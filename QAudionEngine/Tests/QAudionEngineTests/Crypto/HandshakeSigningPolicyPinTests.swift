@@ -2,117 +2,141 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
-/// W-SASPIN (2026-09-08) — pins the first-verified-contact pin rule of
-/// `HandshakeSigningPolicy.evaluate`.
-///
-/// Live incident: two iOS devices (1.0.1108, calls bba2aeca / 1cd640d6) verified
-/// every handshake cleanly and still logged 20 × `sasConfirm noop=1 reason=3`
-/// — the in-call SAS confirm needs the peer's pinned identity key to bind the
-/// record, and the policy never returned a pin candidate when the trust anchor
-/// was the server-published key (it only did on bundle-key TOFU). No test ever
-/// exercised `evaluate` with `serverFetchedKey != nil`; these do.
+/// W-SASPIN pin rule of `HandshakeSigningPolicy.evaluate` under transcript v5: the first
+/// verified contact hands back the trusted key as the pin candidate; an existing pin is never
+/// re-pinned from `.authenticated`; a key that disagrees with the trusted one is a mismatch; an
+/// invalid signature pins nothing; F8: missing/malformed signing material is `.malformed`.
 final class HandshakeSigningPolicyPinTests: XCTestCase {
 
-    private func makeSigner() -> (priv: Curve25519.Signing.PrivateKey, pubRaw: Data) {
-        let priv = Curve25519.Signing.PrivateKey()
-        return (priv, priv.publicKey.rawRepresentation)
+    private typealias F = V5TestFixtures
+
+    private struct Case {
+        let pubRaw: Data
+        let transcript: Data
+        let sigB64: String
+        let fpText: String
     }
 
-    private func transcript(_ seed: UInt8) -> Data {
-        Data((0..<64).map { UInt8(truncatingIfNeeded: Int($0) &+ Int(seed)) })
+    private func makeCase(seed: UInt8, signWith: UInt8? = nil) throws -> Case {
+        let (priv, pubRaw) = F.signer(seed: seed)
+        let t = F.offerTranscript(signerKey: pubRaw)
+        let signingKey = signWith.map { F.signer(seed: $0).priv } ?? priv
+        let sig = try signingKey.signature(for: t)
+        return Case(pubRaw: pubRaw, transcript: t, sigB64: sig.base64EncodedString(), fpText: F.fingerprintText("offerer"))
     }
 
-    /// The regression: no pin yet, server key present and equal to the signer →
-    /// the verdict MUST carry the server key as the pin candidate.
+    private func evaluate(
+        _ c: Case,
+        sigB64: String? = nil, dropSig: Bool = false,
+        fpText: String? = nil, dropFp: Bool = false,
+        transcript: Data? = nil, dropTranscript: Bool = false,
+        pinned: Data? = nil, server: Data? = nil, v4: Bool = false
+    ) -> HandshakeSigningPolicy.Verdict {
+        HandshakeSigningPolicy.evaluate(
+            signerIdentityKeyB64: c.pubRaw.base64EncodedString(),
+            sigV5B64: dropSig ? nil : (sigB64 ?? c.sigB64),
+            dtlsFingerprintText: dropFp ? nil : (fpText ?? c.fpText),
+            transcript: dropTranscript ? nil : (transcript ?? c.transcript),
+            pinnedKey: pinned, serverFetchedKey: server,
+            advertisedV4: v4)
+    }
+
+    /// No pin yet, server key present and equal to the signer: the verdict carries the server key
+    /// as the pin candidate.
     func testServerAnchoredFirstContactReturnsPinCandidate() throws {
-        let (priv, pubRaw) = makeSigner()
-        let t = transcript(3)
-        let sig = try priv.signature(for: t)
-        let verdict = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: pubRaw.base64EncodedString(),
-            signatureB64: sig.base64EncodedString(),
-            transcript: t,
-            pinnedKey: nil, serverFetchedKey: pubRaw,
-            requireSigned: false, advertisedV4: false
-        )
+        let c = try makeCase(seed: 3)
         XCTAssertEqual(
-            verdict,
-            .authenticated(tofuPinKey: pubRaw, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false),
-            "a verified handshake with the server-published key as anchor must hand the key back to be pinned"
-        )
+            evaluate(c, server: c.pubRaw),
+            .authenticated(tofuPinKey: c.pubRaw, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
     }
 
-    /// Unchanged: genuine first contact (no pin, no server key) still pins the
-    /// bundle key.
-    func testBundleTofuFirstContactStillReturnsPinCandidate() throws {
-        let (priv, pubRaw) = makeSigner()
-        let t = transcript(5)
-        let sig = try priv.signature(for: t)
-        let verdict = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: pubRaw.base64EncodedString(),
-            signatureB64: sig.base64EncodedString(),
-            transcript: t,
-            pinnedKey: nil, serverFetchedKey: nil,
-            requireSigned: false, advertisedV4: true
-        )
+    /// Genuine first contact (no pin, no server key) pins the bundle key.
+    func testBundleTofuFirstContactReturnsPinCandidate() throws {
+        let c = try makeCase(seed: 5)
         XCTAssertEqual(
-            verdict,
-            .authenticated(tofuPinKey: pubRaw, v4Capable: true, srtpDirKeyV1Capable: false, ratchetV5Capable: false)
-        )
+            evaluate(c, v4: true),
+            .authenticated(tofuPinKey: c.pubRaw, v4Capable: true, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
     }
 
-    /// Unchanged: an existing pin is never re-pinned from the `.authenticated`
-    /// path (write-once stays write-once; only a set-proven rotation may
-    /// overwrite, via `.authenticatedRepinFromPublished`).
+    /// An existing pin is never re-pinned from `.authenticated` (write-once).
     func testExistingPinReturnsNoPinCandidate() throws {
-        let (priv, pubRaw) = makeSigner()
-        let t = transcript(9)
-        let sig = try priv.signature(for: t)
-        let verdict = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: pubRaw.base64EncodedString(),
-            signatureB64: sig.base64EncodedString(),
-            transcript: t,
-            pinnedKey: pubRaw, serverFetchedKey: pubRaw,
-            requireSigned: false, advertisedV4: false
-        )
+        let c = try makeCase(seed: 9)
         XCTAssertEqual(
-            verdict,
-            .authenticated(tofuPinKey: nil, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false)
-        )
+            evaluate(c, pinned: c.pubRaw, server: c.pubRaw),
+            .authenticated(tofuPinKey: nil, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
     }
 
-    /// Unchanged: a server key that does NOT match the bundle key (and no
-    /// published set proving the bundle key) is still the unauthenticated
-    /// key-change verdict — the fix must not turn that into a pin.
-    func testServerKeyMismatchIsStillIdentityKeyMismatch() throws {
-        let (priv, pubRaw) = makeSigner()
-        let (_, otherPub) = makeSigner()
-        let t = transcript(11)
-        let sig = try priv.signature(for: t)
-        let verdict = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: pubRaw.base64EncodedString(),
-            signatureB64: sig.base64EncodedString(),
-            transcript: t,
-            pinnedKey: nil, serverFetchedKey: otherPub,
-            requireSigned: false, advertisedV4: false
-        )
-        XCTAssertEqual(verdict, .abort(code: "identity_key_mismatch"))
+    /// A server key that does not match the bundle key (and no published set) is the
+    /// unauthenticated key-change verdict, never a pin.
+    func testServerKeyMismatchIsIdentityKeyMismatch() throws {
+        let c = try makeCase(seed: 11)
+        let other = F.signer(seed: 12).pubRaw
+        XCTAssertEqual(evaluate(c, server: other), .abort(code: "identity_key_mismatch"))
     }
 
-    /// Unchanged: a present-but-wrong signature under the server key is fatal
-    /// and pins nothing.
+    /// A present-but-wrong signature is `sig_invalid` and pins nothing.
     func testInvalidSignatureUnderServerKeyPinsNothing() throws {
-        let (_, pubRaw) = makeSigner()
-        let (otherPriv, _) = makeSigner()
-        let t = transcript(13)
-        let wrongSig = try otherPriv.signature(for: t)
-        let verdict = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: pubRaw.base64EncodedString(),
-            signatureB64: wrongSig.base64EncodedString(),
-            transcript: t,
-            pinnedKey: nil, serverFetchedKey: pubRaw,
-            requireSigned: false, advertisedV4: false
-        )
-        XCTAssertEqual(verdict, .abort(code: "sig_invalid"))
+        let c = try makeCase(seed: 13, signWith: 14)
+        XCTAssertEqual(evaluate(c, server: c.pubRaw), .abort(code: "sig_invalid"))
+    }
+
+    /// A signature over a DIFFERENT transcript (another DTLS fingerprint) does not verify.
+    func testSignatureOverOtherDtlsFingerprintIsInvalid() throws {
+        let c = try makeCase(seed: 15)
+        let swapped = F.offerTranscript(signerKey: c.pubRaw, dtls: F.fingerprint("intruder"))
+        XCTAssertEqual(evaluate(c, transcript: swapped), .abort(code: "sig_invalid"))
+    }
+
+    // MARK: - F8 malformed
+
+    func testMissingSigIsMalformed() throws {
+        let c = try makeCase(seed: 16)
+        XCTAssertEqual(evaluate(c, dropSig: true), .malformed(code: "sig_missing"))
+        XCTAssertEqual(evaluate(c, sigB64: ""), .malformed(code: "sig_missing"))
+    }
+
+    func testShortSigIsMalformed() throws {
+        let c = try makeCase(seed: 17)
+        XCTAssertEqual(evaluate(c, sigB64: Data(count: 63).base64EncodedString()), .malformed(code: "sig_malformed"))
+    }
+
+    func testMissingFingerprintIsMalformed() throws {
+        let c = try makeCase(seed: 18)
+        XCTAssertEqual(evaluate(c, dropFp: true), .malformed(code: "dtlsfp_missing"))
+    }
+
+    func testNonCanonicalFingerprintIsMalformed() throws {
+        let c = try makeCase(seed: 19)
+        XCTAssertEqual(evaluate(c, fpText: c.fpText.lowercased()), .malformed(code: "dtlsfp_malformed"))
+        XCTAssertEqual(evaluate(c, fpText: "sha-1 AB:CD"), .malformed(code: "dtlsfp_malformed"))
+    }
+
+    func testUnbuildableTranscriptIsMalformed() throws {
+        let c = try makeCase(seed: 20)
+        XCTAssertEqual(evaluate(c, dropTranscript: true), .malformed(code: "transcript_unbuildable"))
+    }
+
+    func testMissingSignerKeyIsMalformed() throws {
+        let c = try makeCase(seed: 21)
+        let v = HandshakeSigningPolicy.evaluate(
+            signerIdentityKeyB64: nil, sigV5B64: c.sigB64, dtlsFingerprintText: c.fpText,
+            transcript: c.transcript, pinnedKey: nil, serverFetchedKey: nil, advertisedV4: false)
+        XCTAssertEqual(v, .malformed(code: "sig_missing"))
+    }
+
+    // MARK: - D11 published set
+
+    func testPublishedSetProvesRotation() throws {
+        let c = try makeCase(seed: 22)
+        let oldKey = F.signer(seed: 23).pubRaw
+        let v = HandshakeSigningPolicy.evaluate(
+            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV5B64: c.sigB64,
+            dtlsFingerprintText: c.fpText, transcript: c.transcript,
+            pinnedKey: oldKey, serverFetchedKey: nil, publishedKeySet: [c.pubRaw, oldKey],
+            advertisedV4: false)
+        XCTAssertEqual(
+            v,
+            .authenticatedRepinFromPublished(
+                deviceKey: c.pubRaw, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
     }
 }

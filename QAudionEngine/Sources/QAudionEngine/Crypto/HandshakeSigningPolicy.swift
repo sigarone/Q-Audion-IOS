@@ -1,223 +1,101 @@
 import Foundation
 
-/// Phase-10b handshake-signing — the §4 negotiation / fail-closed decision layer
-/// that sits between the byte-exact transcript (`HandshakeTranscript`, §3) and the
-/// call orchestration (`QAudionCallIntegration`).
+/// Handshake-signing decision layer (transcript v5) — sits between the byte-exact transcript
+/// (`HandshakeTranscript`, WIRE_SPEC §3.7) and the call orchestration (`QAudionCallIntegration`).
 ///
-/// Pure value logic, no engine types in its signatures (CLAUDE.md §16) — it takes
-/// `Data` / `Bool` / `String` and the already-built transcript, and returns a
-/// verdict the orchestration acts on. This keeps the security-critical decision
-/// in one small, directly-testable place instead of buried in the 1000-line
-/// integration file (CLAUDE.md §14, type-checker budget).
+/// Pure value logic, no engine types in its signatures (CLAUDE.md §16) — it takes `Data` / `Bool`
+/// / `String` and the already-built transcript, and returns a verdict the orchestration acts on.
 ///
-/// Spec: `docs/phase18/HANDSHAKE-SIGNING-SPEC.md` §4 / §5c.
+/// **Policy (WIRE_SPEC §3.8, F8).**
+/// - A bundle without `sigV5`, without `signerIdentityKey` or without `dtlsFingerprint` — or with
+///   any of them malformed — is MALFORMED: every client emits all three, so the call ENDS
+///   (`.malformed`). There is no unsigned/legacy peer any more.
+/// - An INVALID signature or an unknown identity key keeps the W-NOBRICK policy: the verdict is
+///   `.abort`, the call is not dropped, and media is held pending an in-call SAS comparison. The
+///   SAS now also covers both DTLS fingerprints (the session key is bound to the v5 ACCEPT
+///   transcript), so stripping a signature and then confirming the SAS no longer helps an attacker.
 public enum HandshakeSigningPolicy {
 
-    /// The 16-byte per-direction `epochId` the transcript binds. The OFFER/ACCEPT
-    /// wire bundle does NOT carry an epoch_id and the iOS call handshake has no
-    /// per-direction epoch concept yet (the audio session is keyed directly by
-    /// the 32-byte session key). For this FIRST wiring both signer and verifier
-    /// feed an all-zero 16-byte epoch — deterministic, reproducible on every
-    /// platform, and (with the flag default-OFF) it changes no security property
-    /// because everything else (pubkeys, caps, ratchetV, suiteId, offer_binding)
-    /// is already bound. When the SPQR session-epoch lands on the wire this
-    /// constant is replaced by the real per-direction epoch on both sides.
-    /// Confirmed least-bad by the cross-platform review 2026-06-14.
+    /// The 16-byte per-direction `epochId` the transcript binds. The OFFER/ACCEPT wire bundle does
+    /// NOT carry an epoch id; both signer and verifier feed an all-zero 16-byte epoch —
+    /// deterministic and reproducible on every platform (everything else is already bound).
     public static let placeholderEpochId = Data(count: 16)
 
-    /// Phase-18 GO-LIVE 2026-06-21 (Pavel sign-off): advertised v4 in the SIGNED
-    /// transcript, bumped 0x03→0x04 in lockstep with Android + Desktop. A SIGNED v4
-    /// bundle trips `v4_capable_pinned` and makes stripping the capability bit
-    /// detectable. MUST stay identical on all 3 platforms (verifier rebuilds the
-    /// transcript with its own constant → mismatch = fatal sig failure).
+    /// Advertised ratchet version in the SIGNED transcript. MUST stay identical on all platforms
+    /// (the verifier rebuilds the transcript with its own constant).
     public static let ratchetV: UInt8 = 0x04
     /// suite_id 0x01 = the Phase-18 suite.
     public static let suiteId: UInt8 = 0x01
 
-    /// `require_signed(peer)` (§4): a missing signature is fatal only when one of
-    /// these holds. A present-but-invalid signature is ALWAYS fatal regardless.
-    ///
-    /// - `v4CapablePinned`: a SIGNED v4 bundle was ever verified for this peer.
-    /// - `flagForcesSigned`: the `require_signed_handshake` global flag is ON.
-    /// - `peerVerifiedChannel`: trust ≥ VERIFIED_CHANNEL for this peer.
-    public static func requireSigned(
-        v4CapablePinned: Bool,
-        flagForcesSigned: Bool,
-        peerVerifiedChannel: Bool
-    ) -> Bool {
-        return v4CapablePinned || flagForcesSigned || peerVerifiedChannel
-    }
-
     /// The verdict the orchestration acts on after evaluating a received bundle.
     public enum Verdict: Equatable {
-        /// Signature present, valid, and identity matches the pin (or the
-        /// server-fetched key, or the first-seen TOFU candidate). `tofuPinKey`
-        /// is set whenever the peer had NO pin yet — the caller pins it AFTER
-        /// this success (W-SASPIN: the server-anchored first contact pins too).
-        /// `v4Capable` true when the verified bundle advertised v4+suite-1.
-        /// `srtpDirKeyV1Capable` true when the verified bundle advertised the
-        /// directional-SRTP-key capability (TURN_SPOOF/SRTP downgrade fix —
-        /// TOFU-pin so a later unauthenticated bundle can't silently strip it).
-        /// `ratchetV5Capable` true when the verified bundle advertised the Q-Audion
-        /// Dual-Channel Ratchet v5 capability (MUST-FIX #1, security review
-        /// 2026-09-16) — TOFU-pin so a later bundle can't silently claim
-        /// `ratchetV5=false` without being flagged (see `evaluate`'s sticky
-        /// downgrade check).
+        /// Signature present, valid, and identity matches the pin (or the server-fetched key, or
+        /// the first-seen TOFU candidate). `tofuPinKey` is set whenever the peer had NO pin yet.
         case authenticated(tofuPinKey: Data?, v4Capable: Bool, srtpDirKeyV1Capable: Bool, ratchetV5Capable: Bool)
-        /// D11 trust-on-publish: the bundle key DIFFERS from the per-(peer,device)
-        /// pin (or there is no pin yet for this device) but IS a member of the
-        /// server-published per-device set, and its OWN signature verified under
-        /// it. An AUTHENTICATED new device / rotation — the actuator silently
-        /// re-pins `deviceKey` per-(peer,deviceId); NO banner. This is the iOS
-        /// mirror of Desktop `new_device_pin`. NEVER blind-pins an observed key:
-        /// `deviceKey` was proven ∈ the published set BEFORE this is returned.
+        /// D11 trust-on-publish: the bundle key DIFFERS from the per-(peer,device) pin (or there is
+        /// no pin yet) but IS a member of the server-published per-device set, and its OWN
+        /// signature verified under it. Silent additive re-pin; NEVER blind-pins an observed key.
         case authenticatedRepinFromPublished(deviceKey: Data, v4Capable: Bool, srtpDirKeyV1Capable: Bool, ratchetV5Capable: Bool)
-        /// No signature, and policy does NOT require one — proceed but WARN
-        /// (legacy peer migration path, §4). `reason` is the user-facing hint.
-        case proceedUnsignedWarn(reason: String)
-        /// Fatal-shaped verdict: `code` is one of the §4 codes (`sig_invalid`,
-        /// `identity_key_mismatch`, `sig_required_missing`, `sig_malformed`) or
-        /// the MUST-FIX #1 code `ratchet_v5_downgrade` (a previously
-        /// ratchetV5-capable-pinned peer's validly-signed bundle now claims
-        /// `ratchetV5=false`).
-        ///
-        /// W-NOBRICK (user directive): the call ACTUATOR
-        /// (`QAudionCallIntegration`) NEVER hard-drops media on this verdict — an
-        /// `identity_key_mismatch` (key ∉ published set) is surfaced as a
-        /// NON-BLOCKING in-call alert and the observed key is NOT pinned; SAS is
-        /// the terminal out-of-band gate. The word "abort" is historical
-        /// producer-language only.
+        /// F8: a required field is missing or malformed. The call ENDS. `code` is one of
+        /// `sig_missing`, `sig_malformed`, `dtlsfp_missing`, `dtlsfp_malformed`,
+        /// `transcript_unbuildable`.
+        case malformed(code: String)
+        /// Invalid signature / unknown identity (`sig_invalid`, `identity_key_mismatch`,
+        /// `ratchet_v5_downgrade`): W-NOBRICK — the call is NOT dropped, media is held pending the
+        /// SAS, the observed key is NOT pinned.
         case abort(code: String)
     }
 
-    /// Constant-time-ish membership test of a 32-byte Ed25519 pubkey in the
-    /// server-published per-device set (`GET …/identity-key?all=1`). The keys are
-    /// PUBLIC identity keys (not secret), so `Data ==` (a length-checked memcmp)
-    /// is acceptable; we iterate the whole set so timing does not leak which
-    /// element matched. Empty / nil set ⇒ never a member (degrade to legacy
-    /// pin-only TOFU; D11 graceful fallback, never a fatal mismatch).
+    /// Constant-time-ish membership test of a 32-byte Ed25519 pubkey in the server-published
+    /// per-device set. The keys are PUBLIC identity keys, so `Data ==` is acceptable; empty/nil
+    /// set => never a member (degrade to pin-only TOFU; never a fatal mismatch).
     static func isMember(_ key: Data, of set: Set<Data>?) -> Bool {
         guard let set = set, !set.isEmpty, key.count == 32 else { return false }
         return set.contains(key)
     }
 
-    /// Evaluate a received bundle's signing material against the §4 / §5c rules.
+    /// Evaluate a received bundle's signing material.
     ///
-    /// - `signerIdentityKeyB64` / `signatureB64`: the bundle's two optional
-    ///   fields (nil when the peer is legacy/unsigned).
-    /// - `transcript`: the §3 transcript recomputed from the RECEIVED bundle.
-    /// - `pinnedKey`: the TOFU-pinned key for THIS call's peer, if any.
-    /// - `serverFetchedKey`: the server/QR-fetched identity for this peer, if any
-    ///   (used as the trust source on first contact when no pin exists yet).
-    /// - `requireSigned`: result of `requireSigned(...)` for this peer.
-    /// - `advertisedV4`: bundle advertised `ratchet_v>=4 && suite_id==0x01`.
-    /// - `publishedKeySet`: D11 trust-on-publish floor — the server's published
-    ///   per-device set of Ed25519 identity keys (`GET …/identity-key?all=1`). A
-    ///   bundle key that differs from the pin but is a MEMBER of this set is an
-    ///   AUTHENTICATED new device / rotation, not a mismatch alarm. nil/empty ⇒
-    ///   no floor (degrade to legacy pin-only TOFU; never a fatal mismatch).
-    ///
-    /// Trust source (§5c): verification ALWAYS uses the pinned/server-fetched key
-    /// when one exists; the bundle-carried key is accepted only if it equals that
-    /// trusted key OR it is proven ∈ the published set (D11). When the peer has
-    /// NO pin yet, the key the signature verified under (server-fetched key, or
-    /// on genuine first contact the bundle key itself) is returned in
-    /// `tofuPinKey` so the caller pins it ONLY after this returns
-    /// `.authenticated` (W-SASPIN).
-    ///
-    /// CALLER CONTRACT (D11): when the bundle key differs from the pin but is ∈
-    /// the published set, the signature is verified UNDER THE BUNDLE KEY (its own
-    /// authenticated rotation key), so the caller MUST have built `transcript`
-    /// with `signerIdentityKey = bundleKey` for that case (the integration
-    /// resolves the transcript signer key the same way — see `verifyKeyHint`).
+    /// - `signerIdentityKeyB64` / `sigV5B64` / `dtlsFingerprintText`: the bundle's three fields
+    ///   (nil when absent).
+    /// - `transcript`: the v5 transcript recomputed from the RECEIVED bundle, built with the
+    ///   bundle's own `signerIdentityKey` (the signer signed its OWN key; every path that reaches
+    ///   signature verification has bundle key == trusted key or a set-proven bundle key);
+    ///   `nil` when it could not be built (the peer-supplied inputs have the wrong shape) — which
+    ///   is a malformed bundle.
+    /// - `pinnedKey` / `serverFetchedKey` / `publishedKeySet`: trust sources (§5c, D11).
+    /// - `advertisedV4` / `advertisedSrtpDirKeyV1` / `advertisedRatchetV5`: capability bits the
+    ///   verified bundle advertised (only meaningful once the signature verifies).
+    /// - `ratchetV5CapablePinned`: the sticky per-peer pin (anti-downgrade).
     public static func evaluate(
         signerIdentityKeyB64: String?,
-        signatureB64: String?,
-        transcript: Data,
+        sigV5B64: String?,
+        dtlsFingerprintText: String?,
+        transcript: Data?,
         pinnedKey: Data?,
         serverFetchedKey: Data?,
-        requireSigned: Bool,
-        advertisedV4: Bool,
         publishedKeySet: Set<Data>? = nil,
+        advertisedV4: Bool,
         advertisedSrtpDirKeyV1: Bool = false,
-        sigV2B64: String? = nil,
-        transcriptV2: Data? = nil,
-        /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — whether
-        /// THIS bundle advertised the `ratchetV5` capability, read straight off the SAME bundle
-        /// the signature covers (`bundle.capabilities?.ratchetV5`), regardless of which sigVN
-        /// tier ultimately verifies it. Drives the sticky downgrade check below.
         advertisedRatchetV5: Bool = false,
-        /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — the STICKY per-peer pin: has a
-        /// SIGNED bundle from this peer EVER advertised `ratchetV5`? Wired from a
-        /// UserDefaults-backed set in AppState, mirroring `advertisedV4`'s own
-        /// `isPeerV4Pinned` wiring. NEVER cleared once set.
         ratchetV5CapablePinned: Bool = false
     ) -> Verdict {
 
-        // W-TRANSCRIPTV2 dual-signature verify-both/prefer-v2 (multi-PSK-mixing
-        // SYNTHESIS.md ship step 4): when the peer's envelope carries a non-empty
-        // `sigV2B64`, verification uses ONLY the v2 pair (`sigV2B64`/`transcriptV2`) for
-        // the WHOLE signature-validity decision below — the v1 fields
-        // (`signatureB64`/`transcript`) are never consulted once v2 is in play, and a
-        // present-but-WRONG sigV2 is fatal on its own (the normal "signature invalid" path
-        // below), never a silent fall-back to the lenient v1-only check. If `sigV2B64` is
-        // absent, behaviour is EXACTLY the v1 path as it existed before this step — an old,
-        // v1-only peer is verified exactly as before and never rejected (this is what makes
-        // the rollout staggerable by days rather than a flag day). If `sigV2B64` is present
-        // but `transcriptV2` could not be rebuilt (`nil` — see
-        // `HandshakeTranscript.advEnc`'s doc for when that happens), that is ALSO fatal
-        // (`sig_invalid`) rather than a fall-back — mirrors the Android/Desktop reference
-        // exactly: a present `sigV2` with an unbuildable transcript is never treated as
-        // "sigV2 absent".
-        let sigV2Present = !(sigV2B64 ?? "").isEmpty
-        if sigV2Present && transcriptV2 == nil {
-            return .abort(code: "sig_invalid")
-        }
-        let effectiveSignatureB64 = sigV2Present ? sigV2B64 : signatureB64
-        // force-unwrap safe: line 153 already aborts when sigV2Present &&
-        // transcriptV2 == nil, so reaching here with sigV2Present == true
-        // guarantees transcriptV2 is non-nil.
-        // swiftlint:disable:next force_unwrapping
-        let effectiveTranscript = sigV2Present ? transcriptV2! : transcript
-
-        // --- Signature ABSENT -------------------------------------------------
-        guard let sigB64 = effectiveSignatureB64, !sigB64.isEmpty,
-              let sikB64 = signerIdentityKeyB64, !sikB64.isEmpty else {
-            if requireSigned {
-                return .abort(code: "sig_required_missing")
-            }
-            return .proceedUnsignedWarn(
-                reason: "legacy peer sent an unsigned handshake; verify SAS"
-            )
-        }
-
-        // --- Signature PRESENT: malformed inputs are fatal --------------------
+        // --- F8: every field present and well-formed, else the call ends ------------------
+        guard let sigB64 = sigV5B64, !sigB64.isEmpty else { return .malformed(code: "sig_missing") }
+        guard let sikB64 = signerIdentityKeyB64, !sikB64.isEmpty else { return .malformed(code: "sig_missing") }
+        guard let fpText = dtlsFingerprintText, !fpText.isEmpty else { return .malformed(code: "dtlsfp_missing") }
+        guard DtlsFingerprint.parseCanonical(fpText) != nil else { return .malformed(code: "dtlsfp_malformed") }
         guard let bundleKey = Data(base64Encoded: sikB64), bundleKey.count == 32,
               let signature = Data(base64Encoded: sigB64), signature.count == 64 else {
-            return .abort(code: "sig_malformed")
+            return .malformed(code: "sig_malformed")
         }
+        guard let transcript = transcript else { return .malformed(code: "transcript_unbuildable") }
 
-        // --- Resolve the TRUSTED key (§5c) ------------------------------------
-        // Prefer the pin, then the server/QR key. The bundle key is trusted only
-        // on genuine first contact (no pin, no server key) — and even then it is
-        // pinned only AFTER the signature verifies under it.
-        //
-        // W-SASPIN (2026-09-08) — whichever of the three sources the trust came
-        // from, a peer with NO pin yet gets one on this first VERIFIED contact
-        // (see the `.authenticated` return below). The old shape pinned only on
-        // the bundle-key branch: with the server-published key present (the
-        // normal case once identity keys are published) the signature verified
-        // under it and nothing was ever persisted, so `PeerIdentityPinStore`
-        // stayed empty for that peer forever. Every reader downstream of the
-        // handshake — the in-call SAS binding (`SasVerificationStore` needs the
-        // pinned key's identity tag), `PeerTrustEvaluator`, the per-device
-        // verdicts on the next call — reads the pin store, not the server cache.
-        // Live evidence 2026-09-08 (calls bba2aeca/1cd640d6, iOS<->iOS, both
-        // 1.0.1108): 20x `sasConfirm noop=1 reason=3` on both devices while the
-        // handshake had verified cleanly. Android persists the server-fetched
-        // key on first sight (`PeerTrustRepository.checkOrPinTrust`) and Desktop
-        // stores it on the contact row, so this is the parity gap, not a new
-        // trust class.
+        // --- Resolve the TRUSTED key (§5c) ------------------------------------------------
+        // Prefer the pin, then the server/QR key. The bundle key is trusted only on genuine first
+        // contact (no pin, no server key) — and even then it is pinned only AFTER the signature
+        // verifies under it.
         let trustedKey: Data
         if let pin = pinnedKey {
             trustedKey = pin
@@ -230,57 +108,31 @@ public enum HandshakeSigningPolicy {
         let bundleInSet = isMember(bundleKey, of: publishedKeySet)
         let matchesTrusted = (bundleKey == trustedKey)
 
-        // --- Identity resolution / mismatch (D11 set-membership-aware) --------
-        // A bundle key that disagrees with the trusted (pinned/server) key is a
-        // key change. TRUST-ON-PUBLISH FLOOR: if the new key is ∈ the published
-        // set it is an AUTHENTICATED rotation (handled on the verify path below
-        // as `.authenticatedRepinFromPublished`); otherwise it is an
-        // UNAUTHENTICATED change → `identity_key_mismatch`. The ACTUATOR surfaces
-        // that as a non-blocking in-call alert and does NOT pin the observed key
-        // (W-NOBRICK — never a hard media block; SAS is terminal).
+        // A bundle key that disagrees with the trusted (pinned/server) key is a key change. If the
+        // new key is in the published set it is an AUTHENTICATED rotation (handled on the verify
+        // path below); otherwise it is an UNAUTHENTICATED change: `identity_key_mismatch`.
         if !matchesTrusted && !bundleInSet {
             return .abort(code: "identity_key_mismatch")
         }
 
-        // --- Verify the detached Ed25519 signature over the recomputed §3
-        //     transcript. AUTHORITATIVE key choice (D11):
-        //   • bundle key == trusted key → verify under the trusted key (pin /
-        //     server), the established identity (legacy path).
-        //   • bundle key ∈ published set (new device / authenticated rotation) →
-        //     the bundle key itself is authoritative (its OWN signature proves
-        //     possession AND set membership proves server-publication) — verify
-        //     under the bundle key. NEVER blind-trust the bundle key on a bare
-        //     mismatch: we only get here when bundleInSet is true.
+        // Verify the detached Ed25519 signature over the recomputed v5 transcript, under the
+        // authoritative key: the trusted key when the bundle key matches it, else the
+        // set-proven bundle key.
         let verifyKey = matchesTrusted ? trustedKey : bundleKey
-        let ok = HandshakeTranscript.verify(
-            transcript: effectiveTranscript,
-            signature: signature,
-            signerIdentityKey: verifyKey
-        )
-        guard ok else {
-            // Present-but-invalid signature is ALWAYS fatal, regardless of policy.
+        guard HandshakeTranscript.verify(transcript: transcript, signature: signature, signerIdentityKey: verifyKey) else {
+            // Present-but-invalid signature: hold media pending SAS (W-NOBRICK).
             return .abort(code: "sig_invalid")
         }
 
-        // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 — the STICKY half of the
-        // anti-downgrade invariant (the signed-transcript binding in `offerV4`/`acceptV4` is the
-        // OTHER half): a peer that has ever proven ratchetV5-capable and NOW presents a
-        // validly-signed bundle (any tier above — this runs regardless of which sigVN actually
-        // verified) honestly claiming `ratchetV5=false` is flagged as anomalous rather than
-        // silently accepted as a normal fallback. Checked BEFORE the success verdicts below so
-        // this reflects the peer's PRIOR state, not the one this bundle is about to set.
-        // W-NOBRICK: the caller's existing `.abort` handling already warns + proceeds + holds
-        // media pending SAS reverification for every abort code (the same path
-        // `identity_key_mismatch`/`sig_invalid` already use) — no new consumer wiring needed.
-        // Mirrors Android `HandshakeSigner.verifyBundle` / Desktop `decideSignatureVerdict`.
+        // Sticky half of the ratchetV5 anti-downgrade invariant: a peer that has ever proven
+        // ratchetV5-capable and now presents a validly-signed bundle honestly claiming
+        // `ratchetV5=false` is flagged. Checked BEFORE the success verdicts so it reflects the
+        // peer's PRIOR state.
         if !advertisedRatchetV5 && ratchetV5CapablePinned {
             return .abort(code: "ratchet_v5_downgrade")
         }
 
         if matchesTrusted {
-            // W-SASPIN — first verified contact pins the key the signature was
-            // verified under (bundle key on genuine TOFU, server-published key
-            // otherwise). An existing pin is never re-written from here.
             return .authenticated(
                 tofuPinKey: pinnedKey == nil ? trustedKey : nil,
                 v4Capable: advertisedV4,
@@ -288,50 +140,11 @@ public enum HandshakeSigningPolicy {
                 ratchetV5Capable: advertisedRatchetV5
             )
         }
-        // Not matching the trusted key but ∈ published set and self-signature
-        // valid → authenticated new device / rotation. Silent additive re-pin.
         return .authenticatedRepinFromPublished(
             deviceKey: bundleKey,
             v4Capable: advertisedV4,
             srtpDirKeyV1Capable: advertisedSrtpDirKeyV1,
             ratchetV5Capable: advertisedRatchetV5
         )
-    }
-
-    /// D11 helper for the call integration: given the resolved trust facts, which
-    /// key will `evaluate` verify the signature UNDER — so the caller can build
-    /// the §3 transcript with `signerIdentityKey` set to that exact key. Mirrors
-    /// the authoritative-key choice in `evaluate`:
-    ///   • a present bundle key that differs from the pinned/server key but is ∈
-    ///     the published set → the BUNDLE key (set-proven rotation).
-    ///   • otherwise → the pinned key, else the server key, else the bundle key
-    ///     (genuine first-contact TOFU candidate).
-    /// Returns nil only when there is no parseable bundle key at all (the policy
-    /// will then hit the ABSENT / malformed branch where the transcript bytes are
-    /// irrelevant).
-    ///
-    /// CORRECTNESS (must hold): in every case where `evaluate` actually REACHES
-    /// signature verification (i.e. `matchesTrusted || bundleInSet`), this hint
-    /// equals `evaluate`'s `verifyKey`:
-    ///   • matchesTrusted → both = trustedKey.
-    ///   • !matchesTrusted && bundleInSet → both = bundleKey.
-    /// The remaining case (`!matchesTrusted && !bundleInSet`) is the
-    /// UNAUTHENTICATED change: `evaluate` returns `.abort(identity_key_mismatch)`
-    /// BEFORE verifying, so the transcript this hint built (= trustedKey) is never
-    /// consumed. Do NOT "simplify" this to always return bundleKey on a mismatch
-    /// — that would build the transcript under an UNTRUSTED key for the
-    /// abort-before-verify case (semantically wrong; the key is never set-proven).
-    public static func verifyKeyHint(
-        bundleKey: Data?,
-        pinnedKey: Data?,
-        serverFetchedKey: Data?,
-        publishedKeySet: Set<Data>?
-    ) -> Data? {
-        let trustedKey: Data?
-        if let pin = pinnedKey { trustedKey = pin } else if let server = serverFetchedKey { trustedKey = server } else { trustedKey = bundleKey }
-        if let bk = bundleKey, bk != trustedKey, isMember(bk, of: publishedKeySet) {
-            return bk
-        }
-        return trustedKey
     }
 }

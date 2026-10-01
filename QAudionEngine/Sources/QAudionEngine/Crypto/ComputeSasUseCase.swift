@@ -1,27 +1,29 @@
 import Foundation
 import CryptoKit
 
-/// Derive a deterministic 6-word Short-Authentication-String (SAS) from
-/// an active call's session key. Direct port of Android's
-/// `ComputeSasUseCase.kt`.
+/// Derive a deterministic 6-word Short-Authentication-String (SAS) from an active call's
+/// session key AND the call's v5 handshake transcript hash (WIRE_SPEC §4).
 ///
-/// **Protocol** (must match Android byte-for-byte):
+/// **Protocol** (must match Android and Desktop byte-for-byte):
 /// ```
 ///   hkdfOut = HKDF-SHA256(
 ///       ikm  = sessionKey,
-///       salt = SasConstants.saltBytes,       // "qaudion-sas-v1"
-///       info = SasConstants.infoWordsBytes,   // "sas-words-v1"
-///       L    = 18                              // 6 × 3-byte indices
+///       salt = SasConstants.saltBytes,                       // "qaudion-sas-v1"
+///       info = HkdfLabels.sasTranscriptBindV1 || transcriptHash,   // "q-audion-sas-transcript" || SHA-256(ACCEPT_v5)
+///       L    = 18                                            // 6 x 3-byte indices
 ///   )
 ///   for i in 0..5:
 ///       idx[i] = uint24_be(hkdfOut[3i..3i+3]) % PgpSasWordList.words.count
 ///   sas = PgpSasWordList.words[idx[0..5]]
 /// ```
 ///
-/// The `initiator` flag is intentionally ignored for the derivation —
-/// both peers must derive the same 6 words from the same session key,
-/// otherwise the ceremony would be meaningless. It's accepted as a
-/// parameter for future transcript-binding (asymmetric leg).
+/// The transcript hash is `SHA-256(ACCEPT_v5)`, which binds both signers' identity keys, both DTLS
+/// certificate fingerprints, the ciphertexts and `SHA-256(OFFER_v5)`: a relay that substitutes any of
+/// them (even with the signatures stripped) changes the words on one side, so the SAS comparison
+/// also authenticates the DTLS certificates. There is no transcript-free SAS any more.
+///
+/// The `initiator` flag is intentionally ignored for the derivation: both peers must derive the
+/// same 6 words.
 ///
 /// **Comparison**: always use `matches(_:_:)` rather than `==` to keep
 /// equality checks constant-time.
@@ -46,39 +48,22 @@ public enum ComputeSasUseCase {
 
     public enum SasError: Error, Equatable {
         case emptyKey
+        /// The transcript hash is not exactly 32 bytes.
+        case badTranscriptHash
     }
 
     /// Derive the 6-word SAS for `sessionKey`.
     ///
     /// - Parameters:
-    ///   - sessionKey: shared symmetric session key (typically 32 bytes).
-    ///                 Must not be empty — an empty key disables the ceremony.
-    ///   - initiator: reserved for future protocol transcripts; unused in v1.
-    ///   - transcriptHash: CALL-4/HSID-002 (2026-09-02 protocol audit) — the
-    ///     32-byte SHA-256 of the call's v3 handshake transcript, supplied
-    ///     ONLY when both peers negotiated the `hsTranscriptBindV1` capability
-    ///     and its signature verified. When non-nil, `info` becomes
-    ///     `HkdfLabels.sasTranscriptBindV1 || transcriptHash` INSTEAD of
-    ///     `SasConstants.infoWordsBytes` — a relay that strips a signed
-    ///     capability bit (or any other transcript field) from both bundles
-    ///     changes `transcriptHash`, which changes these 6 words on both
-    ///     ends, making the downgrade visible at SAS-verification time
-    ///     instead of silent (the transcript-independent SAS this function
-    ///     computed before this parameter existed). `nil` (default) is
-    ///     BYTE-IDENTICAL to every call site that predates this fix — the
-    ///     salt (`SasConstants.saltBytes`) is unchanged either way.
-    public static func invoke(sessionKey: Data, initiator: Bool = false, transcriptHash: Data? = nil) throws -> Sas {
+    ///   - sessionKey: shared symmetric session key (typically 32 bytes). Must not be empty.
+    ///   - initiator: reserved; unused.
+    ///   - transcriptHash: `SHA-256(ACCEPT_v5)`, exactly 32 bytes.
+    public static func invoke(sessionKey: Data, initiator: Bool = false, transcriptHash: Data) throws -> Sas {
         guard !sessionKey.isEmpty else { throw SasError.emptyKey }
-        let info: Data
-        if let transcriptHash {
-            precondition(transcriptHash.count == 32, "transcriptHash must be 32 bytes")
-            var i = Data(capacity: HkdfLabels.sasTranscriptBindV1.count + 32)
-            i.append(HkdfLabels.sasTranscriptBindV1)
-            i.append(transcriptHash)
-            info = i
-        } else {
-            info = SasConstants.infoWordsBytes
-        }
+        guard transcriptHash.count == 32 else { throw SasError.badTranscriptHash }
+        var info = Data(capacity: HkdfLabels.sasTranscriptBindV1.count + 32)
+        info.append(HkdfLabels.sasTranscriptBindV1)
+        info.append(transcriptHash)
 
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: sessionKey),

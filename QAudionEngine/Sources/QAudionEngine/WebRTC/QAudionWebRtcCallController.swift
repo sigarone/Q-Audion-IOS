@@ -1206,6 +1206,56 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// ⚠️ Requires coordinated update on Android + Desktop before deployment.
     public var pqcCallId: String = ""
 
+    /// WIRE_SPEC §3.8 — this call's DTLS context: its explicit per-call certificate (presented by
+    /// the PeerConnection), its fingerprint and the PEER fingerprint the signed handshake pins.
+    /// MUST be set (from `CallDtlsContextStore`) BEFORE `startOutgoingCall` /
+    /// `acceptIncomingCall` / the upgrade-responder build: without it no PeerConnection is created.
+    public var dtlsContext: CallDtlsContext?
+
+    /// True when THIS device is the OFFERER of the call's signed handshake (the original caller),
+    /// whatever the role in a later negotiation: it selects which directional frame key encrypts
+    /// (`OneToOneFrameKeys`). Set by the app at every construction site.
+    public var isHandshakeOfferer: Bool = false
+
+    /// A DTLS fingerprint check failed (WIRE_SPEC §3.5 / §3.6). Verdict-only stage string:
+    /// `sdp_remote`, `sdp_local`, `stats` or `pin_timeout`. The app ends the call with reason
+    /// `dtls_fp_mismatch`. May fire on any thread.
+    public var onDtlsFingerprintFailure: ((String) -> Void)?
+
+    /// The directional frame keys of the CURRENT key round (`OneToOneFrameKeys`): the key this
+    /// device's outbound frames are encrypted with and the key the peer's frames are decrypted
+    /// with. `nil` until a 32-byte session key and the call id are both known. The call id is the
+    /// WIRE call id (lowercased) the handshake transcript carries — the id of `dtlsContext` —
+    /// NOT `pqcCallId`, which on the caller device is CallKit's own random UUID.
+    func currentFrameKeys() -> (send: Data, recv: Data)? {
+        guard let sessionKey = pqcSessionKey, sessionKey.count == 32,
+              let callId = dtlsContext?.callId, !callId.isEmpty,
+              let keys = OneToOneFrameKeys.derive(sessionKey: sessionKey, callId: callId) else {
+            return nil
+        }
+        return (keys.sendKey(isOfferer: isHandshakeOfferer), keys.receiveKey(isOfferer: isHandshakeOfferer))
+    }
+
+    /// Forward the PeerConnection's DTLS fingerprint verdicts: the app ends the call on a
+    /// failure; the remote log carries numeric verdicts only (`s`: 1 sdp_remote, 2 sdp_local,
+    /// 3 stats, 4 pin_timeout; `ok`: 1/0), never a fingerprint.
+    private func wireDtlsFailureHook(on pc: QAudionPeerConnection) {
+        pc.onDtlsFingerprintFailure = { [weak self] stage in
+            var code = 3
+            switch stage {
+            case "sdp_remote": code = 1
+            case "sdp_local": code = 2
+            case "pin_timeout": code = 4
+            default: code = 3
+            }
+            self?.log?("dtlsfp s=\(code) ok=0")
+            self?.onDtlsFingerprintFailure?(stage)
+        }
+        pc.onDtlsMediaGateOpened = { [weak self] in
+            self?.log?("dtlsfp s=3 ok=1")
+        }
+    }
+
     /// W383: optional PQC session key for the inner SRTP layer.
     /// When set BEFORE startOutgoingCall / acceptIncomingCall, the
     /// controller automatically installs PqcFrameEncryptor /
@@ -1261,8 +1311,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             applyPqcSealerIfPossible()
             // W539 — when the PQC key arrives (or rotates), retry the
             // video pipeline pick. ensureVideoSealer needs BOTH the
-            // peer's negotiated caps AND a 32-byte key to install the
-            // LiveKit cryptor; whichever arrives last triggers the
+            // peer's negotiated caps AND the round's frame keys to install the
+            // native cryptor; whichever arrives last triggers the
             // install via this didSet or acceptPeerCapabilities below.
             _ = ensureVideoSealerInternal()
             // IOS-C4b — same "whichever arrives last" pattern for the
@@ -1271,23 +1321,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             installAudioSrtpIfPossible()
         }
     }
-
-    /// `vkey-v1` — optional contact PSK (32 bytes) for the K_video HKDF
-    /// salt. iOS has NO SovereignKeyVault today so this is always `nil`,
-    /// which makes `deriveVideoKey` fall back to the fixed
-    /// `Q-AUDION-PHONE-VIDEO-SALT-V1` salt — byte-identical to Android's
-    /// PSK-absent path. The property exists so a future SovereignKeyVault
-    /// landing can wire the per-contact PSK without touching the
-    /// derivation call site. When set it MUST be exactly 32 bytes.
-    public var videoContactPsk: Data?
-
-    /// `vkey-v1` — true once the active video pipeline was keyed off the
-    /// phone-level K_video (peer advertised `vkey-v1`). Used by the
-    /// dual-trust UI indicator ("video is phone-level vs audio sovereign").
-    /// `false` means video either ran legacy/DTLS-only or shared the
-    /// audio session key (pre-vkey-v1 peer). Mirrors Android
-    /// `videoKeyIsPhoneLevel`.
-    public private(set) var videoKeyIsPhoneLevel: Bool = false
 
     /// W411 — optional override for the ICE server list. When set
     /// (typically by AppState reading TransportGate.preferredTurnUrl),
@@ -1372,15 +1405,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// for the full BoringSSL/SDP-munging rationale.
     public var dtlsAnswerPassiveKillSwitchProvider: (() -> Bool)?
 
-    /// SFrame video sealer factory — DI seam retained for backwards
-    /// compatibility with AppState wiring. As of W539 it is NO LONGER
-    /// consulted by the default video pipeline pick: cross-platform
-    /// 1:1 calls install ``LiveKitVideoFrameCryptor`` instead so iOS
-    /// interoperates with Desktop and Android.
-    ///
-    /// Setting this is harmless — it is simply unused by
-    /// ``ensureVideoSealer(pqcSessionKeyProvider:)``. The property is
-    /// kept so existing AppState DI code continues to compile.
+    /// SFrame video sealer factory — DI seam retained for the AppState wiring. It is NOT
+    /// consulted by the default video pipeline pick: 1:1 calls use the native FrameCryptor
+    /// (``VideoCallSealer/native``). Setting it is harmless.
     public var sframeVideoSealerFactory: ((@escaping () -> Data) -> SFrameVideoSealer)?
 
     /// JWT bearer token forwarded to the WSS-TURN WebSocket handshake.
@@ -1402,25 +1429,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         /// advertise any compatible video sealer cap.
         case legacy
         /// SFrame v1 path — Q-Audion custom envelope, kept for future
-        /// iOS-only group-call work or compile-time-flagged
-        /// experimentation. NOT selected by default — the cross-platform
-        /// 1:1 path uses ``livekit(_:)`` so iOS interoperates with
-        /// Desktop and Android.
+        /// iOS-only work or compile-time-flagged experimentation. NOT selected
+        /// by default — the cross-platform 1:1 path is ``native``.
         case sframe(SFrameVideoSealer)
-        /// W539 — LiveKit / libwebrtc native FrameCryptor envelope.
-        /// This is the format Desktop (`LiveKitFrameCryptor.ts`) and
-        /// Android (libwebrtc native `FrameCryptor`) actually emit and
-        /// consume on 1:1 video calls; we MUST use it on iOS too so
-        /// cross-platform calls render. AES-256-GCM (WS-7; was AES-128 —
-        /// matches Android's AES-256-patched native FrameCryptor),
-        /// HKDF-SHA256 (empty salt, 128-byte zero info, L=32), keyIndex=0.
-        case livekit(LiveKitVideoFrameCryptor)
         /// Native libwebrtc RTCFrameCryptor (insertable streams), attached to
-        /// the RTP video sender/receiver — the DEFAULT cross-platform 1:1 path
-        /// on the webrtc-sdk binary. Replaces the codec-layer `.livekit` path
-        /// (which the H265 RTP packetizer broke). Encrypts post-packetization so
-        /// it is codec-agnostic (H265-safe) and byte-compatible with Android's
-        /// native FrameCryptor. The cryptor objects live on `QAudionPeerConnection`.
+        /// the RTP video sender/receiver — the cross-platform 1:1 path on the
+        /// webrtc-sdk binary. Encrypts post-packetization so it is codec-agnostic
+        /// (H265-safe) and byte-compatible with Android's native FrameCryptor.
+        /// The cryptor objects live on `QAudionPeerConnection`.
         case native
     }
     public private(set) var videoSealer: VideoCallSealer?
@@ -1831,13 +1847,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
         let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory(sealerProvider: { [weak self] in
-            // W539 — surface either SFrame or LiveKit sealer to the codec
-            // decorator. The LiveKit path is the cross-platform default
-            // (Desktop / Android emit this wire format); SFrame is kept
-            // for potential iOS-only future paths.
+            // SFrame sealer for the codec decorator (kept for potential iOS-only future
+            // paths); the 1:1 video path is the native FrameCryptor, not a codec decorator.
             switch self?.videoSealer {
             case .sframe(let s):  return .sframe(s)
-            case .livekit(let c): return .livekit(c)
             default:              return nil
             }
         })
@@ -1847,8 +1860,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self,
+            dtlsContext: dtlsContext,
             dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
             dtlsAnswerPassiveKillSwitchProvider: dtlsAnswerPassiveKillSwitchProvider)
+        // WIRE_SPEC §3.8 — no per-call DTLS certificate, no PeerConnection: fail the setup.
+        guard pc.peerConnection != nil else {
+            throw ControllerError.wrongState("no-dtls-context")
+        }
+        wireDtlsFailureHook(on: pc)
         // Bug-C guard: same race, closed a moment later — pc was just built
         // synchronously (no further suspension since the check above), but a
         // teardown could still have landed on another thread. Dispose rather
@@ -1990,13 +2009,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
         let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory(sealerProvider: { [weak self] in
-            // W539 — surface either SFrame or LiveKit sealer to the codec
-            // decorator. The LiveKit path is the cross-platform default
-            // (Desktop / Android emit this wire format); SFrame is kept
-            // for potential iOS-only future paths.
+            // SFrame sealer for the codec decorator (kept for potential iOS-only future
+            // paths); the 1:1 video path is the native FrameCryptor, not a codec decorator.
             switch self?.videoSealer {
             case .sframe(let s):  return .sframe(s)
-            case .livekit(let c): return .livekit(c)
             default:              return nil
             }
         })
@@ -2006,8 +2022,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self,
+            dtlsContext: dtlsContext,
             dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
             dtlsAnswerPassiveKillSwitchProvider: dtlsAnswerPassiveKillSwitchProvider)
+        // WIRE_SPEC §3.8 — no per-call DTLS certificate, no PeerConnection: fail the setup.
+        guard pc.peerConnection != nil else {
+            throw ControllerError.wrongState("no-dtls-context")
+        }
+        wireDtlsFailureHook(on: pc)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()
@@ -2142,9 +2164,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
         let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory(sealerProvider: { [weak self] in
+            // SFrame sealer for the codec decorator (kept for potential iOS-only future
+            // paths); the 1:1 video path is the native FrameCryptor, not a codec decorator.
             switch self?.videoSealer {
             case .sframe(let s):  return .sframe(s)
-            case .livekit(let c): return .livekit(c)
             default:              return nil
             }
         })
@@ -2154,8 +2177,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             iceServers: iceServers,
             iceTransportPolicy: iceTransportPolicyOverride ?? .all,
             delegate: self,
+            dtlsContext: dtlsContext,
             dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
             dtlsAnswerPassiveKillSwitchProvider: dtlsAnswerPassiveKillSwitchProvider)
+        // WIRE_SPEC §3.8 — no per-call DTLS certificate, no PeerConnection: fail the setup.
+        guard pc.peerConnection != nil else {
+            throw ControllerError.wrongState("no-dtls-context")
+        }
+        wireDtlsFailureHook(on: pc)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()
@@ -2893,8 +2922,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         videoSealer = nil                // commit 3db2cd81 parity — reset
                                          // pipeline pick so the next call
                                          // re-runs ensureVideoSealer().
-        videoKeyIsPhoneLevel = false     // vkey-v1 — reset dual-trust flag.
-        videoContactPsk = nil            // vkey-v1 — clear per-call PSK.
         // WIRE_SPEC §8.7 — re-arm the one-shot inbound-video-ready latch
         // so the NEXT call fires onInboundVideoReady again.
         inboundReadyLock.lock()
@@ -3921,7 +3948,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // the AES-256 gate satisfied). Strictly an upgrade: a peer that
         // still does NOT advertise aes256 keeps the fail-closed .legacy
         // latch (never auto-downgrade — downgrades stay explicit/close-only,
-        // and `.native`/`.sframe`/`.livekit` picks are never touched).
+        // and `.native`/`.sframe` picks are never touched).
         if case .legacy = videoSealer,
            let negotiated = peerNegotiated(),
            negotiated.useSFrame,
@@ -3932,7 +3959,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         // W539 — opportunistic install: if the PQC key is already
         // present (typical on responder path where the PQC handshake
-        // ran BEFORE the WebRTC offer applied), install the LiveKit
+        // ran BEFORE the WebRTC offer applied), install the native
         // cryptor now. On the caller path the key arrives later
         // via the pqcSessionKey didSet which also calls this.
         _ = ensureVideoSealerInternal()
@@ -4116,7 +4143,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             print("audiosrtp install skip=1 reason=1")
             return
         }
-        guard let key = pqcSessionKey, key.count == 32 else {
+        guard let frameKeys = currentFrameKeys() else {
             print("audiosrtp install skip=1 reason=2")
             return
         }
@@ -4131,7 +4158,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // `acceptPeerCapabilities`). See `cryptorAttachQueue`'s own doc.
         cryptorAttachQueue.async { [weak self] in
             guard let self, self.peerConnection === pc else { return }
-            self.installAudioSrtpOnQueue(pc: pc, key: key, retriesRemaining: retriesRemaining)
+            self.installAudioSrtpOnQueue(pc: pc, keys: frameKeys, retriesRemaining: retriesRemaining)
         }
     }
 
@@ -4139,7 +4166,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `installAudioSrtpIfPossible`, always running on `cryptorAttachQueue`.
     /// See that method's doc for why, and `cryptorAttachQueue`'s own doc for
     /// the incident this closes.
-    private func installAudioSrtpOnQueue(pc: QAudionPeerConnection, key: Data, retriesRemaining: Int) {
+    private func installAudioSrtpOnQueue(pc: QAudionPeerConnection, keys: (send: Data, recv: Data), retriesRemaining: Int) {
         // W-AUDIORXPOSTNEG (2026-08-28) — this call site is reached only
         // once `negotiated.useAudioSrtp` is confirmed, which means the SDP
         // round that negotiated it has completed — the same "safe to
@@ -4151,13 +4178,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // and a real fix when it did. See NativeAudioFrameCryptor.
         // rebindReceiver's own doc for the live-call failure this closes.
         _ = pc.rebindAudioReceiverCryptorPostNegotiation()
-        let participant = recipientId ?? "peer"
         let epoch = pqcSessionKeyEpoch
         let slot = epoch % 16
         let attachStartedMs = Self.nowMs()
         let installed = pc.activateNativeAudioSrtp(
-            key: key,
-            participantId: participant,
+            sendKey: keys.send,
+            recvKey: keys.recv,
             slot: slot,
             txSink: { [weak self] pcm in
                 // W-CAPTURELIVE — this closure firing AT ALL is the real
@@ -4177,7 +4203,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         ) ?? false
         let attachMs = Self.nowMs() - attachStartedMs
         if installed {
-            print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated (participant=\(participant))")
+            print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated")
             print("audiosrtp tx=1")
             log?("cryattach media=audio ok=1 ms=\(attachMs)")
             // WIRE_SPEC §8.7 v1.2 — `activateNativeAudioSrtp` only installs
@@ -4373,73 +4399,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         onInboundVideoReady?(mid)
     }
 
-    /// W539 — internal autopilot: install the LiveKit video cryptor as
-    /// soon as BOTH the peer's negotiated caps and a 32-byte PQC key
-    /// are available. Called from `acceptPeerCapabilities` and from
-    /// the `pqcSessionKey` didSet so whichever arrives last triggers
-    /// the install. Idempotent — once `videoSealer` is set, this is a
-    /// no-op for the rest of the call. The keyProvider closure used by
-    /// the LiveKit cryptor reads `self.pqcSessionKey` lazily on every
-    /// frame, so audio-driven rekey rotations continue to be picked
-    /// up transparently.
-    ///
-    /// `vkey-v1`: when the peer advertised `vkey-v1` (negotiated
-    /// `useVideoKey == true`) the closure returns the dedicated 32-byte
-    /// K_video derived from the CURRENT session key on every frame —
-    /// `INSTEAD of` the raw `pqcSessionKey`. K_video binds the negotiated
-    /// capability tags via the HKDF `info` (transcriptHash), so it is
-    /// recomputed from `peerNegotiated().agreedTags` each frame. The
-    /// per-frame HKDF is identical in cost to the existing one already
-    /// done inside `LiveKitVideoFrameCryptor` (a second SHA-256-based
-    /// HKDF, ~2 µs).
-    ///
-    /// MEDIA-8 (2026-09-02 protocol audit, backlog item 5B) — when the peer
-    /// did NOT advertise `vkey-v1` the closure USED TO return the raw
-    /// session key verbatim, sharing it byte-for-byte with the audio path
-    /// (separation then rested entirely on the native FrameCryptor's own
-    /// SSRC/timestamp-derived IV — a single key domain across audio+video).
-    /// It now derives a video-only fallback key instead — unconditional, no
-    /// peer coordination needed (deterministic HKDF over a value both sides
-    /// already hold), so unlike `deriveVideoKey`'s vkey-v1 gate this has NO
-    /// kill switch and NO capability check: every build applies it, whether
-    /// or not the peer ever advertises vkey-v1. The FrameCryptor params are
-    /// UNCHANGED either way — the returned value is always the INPUT key fed
-    /// to the cryptor's own internal HKDF, never the final AES key.
+    /// Internal autopilot: install the native video FrameCryptor as soon as BOTH the peer's
+    /// negotiated caps and the current round's directional frame keys are available. Called from
+    /// `acceptPeerCapabilities` and from the `pqcSessionKey` didSet so whichever arrives last
+    /// triggers the install. A re-key round re-publishes the keys of the new round (see
+    /// `ensureVideoSealer`).
     @discardableResult
     private func ensureVideoSealerInternal() -> VideoCallSealer? {
-        let sealer = ensureVideoSealer { [weak self] in
-            guard let self = self else { return Data() }
-            let sessionKey = self.pqcSessionKey ?? Data()
-            // Not ready yet (no session key established) — return as-is;
-            // every downstream caller of this closure already guards on
-            // `.count == 32` and defers until a real key arrives.
-            guard sessionKey.count == 32 else { return sessionKey }
-            if let negotiated = self.peerNegotiated(), negotiated.useVideoKey {
-                // CROSS-PLATFORM K_video: feed ONLY the canonical transcript tags
-                // {sframe-v1, ratchet-v3, vkey-v1} — exactly what Android
-                // `videoTranscriptTags` (PqcHandshake.kt:502) and Desktop
-                // `agreedTagsFromFlags` build, and what the frozen
-                // PhoneVideoKeyKatTests vector pins. `negotiated.agreedTags` also
-                // contains `sframe-aes256-v1` / `dc-mux-v1`, which Android/Desktop
-                // EXCLUDE — feeding the full set made iOS's HKDF transcriptHash
-                // differ → a different K_video → Android/Desktop could not decrypt
-                // iOS video and vice-versa (black/garbage). The KAT passed only
-                // because it used the canonical 3-tag set, masking the runtime drift.
-                let canonicalTags = negotiated.agreedTags.filter {
-                    $0 == CallCapabilities.sframeV1
-                        || $0 == CallCapabilities.ratchetV3
-                        || $0 == CallCapabilities.vkeyV1
-                }
-                return QAudionCallIntegration.deriveVideoKey(
-                    sessionKey: sessionKey,
-                    agreedTags: canonicalTags,
-                    psk: self.videoContactPsk
-                )
-            }
-            // MEDIA-8 — vkey-v1 not negotiated (or peer not heard from yet):
-            // local-only fallback derivation, see this method's kdoc above.
-            return QAudionCallIntegration.deriveVideoFallbackKey(sessionKey: sessionKey)
-        }
+        let sealer = ensureVideoSealer()
         // WIRE_SPEC §8.7 — a successful pick/rekey above may have just
         // completed the "receiver cryptor attached AND keyed" pair
         // (key/caps arriving AFTER the receiver attach). One-shot inside.
@@ -4451,48 +4418,27 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// negotiated capabilities. Mirrors Android
     /// `CallController.ensureVideoSealer()` (commit 3db2cd81):
     ///
-    /// - If ``videoSealer`` is already set → no-op (one pick per call).
+    /// - If ``videoSealer`` is already `.native` → re-publish the CURRENT round's directional
+    ///   keys (a re-key); nothing else changes.
+    /// - If ``videoSealer`` is otherwise set → no-op (one pick per call).
     /// - If `peerNegotiated()` is `nil` (peer not heard from yet) →
     ///   leaves `videoSealer` unset; caller should defer.
-    /// - W539: If `useSFrame=true` (peer advertised `sframe-v1`) AND
-    ///   a 32-byte PQC session key is available → builds a
-    ///   ``LiveKitVideoFrameCryptor`` and stores `.livekit(...)`. This
-    ///   matches the wire format Desktop and Android actually emit
-    ///   (despite the legacy `sframe-v1` tag name on the wire — see
-    ///   `LiveKitFrameCryptor.ts` for the format spec).
-    /// - Otherwise → stores `.legacy`, preserving today's behaviour
-    ///   for legacy peers + tests.
+    /// - If `useSFrame=true` (peer advertised `sframe-v1`) AND the directional frame keys of
+    ///   the current round exist → installs the native RTCFrameCryptor and stores `.native`.
+    /// - Otherwise → fail-closed `.legacy` (the F-02 gate below).
     ///
-    /// - Parameter pqcSessionKeyProvider: closure returning the
-    ///   current 32-byte PQC session key. Typically backed by
-    ///   `{ self.pqcSessionKey ?? Data() }` from the app layer.
-    ///   The closure is captured by the resulting cryptor and called
-    ///   on every frame so audio-driven rekey rotations are picked
-    ///   up transparently.
-    /// - Returns: the resolved sealer, or `nil` if the peer hasn't
-    ///   been heard from yet.
+    /// The frame keys are the two DIRECTIONAL keys of `OneToOneFrameKeys` (transcript v5, owner
+    /// decision O1) — the same pair audio uses: no `K_video` derivation exists any more.
     @discardableResult
-    /// Non-reversible 3-byte (6 hex char) fingerprint of a key, for cross-
-    /// platform key-match diagnostics only — never logs the key itself.
-    /// Mirrors Android's matching helper in PeerConnectionHolder.kt so the
-    /// two hex strings are directly comparable from one test call's logs.
-    static func shortFingerprint(_ key: Data) -> String {
-        SHA256.hash(data: key).prefix(3).map { String(format: "%02x", $0) }.joined()
-    }
-
-    public func ensureVideoSealer(
-        pqcSessionKeyProvider: @escaping () -> Data
-    ) -> VideoCallSealer? {
-        // REKEY: once the native cryptor is active, re-publish K_video on
-        // session-key rotation (the native KeyProvider replaces the shared key
-        // at index 0 in place — no cryptor rebuild). Do NOT no-op like the
-        // other cases below.
+    public func ensureVideoSealer() -> VideoCallSealer? {
+        // REKEY: once the native cryptor is active, re-publish the keys on session-key
+        // rotation (the native KeyProvider replaces the keys at the new ring slot in place —
+        // no cryptor rebuild). Do NOT no-op like the other cases below.
         if case .native = videoSealer {
-            let k = pqcSessionKeyProvider()
-            if k.count == 32, let c = peerConnection?.nativeVideoCryptor {
+            if let keys = currentFrameKeys(), let c = peerConnection?.nativeVideoCryptor {
                 let epoch = pqcSessionKeyEpoch
                 let slot = epoch % 16
-                if c.installKey(k, slot: slot) {
+                if c.installKeys(send: keys.send, recv: keys.recv, slot: slot) {
                     // WIRE_SPEC §8.7 v1.2 — epoch 0 (re-publishing this
                     // call's first key, e.g. a duplicate didSet firing
                     // without an actual rekey) switches immediately,
@@ -4523,7 +4469,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                         self.log?("cryattach media=video reason=rekey ok=\(attached ? 1 : 0) ms=\(Self.nowMs() - started)")
                     }
                 }
-                print("video key fp=\(Self.shortFingerprint(k)) rekey=1")
+                print("video keys rekey=1")
             }
             return videoSealer
         }
@@ -4559,24 +4505,20 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard let negotiated else { return nil }
 
         // When the peer advertised `sframe-v1` we install the NATIVE
-        // RTCFrameCryptor (cross-platform-compatible, H265-safe). Until the PQC
-        // key is available we DEFER (return nil) so a later key arrival via the
+        // RTCFrameCryptor (cross-platform-compatible, H265-safe). Until the
+        // frame keys are available we DEFER (return nil) so a later key arrival via the
         // `pqcSessionKey` didSet retries — never latch `.legacy` while waiting.
         if negotiated.useSFrame {
-            let kVideo = pqcSessionKeyProvider()
-            // Fail closed: need a real 32-byte key; reject the all-zero
+            // Fail closed: need real 32-byte keys; reject the all-zero
             // earbud-SPE placeholder (Android PeerConnectionHolder.kt:346-353).
-            guard kVideo.count == 32, kVideo.contains(where: { $0 != 0 }) else {
-                return nil  // defer until a real key arrives
+            guard let keys = currentFrameKeys(),
+                  keys.send.contains(where: { $0 != 0 }), keys.recv.contains(where: { $0 != 0 }) else {
+                return nil  // defer until real keys arrive
             }
 
             // AES-256 kill-switch gate (v4SFrameAes256Enabled). When this build
             // requires AES-256 but the peer didn't advertise sframe-aes256-v1,
-            // peer can't do our frame cipher: fall back to the .legacy sealer,
-            // i.e. transport-only DTLS-SRTP (video still flows, without
-            // frame-level E2EE). This is a DEGRADE, not a hard block — unlike
-            // Android, which disables the video track outright. Reached only
-            // against a legacy peer (all current clients advertise the tag).
+            // peer can't do our frame cipher: F-02 fail-closed.
             if CallCapabilities.v4SFrameAes256Enabled && !negotiated.useSFrameAes256 {
                 // F-02 (2026-07-26) — this used to DEGRADE to DTLS-SRTP and keep
                 // sending. The comment even said so: "video still flows, without
@@ -4593,10 +4535,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // Native libwebrtc RTCFrameCryptor on the RTP sender (and the
             // receiver, attached from the didReceiveRemoteVideoReceiver
             // delegate). Encrypts AFTER packetization → codec-agnostic / H265-
-            // safe, byte-compatible with Android's native FrameCryptor. The
-            // codec-layer LiveKit decorator is NO LONGER used (it broke H265).
-            let participant = recipientId ?? "peer"
-            let cryptor = peerConnection?.ensureNativeVideoCryptor(participantId: participant)
+            // safe, byte-compatible with Android's native FrameCryptor.
+            let cryptor = peerConnection?.ensureNativeVideoCryptor()
             // WIRE_SPEC §8.7 v1.2 — this branch only ever runs ONCE per
             // call (the early-return guard above latches `videoSealer`
             // after the first pick), so this is structurally the FIRST key
@@ -4606,7 +4546,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // REKEY branch above (`if case .native = videoSealer`) gates
             // the switch on peer readiness.
             let initialSlot = pqcSessionKeyEpoch % 16
-            if let c = cryptor, c.installKey(kVideo, slot: initialSlot) {
+            if let c = cryptor, c.installKeys(send: keys.send, recv: keys.recv, slot: initialSlot) {
                 c.switchSender(slot: initialSlot)
             }
             // W-VIDEOSENDHEALTH (2026-08-27) — attachVideoSenderCryptor()'s
@@ -4623,11 +4563,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // whole duration.
             retryVideoSenderCryptorAttachIfNeeded(retriesRemaining: 5)
             videoSealer = .native
-            videoKeyIsPhoneLevel = negotiated.useVideoKey
             let aes256Active = CallCapabilities.v4SFrameAes256Enabled && negotiated.useSFrameAes256
-            let keyKind = negotiated.useVideoKey ? "K_video (phone-level)" : "session-key (legacy)"
-            print("[WebRtcCallController] video pipeline → NATIVE RTCFrameCryptor key=\(keyKind) aes256=\(aes256Active) (peerCaps=\(negotiated.agreedTags))")
-            print("video key fp=\(Self.shortFingerprint(kVideo)) uvk=\(negotiated.useVideoKey ? 1 : 0) rekey=0")
+            print("[WebRtcCallController] video pipeline → NATIVE RTCFrameCryptor directional-keys aes256=\(aes256Active) (peerCaps=\(negotiated.agreedTags))")
+            print("video keys rekey=0")
             return videoSealer
         }
 
@@ -5784,7 +5722,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// (`pendingReceiverForAudioCryptor` + `flushPendingAudioCryptors`).
     public func peerConnection(_ pc: QAudionPeerConnection,
                                didReceiveNativeAudioSrtpReceiver receiver: RTCRtpReceiver) {
-        let participant = recipientId ?? "peer"
         // W-AUDIOAEADREKEY (2026-09-02) — B3: wire the cryptor's
         // decrypt-fail state callback to the controller's own closure,
         // mirroring the video receiver wiring immediately above.
@@ -5793,12 +5730,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // rebind — the closure lives on the OUTER `NativeAudioFrameCryptor`
         // holder, not the transient `RTCFrameCryptor` `attachReceiver`/
         // `rebindReceiver` recreate underneath it.
-        let cryptor = pc.ensureNativeAudioCryptor(participantId: participant)
+        let cryptor = pc.ensureNativeAudioCryptor()
         cryptor.onDecryptFailure = { [weak self] in
             print("[WebRtcCallController] W-AUDIOAEADREKEY: audio receiver cryptor decrypt-fail")
             self?.onAudioDecryptFailureDetected?()
         }
-        let attached = pc.attachAudioReceiverCryptor(receiver, participantId: participant) { [weak self] pcm in
+        let attached = pc.attachAudioReceiverCryptor(receiver) { [weak self] pcm in
             // PCM-TAP PARITY — see NativeAudioPcmTap's own doc. Feeds the
             // SAME Guardian/VoiceAnalysis/ContactVoiceVerifier/
             // VoiceLearningSession consumers the sealed-DataChannel decode
@@ -5808,7 +5745,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // zero frames for the call's whole life.
             self?.onNativeAudioSrtpRxPcm?(pcm)
         }
-        print("[WebRtcCallController] IOS-C4b: native audio receiver cryptor attached=\(attached) participant=\(participant)")
+        print("[WebRtcCallController] IOS-C4b: native audio receiver cryptor attached=\(attached)")
         // W-SRTPRXDIAG (2026-08-30) — remote-visible twin of the print
         // above. `rxc` is redactor-verified; "rxcryptor" is silently
         // dropped by ship-ios-logs.py, which is exactly how the silent
@@ -5857,7 +5794,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // Create the cryptor holder now even if the PQC key hasn't arrived — the
         // KeyProvider discards frames until setKey runs, so attaching the
         // receiver early avoids the receiver-before-key deadlock.
-        let cryptor = pc.ensureNativeVideoCryptor(participantId: recipientId ?? "peer")
+        let cryptor = pc.ensureNativeVideoCryptor()
         // W-KFFAST (2026-08-25) — wire the cryptor's decrypt-fail state
         // callback to the controller's own closure. Idempotent (re-assigns
         // the same closure) across every `didReceiveRemoteVideoReceiver`
@@ -5875,7 +5812,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         _ = ensureVideoSealerInternal()
         let attached = pc.attachVideoReceiverCryptor(receiver)
         print("[WebRtcCallController] native video receiver cryptor attached=\(attached)")
-        print("video rx att=\(attached ? 1 : 0) uvk=\((peerNegotiated()?.useVideoKey ?? false) ? 1 : 0)")
+        print("video rx att=\(attached ? 1 : 0)")
         // WIRE_SPEC §8.7 — the attach may have just completed the
         // "receiver cryptor attached AND keyed" pair (receiver arriving
         // AFTER key+caps). One-shot inside.

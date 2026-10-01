@@ -136,9 +136,7 @@ jobs:
       #         any Mach-O in the app still contains the upstream WebRTC key-dump log strings,
       #         or if nothing could be scanned. Flipped on in the same PR that pinned the
       #         rebuilt WebRTC.xcframework (sigarone/webrtc-aes256-build, no-key-log.patch) in
-      #         QAudionEngine/Package.swift. (It originally also covered LiveKit's
-      #         LiveKitWebRTC.xcframework; LiveKit was removed in group calls v2 and the app now
-      #         links only this one WebRTC binary.)
+      #         QAudionEngine/Package.swift. The app links only this one WebRTC binary.
       #   '0' = REPORT-ONLY: same scan, prints what it found, never fails the step or the
       #         release. Use it (one-line change) only to roll back to binaries that still
       #         carry the strings.

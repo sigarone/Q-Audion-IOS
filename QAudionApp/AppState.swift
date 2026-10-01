@@ -1359,16 +1359,6 @@ final class AppState: ObservableObject {
     /// Cleared alongside `callPqcSessionKey` at hangup so a stale pin can
     /// never leak into the next call's pipeline.
     private var activeVideoCallIdentity: (callId: String, selfIsRoleA: Bool)?
-    /// vkey-v1 — raw sovereign/KMS PSK bytes mixed into THIS call's session
-    /// key, resolved by the negotiated PSK fingerprint. Pushed to the WebRTC
-    /// controller as `videoContactPsk` so K_video's HKDF *salt* = psk —
-    /// byte-identical to Android `deriveVideoKey(psk = psk)`
-    /// (PqcHandshake.kt:674). nil when no PSK was selected (both platforms then
-    /// fall back to the default "Q-AUDION-PHONE-VIDEO-SALT-V1" salt). Without
-    /// this, iOS derived K_video with the default salt while Android used the
-    /// psk → divergent K_video → AES-GCM video frames undecryptable cross-
-    /// platform (black/garbage) while audio kept working.
-    var callVideoPsk: Data?
     /// M-10 — provenance of the key currently feeding the SAS panel.
     /// `.psk` while the SAS is seeded from the TRANSITIONAL per-pair
     /// PSK (pre-handshake); `.mlKem` once the real ML-KEM-1024 session
@@ -1871,14 +1861,12 @@ final class AppState: ObservableObject {
     /// `handleInboundKcMac` (the peer's `KCMAC:` piggy-back) and the 5000ms
     /// deadline task. A class (not a struct) so both consumers mutate the SAME
     /// instance in place rather than needing a dictionary re-write on every
-    /// field update. PURE OBSERVATION (W-NOBRICK): nothing here ever gates the
-    /// call — `kcStatus` only ever feeds `AssuranceState`/telemetry.
+    /// field update. FAIL-CLOSED under transcript v5 (WIRE_SPEC §3.7.1, O5): a `.wrong`
+    /// verdict, or no peer MAC inside the 5 s window, ENDS the call (`kcmac_mismatch`).
     private final class KeyConfirmationCallState {
         let peerId: String
         let isInitiator: Bool
-        /// `nil` ⇒ kc_mac was never attempted this call (peer didn't advertise
-        /// pskMixV1, or a transcript-v2 binding/identity key was missing) —
-        /// `kcStatus` stays `.absent` and no wire message is ever sent/awaited.
+        /// Always present under v5 (the handshake builds both; a missing one ends the call).
         let kcKey: Data?
         let transcript: Data?
         let n: Int
@@ -1921,6 +1909,11 @@ final class AppState: ObservableObject {
         }
     }
     private var kcCallStates: [String: KeyConfirmationCallState] = [:]
+    /// A peer `KCMAC:` that arrived before this side's own `handleKcMacReady` ran (the responder
+    /// leg's key-confirmation start is deferred until its ACCEPT is released): kept (one per
+    /// call) and verified as soon as the state exists, instead of being dropped and then failing
+    /// the 5 s window.
+    private var kcEarlyInbound: [String: (raw: String, senderId: String)] = [:]
     /// Read by `CallService.getKeyConfirmationTelemetry` at call teardown so
     /// the `psk_mix_n`/`kc_mac_result`/`assurance_state`/`expected_but_missing`
     /// fields can ride the EXISTING `call.audio.diag` emission (no new
@@ -7579,6 +7572,26 @@ final class AppState: ObservableObject {
         RTLog.warn("call", "video rollback ev=rb media_mode=ws-relay state=active")
     }
 
+    /// Transcript v5 (WIRE_SPEC §3.8) — bind a 1:1 controller to its call's DTLS context: the
+    /// call's own certificate (presented by every PeerConnection of the call), the pinned peer
+    /// fingerprint (SDP + stats checks) and the handshake role that picks the directional frame
+    /// keys. `wireCallId` is the id the signed handshake carries. A missing id or certificate
+    /// leaves the context nil: the controller then refuses to build a PeerConnection (a 1:1 call
+    /// without its certificate is never set up). A failed DTLS check ends the call.
+    @MainActor
+    private func bindDtlsContext(
+        _ controller: QAudionWebRtcCallController, wireCallId: String?, isOfferer: Bool
+    ) {
+        let cid = (wireCallId ?? "").lowercased()
+        controller.dtlsContext = cid.isEmpty ? nil : CallDtlsContextStore.shared.context(forCallId: cid)
+        controller.isHandshakeOfferer = isOfferer
+        controller.onDtlsFingerprintFailure = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleHandshakeFatal(callId: cid, reason: "dtls_fp_mismatch")
+            }
+        }
+    }
+
     /// W-VIDUP — build + wire a responder WebRTC controller on-demand when a
     /// video upgrade arrives on a WS-relay call that never built one (the audio
     /// runs over the sealed WS relay, not WebRTC). Mirrors the wiring in
@@ -7592,6 +7605,10 @@ final class AppState: ObservableObject {
             callingApi: provider.callingApi,
             relayProvider: ensureRelayProvider())
         controller.accessToken = currentAccessToken
+        // Transcript v5: this device may be either end of the call; the role is the call role.
+        bindDtlsContext(
+            controller, wireCallId: canonicalActiveCallId(),
+            isOfferer: self.callService.callIntegration?.currentIsCaller ?? false)
         // W419/W-ICEVIS — engine target can't reach RTLog; bridge its
         // print()-only ICE/DTLS diagnostics the same way CallKitProvider's
         // were bridged earlier.
@@ -7751,7 +7768,6 @@ final class AppState: ObservableObject {
         // K_video parity (v1.0.700): the native video FrameCryptor needs the
         // call's session key + the sovereign/KMS PSK salt BEFORE the answer.
         controller.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
-        controller.videoContactPsk = self.callVideoPsk
         // G7 — feeds a cryptor: assert this key is actually for the call
         // this controller is being built for, not a foreign one still
         // sitting in the global slot. Review fix: asserted against the
@@ -8137,7 +8153,6 @@ final class AppState: ObservableObject {
                 // idea of the active call (mid-call already, no ring-time
                 // ambiguity here).
                 if let key = self.callPqcSessionKey(forCallId: self.canonicalActiveCallId()) {
-                    controller.videoContactPsk = self.callVideoPsk
                     controller.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE
                     controller.pqcSessionKey = key
                 }
@@ -8841,6 +8856,41 @@ final class AppState: ObservableObject {
             Task {
                 try? await impl.sendCallHangupForId(
                     callId: cid, recipientId: peer, reason: "ice-recovery-exhausted")
+            }
+        }
+        self.endCall(notifyPeerInBand: false)
+    }
+
+    /// Transcript-v5 end path (WIRE_SPEC §3.7 / §3.8): the call cannot be trusted and ends with a
+    /// fixed reason, one of `dtls_fp_mismatch`, `kcmac_mismatch`, `handshake_malformed`. Fired by
+    /// the signed handshake (`QAudionCallIntegration.onHandshakeFatal`), the PeerConnection's DTLS
+    /// fingerprint checks (`QAudionWebRtcCallController.onDtlsFingerprintFailure`) and the
+    /// key-confirmation window. Same teardown shape as `handleIceRecoveryExhausted`: in-band
+    /// control hangup, then the reason-bearing envelope by explicit id after a synchronous unbind,
+    /// then local teardown. Telemetry is a numeric verdict only (1 dtls_fp_mismatch, 2
+    /// kcmac_mismatch, 3 handshake_malformed). A fatal for a call that is no longer the active one
+    /// is ignored.
+    @MainActor
+    private func handleHandshakeFatal(callId: String, reason: String) {
+        if let active = self.canonicalActiveCallId(), !active.isEmpty,
+           active.lowercased() != callId.lowercased() {
+            RTLog.warn("call", "hsfatal stale=1")
+            return
+        }
+        let code: Int
+        switch reason {
+        case "dtls_fp_mismatch": code = 1
+        case "kcmac_mismatch": code = 2
+        default: code = 3
+        }
+        RTLog.error("call", "hsfatal r=\(code)")
+        self.callService.sendControlHangup(reason: reason)
+        if let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+           let cid = impl.getActiveCallId(),
+           let peer = self.callContactId {
+            impl.unbindActiveCallId(matching: cid)
+            Task {
+                try? await impl.sendCallHangupForId(callId: cid, recipientId: peer, reason: reason)
             }
         }
         self.endCall(notifyPeerInBand: false)
@@ -13293,44 +13343,6 @@ final class AppState: ObservableObject {
         return (displayName, method)
     }
 
-    /// vkey-v1 — resolve the raw PSK key bytes for a negotiated fingerprint
-    /// from the sovereign/KMS vault, so iOS can feed the same `psk` salt into
-    /// `deriveVideoKey` that Android used (PqcHandshake.kt:674). Returns nil
-    /// when no stored key matches the fingerprint — the caller then leaves
-    /// `videoContactPsk` nil and both peers fall back to the default video
-    /// salt (matches Android's `psk == null` branch). Mirrors the lookup in
-    /// ``resolvePskDisplayMeta(fingerprint:)`` but returns the key material.
-    static func resolvePskBytes(fingerprint: String?) -> Data? {
-        guard let fp = fingerprint, !fp.isEmpty else { return nil }
-        let vault = SovereignKeyVault()
-        let matchedName: String? = vault.listPskNames().first { n in
-            if n.hasPrefix("__") { return false }
-            // W-PSKMIX step 6 — this is the SEVERE twin of step 5's receive-
-            // side exclusion: unlike the audio-PSK matching gates (which only
-            // decide WHICH stored PSK a call uses), this function's return
-            // value is fed directly into `deriveVideoKey`'s HKDF *salt*
-            // (`videoContactPsk` → `QAudionCallIntegration.deriveVideoKey`,
-            // salt = psk when non-nil/non-empty). Letting a `.callDerived`
-            // entry's raw bytes (the group-control-channel ratchet seed
-            // material) ever match here would mix that forward-secret
-            // ratchet's key material directly into a video-call key
-            // derivation — coupling two crypto domains that must stay
-            // independent. A fixed peer never advertises a `.callDerived`
-            // fingerprint (771f4c1), so this is defense-in-depth against an
-            // unpatched/malicious peer or a future advertise-side
-            // regression, exactly like step 5's audio-PSK gates — nil is
-            // already the documented safe fallback (both peers then use the
-            // default video salt, matching Android's `psk == null` branch),
-            // so excluding this candidate never breaks an ordinary call.
-            guard PskAdvertising.isEligibleMatchCandidate(origin: vault.origin(name: n)) else { return false }
-            // W-STALEFP — see resolvePskDisplayMeta's identical comment above.
-            guard let raw = (try? vault.loadPsk(name: n)) ?? nil, !raw.isEmpty else { return false }
-            return PskAdvertising.canonicalFingerprint(forPsk: raw) == fp
-        }
-        guard let name = matchedName else { return nil }
-        return (try? vault.loadPsk(name: name)) ?? nil
-    }
-
     /// W-NFCIDBIND (2026-07-29) — the peer's Ed25519 identity pubkey captured
     /// at NFC-tap time for the vault entry matching `fingerprint`, or `nil`
     /// when there is no match or the matched entry never recorded one (every
@@ -13686,17 +13698,10 @@ final class AppState: ObservableObject {
                 return
             }
             earbudCounterparty.handleInbound(callId: callId, pdu: pdu)
-        case .fpSet(let callId, let fpAdv):
-            // Phase B — remote fp_adv for neg_digest computation.
-            // Forward to whichever integration is active (caller or responder).
-            // Sender guard mirrors EARBUDPDU: must be the current call peer.
-            guard callContactId == senderId else {
-                print("[AppState] FPSET dropped — sender \(senderId.prefix(8))… is not the call peer")
-                return
-            }
-            let integration = callService.callIntegration ?? responderCallIntegration
-            integration?.handleInboundFpSet(callId: callId, fpAdv: fpAdv)
-            print("[AppState] FPSET received callId=\(callId.prefix(8))… from=\(senderId.prefix(8))…")
+        case .fpSet(let callId, _):
+            // The FPSET exchange belonged to the retired schema:4 KDF (transcript v5 binds the
+            // session key to SHA-256(ACCEPT_v5) instead). Ignored.
+            print("[AppState] retired FPSET ignored callId=\(callId.prefix(8))…")
         case .earbudMkd(let callId, let pkg):
             // Phase 6: sealed PQ media key package from earbud-side phone.
             // Full KMS integration pending; guard sender and log.
@@ -13793,31 +13798,28 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// W-KCMAC (ship step 5) — fired from `QAudionCallIntegration.onKcMacReady`
-    /// on BOTH the caller and responder legs, immediately after session-key
-    /// derivation. Sends our own `kc_mac` (gated on the peer having advertised
-    /// `pskMixV1`) and arms the 5000ms absent-deadline. W-NOBRICK: never
-    /// throws/gates — every path below at worst leaves `kcStatus == .absent`.
+    /// W-KCMAC — fired from `QAudionCallIntegration.onKcMacReady` on BOTH the caller and responder
+    /// legs, immediately after session-key derivation (the responder's is deferred until its
+    /// ACCEPT is released). Sends our own `kc_mac` and arms the 5000 ms window.
+    ///
+    /// **Fail-closed (WIRE_SPEC §3.7.1, O5).** The exchange is unconditional under transcript v5
+    /// (no `pskMixV1` gate): a key-confirmation transcript that cannot be built, a peer MAC that
+    /// does not verify, or none inside the window ENDS the call with reason `kcmac_mismatch`.
+    /// The verdict is recorded for telemetry first.
     @MainActor
     private func handleKcMacReady(_ event: QAudionCallIntegration.KcMacReadyEvent) {
         let key = event.callId.lowercased()
         let state = KeyConfirmationCallState(event: event)
+        kcCallStates[key]?.deadlineTask?.cancel()
         kcCallStates[key] = state
 
-        // Gate (per the design/task): only actually run the wire exchange when
-        // the peer advertised pskMixV1 AND both sides could reconstruct a
-        // transcript-v2 binding (step 4, both legs). Today (pskMixV1 default
-        // false fleet-wide, step 7 not flipped) this branch is expected to be
-        // the common case — record `.absent` immediately, no wire round-trip.
-        guard event.peerSupportsMix, let kcKey = event.kcKey, let transcript = event.transcript else {
-            state.kcStatus = .absent
-            state.resultRecorded = true
-            emitKeyConfirmationTelemetry(callId: event.callId, state: state)
+        guard let kcKey = event.kcKey, let transcript = event.transcript else {
+            failKeyConfirmation(callId: event.callId, state: state)
             return
         }
 
         // Send our own MAC immediately — fire-and-forget over the existing
-        // opaque_message channel, same pattern as `sendFpSet`.
+        // opaque_message channel, same pattern as the other piggy-backs.
         let ownMac = event.isInitiator
             ? KeyConfirmation.macInit(kcKey: kcKey, transcript: transcript)
             : KeyConfirmation.macResp(kcKey: kcKey, transcript: transcript)
@@ -13834,29 +13836,49 @@ final class AppState: ObservableObject {
             }
         }
 
-        // 5000ms deadline (per the design): if the peer's kc_mac never
-        // arrives, the verdict is `.absent` — never `.wrong` (that's reserved
-        // for a MAC that arrived and failed to verify).
+        // 5000 ms window: no peer MAC inside it is a failure (`kcmac_mismatch`), exactly like a MAC
+        // that arrived and failed to verify.
         state.deadlineTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
-                guard let self, let cur = self.kcCallStates[key], !cur.resultRecorded else { return }
-                cur.resultRecorded = true
-                self.emitKeyConfirmationTelemetry(callId: event.callId, state: cur)
+                guard let self, let cur = self.kcCallStates[key], cur === state, !cur.resultRecorded else { return }
+                self.failKeyConfirmation(callId: event.callId, state: cur)
             }
+        }
+
+        // A peer MAC that raced ahead of this handler.
+        if let early = kcEarlyInbound.removeValue(forKey: key) {
+            handleInboundKcMac(callId: event.callId, raw: early.raw, senderId: early.senderId)
         }
     }
 
-    /// W-KCMAC (ship step 5) — verify an inbound `KCMAC:` piggy-back against
-    /// this call's stashed `(kcKey, transcript)`. Malformed/unexpected payloads
-    /// are dropped with a log line, exactly like every other piggy-back branch
-    /// above — NEVER thrown, NEVER gates the call (W-NOBRICK).
+    /// Record a failed key confirmation (verdict `.wrong`) and end the call (`kcmac_mismatch`).
+    @MainActor
+    private func failKeyConfirmation(callId: String, state: KeyConfirmationCallState) {
+        state.kcStatus = .wrong
+        state.resultRecorded = true
+        state.deadlineTask?.cancel()
+        emitKeyConfirmationTelemetry(callId: callId, state: state)
+        handleHandshakeFatal(callId: callId, reason: "kcmac_mismatch")
+    }
+
+    /// W-KCMAC — verify an inbound `KCMAC:` piggy-back against this call's `(kcKey, transcript)`.
+    /// A MAC that does not verify (wrong role, wrong length, wrong value) fails the key
+    /// confirmation and ends the call (`kcmac_mismatch`, fail-closed); a `KCMAC:` from anyone but
+    /// the call peer, or for another call, is dropped with a log line.
     @MainActor
     private func handleInboundKcMac(callId: String, raw: String, senderId: String) {
         let key = callId.lowercased()
         guard let state = kcCallStates[key] else {
-            print("[AppState] KCMAC dropped — no pending key-confirmation state for callId=\(callId.prefix(8))…")
+            // Not started yet (the responder leg starts after its ACCEPT is released): keep one
+            // for this call and verify it when the state appears. Only the active call's peer.
+            guard callContactId == senderId else {
+                print("[AppState] KCMAC dropped — no pending key-confirmation state for callId=\(callId.prefix(8))…")
+                return
+            }
+            kcEarlyInbound[key] = (raw: raw, senderId: senderId)
+            print("[AppState] KCMAC early — held until the key-confirmation state exists callId=\(callId.prefix(8))…")
             return
         }
         guard state.peerId == senderId else {
@@ -13867,13 +13889,12 @@ final class AppState: ObservableObject {
         // `.absent`) — a late/duplicate KCMAC must not re-open the verdict.
         guard !state.resultRecorded else { return }
         guard let kcKey = state.kcKey, let transcript = state.transcript else {
-            // Gate never opened this call (peer didn't advertise pskMixV1, or we
-            // couldn't build a transcript) — nothing to verify against. Absent
-            // was already recorded synchronously in `handleKcMacReady`.
+            // `handleKcMacReady` already failed this call (no transcript to verify against).
             return
         }
         guard let bytes = Data(base64Encoded: raw), bytes.count == 33 else {
             print("[AppState] KCMAC malformed payload callId=\(callId.prefix(8))… rawLen=\(raw.count)")
+            failKeyConfirmation(callId: callId, state: state)
             return
         }
         let roleByte = bytes[bytes.startIndex]
@@ -13888,15 +13909,16 @@ final class AppState: ObservableObject {
         let expectedPeerRole: UInt8 = state.isInitiator ? 0x02 : 0x01
         guard roleByte == expectedPeerRole else {
             print("[AppState] KCMAC role mismatch callId=\(callId.prefix(8))… expected=\(expectedPeerRole) got=\(roleByte)")
-            state.kcStatus = .wrong
-            state.resultRecorded = true
-            state.deadlineTask?.cancel()
-            emitKeyConfirmationTelemetry(callId: callId, state: state)
+            failKeyConfirmation(callId: callId, state: state)
             return
         }
         let ok = KeyConfirmation.verify(
             received: Data(mac), kcKey: kcKey, asInitiator: !state.isInitiator, transcript: transcript)
-        state.kcStatus = ok ? .verified : .wrong
+        guard ok else {
+            failKeyConfirmation(callId: callId, state: state)
+            return
+        }
+        state.kcStatus = .verified
         state.resultRecorded = true
         state.deadlineTask?.cancel()
         emitKeyConfirmationTelemetry(callId: callId, state: state)
@@ -14069,6 +14091,7 @@ final class AppState: ObservableObject {
         applyPresenceAuthOutcomeIfAny(callId: key)
         kcCallStates[key]?.deadlineTask?.cancel()
         kcCallStates.removeValue(forKey: key)
+        kcEarlyInbound.removeValue(forKey: key)
         keyConfirmationTelemetryByCall.removeValue(forKey: key)
         finalAssuranceByCall.removeValue(forKey: key)
     }
@@ -14624,14 +14647,6 @@ final class AppState: ObservableObject {
                     pskFingerprint: pskFp,
                     pskName: meta.name,
                     pskMethod: meta.method)
-                // vkey-v1: resolve + publish the raw PSK so K_video's salt
-                // matches Android (psk == HKDF salt). nil → default salt.
-                self.callVideoPsk = AppState.resolvePskBytes(fingerprint: pskFp)
-                #if canImport(WebRTC)
-                if let ctrl = self.webRtcController as? QAudionWebRtcCallController {
-                    ctrl.videoContactPsk = self.callVideoPsk
-                }
-                #endif
             }
         }
         // W-REKEYSYNC (2026-09-10) — responder JSON path: adopt the
@@ -14823,10 +14838,6 @@ final class AppState: ObservableObject {
         // Phase-10b: wire the handshake-signing closures (sign + verify + TOFU
         // pin) for this responder integration. peerContactId = the caller.
         wireHandshakeSigning(on: integration)
-        // Phase B: wire the earbud GATT proxy so onAndroidBundleReceived
-        // can perform fp_adv GATT operations (c8 write/read) during the
-        // V4 KDF wiring. Nil when no earbud is connected → keyClass=0 fallback.
-        integration.earbudPairingGattProxy = earbudGattProxy.isConnected ? earbudGattProxy : nil
         responderCallIntegration = integration
         return integration
     }
@@ -14845,10 +14856,9 @@ final class AppState: ObservableObject {
     /// parameter is introduced, so the new wiring cannot trip the Swift-6
     /// Sendable-inference silent build break.
     ///
-    /// ADDITIVE / DEFAULT-OFF: `requireSignedHandshakeFlag` stays `false` (the
-    /// integration's default), so a missing signature is a WARN, not an abort.
-    /// If the local sovereign identity is absent, `signTranscript` returns nil →
-    /// the OFFER/ACCEPT go out UNSIGNED (byte-identical legacy wire).
+    /// Transcript v5: signing is mandatory. If the local sovereign identity is absent there is
+    /// no signature, so no OFFER/ACCEPT is built and the call is not set up; a received bundle
+    /// without a valid signing triple is malformed and ends the call.
     private func wireHandshakeSigning(on integration: QAudionCallIntegration) {
         // CONCURRENCY: AppState is `@MainActor`, but the integration invokes
         // these closures synchronously from its (non-main) WS-dispatch path. So
@@ -15088,40 +15098,27 @@ final class AppState: ObservableObject {
                 UserDefaults.standard.set(set, forKey: ratchetV5Key)
             }
         }
-        // Verified-channel = the user has confirmed the SAS for this peer AND that
-        // confirmation still applies to the identity key currently pinned.
-        //
-        // C-3 (2026-07-26) — the second half is new. "A stored fingerprint is the
-        // proxy for trust >= VERIFIED_CHANNEL" was the old rule and it survived key
-        // rotation: a server-substituted identity inherited the user's in-person
-        // verification with nothing to notice. Now the record is bound to the pinned
-        // key, so a rotation drops this back to unverified by construction.
-        //
-        // No pin (never contacted / wiped) => not verified. `SasVerificationStore.shared`
-        // and `PeerIdentityPinStore` are both Keychain-backed — safe to read off-main.
-        integration.isPeerVerifiedChannel = { peerId in
-            // D11 — deliberately NOT passing deviceId here (unlike the other
-            // pinnedKey call sites this same fix touched): this closure's
-            // declared type, `((String) -> Bool)?` with no actor/Sendable
-            // annotation, is called from QAudionCallIntegration's handshake
-            // path, which is not guaranteed to run on the main actor —
-            // reading AppState.peerDeviceId (a @MainActor member) from here
-            // would be a cross-actor access the type system can't verify
-            // from this Windows box. The bare-contactId lookup this already
-            // does is the pre-existing, safe behavior; left unchanged.
-            guard let pinned = PeerIdentityPinStore().pinnedKey(contactId: peerId) else {
-                return false
-            }
-            return SasVerificationStore.shared.hasVerifiedBinding(
-                peerUserId: peerId,
-                currentIdentityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
+        // Transcript v5 — DTLS certificate binding (WIRE_SPEC §3.8). The signed handshake needs this
+        // call's own certificate fingerprint BEFORE it signs; the PeerConnection later presents that
+        // very certificate and applies no remote SDP until the peer's signed fingerprint is pinned.
+        // Both closures only touch the process-wide `CallDtlsContextStore` (internally locked), so
+        // they are safe off-main like the stores captured above.
+        integration.provideLocalDtlsFingerprint = { callId in
+            CallDtlsContextStore.shared.fingerprint(forCallId: callId)
         }
-        // Global enforcement flag: the integration default is `true` (Gate #16,
-        // enabled 2026-06-18 — see QAudionCallIntegration.requireSignedHandshakeFlag).
-        // We intentionally do NOT touch it here. `require_signed_handshake` ON
-        // means a MISSING signature is surfaced (sig_required_missing) rather than
-        // silently accepted; do NOT set it to `false` (that re-opens the fleet to
-        // unsigned/MITM peers — a security downgrade).
+        integration.onPeerDtlsFingerprintPinned = { callId, fingerprint in
+            _ = CallDtlsContextStore.shared.context(forCallId: callId)?.pinPeer(fingerprint)
+        }
+        // A handshake that cannot continue (malformed bundle, DTLS fingerprint changed in a re-key
+        // round, no usable transcript) ends the call — see `handleHandshakeFatal`.
+        integration.onHandshakeFatal = { [weak self] callId, reason in
+            Task { @MainActor [weak self] in
+                self?.handleHandshakeFatal(callId: callId, reason: reason)
+            }
+        }
+        // There is no "require signed" switch any more: a bundle without a valid signing triple
+        // (`sigV5`, `signerIdentityKey`, `dtlsFingerprint`) is malformed and the call ends. A
+        // present-but-INVALID signature, or an unknown identity, keeps W-NOBRICK (below).
         //
         // D11 / W-NOBRICK — what actually happens to a KEY SWAP (corrects the
         // earlier "caught fail-closed" wording, which never matched runtime):
@@ -16790,8 +16787,6 @@ final class AppState: ObservableObject {
                 // Phase-10b: wire the handshake-signing closures (sign OFFER +
                 // verify ACCEPT + TOFU pin) on the caller-side integration.
                 wireHandshakeSigning(on: integration)
-                // Phase B: wire the earbud GATT proxy for V4 KDF fp_adv operations.
-                integration.earbudPairingGattProxy = earbudGattProxy.isConnected ? earbudGattProxy : nil
                 integration.sendCallProcessing = { callId, callerId in
                     // Forward via the calling API (which routes through WS).
                     Task {
@@ -17005,13 +17000,6 @@ final class AppState: ObservableObject {
                             pskFingerprint: pskFp,
                             pskName: meta.name,
                             pskMethod: meta.method)
-                        // vkey-v1: publish raw PSK so K_video salt == Android.
-                        strongSelf.callVideoPsk = AppState.resolvePskBytes(fingerprint: pskFp)
-                        #if canImport(WebRTC)
-                        if let ctrl = strongSelf.webRtcController as? QAudionWebRtcCallController {
-                            ctrl.videoContactPsk = strongSelf.callVideoPsk
-                        }
-                        #endif
                     }
                 }
 
@@ -17215,6 +17203,9 @@ final class AppState: ObservableObject {
                 // WSS-TURN bridge JWT auth — forwarded to the WS handshake
                 // on /api/v1/turn-ws (server requires Bearer token since W559).
                 controller.accessToken = currentAccessToken
+                // Transcript v5: the caller is the offerer; its certificate was generated before the
+                // OFFER was signed (same wire call id).
+                bindDtlsContext(controller, wireCallId: nativeSrtpOutgoingCallId, isOfferer: true)
                 // W419/W-ICEVIS — bridge print()-only ICE/DTLS diagnostics to RTLog.
                 // G6 — also watches for the native rx-cryptor "ok" line to
                 // mark this call as having reached media (crash-streak gate).
@@ -19813,9 +19804,6 @@ extension AppState {
         // session key so a stale (callId, selfIsRoleA) can't leak into the
         // next call's video pipeline.
         activeVideoCallIdentity = nil
-        // vkey-v1: drop the per-call video PSK salt so a stale key from this
-        // call can't seed the next call's K_video.
-        callVideoPsk = nil
         // M-10: reset SAS provenance so the next call starts from
         // .none and doesn't inherit this call's .mlKem trust state.
         callSasKeySource = .none
@@ -20024,8 +20012,12 @@ extension AppState {
     var callSasWords: [String] {
         guard callSasKeySource == .mlKem else { return [] }
         guard let key = callPqcSessionKey, !key.isEmpty else { return [] }
+        // The words are bound to this call's SHA-256(ACCEPT_v5) (WIRE_SPEC §4): no stored hash,
+        // no words (the SAS panel stays hidden rather than showing a transcript-free value).
+        guard let owner = callPqcSessionKeyCallId ?? canonicalActiveCallId(),
+              let transcriptHash = HandshakeTranscriptHashStore.shared.hash(forCallId: owner) else { return [] }
         do {
-            return try ComputeSasUseCase.invoke(sessionKey: key).words
+            return try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: transcriptHash).words
                 .map { $0.uppercased() }
         } catch {
             return []
@@ -21255,10 +21247,6 @@ extension AppState {
         // the same string the other party received from the wire
         // (all platforms send the callId lowercase in call_offer).
         ctrl.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
-        // vkey-v1: set the K_video salt PSK before the session key so
-        // the first ensureVideoSealer derives the Android-matching
-        // K_video (salt = psk, not the default string).
-        ctrl.videoContactPsk = self.callVideoPsk
         ctrl.pqcSessionKeyEpoch = Int32(max(self.callPqcRekeyEpoch, 0))  // W-KEYSLOTROTATE — before the key (didSet reads it)
         ctrl.pqcSessionKey = key
         print("[AppState] PQC SRTP sealer key forwarded to WebRTC controller (\(key.count) bytes, callId=\(ctrl.pqcCallId.prefix(8))…)")
@@ -25790,6 +25778,10 @@ extension AppState {
         )
         // WSS-TURN bridge JWT auth (responder side mirrors caller).
         controller.accessToken = currentAccessToken
+        // Transcript v5: the callee is the acceptor. The PeerConnection (and its certificate) can
+        // exist from ring time; no remote SDP is applied before the signed OFFER pinned the
+        // caller's fingerprint.
+        bindDtlsContext(controller, wireCallId: offerCallId, isOfferer: false)
         // W419/W-ICEVIS — bridge print()-only ICE/DTLS diagnostics to RTLog.
         // G6 — also watches for the native rx-cryptor "ok" line to mark this
         // call as having reached media (crash-streak gate).

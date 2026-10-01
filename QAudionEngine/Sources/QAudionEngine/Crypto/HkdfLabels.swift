@@ -35,23 +35,6 @@ public enum HkdfLabels {
     /// Frame chain (video) — per-frame key for video uplift (Track B.5).
     public static let frameChainVideo: Data = Data("q-audion-video-frame-key".utf8)
 
-    /// Earbud-video K_video HKDF `info` label (cross-platform `vkey-v1`).
-    ///
-    /// Used as the leading 23 bytes of the HKDF `info` when deriving the
-    /// dedicated phone-level video key (K_video) for earbud calls. The
-    /// full `info` is `phoneVideoV1 || transcriptHash(32)` = 55 bytes.
-    /// MUST be byte-identical to Android `PHONE_VIDEO_INFO` and the
-    /// Desktop port — pinned by the K_video KAT (`PhoneVideoKeyKatTests`).
-    /// 23 bytes, NOT null-terminated.
-    public static let phoneVideoV1: Data = Data("Q-AUDION-PHONE-VIDEO-V1".utf8)
-
-    /// Earbud-video K_video HKDF `salt` used when NO contact PSK is
-    /// present (the only path on iOS today — iOS has no SovereignKeyVault
-    /// so the contact PSK is always absent). When a PSK *is* present the
-    /// 32-byte PSK replaces this salt. MUST match Android's PSK-absent
-    /// salt byte-for-byte. 28 bytes, NOT null-terminated.
-    public static let phoneVideoSaltV1: Data = Data("Q-AUDION-PHONE-VIDEO-SALT-V1".utf8)
-
     /// Attachment encryption — per-file key derivation.
     public static let fileKey: Data = Data("q-audion-file-key".utf8)
 
@@ -80,20 +63,6 @@ public enum HkdfLabels {
     /// Spec: apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
     public static let hybridCtBindV1: Data = Data("q-audion-ct-bind-v1".utf8)
 
-    /// SUPERSEDED (ITEM 2/3 FOLLOW-UP, 2026-09-02) — this platform's
-    /// PRE-RECONCILIATION session-key KDF `info` label, used only by the
-    /// cascaded second-HKDF-pass construction `deriveTranscriptBoundSessionKey`
-    /// carried before this follow-up (see that function's current doc for the
-    /// reconciled, canonical construction, which reuses `hybridPqcSessionKey`
-    /// above as its `info` prefix instead of this label — matching Android's
-    /// `HybridPqcKeyExchange.kt deriveSessionKeyTranscriptBound` byte-for-byte,
-    /// which never had a dedicated KDF-transcript-bind label of its own).
-    /// Kept defined (not deleted) only so old references/diffs still resolve;
-    /// no production code path reads this constant any more. Never had a live
-    /// call using it — `hsTranscriptBindV1Enabled` has been `false` since this
-    /// bit's introduction. 32 bytes, NOT null-terminated.
-    public static let kdfTranscriptBindV1: Data = Data("q-audion-kdf-transcript-bind-v1".utf8)
-
     /// CALL-4/HSID-002 — SAS `info` REPLACEMENT (not appended) used by
     /// `ComputeSasUseCase.invoke` in place of `SasConstants.infoWordsBytes`
     /// when the caller supplies a non-nil `transcriptHash`. A DISTINCT label
@@ -112,13 +81,19 @@ public enum HkdfLabels {
     /// had — the two platforms' independent implementations diverged on a
     /// detail neither this fix's own kdoc above nor the original security
     /// review actually required (a distinct label is what matters, not its
-    /// exact spelling), so the shorter Android string is now the shared
-    /// cross-platform value. Never had a live call using the old value —
-    /// `hsTranscriptBindV1Enabled` has been `false` since this bit's
-    /// introduction — so this is a pre-go-live correction, not a wire break.
+    /// exact spelling), so the shorter Android string is the shared cross-platform value.
+    /// Under transcript v5 the SAS is always bound to `SHA-256(ACCEPT_v5)` (WIRE_SPEC §4).
     public static let sasTranscriptBindV1: Data = Data("q-audion-sas-transcript".utf8)
 
+    /// 1:1 directional frame keys (transcript v5, owner decision O1): HKDF `info` prefix. The full
+    /// info is `frameKeyInfoPrefixV5 || callId || ":o2a"` or `":a2o"` (ASCII, no NUL, `callId`
+    /// exactly as in the transcript). See `OneToOneFrameKeys`. 22 bytes, NOT null-terminated.
+    public static let frameKeyInfoPrefixV5: Data = Data("q-audion-frame-key-v5:".utf8)
+
     // MARK: - Salts (UTF-8)
+
+    /// 1:1 directional frame keys (transcript v5): HKDF salt. 21 bytes.
+    public static let frameKeySaltV5: Data = Data("qaudion-frame-salt-v5".utf8)
 
     /// Hybrid PQC session key salt (used as the HKDF Extract salt when no
     /// PSK is present; the PSK replaces it when one is negotiated).
@@ -142,8 +117,8 @@ public enum HkdfLabels {
             messageKey, hybridPqcSessionKey, nfcCollaborativePsk,
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
-            deviceLinkSalt, phoneVideoV1, phoneVideoSaltV1,
-            kdfTranscriptBindV1, sasTranscriptBindV1
+            deviceLinkSalt, frameKeyInfoPrefixV5, frameKeySaltV5,
+            sasTranscriptBindV1
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

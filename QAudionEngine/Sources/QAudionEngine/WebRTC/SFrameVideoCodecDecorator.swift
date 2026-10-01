@@ -2,51 +2,19 @@ import Foundation
 #if canImport(WebRTC)
 import WebRTC
 
-/// Cross-platform video frame sealer selector — picks the wire format
-/// used for end-to-end video encryption on this call.
-///
-/// W420: SFrame v1 (Q-Audion custom envelope).
-/// W539: LiveKit / libwebrtc native FrameCryptor envelope — the format
-///       Desktop (`LiveKitFrameCryptor.ts`) and Android (libwebrtc
-///       native `FrameCryptor`) actually emit / consume. Required for
-///       cross-platform interop; the SFrame path is preserved for any
-///       future iOS-only group-call work but is NOT selected for
-///       1:1 calls by default.
+/// Video frame sealer selector for the codec-layer decorators: SFrame v1 (Q-Audion custom
+/// envelope). Kept for potential iOS-only work; NOT selected for 1:1 calls, whose video is
+/// encrypted by the native FrameCryptor (the Swift LiveKit-format fallback seal path was deleted:
+/// its fixed key index and its own IV generator cannot satisfy the P12 replay rules).
 public enum VideoFrameSealer {
     case sframe(SFrameVideoSealer)
-    case livekit(LiveKitVideoFrameCryptor)
 }
 
-/// Map a `RTCVideoCodecInfo.name` (uppercased) to the cryptor's codec
-/// tag. Used by the LiveKit cryptor to compute `unencrypted_bytes` and
-/// to decide whether RBSP wrapping is required.
-private func liveKitCodec(from name: String) -> LiveKitVideoFrameCryptor.FrameCodec {
-    switch name.uppercased() {
-    case "H264", "AVC": return .h264
-    case "H265", "HEVC": return .h265
-    case "VP8": return .vp8
-    case "VP9": return .vp9
-    case "AV1", "AV01": return .av1
-    default:
-        // Unknown codec → safest default is VP9 (`unencryptedBytes=0`),
-        // which means the whole frame is ciphertext. If a peer rolls out
-        // a new codec name we'll log+drop on the receive side; for now
-        // this keeps us alive on best-effort fallback.
-        return .vp9
-    }
-}
-
-/// W420 — Decorator for WebRTC encoders and decoders that injects
-/// SFrame (RFC 9605) or LiveKit (libwebrtc native) encryption/decryption
-/// into the video pipeline.
-///
-/// This provides a byte-identical alternative to Android's native
-/// `FrameCryptor` on iOS builds where the insertable-streams API
-/// is unavailable.
+/// W420 — Decorator for WebRTC encoders and decoders that injects SFrame (RFC 9605)
+/// encryption/decryption into the video pipeline.
 public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
     private let delegate: RTCVideoEncoder
     private let sealerProvider: () -> VideoFrameSealer?
-    private let codec: LiveKitVideoFrameCryptor.FrameCodec
     private var callback: RTCVideoEncoderCallback?
 
     public init(
@@ -56,7 +24,6 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
     ) {
         self.delegate = delegate
         self.sealerProvider = sealerProvider
-        self.codec = liveKitCodec(from: codecInfo.name)
         super.init()
     }
 
@@ -83,21 +50,6 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
                     layer: .low,
                     keyFrame: isKeyFrame,
                     padded: true // Match Android's 64-byte padding policy
-                )
-            case .livekit(let lk):
-                // W539 — LiveKit/libwebrtc native FrameCryptor wire format.
-                // `image.timeStamp` is the RTP timestamp; SSRC is not
-                // available at the codec layer (codec output happens
-                // before RTP packetization), but the IV is carried on
-                // the wire so the receiver doesn't need to reconstruct
-                // it. Passing ssrc=0 is fine for interop — the receiver
-                // reads `iv` from the trailer.
-                sealedDataOpt = try? lk.seal(
-                    data: image.buffer,
-                    codec: self.codec,
-                    isKeyFrame: isKeyFrame,
-                    ssrc: 0,
-                    rtpTimestamp: image.timeStamp
                 )
             }
 
@@ -162,7 +114,6 @@ public final class SFrameVideoEncoderDecorator: NSObject, RTCVideoEncoder {
 public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
     private let delegate: RTCVideoDecoder
     private let sealerProvider: () -> VideoFrameSealer?
-    private let codec: LiveKitVideoFrameCryptor.FrameCodec
     private var callback: RTCVideoDecoderCallback?
 
     public init(
@@ -172,7 +123,6 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
     ) {
         self.delegate = delegate
         self.sealerProvider = sealerProvider
-        self.codec = liveKitCodec(from: codecInfo.name)
         super.init()
     }
 
@@ -198,27 +148,17 @@ public final class SFrameVideoDecoderDecorator: NSObject, RTCVideoDecoder {
         }
 
         // Intercept and open.
-        let isKeyFrame = image.frameType == .videoFrameKey
         let plaintext: Data
         do {
             switch sealer {
             case .sframe(let s):
                 plaintext = try s.open(image.buffer)
-            case .livekit(let lk):
-                // W539 — Open the LiveKit/libwebrtc native FrameCryptor
-                // wire-format frame produced by Desktop or Android.
-                plaintext = try lk.open(
-                    data: image.buffer,
-                    codec: self.codec,
-                    isKeyFrame: isKeyFrame
-                )
             }
         } catch {
-            // W539 — log the first few open failures so a misconfigured
-            // call (e.g. wrong codec map, peer using a different format)
-            // doesn't silently black-screen forever. Throttled to once
-            // per second per decoder.
-            LiveKitDecodeWarn.shared.warn(
+            // Log the first few open failures so a misconfigured call
+            // (peer using a different format) doesn't silently black-screen
+            // forever. Throttled to once per second per decoder.
+            SFrameDecodeWarn.shared.warn(
                 "decoder open failed: \(error)"
             )
             // Drop the frame — better to skip a frame than to feed
@@ -290,11 +230,10 @@ public final class SFrameVideoDecoderFactoryDecorator: NSObject, RTCVideoDecoder
     }
 }
 
-/// W539 — throttled warn-log helper for LiveKit decoder open failures.
-/// A peer mismatch (different codec, stale key, wrong format) would
-/// otherwise flood the console at 30 fps.
-final class LiveKitDecodeWarn: @unchecked Sendable {
-    static let shared = LiveKitDecodeWarn()
+/// Throttled warn-log helper for decoder open failures. A peer mismatch (different
+/// codec, stale key, wrong format) would otherwise flood the console at 30 fps.
+final class SFrameDecodeWarn: @unchecked Sendable {
+    static let shared = SFrameDecodeWarn()
     private let lock = NSLock()
     private var lastAt: TimeInterval = 0
 
@@ -304,7 +243,7 @@ final class LiveKitDecodeWarn: @unchecked Sendable {
         let due = now - lastAt > 1.0
         if due { lastAt = now }
         lock.unlock()
-        if due { print("[LiveKitVideoCryptor] \(msg) (throttled)") }
+        if due { print("[SFrameVideoDecorator] \(msg) (throttled)") }
     }
 }
 #endif
