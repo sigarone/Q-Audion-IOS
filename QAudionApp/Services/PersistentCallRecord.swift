@@ -16,6 +16,10 @@ public struct CallRecord: Codable, Identifiable, Sendable {
     public var endedAt: Date?           // nil while call is ongoing
     public let isVideo: Bool
     public let peerExtension: Int?      // PBX short number if known
+    /// Post-v5: one of the allow-listed `CallCloseReason` tokens when the call closed over a failed
+    /// handshake / identity check, else nil. Shown as a label in the call history. Optional, so records
+    /// saved before this field existed decode with nil.
+    public var closeReason: String? = nil
 
     public enum Direction: String, Codable, Sendable {
         case incoming, outgoing, missed
@@ -214,9 +218,10 @@ public final class PersistentCallRecordStore: ObservableObject {
         save()
     }
 
-    /// Mark a call as ended (sets `endedAt` to now).
+    /// Mark a call as ended (sets `endedAt` to now). `closeReason` is stored only when it is one of the
+    /// allow-listed `CallCloseReason` tokens, never a free-form string.
     /// Call from `AppState.endCall()`.
-    public func endCall(id: String) {
+    public func endCall(id: String, closeReason: String? = nil) {
         guard let idx = records.firstIndex(where: { $0.id == id }) else { return }
         let old = records[idx]
         // Only set endedAt once — idempotent on double endCall.
@@ -229,7 +234,8 @@ public final class PersistentCallRecordStore: ObservableObject {
             startedAt: old.startedAt,
             endedAt: Date(),
             isVideo: old.isVideo,
-            peerExtension: old.peerExtension
+            peerExtension: old.peerExtension,
+            closeReason: CallCloseReason.accepted(closeReason)?.rawValue
         )
         records[idx] = updated
         save()

@@ -1295,12 +1295,6 @@ public enum CallCapabilities {
         /// ``agreedTags`` — no wire or init change.
         public var useRatchetV3: Bool { agreedTags.contains(CallCapabilities.ratchetV3) }
 
-        /// True iff both sides advertise ``vkeyV1``. When `true` the video
-        /// FrameCryptor was once keyed off a dedicated video key instead of
-        /// the audio/control PQC session key. Derived from ``agreedTags``
-        /// — no wire or init change.
-        public var useVideoKey: Bool { agreedTags.contains(CallCapabilities.vkeyV1) }
-
         /// True iff BOTH peers advertised ``sframeAes256V1``. This is the
         /// Phase 2 gate for the AES-256-GCM FrameCryptor path.
         ///

@@ -9,14 +9,14 @@ import CryptoKit
 /// long-term Ed25519 identity keys — then exchange an HMAC over it. A verified MAC is
 /// cryptographic proof both sides agree on every input that fed the session key,
 /// including the order the PSK list was advertised in (closing the same
-/// permute/reorder gap `HandshakeTranscript.advEnc` closed for the v2 signature —
+/// permute/reorder gap `HandshakeTranscript.advEnc` closed for the signature —
 /// this is the same idea one layer up, over the DERIVED session key rather than a
 /// long-term identity signature).
 ///
-/// **This step (W-KCMAC) is PURE OBSERVATION.** `N` stays capped at ≤1 everywhere;
-/// nothing here reads or writes `PskMix` mixing state, and a wrong/absent `kc_mac`
-/// never drops a call (W-NOBRICK) — the verdict is only ever surfaced as telemetry/UI
-/// signal via `AssuranceState`.
+/// The MAC is exchanged on EVERY key round (the initial one and each rekey). A MAC that
+/// does not verify, or none inside the window, ENDS the call (`kcmac_mismatch`); the
+/// verdict also feeds `AssuranceState`. `N` stays capped at ≤1 everywhere and nothing here
+/// reads or writes `PskMix` mixing state.
 ///
 /// This is the iOS port of the Android reference
 /// `apps/qaudion-android-new/qaudion-engine/src/main/java/com/bcrypto/qaudion/crypto/KeyConfirmation.kt`
@@ -179,9 +179,9 @@ public enum KeyConfirmation {
     /// ```
     ///
     /// - Parameters:
-    ///   - offerBinding / acceptBinding: `SHA-256` of the RECONSTRUCTED transcript-v2
-    ///     objects transcript-v2 signing already builds
-    ///     (`HandshakeTranscript.offerBinding(offerTranscriptV2)` / the ACCEPT-v2
+    ///   - offerBinding / acceptBinding: `SHA-256` of the RECONSTRUCTED v5 transcripts
+    ///     the signed handshake already builds
+    ///     (`HandshakeTranscript.offerBinding(offerTranscript)` / the ACCEPT
     ///     equivalent) — NEVER raw JSON bytes.
     ///   - initAdvert / respAdvert: the initiator's / responder's PSK advert list, in
     ///     the exact order RECEIVED on the wire (never re-sorted) — this is what makes

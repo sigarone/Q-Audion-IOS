@@ -79,13 +79,9 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
 
     /// Builds the factory instance (called at most once per process by
     /// `sharedFactory()` below — see W-PERSISTENTFACTORY further down for
-    /// why this is no longer per-call). `sealerProvider` on the public
-    /// `sharedFactory()` entry point is retained for source-compatibility
-    /// with existing call sites but is NO LONGER USED: 1:1 video E2EE moved
-    /// from the codec-layer
-    /// `SFrameVideoEncoder/DecoderFactoryDecorator` to the native RTP-layer
-    /// `RTCFrameCryptor` (NativeVideoFrameCryptor). Wrapping the codec factories
-    /// would DOUBLE-ENCRYPT (codec-layer seal + native FrameCryptor). So we
+    /// why this is no longer per-call). 1:1 video E2EE is the native RTP-layer
+    /// `RTCFrameCryptor` (NativeVideoFrameCryptor); there is no codec-layer sealing, and wrapping the
+    /// codec factories would DOUBLE-ENCRYPT. So we
     /// return the plain HEVC-preferred factories — they still advertise/build
     /// H265 (RTCVideoEncoderH265/Decoder), which the native cryptor then encrypts
     /// after packetization (codec-agnostic). See NativeVideoFrameCryptor.swift.
@@ -428,12 +424,9 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     }
 
     /// Returns the process-lifetime factory + ADM, building them once on
-    /// first use and reusing them for every subsequent call.
-    /// `sealerProvider` is retained for source-compatibility with existing
-    /// call sites but is NO LONGER USED — see the class-level kdoc above
-    /// this method's predecessor for why (native RTP-layer FrameCryptor,
-    /// not codec-layer sealing, owns 1:1 video E2EE now).
-    public func sharedFactory(sealerProvider: @escaping () -> VideoFrameSealer? = { nil }) async
+    /// first use and reusing them for every subsequent call. 1:1 video E2EE is the native RTP-layer
+    /// FrameCryptor, not codec-layer sealing, so the codec factories are never wrapped.
+    public func sharedFactory() async
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
         lock.lock()
         defer { lock.unlock() }

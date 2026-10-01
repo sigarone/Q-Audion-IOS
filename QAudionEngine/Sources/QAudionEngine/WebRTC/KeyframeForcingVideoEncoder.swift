@@ -70,8 +70,7 @@ public final class VideoKeyframeController: @unchecked Sendable {
 /// ALWAYS on the encode hot path — no bypass to guard against.
 ///
 /// Protocol surface mirrored from `sdk/objc/base/RTCVideoEncoder.h`
-/// (webrtc-sdk M144) exactly as the shipping
-/// `SFrameVideoEncoderDecorator` (same binary) already conforms to it.
+/// (webrtc-sdk M144).
 public final class KeyframeForcingVideoEncoder: NSObject, RTCVideoEncoder {
 
     private let inner: RTCVideoEncoder

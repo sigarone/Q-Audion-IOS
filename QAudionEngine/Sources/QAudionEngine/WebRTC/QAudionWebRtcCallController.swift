@@ -1405,11 +1405,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// for the full BoringSSL/SDP-munging rationale.
     public var dtlsAnswerPassiveKillSwitchProvider: (() -> Bool)?
 
-    /// SFrame video sealer factory — DI seam retained for the AppState wiring. It is NOT
-    /// consulted by the default video pipeline pick: 1:1 calls use the native FrameCryptor
-    /// (``VideoCallSealer/native``). Setting it is harmless.
-    public var sframeVideoSealerFactory: ((@escaping () -> Data) -> SFrameVideoSealer)?
-
     /// JWT bearer token forwarded to the WSS-TURN WebSocket handshake.
     /// Must be set (from AppState) before `startOutgoingCall` /
     /// `acceptIncomingCall` so the server-side auth check on
@@ -1428,10 +1423,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         /// SRTP only (no E2EE on video). Used when the peer didn't
         /// advertise any compatible video sealer cap.
         case legacy
-        /// SFrame v1 path — Q-Audion custom envelope, kept for future
-        /// iOS-only work or compile-time-flagged experimentation. NOT selected
-        /// by default — the cross-platform 1:1 path is ``native``.
-        case sframe(SFrameVideoSealer)
         /// Native libwebrtc RTCFrameCryptor (insertable streams), attached to
         /// the RTP video sender/receiver — the cross-platform 1:1 path on the
         /// webrtc-sdk binary. Encrypts post-packetization so it is codec-agnostic
@@ -1846,14 +1837,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard !intentionalShutdown else {
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
-        let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory(sealerProvider: { [weak self] in
-            // SFrame sealer for the codec decorator (kept for potential iOS-only future
-            // paths); the 1:1 video path is the native FrameCryptor, not a codec decorator.
-            switch self?.videoSealer {
-            case .sframe(let s):  return .sframe(s)
-            default:              return nil
-            }
-        })
+        let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory()
         let pc = QAudionPeerConnection(
             factory: factory,
             audioProcessingModule: audioProcessingModule,
@@ -2008,14 +1992,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard !intentionalShutdown else {
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
-        let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory(sealerProvider: { [weak self] in
-            // SFrame sealer for the codec decorator (kept for potential iOS-only future
-            // paths); the 1:1 video path is the native FrameCryptor, not a codec decorator.
-            switch self?.videoSealer {
-            case .sframe(let s):  return .sframe(s)
-            default:              return nil
-            }
-        })
+        let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory()
         let pc = QAudionPeerConnection(
             factory: factory,
             audioProcessingModule: audioProcessingModule,
@@ -2163,14 +2140,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard !intentionalShutdown else {
             throw ControllerError.wrongState("intentional-shutdown-raced-setup")
         }
-        let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory(sealerProvider: { [weak self] in
-            // SFrame sealer for the codec decorator (kept for potential iOS-only future
-            // paths); the 1:1 video path is the native FrameCryptor, not a codec decorator.
-            switch self?.videoSealer {
-            case .sframe(let s):  return .sframe(s)
-            default:              return nil
-            }
-        })
+        let (factory, audioProcessingModule) = await QAudionPeerConnectionFactory.shared.sharedFactory()
         let pc = QAudionPeerConnection(
             factory: factory,
             audioProcessingModule: audioProcessingModule,
@@ -4428,7 +4398,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// - Otherwise → fail-closed `.legacy` (the F-02 gate below).
     ///
     /// The frame keys are the two DIRECTIONAL keys of `OneToOneFrameKeys` (transcript v5, owner
-    /// decision O1) — the same pair audio uses: no `K_video` derivation exists any more.
+    /// decision O1) — the same pair audio uses (video has no key of its own).
     @discardableResult
     public func ensureVideoSealer() -> VideoCallSealer? {
         // REKEY: once the native cryptor is active, re-publish the keys on session-key

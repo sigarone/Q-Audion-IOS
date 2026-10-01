@@ -29,12 +29,16 @@ public struct CallHistoryEntry: Equatable, Identifiable {
     /// so a contact's avatar update never reached this list even though the
     /// rubrica itself showed it correctly.
     public let peerAvatarUrl: URL?
+    /// Post-v5: the allow-listed `CallCloseReason` token the call closed with (failed handshake or
+    /// identity check), nil for an ordinary end. Rendered as a short label in the row.
+    public let closeReason: String?
 
     public init(id: String, peerUserId: String, peerDisplay: String,
                 direction: Direction, startedAt: Date,
                 durationSeconds: Int?, isVideo: Bool,
                 peerExtension: Int? = nil,
-                peerAvatarUrl: URL? = nil) {
+                peerAvatarUrl: URL? = nil,
+                closeReason: String? = nil) {
         self.id = id
         self.peerUserId = peerUserId
         self.peerDisplay = peerDisplay
@@ -44,6 +48,7 @@ public struct CallHistoryEntry: Equatable, Identifiable {
         self.isVideo = isVideo
         self.peerExtension = peerExtension
         self.peerAvatarUrl = peerAvatarUrl
+        self.closeReason = closeReason
     }
 }
 
@@ -165,7 +170,8 @@ final class CallHistoryStore: ObservableObject {
             durationSeconds: record.durationSeconds,
             isVideo: record.isVideo,
             peerExtension: record.peerExtension,
-            peerAvatarUrl: avatarByUserId[record.peerUserId]
+            peerAvatarUrl: avatarByUserId[record.peerUserId],
+            closeReason: record.closeReason
         )
     }
 
@@ -677,6 +683,9 @@ private struct CallHistoryRow: View {
             parts.append(String(format: "%d:%02d", dur / 60, dur % 60))
         } else if entry.direction == .missed {
             parts.append(String(localized: "call_history.missed", defaultValue: "persa", comment: "Call history row subtitle — appended when a call was missed and has no duration to show"))
+        }
+        if let label = CallCloseReasonLabel.text(for: entry.closeReason) {
+            parts.append(label)
         }
         return parts.joined(separator: " · ")
     }

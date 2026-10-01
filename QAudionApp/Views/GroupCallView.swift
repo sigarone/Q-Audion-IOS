@@ -54,6 +54,13 @@ struct GroupCallView: View {
     /// Clamped back on-screen if a departure shrinks the page count below
     /// this index — see the `.onChange(of: gridPages.count)` below.
     @State private var currentGridPage = 0
+    /// M3 — the participant whose identity verification the "unverified participants" banner opened
+    /// (nil while no sheet is up). Identifiable so `.sheet(item:)` can drive it.
+    @State private var verificationTarget: VerificationTarget?
+
+    private struct VerificationTarget: Identifiable {
+        let id: String
+    }
 
     var body: some View {
         ZStack {
@@ -120,6 +127,14 @@ struct GroupCallView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 10)
 
+                // M3 — at least one participant is not verified: say so, and offer the verification of
+                // the first one. Never hides on its own; it goes away when the verification is done.
+                if viewModel.verification.showsBanner {
+                    unverifiedBanner
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 10)
+                }
+
                 // W-GRPSCREENSHARE: spotlight tile for whichever remote
                 // participant is currently sharing their screen — rendered
                 // full-width, ABOVE the regular participant grid, so a
@@ -178,7 +193,8 @@ struct GroupCallView: View {
                         isSelf: speaker.id == viewModel.selfUserId,
                         localMuted: viewModel.isMuted,
                         reactionEmoji: viewModel.latestReactionEmoji(for: speaker.id),
-                        onRequestMute: { viewModel.requestMute(participantId: speaker.id) }
+                        onRequestMute: { viewModel.requestMute(participantId: speaker.id) },
+                        showsUnverifiedBadge: viewModel.verification.isUnverified(speaker.id)
                     )
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
@@ -241,7 +257,8 @@ struct GroupCallView: View {
                                                 localMuted: viewModel.isMuted,
                                                 reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
                                                 onRequestMute: { viewModel.requestMute(participantId: participant.id) },
-                                                tileSize: CGSize(width: layout.tileW, height: layout.tileH)
+                                                tileSize: CGSize(width: layout.tileW, height: layout.tileH),
+                                                showsUnverifiedBadge: viewModel.verification.isUnverified(participant.id)
                                             )
                                         }
                                         Spacer(minLength: 0)
@@ -350,7 +367,16 @@ struct GroupCallView: View {
             )
             .onDisappear { refreshChatUnreadCount() }
         }
-        .onAppear { refreshChatUnreadCount() }
+        .onAppear {
+            refreshChatUnreadCount()
+            viewModel.refreshVerification(force: true)
+        }
+        // M3 — the verification of one participant, opened from the banner. The contact screen is the
+        // app's existing verification surface (safety number, SAS, in-person); when it closes, the
+        // verification state is read again so a badge and the banner clear at once.
+        .sheet(item: $verificationTarget, onDismiss: { viewModel.refreshVerification(force: true) }) { target in
+            ContactDetailScreen(item: verificationItem(for: target.id))
+        }
         // Defensive: `activeGroupId` is normally already bound by the time
         // this view appears (both AppState bind sites run synchronously
         // before the call surface presents — see `GroupCallViewModel.
@@ -709,6 +735,77 @@ struct GroupCallView: View {
         .padding(20)
     }
 
+    /// M3 — short banner shown while at least one participant is not verified. The action opens the
+    /// verification of the first unverified participant (roster order).
+    private var unverifiedBanner: some View {
+        let state = viewModel.verification
+        let firstId = state.firstUnverifiedId
+        let firstName = firstId.flatMap { id in viewModel.participants.first(where: { $0.id == id })?.displayName } ?? ""
+        let message = state.count == 1
+            ? String(localized: "group_call.unverified_banner.one",
+                     defaultValue: "Un partecipante non è verificato",
+                     comment: "Group call banner — exactly one participant has not been verified (no SAS confirmation, no in-person pairing)")
+            : String(localized: "group_call.unverified_banner.many",
+                     defaultValue: "\(state.count) partecipanti non sono verificati",
+                     comment: "Group call banner — several participants have not been verified; %lld is how many")
+        return HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.orange)
+            Text(message)
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurface)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            if let firstId {
+                Button {
+                    verificationTarget = VerificationTarget(id: firstId)
+                } label: {
+                    Text(String(localized: "group_call.unverified_banner.action",
+                                defaultValue: "Verifica",
+                                comment: "Group call banner — button that opens the identity verification of the first unverified participant"))
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(Color.orange)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .overlay(Capsule().stroke(Color.orange.opacity(0.6), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "group_call.unverified_banner.action_a11y",
+                                           defaultValue: "Apri la verifica dell'identità di \(firstName)",
+                                           comment: "Group call banner — accessibility label of the verify button; %@ is the display name of the participant it opens"))
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.orange.opacity(0.14))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.orange.opacity(0.45), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    /// M3 — the contact-list row the contact screen needs, from the stored contact when there is one
+    /// and from the roster otherwise (a participant who is not a contact still opens the screen).
+    private func verificationItem(for userId: String) -> ContactsListViewModel.Item {
+        let stored = ContactsStore().load().first(where: { $0.userId == userId })
+        let rosterName = viewModel.participants.first(where: { $0.id == userId })?.displayName
+        return ContactsListViewModel.Item(
+            userId: userId,
+            displayName: rosterName ?? DisplayName.forUser(userId),
+            phoneHash: stored?.phoneHash ?? "",
+            avatarUrl: stored?.avatarUrl,
+            isOnline: false,
+            unreadMessageCount: 0,
+            isVerified: stored?.isVerified ?? false,
+            extension: stored?.`extension`)
+    }
+
     /// Unified call UI (group-call adaptation) — same "chip row ending in
     /// a shield button" shape as `InCallScreen.trustBar` (see that file's
     /// header comment for the full 1:1 pattern). Always visible, never
@@ -812,6 +909,9 @@ struct ParticipantTile: View {
     /// untouched via `AdaptiveGridClamp`'s no-op branch, exactly as specced
     /// ("keep the spotlight panels exactly as they are").
     var tileSize: CGSize? = nil
+    /// M3 — this participant is not verified (no confirmed SAS pin, no in-person pairing): the tile
+    /// carries a "Non verificato" badge. Never set for the local participant.
+    var showsUnverifiedBadge: Bool = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -877,6 +977,25 @@ struct ParticipantTile: View {
                 .font(isPinned ? .body : .caption).foregroundColor(.white)
                 .lineLimit(1)
 
+            if showsUnverifiedBadge {
+                HStack(spacing: 3) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text(String(localized: "group_call.unverified_badge",
+                                defaultValue: "Non verificato",
+                                comment: "Group call participant tile — badge: this participant's identity has not been verified (no SAS confirmation, no in-person pairing)"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundColor(Color.orange)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Capsule().fill(Color.orange.opacity(0.18)))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(String(localized: "group_call.unverified_badge_a11y",
+                                           defaultValue: "\(participant.displayName): identità non verificata",
+                                           comment: "Group call participant tile — accessibility label of the unverified badge; %@ is the participant's display name"))
+            }
+
             if isSelf ? localMuted : participant.isMuted {
                 Image(systemName: "mic.slash.fill")
                     .font(.caption2).foregroundColor(.red)
@@ -928,13 +1047,15 @@ struct ParticipantTile: View {
     /// overflow.
     private var mediaHeight: CGFloat {
         if let tileSize {
-            return max(24, tileSize.height - Self.chromeReserve)
+            return max(24, tileSize.height - Self.chromeReserve - (showsUnverifiedBadge ? Self.badgeReserve : 0))
         }
         if isPinned { return participant.videoTrack != nil ? 220 : 140 }
         return participant.videoTrack != nil ? 120 : 64
     }
 
     private static let chromeReserve: CGFloat = 50
+    /// Extra height the unverified badge row takes below the name.
+    private static let badgeReserve: CGFloat = 22
 }
 
 /// Adaptive gallery grid — clamps a `ParticipantTile` to an exact size
@@ -951,6 +1072,26 @@ private struct AdaptiveGridClamp: ViewModifier {
             content.frame(width: tileSize.width, height: tileSize.height)
         } else {
             content
+        }
+    }
+}
+
+// MARK: - Verification state (M3)
+
+/// Reads the app's existing verification stores for a group-call roster: the contact rows, the persisted
+/// SAS confirmations (bound to the pinned identity keys) and the peer pins. The decision itself is the
+/// engine's `GroupParticipantVerification` (unit-tested there).
+enum GroupVerificationResolver {
+    static func state(participantIds: [String], selfId: String) -> GroupVerificationState {
+        let contacts = Dictionary(
+            ContactsStore().load().map { ($0.userId, $0) }, uniquingKeysWith: { first, _ in first })
+        let pins = PeerIdentityPinStore()
+        let sas = SasVerificationStore.shared
+        return GroupVerificationState(participantIds: participantIds, selfId: selfId) { id in
+            GroupParticipantVerification.isVerified(
+                contact: contacts[id],
+                sasBinding: sas.storedBinding(peerUserId: id),
+                pinnedKeys: pins.allPinnedKeys(contactId: id))
         }
     }
 }
@@ -987,6 +1128,14 @@ class GroupCallViewModel: ObservableObject {
     }
 
     @Published var participants: [ParticipantUI] = []
+    /// M3 — who in this call is not verified (drives the tile badges and the banner). Recomputed when the
+    /// roster's membership changes, when the contacts change, and on `refreshVerification(force: true)`.
+    @Published private(set) var verification = GroupVerificationState()
+    /// Resolves the verification state of a roster from the app's stores; replaceable in tests.
+    var verificationResolver: (_ participantIds: [String], _ selfId: String) -> GroupVerificationState =
+        GroupVerificationResolver.state
+    private var verifiedRosterIds: [String] = []
+    private var contactsObserver: NSObjectProtocol?
     @Published var callState: BCryptoGroupCallManager.State = .idle
     @Published var isMuted = false
     @Published var elapsedTime = "0:00"
@@ -1263,6 +1412,7 @@ class GroupCallViewModel: ObservableObject {
                                   screenShareTrack: screenShare,
                                   handRaised: self.raisedHandsCache.contains(entry.id))
                 }
+                self.refreshVerification()
                 self.refreshMediaReady()
             }
         }
@@ -1438,6 +1588,25 @@ class GroupCallViewModel: ObservableObject {
         // rebind(manager:)`) would otherwise not show the camera button
         // until the next event.
         isMediaReady = controller?.hasMediaLink ?? false
+        // M3 — a verification written elsewhere in the app (a contact verified, a pairing completed) is
+        // reflected on the tiles and the banner without waiting for the next roster change.
+        contactsObserver = NotificationCenter.default.addObserver(
+            forName: .contactsDidChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.refreshVerification(force: true) }
+    }
+
+    deinit {
+        if let contactsObserver { NotificationCenter.default.removeObserver(contactsObserver) }
+    }
+
+    /// M3 — re-evaluate who is unverified. Skipped when the roster's membership is the one already
+    /// evaluated, unless `force` (roster updates also carry speaking/mute flags and arrive often; the
+    /// stores are read only when something that can change the answer happened). Main thread only.
+    func refreshVerification(force: Bool = false) {
+        let ids = participants.map(\.id)
+        if !force && ids == verifiedRosterIds { return }
+        verifiedRosterIds = ids
+        verification = verificationResolver(ids, selfUserId)
     }
 
     /// Re-reads whether the controller has a media link (the camera button's
