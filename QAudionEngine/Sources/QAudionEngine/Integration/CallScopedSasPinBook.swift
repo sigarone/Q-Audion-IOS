@@ -37,11 +37,22 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
     private var confirmedByCall: [String: Data] = [:]
     /// callId -> the signer key of the call's FIRST `identity_unresolved` round (never replaced).
     private var candidateByCall: [String: Data] = [:]
+    /// callId -> the signed round of the candidate (the call's first `identity_unresolved` round).
+    private var candidateRoundByCall: [String: UInt32] = [:]
+    /// callId -> the SAS material (session key and transcript hash) of the candidate round (R-SAS-WORDS).
+    private var candidateMaterialByCall: [String: SasMaterial] = [:]
     /// Calls with a round (before the confirmation) the candidate key cannot vouch for.
     private var taintedCalls: Set<String> = []
     /// Calls where a round judged `identity_unresolved` (its verification raced the confirmation) carried
     /// a key other than the confirmed one.
     private var lateConflictCalls: Set<String> = []
+
+    /// What the SAS words of a round are derived from (`ComputeSasUseCase.invoke`).
+    public struct SasMaterial: Equatable, Sendable {
+        public let round: UInt32
+        public let sessionKey: Data
+        public let transcriptHash: Data
+    }
 
     /// Bound on remembered unresolved rounds per call (oldest rounds drop first).
     static let maxRoundsPerCall = 8
@@ -69,6 +80,7 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
             if candidate != key { taintedCalls.insert(id) }
         } else {
             candidateByCall[id] = key
+            candidateRoundByCall[id] = UInt32(round)
         }
         var rounds = unresolvedByCall[id] ?? [:]
         rounds[UInt32(round)] = key
@@ -126,6 +138,33 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
         return confirmedByCall[id]
     }
 
+    /// R-SAS-WORDS: remember what the SAS words of the candidate round (the call's first
+    /// `identity_unresolved` round) are derived from, the moment that round's session key is installed.
+    /// Anything that is not the candidate round, or a second write for it, is ignored: the words of a
+    /// held call never change.
+    public func recordCandidateMaterial(callId: String, round: UInt32, sessionKey: Data, transcriptHash: Data) {
+        guard sessionKey.count == 32, transcriptHash.count == 32 else { return }
+        let id = callId.lowercased()
+        guard !id.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard candidateRoundByCall[id] == round, candidateMaterialByCall[id] == nil else { return }
+        candidateMaterialByCall[id] = SasMaterial(round: round, sessionKey: sessionKey, transcriptHash: transcriptHash)
+    }
+
+    /// R-SAS-WORDS: the material the SAS words of this call are derived from while the call has a
+    /// candidate round: the words shown (and compared by the user, and the ones the confirmation is
+    /// checked against) are the candidate round's, whatever same-key rekey installed a later session
+    /// key. `nil` when the call never had an `identity_unresolved` round (the live round's words apply)
+    /// and for a call in conflict (the candidate's words then vouch for nothing; the live ones are shown
+    /// and the confirmation is refused anyway).
+    public func candidateSasMaterial(callId: String) -> SasMaterial? {
+        let id = callId.lowercased()
+        lock.lock(); defer { lock.unlock() }
+        if lateConflictCalls.contains(id) { return nil }
+        if confirmedByCall[id] == nil && candidateByCall[id] != nil && taintedCalls.contains(id) { return nil }
+        return candidateMaterialByCall[id]
+    }
+
     /// The key to verify under: a stored (durable) pin always wins; the call-scoped one only fills in
     /// when there is none. A stored pin that differs from the call-scoped key therefore keeps the
     /// ordinary `identity_key_mismatch` behaviour.
@@ -140,6 +179,8 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
         unresolvedByCall.removeValue(forKey: id)
         confirmedByCall.removeValue(forKey: id)
         candidateByCall.removeValue(forKey: id)
+        candidateRoundByCall.removeValue(forKey: id)
+        candidateMaterialByCall.removeValue(forKey: id)
         taintedCalls.remove(id)
         lateConflictCalls.remove(id)
     }
@@ -150,6 +191,8 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
         unresolvedByCall.removeAll()
         confirmedByCall.removeAll()
         candidateByCall.removeAll()
+        candidateRoundByCall.removeAll()
+        candidateMaterialByCall.removeAll()
         taintedCalls.removeAll()
         lateConflictCalls.removeAll()
     }
