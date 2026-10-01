@@ -7,7 +7,7 @@ import WebRTC
 /// `PeerConnectionHolder.kt` (createFrameCryptorKeyProvider :354-371 +
 /// createFrameCryptorForRtpSender/Receiver :471-514).
 ///
-/// WHY native (not the old codec-layer `SFrameVideoEncoderDecorator`): the
+/// WHY native (not a codec-layer cryptor): the
 /// codec-layer cryptor seals the encoded frame BEFORE RTP packetization, and the
 /// H265 packetizer then reshapes the NALUs so the bytes reaching the peer's
 /// decoder no longer match what was sealed → AES-GCM unseal fails. The native FrameCryptor

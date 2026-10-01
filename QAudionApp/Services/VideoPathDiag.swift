@@ -16,8 +16,7 @@ import WebRTC
 /// per-frame render callback increments through a single
 /// `os_unfair_lock` (`OSAllocatedUnfairLock`: non-allocating,
 /// uncontended CAS fast-path; the closest primitive to a lock-free
-/// atomic available without the swift-atomics dependency — see
-/// SFrameVideoSealer's same note). No per-frame task spawning, zero
+/// atomic available without the swift-atomics dependency). No per-frame task spawning, zero
 /// allocation on the increment path. Arrival/decode counts ride the
 /// controller's EXISTING 3 s stats poll (`video.stats` telemetry),
 /// not a new poller.

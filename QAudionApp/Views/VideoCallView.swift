@@ -783,13 +783,21 @@ struct VideoCallView: View {
         guard !words.isEmpty, let peer = appState.callContactId else { return }
         // 2026-09-19 — adopt a rotated key this call presented BEFORE binding the confirmation to a pin.
         appState.adoptPendingIdentityRotationIfEligible()
+        // SAS-PIN — see LiveInCallScreen.handleConfirmSas: an `identity_unresolved` call gets its signer key
+        // pinned by this explicit confirmation.
+        let adoption = appState.adoptSasConfirmedSignerKeyIfUnresolved()
+        // A round of this call was not signed by its unresolved signer key: record and release nothing.
+        guard adoption != .refused else { return }
+        let adoptedSignerKey = adoption.adoptedKey
         guard let pinned = PeerIdentityPinStore().pinnedKey(
             contactId: peer, deviceId: appState.peerDeviceId(for: peer)
-        ) else { return }
+        ) ?? adoptedSignerKey else { return }
         let fp = SasVerificationStore.fingerprint(forWords: words)
         SasVerificationStore.shared.recordVerified(
             peerUserId: peer, fingerprint: fp,
             identityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
+        // Release the media held for an unverified handshake identity (no-op when never engaged).
+        appState.confirmIdentityAndReleaseMedia()
     }
 
     /// W-EXTPREFIX consolidation (2026-07-29): this used to be ANOTHER

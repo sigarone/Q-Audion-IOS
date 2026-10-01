@@ -79,13 +79,9 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
 
     /// Builds the factory instance (called at most once per process by
     /// `sharedFactory()` below — see W-PERSISTENTFACTORY further down for
-    /// why this is no longer per-call). `sealerProvider` on the public
-    /// `sharedFactory()` entry point is retained for source-compatibility
-    /// with existing call sites but is NO LONGER USED: 1:1 video E2EE moved
-    /// from the codec-layer
-    /// `SFrameVideoEncoder/DecoderFactoryDecorator` to the native RTP-layer
-    /// `RTCFrameCryptor` (NativeVideoFrameCryptor). Wrapping the codec factories
-    /// would DOUBLE-ENCRYPT (codec-layer seal + native FrameCryptor). So we
+    /// why this is no longer per-call). 1:1 video E2EE is the native RTP-layer
+    /// `RTCFrameCryptor` (NativeVideoFrameCryptor); there is no codec-layer sealing, and wrapping the
+    /// codec factories would DOUBLE-ENCRYPT. So we
     /// return the plain HEVC-preferred factories — they still advertise/build
     /// H265 (RTCVideoEncoderH265/Decoder), which the native cryptor then encrypts
     /// after packetization (codec-agnostic). See NativeVideoFrameCryptor.swift.
@@ -112,10 +108,10 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///
     /// W-ADMPARITY (adversarial review, 2026-09-08) — an EARLIER version of
     /// this fix picked `.audioEngine` for that call, on the reasoning that
-    /// this app's own `LiveKit` dependency already runs it in production —
-    /// for GROUP calls. That reasoning does not carry over: `LiveKit` builds
-    /// and owns an entirely separate `RTCPeerConnectionFactory` internally
-    /// (see `LiveKitGroupCallRoom.swift`), with its own CallKit/session
+    /// the group-call media stack once used (a former SDK, since removed) ran it in production —
+    /// for GROUP calls. That reasoning does not carry over: that SDK built
+    /// and owned an entirely separate `RTCPeerConnectionFactory` internally,
+    /// with its own CallKit/session
     /// integration this class's 1:1 path does not share, and this app
     /// already fences the two apart precisely BECAUSE they cannot safely
     /// share one hardware audio unit (`AudioCapture.start()`'s group-call
@@ -246,8 +242,8 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         let encoderFactory = HevcPreferredVideoEncoderFactory()
         let decoderFactory = HevcPreferredVideoDecoderFactory()
         // nil config = APM defaults (unchanged AEC/NS/AGC/HPF toggle state
-        // versus today — same as LiveKit's own `.init()`, whose designated
-        // initializer's params are all nullable so this is equivalent).
+        // versus today — `.init()` is equivalent: the designated
+        // initializer's params are all nullable).
         // BOTH delegate params are deliberately left `nil` here — see
         // W-RXFALLBACKINJECT-2 below for why passing either through this
         // initializer is silently a no-op on this pinned fork.
@@ -428,12 +424,9 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     }
 
     /// Returns the process-lifetime factory + ADM, building them once on
-    /// first use and reusing them for every subsequent call.
-    /// `sealerProvider` is retained for source-compatibility with existing
-    /// call sites but is NO LONGER USED — see the class-level kdoc above
-    /// this method's predecessor for why (native RTP-layer FrameCryptor,
-    /// not codec-layer sealing, owns 1:1 video E2EE now).
-    public func sharedFactory(sealerProvider: @escaping () -> VideoFrameSealer? = { nil }) async
+    /// first use and reusing them for every subsequent call. 1:1 video E2EE is the native RTP-layer
+    /// FrameCryptor, not codec-layer sealing, so the codec factories are never wrapped.
+    public func sharedFactory() async
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
         lock.lock()
         defer { lock.unlock() }

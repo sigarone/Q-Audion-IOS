@@ -150,6 +150,7 @@ jobs:
             -parallel-testing-enabled NO \
             -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
             -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \
+            -only-testing:QAudionAppTests/CallCloseReasonRedactionTests \
             -resultBundlePath /tmp/app-tests.xcresult \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGN_IDENTITY="-" \

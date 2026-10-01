@@ -109,7 +109,7 @@ public enum SrtpFallbackDecisions {
 /// `NativeAudioPcmTap` registered on the LOCAL mic track had delivered a
 /// frame. In the pinned WebRTC build that renderer is never fed for a local
 /// track (`LocalAudioSource::AddSink` is an empty override upstream; the
-/// LiveKit SDK routes local renderers through the ADM's capture-post-
+/// SDK routes local renderers through the ADM's capture-post-
 /// processing hook instead, never through the track sink). Live corpus
 /// 2026-09-08, six devices / ~24 calls: 24 × `capturelive=0 … fallback=1`,
 /// zero `capturelive=1`, while the same legs' `outbound-rtp.packetsSent`

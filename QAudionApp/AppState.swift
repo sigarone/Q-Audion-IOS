@@ -955,6 +955,14 @@ final class AppState: ObservableObject {
     /// `onRelaySessionReady` / `onV4BootstrapReady` to decide whether to run
     /// their media-install work immediately or stash it above.
     private var identityUnverifiedCallIds: Set<String> = []
+    /// Lowercased callId -> the verdict code (`identity_unresolved`, `identity_key_mismatch`, ...) of the
+    /// latest media hold of that call. Read when the call ends while still held (close reason) and
+    /// dropped together with `identityUnverifiedCallIds`.
+    private var identityHoldCodeByCallId: [String: String] = [:]
+    /// The close reason of a handshake fatal (`dtls_fp_mismatch`, `kcmac_mismatch`, `handshake_malformed`)
+    /// or of a remote hangup carrying one, kept for the end-of-call telemetry and call history. Consumed
+    /// (and cleared) by `endCall`.
+    private var pendingFatalCloseReason: String?
     // W-STALESEALER (2026-09-26) — the monotonic call-generation counter AND the
     // stale-install guard behind the caller/responder `onRelaySessionReady` wiring
     // both live on `CallService` now, not here: several terminal paths call
@@ -1026,15 +1034,73 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// SAS-PIN (post-v5) — the user is confirming the SAS of the ACTIVE call. When that call's round was held
+    /// as `identity_unresolved` (no pin, no server key), the signer key of the very round whose session key
+    /// the words were derived from is what the user just verified out of band: it becomes
+    ///   1. the call-scoped pin (later key rounds of this call verify under it; another signer re-holds), and
+    ///   2. the durable identity pin of that peer device in the existing pin store (`PeerIdentityPinStore`),
+    ///      so the caller can bind the SAS record to it and the contact shows as verified from then on.
+    /// Never pins without this explicit confirmation, never overwrites an existing pin that differs
+    /// (`identity_key_mismatch` keeps its behaviour), and only for a session key bound to the signed v5
+    /// transcript. Returns `.adopt(key)` when this call adopted the live round's signer key, `.refused`
+    /// when the call is in SAS-PIN conflict (a round of it was not signed by its unresolved signer key: the
+    /// caller must then record and release NOTHING), `.notApplicable` otherwise (the ordinary path). Call
+    /// it BEFORE the confirmation is recorded.
+    @discardableResult
+    func adoptSasConfirmedSignerKeyIfUnresolved() -> SasSignerAdoption {
+        guard let peer = callContactId, !peer.isEmpty,
+              let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+              let sessionKey = callPqcSessionKey, !sessionKey.isEmpty else { return .notApplicable }
+        var found: (integration: QAudionCallIntegration, key: Data)?
+        for candidate in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
+            let adoption = candidate.sasSignerAdoption(callId: activeCallId, sessionKey: sessionKey)
+            if adoption == .refused {
+                RTLog.warn("call", "saspin adopt=0 conflict=2")
+                return .refused
+            }
+            if let key = adoption.adoptedKey {
+                found = (candidate, key)
+                break
+            }
+        }
+        guard let hit = found else { return .notApplicable }
+        guard hit.integration.isSessionKeyTranscriptBound(callId: activeCallId) else {
+            RTLog.warn("call", "saspin adopt=0 gate=1")
+            return .notApplicable
+        }
+        let store = PeerIdentityPinStore()
+        let deviceId = peerDeviceId(for: peer)
+        switch SasSignerPinPolicy.decide(
+            storedPin: store.pinnedKey(contactId: peer, deviceId: deviceId), confirmedKey: hit.key) {
+        case .conflict:
+            RTLog.warn("call", "saspin adopt=0 conflict=1")
+            return .notApplicable
+        case .alreadyPinned:
+            RTLog.info("call", "saspin adopt=1 durable=2")
+        case .pin:
+            switch store.pinOrMatch(contactId: peer, ed25519Pub: hit.key, deviceId: deviceId) {
+            case .pinnedNew, .match:
+                RTLog.info("call", "saspin adopt=1 durable=1")
+            case .mismatch:
+                // Keychain write failed (e.g. device locked) or a pin appeared meanwhile: the explicit
+                // confirmation still holds for THIS call, nothing durable is written.
+                RTLog.warn("call", "saspin adopt=1 durable=0")
+            }
+        }
+        hit.integration.confirmSasSigner(callId: activeCallId, key: hit.key)
+        return .adopt(hit.key)
+    }
+
     /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both
     /// the responder (OFFER-verify) and caller (ACCEPT-verify) integration
     /// instances. MainActor-isolated like the sibling `onUnauthenticatedIdentityChange`
     /// / `onInvalidHandshakeSignature` handlers just above.
     @MainActor
-    private func handleHandshakeIdentityUnverified(callId: String) {
+    private func handleHandshakeIdentityUnverified(callId: String, code: String) {
         let cid = callId.lowercased()
         guard !cid.isEmpty else { return }
         identityUnverifiedCallIds.insert(cid)
+        identityHoldCodeByCallId[cid] = code
         awaitingIdentityConfirmation = true
     }
 
@@ -1049,6 +1115,7 @@ final class AppState: ObservableObject {
         }
         let cid = activeCallId.lowercased()
         identityUnverifiedCallIds.remove(cid)
+        identityHoldCodeByCallId.removeValue(forKey: cid)
         awaitingIdentityConfirmation = false
         let actions = pendingIdentityGatedMedia.removeValue(forKey: cid) ?? []
         for action in actions { action() }
@@ -7660,9 +7727,6 @@ final class AppState: ObservableObject {
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
         }
-        controller.sframeVideoSealerFactory = { keyProvider in
-            SFrameVideoSealer.forRotatingKey(keyProvider)
-        }
         controller.useExternalVideoSource = true
         // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
         // until the receiver cryptor is ready, 2s failsafe).
@@ -8903,6 +8967,11 @@ final class AppState: ObservableObject {
         default: code = 3
         }
         RTLog.error("call", "hsfatal r=\(code)")
+        // The reason is the fixed allow-listed token (an unknown one is the malformed class, like the
+        // numeric verdict above): telemetry and the call history carry it by name.
+        if !isEndingCall {
+            pendingFatalCloseReason = (CallCloseReason.accepted(reason) ?? .handshakeMalformed).rawValue
+        }
         // R-CERT: the call is over; release its certificate before the (possibly already
         // unbound) teardown.
         CallDtlsContextStore.shared.release(callId: callId)
@@ -8989,7 +9058,15 @@ final class AppState: ObservableObject {
         case "peer_disconnected": reason = .failed("peer_disconnected")
         case "media-lost":        reason = .failed("media-lost")
         case "recall":            reason = .remoteEnded
-        default:          reason = .remoteEnded
+        default:
+            // The peer ended the call over a failed handshake/identity check (allow-listed reasons):
+            // CallKit's failed treatment, and the reason is kept for the call history.
+            if let closeReason = CallCloseReason.accepted(reasonString) {
+                reason = .failed(closeReason.rawValue)
+                if !self.isEndingCall { self.pendingFatalCloseReason = closeReason.rawValue }
+            } else {
+                reason = .remoteEnded
+            }
         }
         // If the call was still ringing when the hangup arrived the
         // callee never answered — mark the record as missed.
@@ -13498,10 +13575,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Caller-side dispatch for Android JSON ACCEPT. iOS originator
-    /// path currently emits QUAD only, so this branch is reached only
-    /// when iOS-originated JSON is added later (TODO). Wired now for
-    /// forward-compatibility.
+    /// Caller-side dispatch for the signed JSON ACCEPT_v5 (the only 1:1 handshake dialect).
     @MainActor
     private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
         // Sender-identity check (2026-07-11 — same reasoning/fix as
@@ -13722,9 +13796,8 @@ final class AppState: ObservableObject {
             }
             print("[AppState] EARBUDMKD callId=\(callId.prefix(8))… \(pkg.count)B")
         case .kcmac(let callId, let raw):
-            // W-KCMAC (ship step 5) — upgraded from log-and-drop (step 2) to an
-            // actual verify. Still PURE OBSERVATION: `handleInboundKcMac` only
-            // ever records a telemetry verdict, never gates/drops the call.
+            // W-KCMAC — verify the peer's key-confirmation MAC of the live round:
+            // a MAC that does not verify ends the call (`kcmac_mismatch`).
             handleInboundKcMac(callId: callId, raw: raw, senderId: senderId)
         case .voiceKey(let callId, let enrolled):
             // "Voce come chiave" cross-device attestation — the peer's own
@@ -15093,9 +15166,9 @@ final class AppState: ObservableObject {
         // QAudionCallIntegration's OFFER verdict switch, BEFORE onRelaySessionReady
         // / onV4BootstrapReady fire for this same call, so the gate is always set
         // before there is anything to gate.
-        integration.onHandshakeIdentityUnverified = { [weak self] cid in
+        integration.onHandshakeIdentityUnverified = { [weak self] cid, code in
             Task { @MainActor [weak self] in
-                self?.handleHandshakeIdentityUnverified(callId: cid)
+                self?.handleHandshakeIdentityUnverified(callId: cid, code: code)
             }
         }
 
@@ -16887,9 +16960,9 @@ final class AppState: ObservableObject {
                 // onV4BootstrapReady below for the same call (verdict evaluation
                 // in QAudionCallIntegration happens earlier in the ACCEPT path than
                 // either of those).
-                integration.onHandshakeIdentityUnverified = { [weak self] cid in
+                integration.onHandshakeIdentityUnverified = { [weak self] cid, code in
                     Task { @MainActor [weak self] in
-                        self?.handleHandshakeIdentityUnverified(callId: cid)
+                        self?.handleHandshakeIdentityUnverified(callId: cid, code: code)
                     }
                 }
                 // XC-1 (2026-08-05, post-remediation audit follow-up) — this leg
@@ -17295,16 +17368,6 @@ final class AppState: ObservableObject {
                 controller.dtlsAnswerPassiveKillSwitchProvider = {
                     guard Thread.isMainThread else { return false }
                     return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
-                }
-                // Commit 77583315 parity — wire the rotating-key SFrame
-                // sealer factory. The factory is consulted by
-                // `ensureVideoSealer()` at video-pipeline pickup time;
-                // until then keeping it set has zero side effects.
-                // The provider closure must return the CURRENT 32-byte
-                // PQC session key on every frame so audio-driven rekey
-                // rotations are picked up transparently.
-                controller.sframeVideoSealerFactory = { keyProvider in
-                    SFrameVideoSealer.forRotatingKey(keyProvider)
                 }
                 // For outgoing video calls VideoCallPipeline (above)
                 // already opened the camera. Tell the controller to
@@ -19545,8 +19608,8 @@ extension AppState {
             callService.sendControlHangup(reason: "local_hangup")
         }
 
-        // W517: send call_hangup for non-WebRTC paths (QUAD binary iOS↔Android
-        // and all incoming calls). The WebRTC path uses sendHangupAndClose()
+        // W517: send call_hangup for calls without a WebRTC controller (e.g. one that never
+        // reached media, and incoming calls). The WebRTC path uses sendHangupAndClose()
         // below — skip here to avoid double-hangup.
         // callingApi.activeCallId is pre-bound: outgoing via sendCallOfferWithId,
         // incoming via bindIncomingCallId (AppState.wireIncomingCallHandlers).
@@ -19657,27 +19720,40 @@ extension AppState {
         // membership is cleared, keyed the same way the gate itself is
         // (lowercased wire call id). No-op when the gate was never engaged
         // for this call.
+        var heldIdentityCode: String?
         if let gatedCallId = wireCallId?.lowercased() {
+            if identityUnverifiedCallIds.contains(gatedCallId) {
+                heldIdentityCode = identityHoldCodeByCallId[gatedCallId]
+            }
             identityUnverifiedCallIds.remove(gatedCallId)
+            identityHoldCodeByCallId.removeValue(forKey: gatedCallId)
             pendingIdentityGatedMedia.removeValue(forKey: gatedCallId)
         }
+        // Post-v5: why the call closed, when it is one of the allow-listed handshake/identity reasons
+        // (a handshake fatal, or a call closed while its media was still held for an unconfirmed
+        // identity). `nil` for every ordinary end.
+        let closeReason: CallCloseReason? = CallCloseReason.forEnd(
+            fatalReason: pendingFatalCloseReason, heldIdentityCode: heldIdentityCode)
+        pendingFatalCloseReason = nil
 
         // W541-3: telemetry event for call end. callState carries the
         // terminal state which the maintainer correlates with peer's
         // own endCall event to detect "iPhone went encrypted but S24
         // gave up at ringing" patterns.
+        var callEndAttrs: [String: Any] = [
+            "terminal_state": String(describing: callState),
+            "is_video": isVideoCall
+        ]
+        if let closeReason { callEndAttrs["end_reason"] = closeReason.rawValue }
         TelemetryService.shared.emit(
             kind: "call.end",
             callId: endCallId,
-            attrs: [
-                "terminal_state": String(describing: callState),
-                "is_video": isVideoCall
-            ]
+            attrs: callEndAttrs
         )
         // Persist call end time. Use the stable record id registered in startCall
         // or wireIncomingCallHandlers. Works for both outgoing and incoming paths.
         if let rid = activeOutgoingRecordId {
-            PersistentCallRecordStore.shared.endCall(id: rid)
+            PersistentCallRecordStore.shared.endCall(id: rid, closeReason: closeReason?.rawValue)
             activeOutgoingRecordId = nil
         }
         callService.endCall()
@@ -19714,7 +19790,7 @@ extension AppState {
         // W548 (iOS): emit call.media.summary on the canonical end edge.
         do {
             let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
-            CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "user_hangup")
+            CallMediaTelemetry.shared.recordEnded(callId: cid, reason: closeReason?.rawValue ?? "user_hangup")
             // W-KCMAC — drop this call's key-confirmation state. AFTER
             // `callService.endCall()` above (which already read
             // `getKeyConfirmationTelemetry` during its own teardown).
@@ -25900,13 +25976,6 @@ extension AppState {
         controller.dtlsAnswerPassiveKillSwitchProvider = {
             guard Thread.isMainThread else { return false }
             return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
-        }
-        // Commit 77583315 parity — DI the rotating-key SFrame sealer
-        // factory on the responder side too. Without this, two
-        // updated peers would still pick `.legacy` because the
-        // factory is the gate inside `ensureVideoSealer()`.
-        controller.sframeVideoSealerFactory = { keyProvider in
-            SFrameVideoSealer.forRotatingKey(keyProvider)
         }
         // For incoming video calls, start the VideoCallPipeline first so it
         // owns the AVCaptureSession. Tell the WebRTC controller to skip its

@@ -62,6 +62,20 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
         if case .authenticatedRepinFromPublished = v { XCTFail("an unresolved identity must never be re-pinned") }
     }
 
+    /// SAS-PIN: with no pin and no server key the signature is still verified under the bundle key.
+    /// A bundle that claims a key it did not sign with (a relay replaying the peer's public key over
+    /// its own key material) is `sig_invalid`, never `identity_unresolved`, so a SAS confirmation can
+    /// never pin or vouch for a round that key did not sign.
+    func testNoPinAndNoServerKeyWithASignatureNotMadeByTheBundleKeyIsSigInvalid() throws {
+        let forged = try makeCase(seed: 5, signWith: 16)
+        XCTAssertEqual(evaluate(forged), .abort(code: "sig_invalid"))
+        XCTAssertEqual(evaluate(forged, v4: true), .abort(code: "sig_invalid"))
+        // a signature over another transcript (another DTLS fingerprint) is just as invalid
+        let c = try makeCase(seed: 5)
+        let swapped = F.offerTranscript(signerKey: c.pubRaw, dtls: F.fingerprint("intruder"))
+        XCTAssertEqual(evaluate(c, transcript: swapped), .abort(code: "sig_invalid"))
+    }
+
     /// The server-published per-device set is a server source: a member bundle key is accepted
     /// (and is the pin candidate), a non-member is an unauthenticated change.
     func testPublishedSetWithoutPinOrServerKey() throws {

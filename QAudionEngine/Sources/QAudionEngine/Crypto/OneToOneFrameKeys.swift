@@ -14,7 +14,7 @@ import CryptoKit
 ///
 /// `o` is the OFFERER (the signer of `OFFER_v5`, i.e. the caller), `a` the ACCEPTOR. ASCII
 /// strings, no NUL, `callId` exactly as in the transcript. These keys REPLACE the single key both
-/// directions used to share (the raw session key for audio, `K_video` for video): with one key per
+/// directions used to share (the raw session key, audio and video alike): with one key per
 /// direction a peer's own frames reflected back at it can no longer authenticate. The native
 /// FrameCryptors run in per-participant mode: the SENDER cryptors use a local participant id that
 /// holds the own-direction key, the RECEIVER cryptors use the remote participant id that holds the

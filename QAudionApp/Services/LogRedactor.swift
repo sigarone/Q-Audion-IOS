@@ -261,6 +261,13 @@ enum LogRedactor {
             return isPlausibleIdentifierWord(s[r])
         }
     }
+    // Post-v5 — the allow-listed call close reasons, exact whole tokens only. They are fixed ASCII words
+    // (no digits, no base64/hex punctuation beyond '_'), and `identity_key_mismatch` is 21 characters,
+    // above the 20-character residual bar, so without this allow-list the telemetry `end_reason` and the
+    // log lines that name it would ship as `***REDACTED***`.
+    private static let closeReasonRegex = try! NSRegularExpression(
+        pattern: #"\b(?:"# + CallCloseReason.allTokens.joined(separator: "|") + #")\b"#)
+
     // Dot-delimited JWT: three base64url segments. Caught explicitly because
     // '.' fragments each segment below the length bars of the blob/residual
     // rules (the classic base64url fail-open).
@@ -293,6 +300,9 @@ enum LogRedactor {
         work = LogRedactor.stashMatches(of: uuidRegex, in: work, stash: &stash)
         // --- 1b. stash labelled short-hex fingerprints ---
         work = LogRedactor.stashMatches(of: fingerprintRegex, in: work, stash: &stash)
+        // --- 1b2. post-v5: stash the five allow-listed call close reasons (`CallCloseReason`) so
+        //          the residual sweep cannot eat the 21-character `identity_key_mismatch` ---
+        work = LogRedactor.stashCloseReasons(in: work, stash: &stash)
         // --- 1c. I8 FIX: stash letters-only code-identifier-shaped runs
         //         that ALSO pass the per-word plausibility check ---
         work = LogRedactor.stashCodeIdentifiers(in: work, stash: &stash)
@@ -381,6 +391,42 @@ enum LogRedactor {
     /// up. A real prose identifier is never written glued to `+`/`/`/`=`/`-`
     /// this way, so the guard costs no genuine diagnostic value.
     private static let blobAdjacentChars: Set<Character> = ["+", "/", "=", "-"]
+
+    /// Post-v5 -- stash the allow-listed close reason tokens (see `closeReasonRegex`). Same adjacency
+    /// guard as `stashCodeIdentifiers`: a token glued to `+ / = -` is a substring of a longer
+    /// secret-charset run, never a standalone reason, and is left for the blob/residual rules.
+    private static func stashCloseReasons(in text: String, stash: inout [String]) -> String {
+        let ns = text as NSString
+        let matches = closeReasonRegex.matches(
+            in: text, options: [],
+            range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return text }
+        var out: String = ""
+        out.reserveCapacity(text.count)
+        var lastEnd = text.startIndex
+        for m in matches {
+            guard let r = Range(m.range, in: text) else { continue }
+            // Left side: `=` is the key=value separator of a log line (end_reason=TOKEN), not a base64
+            // member (padding only ever ends a run), so only `+ / -` glue a token to a longer run.
+            if r.lowerBound > text.startIndex,
+               ["+", "/", "-"].contains(text[text.index(before: r.lowerBound)]) {
+                continue
+            }
+            if r.upperBound < text.endIndex,
+               blobAdjacentChars.contains(text[r.upperBound]) {
+                continue
+            }
+            out.append(contentsOf: text[lastEnd..<r.lowerBound])
+            let idx: Int = stash.count
+            stash.append(String(text[r]))
+            out.append("\u{0001}K")
+            out.append(String(idx))
+            out.append("\u{0001}")
+            lastEnd = r.upperBound
+        }
+        out.append(contentsOf: text[lastEnd..<text.endIndex])
+        return out
+    }
 
     /// I8 FIX -- same sentinel-stashing shape as `stashMatches` above, but
     /// for `codeIdentifierRegex` candidates specifically: each candidate is

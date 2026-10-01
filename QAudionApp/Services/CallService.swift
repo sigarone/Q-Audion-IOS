@@ -928,12 +928,12 @@ final class CallService: @unchecked Sendable {
         reachedMediaThisCall = true
     }
     /// W-GRPVPIO-CRASH-3 (2026-07-17) — returns true while a GROUP call owns
-    /// the shared VoiceProcessingIO hardware unit (LiveKit's SFU room drives
-    /// it directly). Injected by AppState (`{ groupCallKitId != nil }`).
+    /// the shared VoiceProcessingIO hardware unit (the group call's own media
+    /// stack drives it directly). Injected by AppState (`{ groupCallKitId != nil }`).
     /// Every 1:1 audio-engine START path guards on this so NO caller — any
     /// WS message handler, CallKit callback, or stale redelivered signaling —
     /// can call `setVoiceProcessingEnabled(true)` on a SECOND engine while
-    /// LiveKit already holds the unit: that throws an uncatchable ObjC
+    /// the group call already holds the unit: that throws an uncatchable ObjC
     /// NSException inside AVAudioEngineGraph::_Connect (EXC_CRASH/SIGABRT,
     /// crashPointId B4lMk7amGdH7pnGoa5qsYT — repro'd 5+ times today via the
     /// App Store Connect crash portal, always "crash after answering" a
@@ -1335,8 +1335,8 @@ final class CallService: @unchecked Sendable {
 
     /// W574l — fingerprint (8 hex of SHA-256) of the session key the current
     /// sealers were built from. The call handshake fires `onRelaySessionReady`
-    /// from MULTIPLE sites with DIFFERENT key material (QUAD raw ML-KEM
-    /// `sharedSecret` vs JSON dual-hybrid `combined`); the old per-callId
+    /// from MULTIPLE sites with DIFFERENT key material (a raw ML-KEM
+    /// `sharedSecret` vs the dual-hybrid `combined`); the old per-callId
     /// idempotency locked the sealer to whichever fired FIRST, so if a
     /// contact-key-exchange `sharedSecret` install beat the real audio
     /// `combined` key, the seal was keyed wrong while the audio engine used
@@ -2200,8 +2200,8 @@ final class CallService: @unchecked Sendable {
         // the peer and the call attached no media (silent audio).
         // The universal outgoing path is `beginAndroidOutgoing` for
         // ALL peer types (iOS / Android / Desktop) — it owns the
-        // idle → capabilitySent transition itself and ships the real
-        // JSON+QUAD OFFER pair.
+        // idle → capabilitySent transition itself and ships the signed
+        // OFFER_v5.
 
         self.callIntegration = integration
         drainRxPreBuffer()  // W481 — replay any frames that arrived before binding
@@ -2270,7 +2270,7 @@ final class CallService: @unchecked Sendable {
         // otherwise reaches setVoiceProcessingEnabled here and aborts the
         // whole process.
         if isGroupCallActive?() == true {
-            print("[CallService] activateIncomingCallAudio SKIPPED — group call active (VP-IO owned by LiveKit)")
+            print("[CallService] activateIncomingCallAudio SKIPPED — group call active (VP-IO owned by the group call)")
             return
         }
         // W-PADOVERFLOW — incoming-call counterpart of the assignment in
@@ -2556,8 +2556,7 @@ final class CallService: @unchecked Sendable {
     ///      same callId. The engine generates dual-hybrid keypair,
     ///      stashes the privs INSIDE the method body BEFORE invoking
     ///      either send closure, then ships the JSON OFFER (literal
-    ///      string, no base64 wrap) followed by the legacy QUAD
-    ///      binary OFFER for backwards compat.
+    ///      string, no base64 wrap).
     ///   4. On any failure mid-stream: fire `sendCallHangupForId` so
     ///      the peer's UI doesn't sit on a phantom incoming call.
     ///
@@ -2596,7 +2595,7 @@ final class CallService: @unchecked Sendable {
             hasVideo: hasVideo
         )
 
-        // 2) PQC handshake OFFER pair (JSON + QUAD). Best-effort
+        // 2) PQC handshake OFFER (signed JSON bundle). Best-effort
         //    cleanup on failure: tell the peer to dismiss the
         //    phantom incoming call.
         do {

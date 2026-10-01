@@ -32057,6 +32057,468 @@
           }
         }
       }
+    },
+    "call_history.close.dtls_fp_mismatch": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call ended because the media connection's certificate fingerprint did not match the one signed in the handshake",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: impronta di connessione non valida"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ended: connection fingerprint mismatch"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "beendet: Verbindungsfingerabdruck stimmt nicht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "finalizada: huella de conexión no válida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminé : empreinte de connexion non valide"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "encerrada: impressão digital da conexão inválida"
+          }
+        }
+      }
+    },
+    "call_history.close.kcmac_mismatch": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call ended because the two phones could not confirm they derived the same keys",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: conferma delle chiavi non riuscita"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ended: key confirmation failed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "beendet: Schlüsselbestätigung fehlgeschlagen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "finalizada: falló la confirmación de claves"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminé : échec de la confirmation des clés"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "encerrada: falha na confirmação das chaves"
+          }
+        }
+      }
+    },
+    "call_history.close.handshake_malformed": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call ended because the other side's secure handshake was malformed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: handshake non valido"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ended: invalid handshake"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "beendet: ungültiger Handshake"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "finalizada: handshake no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminé : handshake non valide"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "encerrada: handshake inválido"
+          }
+        }
+      }
+    },
+    "call_history.close.identity_unresolved": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call was closed before the other person's identity was verified (the words were never confirmed)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: identità non verificata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ended: identity not verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "beendet: Identität nicht verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "finalizada: identidad no verificada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminé : identité non vérifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "encerrada: identidade não verificada"
+          }
+        }
+      }
+    },
+    "call_history.close.identity_key_mismatch": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call was closed while the other person's identity key differed from the one already trusted",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: chiave di identità cambiata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ended: identity key changed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "beendet: Identitätsschlüssel geändert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "finalizada: la clave de identidad cambió"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminé : clé d'identité modifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "encerrada: chave de identidade alterada"
+          }
+        }
+      }
+    },
+    "group_call.unverified_badge": {
+      "extractionState": "manual",
+      "comment": "Group call participant tile — badge: this participant's identity has not been verified (no SAS confirmation, no in-person pairing)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non verificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non vérifié"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não verificado"
+          }
+        }
+      }
+    },
+    "group_call.unverified_badge_a11y": {
+      "extractionState": "manual",
+      "comment": "Group call participant tile — accessibility label of the unverified badge; %@ is the participant's display name",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: identità non verificata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: identity not verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: Identität nicht verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: identidad no verificada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ : identité non vérifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: identidade não verificada"
+          }
+        }
+      }
+    },
+    "group_call.unverified_banner.one": {
+      "extractionState": "manual",
+      "comment": "Group call banner — exactly one participant has not been verified (no SAS confirmation, no in-person pairing)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un partecipante non è verificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One participant is not verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Teilnehmer ist nicht verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un participante no está verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un participant n'est pas vérifié"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um participante não está verificado"
+          }
+        }
+      }
+    },
+    "group_call.unverified_banner.many": {
+      "extractionState": "manual",
+      "comment": "Group call banner — several participants have not been verified; %lld is how many",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld partecipanti non sono verificati"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld participants are not verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Teilnehmer sind nicht verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld participantes no están verificados"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld participants ne sont pas vérifiés"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld participantes não estão verificados"
+          }
+        }
+      }
+    },
+    "group_call.unverified_banner.action": {
+      "extractionState": "manual",
+      "comment": "Group call banner — button that opens the identity verification of the first unverified participant",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifizieren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        }
+      }
+    },
+    "group_call.unverified_banner.action_a11y": {
+      "extractionState": "manual",
+      "comment": "Group call banner — accessibility label of the verify button; %@ is the display name of the participant it opens",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri la verifica dell'identità di %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open the identity verification of %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identitätsprüfung von %@ öffnen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir la verificación de identidad de %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir la vérification d'identité de %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir a verificação de identidade de %@"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
