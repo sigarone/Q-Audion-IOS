@@ -287,12 +287,13 @@ Therefore:
     answered: the roster update that follows distributes our key of that epoch to every member, the
     requester included, which is the answer; nothing is queued.
 19. **Refused requests: the `error` envelope and the `entitlement` reason.** The server answers a
-    refused create / join / media request with a generic `error` envelope (and, once it adds them,
-    `call_id` and `code`). The app layer feeds it to the group call manager (single handler slot):
-    while the call has no media path yet (a first join, a rejoin, a creator's start) an `error` that
-    names the live call, or an uncorrelated one that arrives within 3 s of our own request, ends the
-    attempt at once (`entitlement_required` is the entitlement error, everything else a generic media
-    error) instead of after the 10-30 s timeouts; with a running media path an `error` changes
+    refused create / join request with a generic `error` envelope that carries `call_id` and `code`
+    (server D25). The app layer feeds it to the group call manager (single handler slot): while the
+    call has no media path yet (a first join, a rejoin, a creator's start) an `error` that names the
+    live call ends the attempt at once (`entitlement_required` is the entitlement error, everything
+    else a generic media error) instead of after the 10-30 s timeouts. An `error` that names no call
+    is never taken for the answer of a group request (the envelope is shared by every feature, the
+    1:1 call a group is promoted from included); with a running media path an `error` changes
     nothing. `group_call_media_unavailable {reason: "entitlement"}` (also spelled
     `entitlement_required`) is the same fatal, never-retried error. Unknown reasons stay generic.
 20. **The creator asks for its media at once.** The server sends the creator of a call no
@@ -324,9 +325,13 @@ Therefore:
     flag: a layer inactive in one offer is echoed `~rid` in every later answer and libwebrtc then
     switches it off again. The publisher offer is stripped of every `~` in `a=simulcast` and the
     publish policy's intended active layers are re-applied after each answer.
-26. **Ring-only `group_call_ended` reasons.** `ring_timeout`, `declined` and
-    `answered_elsewhere` (the server tells the user's other devices when one joined) only dismiss a
-    ring; for the call this device is in or joining they change nothing (an accept racing the 45 s
-    timer must not tear the call down and leave a ghost participant). A `group_call_update` for a
+26. **Ring-only `group_call_ended` reasons.** `ring_timeout` and `declined` only dismiss a ring; for
+    the call this device is in or joining they change nothing (an accept racing the 45 s timer must
+    not tear the call down and leave a ghost participant). `answered_elsewhere` (server D24: the
+    server tells the user's other devices when one joined, and answers a second device's own
+    `group_call_join` / `group_call_media_join` with it, as `group_call_ended` / as
+    `group_call_media_unavailable`) dismisses a ring, and for a call this device is joining or in it
+    ends the call HERE, locally and WITHOUT a `group_call_leave`: a leave is per account and would
+    remove the seat from under the device that holds it. A `group_call_update` for a
     call this device is not in is dropped (another device of the same account joined it), and the
     delayed `.ended -> .idle` reset of the manager never overwrites a call started inside its second.

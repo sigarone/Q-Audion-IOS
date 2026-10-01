@@ -57,9 +57,6 @@ public final class GroupCallController: @unchecked Sendable {
     /// server's 5 s per-(call, member) interval and far below its 12 per minute.
     private let tokenRetryBackoffSeconds: [Double]
     private static let iceRefreshMaxAttempts = 3
-    /// An uncorrelated server `error` counts as the answer of a group request only when it
-    /// arrives this soon after the request went out.
-    private static let serverErrorWindowMs: Int64 = 3_000
     /// A late answer (after the retries) of a refresh is still a refresh, not a new path.
     private static let iceRefreshAnswerWindowMs: Int64 = 300_000
     private let lock = NSLock()
@@ -113,8 +110,6 @@ public final class GroupCallController: @unchecked Sendable {
     private var tokenRefreshGeneration = 0
     private var tokenRefreshAttempt = 0
     private var tokenRefreshTimer: DispatchWorkItem?
-    /// When the last create / join / media request of this call went out (0 = none).
-    private var lastGroupRequestAtMs: Int64 = 0
     private var videoStoppedByPolicy = false
     private var backgrounded = false
     private var desiredTiles: [String: (tile: GroupLayerPolicy.TileClass, visible: Bool)] = [:]
@@ -313,12 +308,13 @@ public final class GroupCallController: @unchecked Sendable {
         }
         beginCall(callId: callId, video: callType == "video", created: true, startMuted: startMuted)
         setState(.connecting(callId: callId))
-        // The creator is a participant from the moment the server has the create, and the
-        // server sends it NO `group_call_update` until somebody joins (or the room exists):
-        // waiting for one would hold this phone's media back until the first invitee has
-        // accepted. Android and desktop start their media at once; so does this. Both
-        // frames go out on the one socket, in order. Setting `mediaJoinRequested` here also
-        // keeps the first update from asking a second time.
+        // The creator is a participant from the moment the server has the create, and a
+        // server need not send it any `group_call_update` until somebody joins (an older one
+        // does not; a newer one sends the epoch-1 roster at create): waiting for one would
+        // hold this phone's media back until the first invitee has accepted. Android and
+        // desktop start their media at once; so does this. Both frames go out on the one
+        // socket, in order. Setting `mediaJoinRequested` here also keeps the first update
+        // from asking a second time.
         requestMediaJoin(force: false)
         return callId
     }
@@ -329,9 +325,6 @@ public final class GroupCallController: @unchecked Sendable {
     ///   group a 1:1 call is promoted into carries the mute of the 1:1 leg over.
     public func join(callId: String, video: Bool = false, startMuted: Bool = false) {
         beginCall(callId: callId, video: video, created: false, startMuted: startMuted)
-        lock.lock()
-        lastGroupRequestAtMs = nowMs()
-        lock.unlock()
         manager.joinGroupCall(callId: callId)
         setState(.connecting(callId: callId))
     }
@@ -607,7 +600,6 @@ public final class GroupCallController: @unchecked Sendable {
         tokenRefreshAttempt = 0
         let staleTokenTimer = tokenRefreshTimer
         tokenRefreshTimer = nil
-        lastGroupRequestAtMs = 0
         rejoinReasonInFlight = nil
         desiredTiles.removeAll()
         let newCoordinator = GroupE2eeCoordinator(
@@ -671,7 +663,6 @@ public final class GroupCallController: @unchecked Sendable {
         tokenRefreshAttempt = 0
         let tokenTimer = tokenRefreshTimer
         tokenRefreshTimer = nil
-        lastGroupRequestAtMs = 0
         _reactionEvents.removeAll()
         _raisedHands.removeAll()
         let hadConnected = connectedTelemetrySent
@@ -845,7 +836,6 @@ public final class GroupCallController: @unchecked Sendable {
         }
         mediaJoinRequested = true
         mediaJoinRequestedAtMs = nowMs()
-        lastGroupRequestAtMs = mediaJoinRequestedAtMs
         rejoinReasonInFlight = nil
         let previousTimeout = mediaReadyTimeout
         let item = DispatchWorkItem { [weak self] in self?.mediaReadyTimedOut(callId: callId) }
@@ -965,21 +955,20 @@ public final class GroupCallController: @unchecked Sendable {
     }
 
     /// A server `error` envelope (iOS deviation 19): the answer of a refused create / join /
-    /// media request. It names the call (`call_id`) once the server says so; an uncorrelated
-    /// one is only taken as the answer of a request that went out a moment ago. While no media
-    /// path exists (a first join, a rejoin, a creator's start) it ends the attempt at once
-    /// instead of waiting out the 10-30 s timeouts; with a running media path an `error` is
-    /// not about this call and changes nothing.
+    /// media request. The server names the call (`call_id`, server D25): only an error that
+    /// names the live call is its answer. An error WITHOUT a call id is about something else
+    /// (the `error` envelope is shared by every feature: a chat, a 1:1 call that is being
+    /// promoted) and never ends a group attempt. While no media path exists (a first join, a
+    /// rejoin, a creator's start) it ends the attempt at once instead of waiting out the
+    /// 10-30 s timeouts; with a running media path an `error` is not about this call and
+    /// changes nothing.
     private func handleServerError(code: String, callId: String?) {
         lock.lock()
-        guard let active = activeCallId, link == nil else {
+        guard let active = activeCallId, link == nil, callId == active else {
             lock.unlock()
             return
         }
-        let correlated = callId != nil && callId == active
-        let recent = callId == nil && nowMs() - lastGroupRequestAtMs <= Self.serverErrorWindowMs
         lock.unlock()
-        guard correlated || recent else { return }
         print("[GroupCallController] server error during media setup code=\(code.prefix(24)) call=\(active.prefix(8))…")
         failMedia(code == "entitlement_required" ? .entitlementRequired : .other("server_error"))
     }
@@ -1375,7 +1364,6 @@ public final class GroupCallController: @unchecked Sendable {
         }
         mediaJoinRequested = true
         mediaJoinRequestedAtMs = nowMs()
-        lastGroupRequestAtMs = mediaJoinRequestedAtMs
         rejoinReasonInFlight = reason
         let previousTimeout = mediaReadyTimeout
         let item = DispatchWorkItem { [weak self] in self?.mediaReadyTimedOut(callId: callId) }

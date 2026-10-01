@@ -114,15 +114,15 @@ final class GroupCallManagerTests: XCTestCase {
         XCTAssertNil(manager.callId)
     }
 
-    /// `ring_timeout` / `declined` / `answered_elsewhere` are about a RING: the invitee presses Accept
-    /// a moment before the server's timer fires, joins, and the notice for the ring arrives with the
-    /// live call id. It must not tear the call down (the server then still processes the join, which
-    /// would leave a ghost participant).
+    /// `ring_timeout` / `declined` are about a RING: the invitee presses Accept a moment before the
+    /// server's timer fires, joins, and the notice for the ring arrives with the live call id. It must
+    /// not tear the call down (the server then still processes the join, which would leave a ghost
+    /// participant).
     func testRingOnlyEndReasonsDoNotEndTheCallWeAreIn() {
         let (manager, _) = makeManager()
         manager.joinGroupCall(callId: callId)
         manager.onActiveCallEnded = { _, _ in XCTFail("a ring notice is not the end of the call") }
-        for reason in ["ring_timeout", "declined", "answered_elsewhere"] {
+        for reason in ["ring_timeout", "declined"] {
             manager.handleGroupCallEnded(data: ["call_id": callId, "reason": reason])
         }
         manager.handleGroupCallEnded(data: ["reason": "ring_timeout"])
@@ -139,6 +139,29 @@ final class GroupCallManagerTests: XCTestCase {
             manager.handleGroupCallEnded(data: ["call_id": callId, "reason": reason])
             XCTAssertEqual(ended.value, [callId, reason])
             XCTAssertEqual(manager.state, .ended)
+        }
+    }
+
+    /// Another live device of the account holds the seat (server D24): for the call this device is
+    /// joining or in, `answered_elsewhere` is its end HERE, locally, without a `group_call_leave`
+    /// (a leave is per account and would remove the seat from under the device that holds it). The
+    /// same goes for its `group_call_media_unavailable` form.
+    func testAnsweredElsewhereEndsTheCallWeAreInLocallyAndSendsNoLeave() {
+        for viaMedia in [false, true] {
+            let (manager, sent) = makeManager()
+            manager.joinGroupCall(callId: callId)
+            let ended = LockedBox<[String]>([])
+            manager.onActiveCallEnded = { id, why in ended.mutate { $0 = [id, why] } }
+            manager.onMediaUnavailable = { _, _ in XCTFail("not a media failure: it is the end of the call here") }
+            if viaMedia {
+                manager.handleMediaUnavailable(data: ["call_id": callId, "reason": "answered_elsewhere"])
+            } else {
+                manager.handleGroupCallEnded(data: ["call_id": callId, "reason": "answered_elsewhere"])
+            }
+            XCTAssertEqual(ended.value, [callId, "answered_elsewhere"])
+            XCTAssertEqual(manager.state, .ended)
+            XCTAssertNil(manager.callId)
+            XCTAssertFalse(sent().contains { $0.type == "group_call_leave" }, "the holder keeps the seat")
         }
     }
 

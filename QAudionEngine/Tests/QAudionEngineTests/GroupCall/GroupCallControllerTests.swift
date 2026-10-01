@@ -793,12 +793,48 @@ final class GroupCallControllerTests: XCTestCase {
         XCTAssertTrue(h.sentTypes.contains("group_call_leave"))
     }
 
-    func testAnUncorrelatedServerErrorRightAfterOurRequestFailsFastToo() async {
+    /// The `error` envelope is shared by every feature (a chat, the 1:1 call a group is promoted
+    /// from): one that does not name our call is not the answer of our request, however soon it
+    /// arrives, and must not end a group attempt.
+    func testAnErrorThatNamesNoCallNeverEndsAGroupAttempt() async {
         let h = ControllerHarness()
         h.controller.join(callId: ControllerHarness.callId)
-        h.manager.handleServerError(code: "?", callId: nil)                    // the answer of the join we just sent
-        XCTAssertEqual(h.errors, [.other("server_error")])
+        h.manager.handleServerError(code: "?", callId: nil)
+        h.manager.handleServerError(code: "rate_limited", callId: "")
+        XCTAssertTrue(h.errors.isEmpty)
+        XCTAssertNotEqual(h.controller.state, .idle)
+        XCTAssertFalse(h.sentTypes.contains("group_call_leave"))
+        h.controller.leave()
+    }
+
+    // MARK: another device of the account holds the seat (server D24)
+
+    /// This device's `group_call_media_join` was refused because another live device of the account
+    /// holds the seat: the call ends HERE, and no `group_call_leave` goes out (a leave is per account:
+    /// it would remove the seat from under the device that holds it).
+    func testAnsweredElsewhereOnTheMediaJoinEndsTheCallHereWithoutALeave() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: false))
+        h.manager.handleMediaUnavailable(data: ["call_id": ControllerHarness.callId, "reason": "answered_elsewhere"])
         XCTAssertEqual(h.controller.state, .idle)
+        XCTAssertNil(h.controller.currentCallId)
+        XCTAssertTrue(h.errors.isEmpty, "not a media failure: no error path, no retry")
+        XCTAssertFalse(h.sentTypes.contains("group_call_leave"), "the holder's seat is not ours to give up")
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"))
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, 1)
+    }
+
+    /// The refusal of this device's `group_call_join` is a `group_call_ended {answered_elsewhere}` for
+    /// the call it is joining: with no update and no media it would sit in "connecting" for ever.
+    func testAnsweredElsewhereOnTheRefusedJoinEndsTheCallHereWithoutALeave() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.handleGroupCallEnded(data: ["call_id": ControllerHarness.callId, "reason": "answered_elsewhere"])
+        XCTAssertEqual(h.controller.state, .idle)
+        XCTAssertNil(h.controller.currentCallId)
+        XCTAssertFalse(h.sentTypes.contains("group_call_leave"))
     }
 
     func testAServerErrorOfAnotherCallOrWithALiveMediaPathChangesNothing() async {
@@ -814,15 +850,6 @@ final class GroupCallControllerTests: XCTestCase {
         h.manager.handleServerError(code: "x", callId: nil)
         XCTAssertTrue(h.errors.isEmpty, "with a running media path an error is about something else")
         XCTAssertTrue(h.controller.hasMediaLink)
-        h.controller.leave()
-    }
-
-    func testAnUncorrelatedServerErrorLongAfterOurRequestIsNotTheAnswerOfIt() async {
-        let h = ControllerHarness()
-        h.controller.join(callId: ControllerHarness.callId)
-        try? await Task.sleep(nanoseconds: 3_300_000_000)
-        h.manager.handleServerError(code: "?", callId: nil)
-        XCTAssertTrue(h.errors.isEmpty)
         h.controller.leave()
     }
 

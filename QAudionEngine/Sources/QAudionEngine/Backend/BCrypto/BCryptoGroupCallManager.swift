@@ -114,12 +114,17 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     }
 
     /// `group_call_ended` reasons that are about a RING, never about a call this device is
-    /// in: the invitee-side ring timeout, a decline, and "answered on another device" (the
-    /// server tells the user's other devices when one of them joined). They race an accept
-    /// (the client joins a moment before the server's timer fires, or a sibling's decline
-    /// arrives after our own join): for the active call only `ended` (and a reason this
-    /// client does not know) ends it, and the server then still processes the join.
-    static let ringOnlyEndReasons: Set<String> = ["ring_timeout", "declined", "answered_elsewhere"]
+    /// in: the invitee-side ring timeout and a decline from another device. They race an
+    /// accept (the client joins a moment before the server's timer fires, or a sibling's
+    /// decline arrives after our own join): for the active call only `ended`,
+    /// `answered_elsewhere` and a reason this client does not know end it, and the server
+    /// then still processes the join.
+    static let ringOnlyEndReasons: Set<String> = ["ring_timeout", "declined"]
+    /// Another live device of this account holds the seat (server D24). For a ring it is a
+    /// dismissal; for a call this device is joining (its own join was refused) or is in, it
+    /// ends the call HERE, locally and WITHOUT a `group_call_leave`: a leave is per account
+    /// and would remove the seat from under the device that holds it.
+    static let answeredElsewhere = "answered_elsewhere"
 
     // ─── Tier-1 call features: reactions / raise-hand / mute-request ──
     // Wire contract finalized 2026-07-16. `callId` on every one of these
@@ -581,7 +586,16 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     func handleMediaUnavailable(data: [String: Any]) {
         guard let cid = data["call_id"] as? String, cid == callId else { return }
-        onMediaUnavailable?(cid, GroupCallWire.UnavailableReason(wire: (data["reason"] as? String) ?? ""))
+        let wireReason = (data["reason"] as? String) ?? ""
+        if wireReason == Self.answeredElsewhere {
+            // Another live device of this account holds the seat (server D24): this device's
+            // media request was refused. That is the end of the call HERE, and it must not send a
+            // `group_call_leave` (the failure path of every other reason does): that would remove
+            // the account's seat from under the device that holds it.
+            handleGroupCallEnded(data: ["call_id": cid, "reason": Self.answeredElsewhere])
+            return
+        }
+        onMediaUnavailable?(cid, GroupCallWire.UnavailableReason(wire: wireReason))
     }
 
     func handleMediaToken(data: [String: Any]) {
