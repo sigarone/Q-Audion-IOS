@@ -159,3 +159,20 @@ final class EarbudExclKatTests: XCTestCase {
     // No test here reproduces those bytes — doing so would break the blindness invariant.
     // The KAT JSON contains those fields for firmware/server-side verification only.
 }
+
+// MARK: - Hex helper (file-private, same pattern as other KAT test files)
+
+private extension Data {
+    init(hex: String) {
+        precondition(hex.count % 2 == 0, "hex must be even-length: \(hex)")
+        var data = Data(capacity: hex.count / 2)
+        var idx = hex.startIndex
+        while idx < hex.endIndex {
+            let next = hex.index(idx, offsetBy: 2)
+            data.append(UInt8(hex[idx..<next], radix: 16) ?? 0)
+            idx = next
+        }
+        self = data
+    }
+}
+// swiftlint:enable identifier_name

@@ -8,7 +8,7 @@ import CryptoKit
 /// reconstructing it from first principles.
 final class ComputeSasUseCaseTests: XCTestCase {
 
-    private let hash = Data(repeating: 0xAB, count: 32)
+    private let acceptHash = Data(repeating: 0xAB, count: 32)
 
     func testWordListSize() {
         XCTAssertEqual(PgpSasWordList.words.count, 256)
@@ -16,15 +16,15 @@ final class ComputeSasUseCaseTests: XCTestCase {
 
     func testDerivationIsDeterministic() throws {
         let key = Data(repeating: 0x42, count: 32)
-        let a = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash)
-        let b = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash)
+        let a = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: acceptHash)
+        let b = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: acceptHash)
         XCTAssertEqual(a.words, b.words)
         XCTAssertEqual(a.words.count, ComputeSasUseCase.sasWordCount)
     }
 
     func testDifferentKeysProduceDifferentSas() throws {
-        let s1 = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x01, count: 32), transcriptHash: hash)
-        let s2 = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x02, count: 32), transcriptHash: hash)
+        let s1 = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x01, count: 32), transcriptHash: acceptHash)
+        let s2 = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x02, count: 32), transcriptHash: acceptHash)
         XCTAssertNotEqual(s1.words, s2.words)
     }
 
@@ -38,7 +38,7 @@ final class ComputeSasUseCaseTests: XCTestCase {
     }
 
     func testEmptyKeyThrows() {
-        XCTAssertThrowsError(try ComputeSasUseCase.invoke(sessionKey: Data(), transcriptHash: hash)) { err in
+        XCTAssertThrowsError(try ComputeSasUseCase.invoke(sessionKey: Data(), transcriptHash: acceptHash)) { err in
             XCTAssertEqual(err as? ComputeSasUseCase.SasError, .emptyKey)
         }
     }
@@ -56,8 +56,8 @@ final class ComputeSasUseCaseTests: XCTestCase {
 
     func testInitiatorFlagDoesNotChangeOutput() throws {
         let key = Data(repeating: 0x77, count: 32)
-        let a = try ComputeSasUseCase.invoke(sessionKey: key, initiator: true, transcriptHash: hash)
-        let b = try ComputeSasUseCase.invoke(sessionKey: key, initiator: false, transcriptHash: hash)
+        let a = try ComputeSasUseCase.invoke(sessionKey: key, initiator: true, transcriptHash: acceptHash)
+        let b = try ComputeSasUseCase.invoke(sessionKey: key, initiator: false, transcriptHash: acceptHash)
         XCTAssertEqual(a.words, b.words)
     }
 
@@ -89,14 +89,14 @@ final class ComputeSasUseCaseTests: XCTestCase {
 
     func testMatchesIsTrueForEqualSas() throws {
         let key = Data(repeating: 0x33, count: 32)
-        let a = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash)
-        let b = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash)
+        let a = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: acceptHash)
+        let b = try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: acceptHash)
         XCTAssertTrue(ComputeSasUseCase.matches(a, b))
     }
 
     func testMatchesIsFalseForDifferentSas() throws {
-        let a = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x01, count: 32), transcriptHash: hash)
-        let b = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x02, count: 32), transcriptHash: hash)
+        let a = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x01, count: 32), transcriptHash: acceptHash)
+        let b = try ComputeSasUseCase.invoke(sessionKey: Data(repeating: 0x02, count: 32), transcriptHash: acceptHash)
         XCTAssertFalse(ComputeSasUseCase.matches(a, b))
     }
 
