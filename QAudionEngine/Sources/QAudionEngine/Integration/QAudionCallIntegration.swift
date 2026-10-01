@@ -1397,7 +1397,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 isHeld: held)
             else {
                 // R-HELD-REKEY: a rekey the caller would have started is deferred, not dropped.
-                if held && isCaller && state == .active { rekeyDeferredWhileHeld.insert(callId.lowercased()) }
+                if held && isCaller && state == .active && pendingReKeyAttempt == nil {
+                    rekeyDeferredWhileHeld.insert(callId.lowercased())
+                }
                 return (false, nil)
             }
             return (true, retrySenderClosure)
