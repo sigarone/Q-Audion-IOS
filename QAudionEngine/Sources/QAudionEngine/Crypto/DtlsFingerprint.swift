@@ -198,4 +198,28 @@ public enum DtlsFingerprint {
         if connectedTransports == 0 || pending { return .pending }
         return .pass
     }
+
+    // MARK: - Failure stage -> numeric verdict (local logs only)
+
+    /// Numeric verdict of the stage a failed DTLS check reports
+    /// (`QAudionPeerConnection.onDtlsFingerprintFailure`). The redacted remote logs carry numbers
+    /// only, never a fingerprint:
+    /// - 1 `sdp_remote`, 2 `sdp_local`, 4 `pin_timeout`;
+    /// - 3 `stats`: check (b) saw a REAL certificate mismatch in the transport stats;
+    /// - 5 `stats_timeout`: check (b) reached its 5 s deadline with no verdict at all (the
+    ///   certificate stats never reported both certificates, or the peer pin was still missing).
+    ///
+    /// LOCAL ONLY: every stage ends the call with the same on-the-wire hangup reason
+    /// `dtls_fp_mismatch` (WIRE_SPEC §3.8.4), which this function must never influence. An unknown
+    /// stage maps to 3, the value every unlisted stage had before `stats_timeout` existed.
+    public static func failureCode(stage: String) -> Int {
+        switch stage {
+        case "sdp_remote": return 1
+        case "sdp_local": return 2
+        case "stats": return 3
+        case "pin_timeout": return 4
+        case "stats_timeout": return 5
+        default: return 3
+        }
+    }
 }

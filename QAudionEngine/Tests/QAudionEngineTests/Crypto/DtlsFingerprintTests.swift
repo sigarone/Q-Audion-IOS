@@ -208,4 +208,64 @@ final class DtlsFingerprintTests: XCTestCase {
     func testStatsMalformedPinnedFingerprintIsMismatch() {
         XCTAssertEqual(DtlsFingerprint.checkStats(stats(), fpSelf: Data(count: 3), fpPeer: fpPeer), .mismatch)
     }
+
+    // MARK: - Failure stage -> numeric verdict (local logs only)
+
+    /// Every stage the PeerConnection can report has its own number, so a server log line tells a
+    /// real certificate mismatch (3) from a check (b) timeout (5).
+    func testEveryFailureStageHasItsOwnCode() {
+        let expected: [(String, Int)] = [
+            ("sdp_remote", 1), ("sdp_local", 2), ("stats", 3), ("pin_timeout", 4), ("stats_timeout", 5),
+        ]
+        for (stage, code) in expected {
+            XCTAssertEqual(DtlsFingerprint.failureCode(stage: stage), code, stage)
+        }
+        let distinct = Set(expected.map { DtlsFingerprint.failureCode(stage: $0.0) })
+        XCTAssertEqual(distinct.count, expected.count)
+    }
+
+    func testAnUnknownFailureStageKeepsTheHistoricalDefault() {
+        XCTAssertEqual(DtlsFingerprint.failureCode(stage: "something_new"), 3)
+        XCTAssertEqual(DtlsFingerprint.failureCode(stage: ""), 3)
+    }
+
+    private func repoSource(_ relativePath: String) throws -> String {
+        var dir = URL(fileURLWithPath: #filePath)
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent(relativePath)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+        }
+        throw XCTSkip("\(relativePath) not found")
+    }
+
+    /// The PeerConnection, the controller and AppState cannot be driven here (a live libwebrtc
+    /// PeerConnection, CallKit, a WebSocket), so the stats-timeout wiring is pinned on the source
+    /// text, like the other wiring invariants (RekeyRolePolicyTests): the 5 s deadline reports the
+    /// new LOCAL stage, a real mismatch still reports `stats`, the log lines use words the log
+    /// shipper keeps, and the app keeps ending the call with the on-the-wire reason
+    /// `dtls_fp_mismatch` whatever the stage.
+    func testStatsTimeoutIsALocalStageAndTheWireReasonIsUnchanged() throws {
+        let pc = try repoSource("QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionPeerConnection.swift")
+        let controller = try repoSource(
+            "QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift")
+        let app = try repoSource("QAudionApp/AppState.swift")
+
+        func occurrences(_ needle: String, in text: String) -> Int {
+            return text.components(separatedBy: needle).count - 1
+        }
+        XCTAssertEqual(occurrences("reportDtlsFailure(stage: \"stats_timeout\")", in: pc), 1, "the 5 s deadline")
+        XCTAssertEqual(occurrences("reportDtlsFailure(stage: \"stats\")", in: pc), 1, "a real mismatch only")
+
+        XCTAssertTrue(controller.contains("DtlsFingerprint.failureCode(stage: stage)"))
+        XCTAssertTrue(controller.contains("\"dtls fail s=\\(code) ok=0\""))
+        XCTAssertTrue(controller.contains("\"dtls pass s=3 ok=1\""))
+        XCTAssertFalse(controller.contains("dtlsfp s="), "the shipper drops the old vowel-less token")
+
+        XCTAssertTrue(app.contains("reason: \"dtls_fp_mismatch\", dtlsStage:"))
+        XCTAssertFalse(app.contains("\"stats_timeout\""), "the stage is local: it never selects a reason")
+        XCTAssertTrue(app.contains("\"hsfatal r=\\(code) dtls=\\(dtlsStage)\""))
+    }
 }
