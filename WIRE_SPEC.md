@@ -506,9 +506,10 @@ advertisement — v3 if it matched v3, otherwise static. Consequences:
   advertisement is never consumed for PSK selection (the echoed SELECTION is). The
   only thing given up is a pre-phase-A initiator's mutual/NFC-in-common indicator
   going dark.
-* Rewriting the initiator's advertisement in place IS covered by the §3.7 signature —
-  but note that verification is advisory under W-NOBRICK, so that coverage detects
-  and reports rather than prevents.
+* Rewriting the initiator's advertisement in place IS covered by the §3.7 signature, and
+  both advertisements feed the key-confirmation transcript (§3.7.1). An invalid
+  signature aborts the handshake and holds media pending SAS (§3.8.6); a KCMAC that
+  does not verify ends the call.
 * Every platform now also reports the degraded outcome. Where the notice was
   previously gated on a NON-EMPTY advertisement — making the stripped-field case
   completely silent — it now fires whenever candidates are held and no PSK results,
@@ -811,7 +812,7 @@ JSON text. Optional fields that are absent encode as `LP(empty) = 0x0000`.
 | `ctPqc`, `ctX25519`, `ctStrongBox`, `ctDualCurve` | ACCEPT `ciphertext.pqc`, `.x25519`, `.strongBox`, `.dualCurve` |
 | `CAPS9` | 9 bytes, each `0x00` or `0x01`, in this fixed order: `ratchetV3`, `sframeV1`, `vkeyV1`, `sessionKdfV3`, `ratchetV4`, `srtpDirKeyV1`, `pskMixV1`, `hsTranscriptBindV1`, `ratchetV5`. Read from the signer's OWN bundle `capabilities`; an absent capability is `0x00` |
 | `ratchetV`, `suiteId` | 1 byte each: `0x04` and `0x01` |
-| `advEnc(list)` | `u8(m) ‖ (u8(role_j) ‖ fp32_j)` for `j = 1..m`, in the advertised order. `fp32_j` is the RAW 32-byte value of the advertised `pskFingerprints[j]` (a blinded tag, §3.3.1). `pskRoles` is omitted on the wire, so every `role_j` is `0`. A string that is not exactly 64 hex characters encodes as 32 zero bytes (it never throws). `m ≤ 255` |
+| `advEnc(list)` | `u8(m) ‖ (u8(role_j) ‖ fp32_j)` for `j = 1..m`, in the advertised order. `fp32_j` is the RAW 32-byte value of the advertised `pskFingerprints[j]` (a blinded tag, §3.3.1). `role_j` is the j-th entry of the bundle's optional `pskRoles` array (one unsigned byte), and `0` when the array is absent, null or shorter than the list. The blinded advertisement of §3.3.1 omits `pskRoles`, so on such a bundle every `role_j` is `0`, but a builder MUST still honour a non-zero entry: the KAT vector `v5-psk-rekey-round-2` pins that encoding with roles `[0, 1]`. A string that is not exactly 64 hex characters encodes as 32 zero bytes (it never throws). `m ≤ 255` |
 | `selectedPskFp` | UTF-8 bytes of the bundle `selectedPskFingerprint` string verbatim, empty when none |
 | `rekeyNonce[8]` | the 8 raw bytes of `rekeyNonce`. The offerer mints it once per call in memory and reuses it on every OFFER of that call. The ACCEPT echoes the OFFER's value. It is always present and exactly 8 bytes |
 | `round` | `rekeyRound`: `1` for the initial handshake, strictly increasing for each later rekey OFFER under the same `callId`. The ACCEPT echoes the OFFER's value |
@@ -826,14 +827,31 @@ bound to the v5 transcript.
 
 ```
 sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
-                         salt = as §1 / §3.3 (PSK mix, otherwise "q-audion-hybrid-pqc-v1"),
+                         salt = the raw bytes of the agreed PSK (§3.3) when one was selected,
+                                otherwise the 22 ASCII bytes "q-audion-hybrid-pqc-v1",
                          info = "q-audion-session-key" ‖ SHA-256(ACCEPT_v5),      (20 + 32 = 52 B)
                          L    = 32)
 ```
 
+- The PSK is the salt itself. The `q-audion-psk-mix` label of §1 belongs to the N ≥ 2 PSK-mixing construction,
+  which this derivation does not use. The KAT `kdf` section pins both cases (`kdf-no-psk`, `kdf-with-psk`).
 - SAS: §4, over the same `SHA-256(ACCEPT_v5)`.
-- Key confirmation (KCMAC): the `offerBinding` and `acceptBinding` inputs of the key-confirmation transcript are
-  `SHA-256(OFFER_v5)` and `SHA-256(ACCEPT_v5)`.
+- Key confirmation (KCMAC), with `offerBinding = SHA-256(OFFER_v5)` and `acceptBinding = SHA-256(ACCEPT_v5)`:
+
+  ```
+  kc_transcript = SHA-256( "qa-kc-transcript-v1"                      19 B ASCII, not length-prefixed
+                           ‖ offerBinding[32] ‖ acceptBinding[32]
+                           ‖ LP(advEnc(initiator advert)) ‖ LP(advEnc(responder advert))     received wire order
+                           ‖ u8(N) ‖ fp_1 ‖ … ‖ fp_N                  the N mixed PSKs, raw 32 B each (N ≤ 1 today)
+                           ‖ LP(mix_id)                               LP(empty) = 0x0000 when N ≤ 1
+                           ‖ ikInit[32] ‖ ikResp[32] )                Ed25519 identity keys, raw
+  K_kc          = HKDF-Expand(PRK = sessionKey, info = "qa-kc-key-v1", L = 32)     expand only, no extract step
+  kcMacInit     = HMAC-SHA256(K_kc, 0x01 ‖ kc_transcript)            sent by the offerer
+  kcMacResp     = HMAC-SHA256(K_kc, 0x02 ‖ kc_transcript)            sent by the acceptor
+  ```
+
+  `ikInit` is the offerer's and `ikResp` the acceptor's `signerIdentityKey`. The KAT `kdf` section pins
+  `kc_transcript`, `K_kc` and both MACs. A MAC is compared in constant time.
 - **KCMAC fails closed.** Under v5 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: the call ends if
   the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (5 s). There is no
   observation-only mode and no hold-pending-SAS path for it.
@@ -916,7 +934,8 @@ unlinkable. There is no DTLS trust-on-first-use.
 `checkSdp(sdp, expectedFp)` passes iff all of the following hold:
 
 - There is at least one `a=fingerprint:` line (session or media level, whether a line ends in CRLF or LF).
-- Every line is `a=fingerprint:<alg> <hex>`, where `<alg>` equals `sha-256` (ASCII case-insensitive, RFC 8122).
+- Every line is exactly `a=fingerprint:<alg> <hex>` (a single space, no other characters before the line end, so
+  trailing whitespace fails), where `<alg>` equals `sha-256` (ASCII case-insensitive, RFC 8122).
 - For every line, `<hex>` upper-cased equals the canonical HEX of `expectedFp`.
 - There are no other hash algorithms and no differing values.
 
@@ -1019,8 +1038,8 @@ inputs).
 | iOS KMS device-key persistence | iOS app | ✅ done 2026-05-06: DeviceKeyManager.swift generates X25519 + ML-KEM-1024 keypairs ONCE, persists privs+pubs to Keychain via SovereignKeyVault namespacing (`__device.x25519.{priv,pub}`, `__device.mlkem.{priv,pub}`), and registers pubs idempotently via `BCryptoKmsClient.registerPublicKey(publicKey:, mlkemEncapKey:)`. ensureProvisioned() is the canonical app-launch hook; currentKeys() the read-only fast-path for the WS `kms_key_available` handler. |
 | iOS KMS app-level wiring | iOS app | ✅ done 2026-05-06: AppState.runKmsSweep() helper + initial sweep right after WS auth + per-event sweep on every `kms_key_available` push. BCryptoBackendProvider.kmsClient lazy var mirrors accountApi/contactsApi pattern. The full iOS KMS pipeline is now end-to-end functional. |
 | Desktop PSK fingerprint negotiation | Desktop | ✅ done 2026-05-06: vault.list().map(p => p.fingerprint) feeds generateOffer + lex-sort intersection on responder |
-| Cross-platform KAT vectors — SAS | tools/kat/sas | ✅ done 2026-05-06: tools/kat/sas/sas-kat.json (4 vectors: all-zeros, all-ones, incremental, pinned-pi-bytes) mirrored byte-equal in all 4 repos. Verifier tests on Android (SasCrossPlatformKatTest.kt, BouncyCastle HKDF), Desktop (CallSas.kat.spec.ts, noble HKDF), iOS (SasCrossPlatformKatTests.swift, CryptoKit HKDF) load the JSON + assert HKDF output byte-equal AND production SAS path produces the pinned 6 words. |
-| Cross-platform KAT vectors — Hybrid PQC combine | tools/kat/hybrid-combine | ✅ done 2026-05-06: tools/kat/hybrid-combine/hybrid-combine-kat.json (6 vectors: all-zeros, all-ones, asymmetric-pqc, asymmetric-x25519, incremental, mid-pi-bytes) mirrored byte-equal in all 4 repos. Verifier tests on Android (HybridCombineKatTest.kt, BouncyCastle HKDF), Desktop (HybridCombine.kat.spec.ts, noble HKDF), iOS (HybridCombineKatTests.swift, CryptoKit HKDF) load the JSON + assert HKDF-SHA256(IKM=pqcSs\|\|x25519Ss, salt='q-audion-hybrid-pqc-v1', info='q-audion-session-key', L=32) reproduces every pinned session key byte-for-byte. Pins WIRE_SPEC §1 + §3.2. |
+| Cross-platform KAT vectors — SAS | tools/kat/sas | RETIRED 2026-10-01: the transcript-less SAS (`info = "sas-words-v1"`) no longer exists (§4). The SAS vectors are the `kdf` section of `tools/kat/handshake-sig-v5/handshake-sig-v5-kat.json`; `tools/kat/sas/sas-kat.json` is deleted and every client drops its test of it. |
+| Cross-platform KAT vectors — Hybrid PQC combine | tools/kat/hybrid-combine | RETIRED 2026-10-01: those vectors pinned the session key WITHOUT the transcript hash in `info`, a variant that no longer exists (§3.7.1). The session key vectors are the `kdf` section of `tools/kat/handshake-sig-v5/handshake-sig-v5-kat.json`; `tools/kat/hybrid-combine/` and `tools/kat/hybrid-combine-kat.json` are deleted and every client drops its test of them. |
 | Cross-platform KAT vectors — PSK negotiation | tools/kat/psk-negotiation | ✅ done 2026-05-06: tools/kat/psk-negotiation/psk-negotiation-kat.json (6 vectors: no-intersection, single-match, lex-sort-required, reversed-offer, partial-overlap, empty-offer) mirrored byte-equal in all 4 repos. Verifiers on Android (PskNegotiationKatTest.kt), Desktop (PskNegotiation.kat.spec.ts), iOS (PskNegotiationKatTests.swift) load the JSON + assert `selected = sort(offerSet ∩ localSet, lex-asc)[0]` produces the pinned answer regardless of input ordering. Pins WIRE_SPEC §3.3. |
 | Cross-platform KAT vectors — KMS round-trip | tools/kat/kms | ✅ done 2026-05-06: tools/kat/kms/kms-roundtrip-kat.json (4 vectors: 2 classical + 2 binding-hybrid, each 92 bytes) mirrored byte-equal in all 4 repos. Reference Python encryptor uses `cryptography` package (X25519 + AES-GCM) with WIRE_SPEC §2 canonical labels. Verifier tests on Android (KmsRoundTripKatTest.kt, BouncyCastle X25519 + javax AES-GCM), Desktop (KmsRoundTrip.kat.spec.ts, noble x25519 + node crypto), iOS (KmsRoundTripKatTests.swift, exercises production KmsTransport.decryptPackage) decrypt every package back to the pinned PSK. Legacy KEM-hybrid (1628+ B) requires a real ML-KEM keypair to be deterministic — separate KAT planned. |
 | Capabilities negotiation in JSON OFFER | Android+Desktop | Add `wireFormats: [...]` so peer can pick the lowest common denominator |
@@ -1685,7 +1704,9 @@ iv      = BE32(ssrc) || BE32(rtpTs) || BE32((rtpTs - counter) mod 2^32)
 - **S4.** Nonce uniqueness. For a fixed key and ssrc, `(w2,w3)` determines `counter = w2 - w3`, so two frames with
   different counters have different IVs.
 - **S5.** A key provider MUST live at least as long as every sender that uses it. An app MUST NOT create a new provider
-  for an RtpSender whose ssrc is unchanged under a key that is still installed.
+  for an RtpSender whose ssrc is unchanged under a key that is still installed. The same holds for the receiving
+  key handlers: a receiving handler, with its replay windows, MUST live as long as any key it holds stays
+  installed, and in particular across the teardown and re-creation of the PeerConnection (§11.9).
 - **S6.** A sender that cannot read `synchronizationSource` or `rtpTimestamp` from the frame metadata, or finds either
   one not a uint32, MUST drop the frame. It MUST NOT default them to 0.
 
@@ -1748,7 +1769,8 @@ return OK
 ```
 
 Counters are uint32 and never wrap (S1), so the comparisons are plain unsigned comparisons and need no rollover
-estimate. For the same state, the pre-check and the commit return the same verdict.
+estimate. For the same state, the pre-check and the commit return the same verdict, except that `CAP` is decided
+only at commit (the pre-check of an unseen `ivSsrc` returns `OK`).
 
 The window is a sliding bitmap in the style of RFC 4303. 256 frames are 15 s of 60 ms audio and 8.5 s of 30 fps
 video, far more than any real reordering. When the limit of 64 windows is reached, a new stream is **rejected**
@@ -1790,8 +1812,9 @@ The verdicts are `OK`, `DUPLICATE`, `TOO_OLD`, `REFLECTED` and `CAP`.
   id, the receiver cryptors use the key handler of the remote participant id. A frame reflected back to its sender
   is sealed under the wrong direction key and fails the tag.
 - The reflection guard stays as defence in depth: a received frame whose `ivSsrc` equals a local send ssrc of the same
-  handler is rejected with `REFLECTED`. In group calls the receiving handlers belong to other participants, so the
-  guard never fires there.
+  handler is rejected with `REFLECTED`. With directional keys the sender and receiver cryptors of a call use
+  different handlers, so the guard does not fire in the normal 1:1 flow and the tag failure above is the defence.
+  In group calls the receiving handlers belong to other participants, so the guard never fires there either.
 
 ### 11.8 Window garbage collection tied to keys
 
@@ -1808,6 +1831,12 @@ Installing key material into a slot compares the new material with the slot's cu
 Group calls v2 bump the epoch, and with it every sender's key, on every join and every leave
 (`docs/GROUP_CALLS_V2.md` §5.1). A receiver that has just joined therefore never holds a key that was used before it
 joined, and a frame sealed before the join cannot be replayed to it.
+
+A media-only rejoin is different: after `group_call_media_moved` or a media rejoin the clients tear down and
+re-create their PeerConnections but keep the same keys, with no epoch bump (`docs/GROUP_CALLS_V2.md` §2.5). The
+receiving key handler and its windows MUST therefore survive that teardown (§11.2 S5). A client that re-created the
+handler would open a fresh window for an old ssrc and accept a replayed frame of the current epoch once. The periodic
+rekey (`docs/GROUP_CALLS_V2.md` §12.6) bounds the lifetime of any key that is replayable at all.
 
 Previous: 2026-10-01 (§3 rewritten: single JSON dialect, signed transcript v5 §3.7 with
 OFFER/ACCEPT DTLS fingerprints, DTLS certificate binding §3.8, directional 1:1 frame keys,

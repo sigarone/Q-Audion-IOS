@@ -92,6 +92,19 @@ final class FrameCryptorProviderLifetimeTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "NativeVideoFrameCryptor(", in: text), 1)
     }
 
+    /// Group calls: the hub (and with it the provider, the receiving handlers and their windows)
+    /// is replaced only at a call boundary (`beginCall` / `endCall`), never by a media restart:
+    /// `makeLink` (a media rejoin builds a new PeerConnection) reuses the current hub.
+    func testGroupHubSurvivesMediaRestartAndIsReplacedOnlyAtCallBoundaries() throws {
+        let text = try source("GroupCall/WebRtcGroupMediaBackend.swift")
+        XCTAssertEqual(occurrences(of: "GroupFrameCryptorHub()", in: text), 3, "init, beginCall, endCall")
+        let makeLink = try XCTUnwrap(text.range(of: "public func makeLink("))
+        let endCall = try XCTUnwrap(text.range(of: "public func endCall()"))
+        let body = String(text[makeLink.upperBound..<endCall.lowerBound])
+        XCTAssertFalse(body.contains("GroupFrameCryptorHub("), "makeLink must not re-create the hub")
+        XCTAssertTrue(body.contains("let cryptors = currentHub"))
+    }
+
     /// The 1:1 cryptors run in per-participant mode with the ring slot semantics of WIRE_SPEC §3.7.2.
     func testOneToOneCryptorsUsePerParticipantKeys() throws {
         for file in ["WebRTC/NativeAudioFrameCryptor.swift", "WebRTC/NativeVideoFrameCryptor.swift"] {
