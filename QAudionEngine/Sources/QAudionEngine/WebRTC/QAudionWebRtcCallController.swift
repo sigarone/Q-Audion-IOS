@@ -370,7 +370,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     /// WIRE_SPEC §8.7 — fired ONCE per call when the RECEIVER-side native
     /// video cryptor is BOTH attached to the inbound RTP receiver AND
-    /// keyed (K_video published). The argument is the established inbound
+    /// keyed (the round's frame keys installed). The argument is the established inbound
     /// video mid, or `nil` when the transceiver mid could not be resolved.
     /// AppState wires this to `sendCallMediaReady(dir:"recv", keyEpoch:0)`
     /// so the sender forces an IDR the moment we can actually decrypt.
@@ -2238,7 +2238,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // 3. Apply the peer caps NOW — AFTER the PC exists (caps live on the
         //    QAudionPeerConnection). This makes peerNegotiated() non-nil so
         //    ensureVideoSealer (called inside acceptPeerCapabilities) creates and
-        //    KEYS the native video FrameCryptor with K_video. Applying caps before
+        //    KEYS the native video FrameCryptor with the round's frame keys. Applying caps before
         //    the PC was built silently dropped them → cryptor never keyed →
         //    discardFrameWhenCryptorNotReady drops every frame → black video.
         acceptPeerCapabilities(peerCapabilities)
@@ -5764,7 +5764,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W466 — confirm the remote video track arrived.
         print("[WebRTC] remote VIDEO track received — enabled=\(track.isEnabled)")
         // R-4 (sovereign-only): a sovereign user only accepts video under
-        // sovereign-grade keys; phone-level K_video does not qualify, so
+        // sovereign-grade keys; phone-level video keys do not qualify, so
         // when the policy is on we REJECT incoming video outright rather
         // than rendering it. Disable the track (stops decode/render) and
         // do NOT forward it to the UI callback. Mirrors Android rejecting
@@ -5807,7 +5807,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             print("[WebRtcCallController] W-KFFAST: receiver cryptor decrypt-fail — requesting peer keyframe")
             self?.onDecryptFailureDetected?()
         }
-        // Publish K_video if we already hold a session key (idempotent); the
+        // Publish the frame keys if we already hold a session key (idempotent); the
         // pqcSessionKey didSet path (re)publishes it on arrival/rotation.
         _ = ensureVideoSealerInternal()
         let attached = pc.attachVideoReceiverCryptor(receiver)

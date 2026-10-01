@@ -60,20 +60,13 @@ public enum AudioAeadFailureRekeyPolicy {
     /// scattered/just-outside-window calibration cases added alongside this
     /// flip) and safe to always run.
     ///
-    /// Enabled 2026-09-05 WITHOUT a live device/call verification (still no
-    /// Mac/device available that session — see this file's history for the
-    /// original never-verified caveat) — an explicit risk-accepted decision,
-    /// not a "confirmed working" one: the trigger it feeds,
-    /// `ReKeyScheduler.forceReKey`, is the SAME already-proven mid-call PQC
-    /// re-handshake mechanism `ContactVoiceVerifier`'s confidence signal
-    /// already drives in production (this only adds a second trigger
-    /// source into that existing, exercised path — no new handshake code),
-    /// and its own caller-only glare guard + 8s timeout bound the blast
-    /// radius of an unnecessary tick the same way any other spurious
-    /// `forceReKey` call already would. Re-disable (set back to `false`) if
-    /// a live call ever shows a rekey firing on ordinary transient network
-    /// noise rather than a genuine stuck key.
-    public static let triggerEnabled: Bool = true
+    /// **OFF under transcript v5 (WIRE_SPEC §11.7).** In a 1:1 call a tag failure is an
+    /// attacker-or-relay artefact (a reflected or replayed frame, a replay-window drop), not a key
+    /// problem, and a receiver MUST NOT start or request a rekey because of it: the key only changes
+    /// through a signed rekey round of the call's own schedule (§3.7). Honouring a burst of failures
+    /// here would let anyone who can inject a handful of frames force rekey rounds on a healthy call.
+    /// The burst meter itself stays (pure, unit-tested, counts only).
+    public static let triggerEnabled: Bool = false
 
     /// True when the last `failureBurstCount` entries of `failureTimesMs`
     /// (oldest first) all landed inside `failureBurstWindowMs` of `nowMs`.

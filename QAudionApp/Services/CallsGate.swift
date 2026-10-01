@@ -108,7 +108,7 @@ public enum CallsGate {
     /// `vkey-v1` (so it never offers phone-level video E2EE) and MUST
     /// reject any incoming video. Rationale: a "sovereign" user only
     /// accepts video protected by sovereign-grade keys; the phone-derived
-    /// K_video does not meet that bar, so video is refused outright rather
+    /// phone-level video key does not meet that bar, so video is refused outright rather
     /// than downgraded to phone-level trust. Default OFF (phone-level
     /// video allowed). Keychain-backed (SECURITY M-8) so it cannot be
     /// silently downgraded via plist/backup. Mirrors Android

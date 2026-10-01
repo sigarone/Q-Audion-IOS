@@ -311,8 +311,11 @@ in the `data` field of an `opaque_message`.
 The following fields are REQUIRED in every OFFER and ACCEPT, including rekey
 rounds: `signerIdentityKey`, `capabilities`, `rekeyNonce`, `rekeyRound`,
 `dtlsFingerprint` (canonical text form, §3.8.1) and `sigV5` (base64, 64 bytes).
-A bundle that lacks `sigV5` or `dtlsFingerprint` is malformed and ends the call
-(§3.8.6). `signature`, `sigV2`, `sigV3` and `sigV4` are removed: a sender MUST NOT
+`rekeyRound` MUST be present as a JSON integer in [1, 4294967295] (the initial handshake is 1; the transcript
+encodes it as a u32). A bundle that lacks `sigV5`, `dtlsFingerprint` or `rekeyRound`, or whose
+`rekeyRound` is 0, negative, fractional, above 4294967295 or not a number, is malformed and ends
+the call (§3.8.6). There is no default value: a receiver never reads a missing
+`rekeyRound` as 1. `signature`, `sigV2`, `sigV3` and `sigV4` are removed: a sender MUST NOT
 emit them and a receiver MUST NOT consult them. The signature is computed over
 the transcript of §3.7, never over the JSON bytes.
 
@@ -790,7 +793,7 @@ sigV5     = Ed25519(deviceIdentityKey, OFFER_v5 | ACCEPT_v5)     (pure RFC 8032)
   carries the offerer's fingerprint and ACCEPT carries the acceptor's, so through
   `offerBinding` the ACCEPT transcript covers both.
 - Every field except the domain, `offerBinding` and `DTLSFP` keeps the definition below, including
-  `rekeyNonce` and `round` semantics, with `round` defaulting to 1, and CAPS9.
+  `rekeyNonce`, `round` semantics and CAPS9. `round` is mandatory and has no default (R-ROUND, §3.1).
 - A verifier MUST build `OFFER_v5` with these inputs:
   - as the **offerer**: its own real certificate fingerprint
   - as the **acceptor**: the fingerprint parsed from the received bundle
@@ -815,7 +818,7 @@ JSON text. Optional fields that are absent encode as `LP(empty) = 0x0000`.
 | `advEnc(list)` | `u8(m) ‖ (u8(role_j) ‖ fp32_j)` for `j = 1..m`, in the advertised order. `fp32_j` is the RAW 32-byte value of the advertised `pskFingerprints[j]` (a blinded tag, §3.3.1). `role_j` is the j-th entry of the bundle's optional `pskRoles` array (one unsigned byte), and `0` when the array is absent, null or shorter than the list. The blinded advertisement of §3.3.1 omits `pskRoles`, so on such a bundle every `role_j` is `0`, but a builder MUST still honour a non-zero entry: the KAT vector `v5-psk-rekey-round-2` pins that encoding with roles `[0, 1]`. A string that is not exactly 64 hex characters encodes as 32 zero bytes (it never throws). `m ≤ 255` |
 | `selectedPskFp` | UTF-8 bytes of the bundle `selectedPskFingerprint` string verbatim, empty when none |
 | `rekeyNonce[8]` | the 8 raw bytes of `rekeyNonce`. The offerer mints it once per call in memory and reuses it on every OFFER of that call. The ACCEPT echoes the OFFER's value. It is always present and exactly 8 bytes |
-| `round` | `rekeyRound`: `1` for the initial handshake, strictly increasing for each later rekey OFFER under the same `callId`. The ACCEPT echoes the OFFER's value |
+| `round` | `rekeyRound`: `1` for the initial handshake, strictly increasing for each later rekey OFFER under the same `callId`. It MUST be present and in [1, 4294967295]: a missing, 0, out-of-range or non-integer value is malformed and ends the call (§3.1), a verifier never substitutes a default. The ACCEPT echoes the OFFER's value |
 
 A receiver that has accepted round N for a `callId` MUST reject any later OFFER whose `round` is not greater than N,
 and any OFFER whose `rekeyNonce` differs from the one recorded for that call.
@@ -852,6 +855,33 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
 
   `ikInit` is the offerer's and `ikResp` the acceptor's `signerIdentityKey`. The KAT `kdf` section pins
   `kc_transcript`, `K_kc` and both MACs. A MAC is compared in constant time.
+- **KCMAC runs on EVERY key round (R-KCMAC).** The exchange is not a once-per-call step: the initial handshake
+  and each rekey round run it, with that round's own inputs.
+  - For a round, `init` (the "offerer" above: `ikInit`, `offerBinding`, `kcMacInit`) is the signer of THAT round's
+    OFFER_v5 and `resp` is the signer of THAT round's ACCEPT_v5. `offerBinding`, `acceptBinding`, the adverts, the
+    mixed PSKs, `sessionKey` and so `K_kc` are all that round's. A rekey started by the callee therefore has the callee as
+    `init` for that round. (This is per round and is unrelated to the fixed call role `o`/`a` of §3.7.2.)
+  - Each side sends its own MAC for the round as soon as the round's session key is derived and verifies the peer's
+    MAC against that round's `K_kc` and `kc_transcript`. The MAC travels in the existing opaque piggyback
+    `<callId>|KCMAC:<base64(role byte ‖ MAC[32])>` (role byte `0x01` for `init`, `0x02` for `resp` of THAT round).
+    The message carries NO round field and none is added: a receiver attributes a MAC to a round by content, with the
+    rules below, never by arrival order alone.
+  - **Window:** the 5 s window of the KCMAC fail-closed rule below runs per round, from the moment that round's
+    context is armed (the round's key is derived).
+  - **Duplicate:** a receiver keeps, for the rest of the call, the peer MAC (32 bytes) it verified for each decided
+    round. An inbound MAC that is byte-identical to one of them (a retransmission, or the previous round's MAC arriving
+    after the next round was armed) is a duplicate: it is dropped silently, never judged `wrong`, never ends the call.
+    Only the first MAC for a round is judged. The duplicate test comes BEFORE the judgment against the live round.
+  - **Judgment:** a MAC that is not a duplicate is judged against the live round (armed and not yet decided). If it
+    does not verify, or its role byte is not the peer's role for that round, the call ends with `kcmac_mismatch`.
+  - **Early MAC:** a MAC that is not a duplicate and arrives while no round is armed and undecided (for example the
+    peer derived its key first) is held, at most one per call at a time (a further early MAC while one is held is
+    dropped silently), at most 512 characters of payload, and judged when the next round is armed. It is held for at
+    most 10 s from receipt and dropped silently after that. Holding never fails the call by itself; the round's own
+    5 s window then ends the call if the peer's MAC for it never verifies.
+  - A receiver MUST NOT use "the latest MAC seen" as the peer's MAC of the current round.
+  - A call in which a KCMAC context is required but missing (no armed context for the live round) ends with
+    `kcmac_mismatch` (R-EARBUD, §3.7.3).
 - **KCMAC fails closed.** Under v5 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: the call ends if
   the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (5 s). There is no
   observation-only mode and no hold-pending-SAS path for it.
@@ -872,16 +902,47 @@ frameKey_a2o = HKDF-SHA256(IKM = sessionKey, salt = "qaudion-frame-salt-v5",
 ```
 
 - All strings are ASCII with no NUL. `callId` is exactly the string of the transcript.
-- `o` is the offerer (the signer of OFFER_v5, that is the caller) and `a` is the acceptor. This is the call role, not
-  the user-id ordering used by §1.1.
+- **R-ROLE.** `o` is the **caller**: the signer of the call's INITIAL OFFER_v5 (the round with `rekeyRound` = 1), and `a`
+  is the callee. The role is fixed for the whole call and for every key round: whoever starts a rekey, and whoever
+  signs that round's OFFER_v5, `o2a` stays the caller-to-callee direction and `a2o` the callee-to-caller direction.
+  This is the call role, not the signer of the round's own OFFER_v5 (that is `init` of R-KCMAC, which may differ per
+  round), and not the user-id ordering used by §1.1.
 - The offerer encrypts its outgoing frames with `frameKey_o2a` and decrypts incoming frames with `frameKey_a2o`. The
   acceptor does the opposite.
 - These two keys are the only keys the 1:1 FrameCryptor receives. No single key is shared by both directions. On the
   native FrameCryptor the key provider runs in per-participant mode (`shared_key = false`): the sender cryptors use
   a local participant id holding the own-direction key, the receiver cryptors use the remote participant id holding
-  the peer-direction key. The ring slot stays `epoch % 16`.
+  the peer-direction key.
+- **R-SLOT: slot and `keyIndex` (1:1, every platform).** The key round epoch is `E = rekeyRound - 1` (the initial
+  round is `E = 0`, the first rekey `E = 1`, and so on). `E` is computed from the round's signed `rekeyRound`, never
+  from a local counter: a round that never completes leaves a gap and both sides still agree. Audio and video
+  FrameCryptor keys of one round share `E` (it is the `key_epoch` of §8.7, which applies to both media kinds). Both directions of round `E` are installed in ring slot `E mod 16`, and a sender
+  stamps every frame it seals under round `E` with `keyIndex = E mod 16` (§11.1). A receiver selects the ring slot
+  ONLY from the frame's `keyIndex`, never from "the current key" or from its own sender state; a platform that
+  always stamps or opens slot 0 is non-conformant. The ring has 16 slots.
+  - A slot that is retired (the grace of §8.7 has expired, or the call ends) is overwritten with 32 RANDOM bytes
+    from a CSPRNG, never with zeros: the native FrameCryptor accepts 32 zero bytes as valid key material, so a
+    zeroed slot would hold a key derived from a public value and frames sealed under it would authenticate.
+    Receivers MUST NOT install all-zero key material in any slot.
 - The relay sealer (`srtp_master` a2b/b2a, §1.1) is unchanged.
 - The frame wire format and the receiver replay window are defined in §11.
+
+#### 3.7.3 No unauthenticated handshake path (R-EARBUD)
+
+Every 1:1 call on every platform runs the v5 handshake of §3.7: signed OFFER/ACCEPT, DTLS binding (§3.8) and
+KCMAC (§3.7.1). There is no other way to set up a 1:1 call.
+
+- The hardware-earbud relay handshake (`earbud-relay-v1` capability, the EARBUDPDU frames, the PSK-less relay
+  agreement) is **retired**. A client MUST NOT advertise `earbud-relay-v1`, and MUST ignore it when it is present in
+  the unsigned `capabilities` of `call_incoming`, `call_answer` or any other server-relayed message: such a field
+  never selects a different handshake, never exempts the DTLS binding checks (a) and (b), and never skips KCMAC. The
+  capabilities that matter are the signed ones inside the bundle (CAPS9, §3.7).
+- A signalling field that the server, or anyone on the path, can add or change MUST NOT turn off or weaken any step
+  of §3.7 or §3.8. In particular there is no "exempt" state of the DTLS binding.
+- If a KCMAC context is required for the live round (§3.7.1) and is missing, the call ends with reason
+  `kcmac_mismatch`. A missing context is a failure, never a reason to skip the check.
+- The earbud GATT key-import family of §7 is a local BLE interface of the hardware earbud and is unaffected by this
+  rule; it is not a call-handshake path.
 
 ### 3.8 DTLS certificate binding
 
@@ -894,6 +955,19 @@ relays SDP byte-for-byte, never parses `opaque_message` or `a=fingerprint`, and 
 Each client generates a fresh ECDSA P-256 certificate per call, before it signs anything, and passes it to the
 PeerConnection (`RTCConfiguration.certificates`). The certificate is never reused across calls, so calls stay
 unlinkable. There is no DTLS trust-on-first-use.
+
+**R-CERT: the certificate and its context are pinned per call.** A call's DTLS certificate, its `fpSelf` and the
+context that holds them (including the PeerConnection reference and `fpPeer` once pinned) live exactly as long as the
+call. A client:
+- MUST NOT evict the context of a live call from any cache or table (an LRU or a size cap may only evict contexts of
+  calls that have ended; offers for other callIds, from the same peer or from anyone else, never displace it);
+- MUST NOT generate a new certificate for a `callId` that has already signed a bundle, and in particular not on a
+  rekey round: every bundle of the call carries the same `fpSelf`. If the context of such a call is missing when it is
+  needed, the call ends with `dtls_fp_mismatch`; it does not silently mint a new certificate;
+- MUST create every PeerConnection of the call (the first one and any re-created one after a reconnect or media
+  move) with that same pinned certificate;
+- MUST bound the table for contexts of calls that are not yet live (pending offers) separately, so that flooding it
+  cannot evict a live call.
 
 #### 3.8.1 Canonical fingerprint
 
@@ -927,7 +1001,7 @@ unlinkable. There is no DTLS trust-on-first-use.
 4. The acceptor sends ACCEPT **before** `call_answer`, so the offerer normally has `fpPeer` before the answer
    arrives. The offerer still buffers the answer if it does not.
 5. `fpPeer` is pinned once per call. Later bundles (rekey rounds) MUST carry the same `fpPeer`, and the re-signed
-   own `fpSelf` must be unchanged.
+   own `fpSelf` must be unchanged (R-CERT above).
 
 #### 3.8.3 Check (a): SDP
 
@@ -992,7 +1066,8 @@ still DTLS end to end, so it is fully covered.
 - A fingerprint mismatch (a, b, a changed fingerprint in a rekey round, or a differing `fpPeer`) never has a benign
   cause. It ends the call with reason `dtls_fp_mismatch`. It is NOT the hold-pending-SAS path and no SAS comparison
   can override it.
-- A bundle without `sigV5` or without `dtlsFingerprint` is malformed (every client emits both) and ends the call.
+- A bundle without `sigV5`, without `dtlsFingerprint` or without a valid `rekeyRound` ([1, 4294967295]) is malformed (every
+  client emits all three) and ends the call.
 - An *invalid* signature or an unknown identity key aborts the handshake and holds media pending SAS, as before. The
   SAS covers both fingerprints (§3.7.1), so confirming a matching SAS also authenticates them.
 - A KCMAC failure ends the call with reason `kcmac_mismatch` (§3.7.1).
@@ -1227,16 +1302,22 @@ offerer-side only, per-platform, months apart; iOS never had it.)
   hold video TX (camera or gate) until ready arrives or a **2 s** timeout
   elapses (timeout ⇒ proceed as today — the handshake is an optimization
   for correctness, never a hard gate: signal-not-kill). On receiving
-  ready for the FIRST key of a call (`key_epoch = 0`), the sender MUST
-  force an IDR.
+  ready for the FIRST key of that media kind in the call, the sender MUST
+  force an IDR. In a 1:1 call `key_epoch` is the key round epoch `E` of §3.7.2
+  (`E = rekeyRound - 1`), so the first video key of a call that starts audio-only
+  and upgrades to video in round R carries `key_epoch = R - 1`, not 0; the
+  force-IDR rule is keyed on "first ready for this media kind", never on the
+  number 0.
 - `video_keyframe_request`: receiver→sender; the sender MUST force a
   local encoder IDR. Senders rate-limit to 1/s. Rationale: the E2EE
   frame-transform suppresses libwebrtc's native PLI on every platform,
   so decoder recovery REQUIRES an explicit wire path. Platforms SHOULD
   additionally run a periodic (~5 s) sender-side IDR forcer.
-- Rekey: `key_epoch` is monotonic per call, tracked INDEPENDENTLY per
-  media kind (audio and video can be at different epochs at the same
-  instant). Receivers keep the PREVIOUS key valid for a grace window
+- Rekey: `key_epoch` is monotonic per call. In a 1:1 call it is the key
+  round epoch `E` of §3.7.2, shared by audio and video; the two media kinds
+  are tracked INDEPENDENTLY only in WHEN each kind switches its sender to a
+  new epoch and releases the old one (audio and video can be at different
+  epochs at the same instant), not in how the epoch is numbered. Receivers keep the PREVIOUS key valid for a grace window
   (mirror of the audio `previousKey` fallback) so in-flight frames sealed
   under the old epoch still decrypt.
 - **Re-key media-deafness fix (v1.2, 2026-09-04)** — `call_media_ready`
@@ -1688,7 +1769,9 @@ iv      = BE32(ssrc) || BE32(rtpTs) || BE32((rtpTs - counter) mod 2^32)
 - For H.264/H.265 the tail `ct||tag||iv||trailer` is RBSP-escaped by the sender.
   - The receiver MUST unescape the whole body first, then parse trailer and IV from the unescaped tail.
 - `ssrc` and `rtpTs` are the sender's own frame metadata (`frame->GetSsrc()`, `frame->GetTimestamp()`).
-- `keyIndex` selects the key slot of the receiver's key ring (ring size 16, slot = `epoch % 16`).
+- `keyIndex` selects the key slot of the receiver's key ring (ring size 16, slot = `epoch % 16`). The sender stamps
+  `keyIndex = epoch mod 16` of the key it sealed with, and the receiver selects the slot by that value alone. For 1:1
+  calls `epoch = rekeyRound - 1` (R-SLOT, §3.7.2); for group calls it is the group epoch (§11.9).
 
 ### 11.2 Sender (MUST)
 
@@ -1783,13 +1866,13 @@ video, far more than any real reordering. When the limit of 64 windows is reache
 | Reorder ≤ 255 frames behind the top | Accepted once. |
 | Exact duplicate on the same mid or another mid, or into a re-created or re-bound receiver cryptor | DUPLICATE. The window belongs to the key handler, so all cryptors bound to the same participant share it. |
 | Key switch (sender moves to a new slot) | Same window. The counter keeps increasing across keys, and late old-slot frames inside the window are still accepted once. |
-| Slot retirement or overwrite (zeroed slot, ring wrap) | Window GC, §11.8. Frames under the old key can no longer authenticate. |
+| Slot retirement or overwrite (random-byte retirement, ring wrap) | Window GC, §11.8. Frames under the old key can no longer authenticate. |
 | Simulcast layer switch by the SFU | Each layer has its own sender ssrc, so its own `ivSsrc` and its own window. Switching back to a layer jumps forward, the bitmap resets to 1 and the frame is accepted. |
 | SSRC rewriting or timestamp rebasing by the SFU | Irrelevant. Only IV fields are used. |
 | RTP timestamp wrap | Irrelevant. `ctr = w2 - w3` is computed mod 2^32, and the wrap of `rtpTs` cancels out. |
 | Receiver joins mid-stream | The first authenticated frame of each `ivSsrc` opens the window at any counter. |
 | Sender rejoins (new PC) | New random ssrcs, so new windows. Old windows are collected when their keys retire. |
-| Reflection of a local stream back to the sender | REFLECTED (§11.7). |
+| Reflection of a local stream back to the sender | 1:1: the frame is sealed under the direction key the receiver does not hold, so it fails the tag; it is dropped without any key action (§11.7). Group: REFLECTED (§11.4). |
 | More than 64 live streams for one participant | CAP: fail-closed and counted. |
 
 An SFU that drops or delays frames is inherent and out of scope: a delayed frame that is still inside the window and
@@ -1810,17 +1893,32 @@ The verdicts are `OK`, `DUPLICATE`, `TOO_OLD`, `REFLECTED` and `CAP`.
 
 - 1:1 calls use the directional keys of §3.7.2. The sender cryptors use the key handler of the local participant
   id, the receiver cryptors use the key handler of the remote participant id. A frame reflected back to its sender
-  is sealed under the wrong direction key and fails the tag.
-- The reflection guard stays as defence in depth: a received frame whose `ivSsrc` equals a local send ssrc of the same
-  handler is rejected with `REFLECTED`. With directional keys the sender and receiver cryptors of a call use
-  different handlers, so the guard does not fire in the normal 1:1 flow and the tag failure above is the defence.
-  In group calls the receiving handlers belong to other participants, so the guard never fires there either.
+  is sealed under the sender's own direction key, which the receiver cryptor does not hold for that direction, so it
+  fails the tag. Nothing is decrypted and nothing is delivered.
+- The `REFLECTED` guard of §11.4 compares against the local send ssrcs of the SAME handler. With directional keys the
+  sender and receiver cryptors of a 1:1 call use different handlers, so the guard does not fire in the normal 1:1
+  flow: for 1:1 the tag failure above is the defence, and §11.5 lists it as such. In group calls the receiving
+  handlers belong to other participants, so the guard never fires there either.
+- **What a 1:1 receiver does with such a tag failure.** A reflected frame is an attacker-or-relay artefact, not a key
+  problem, and a receiver MUST NOT react to it as one:
+  - it drops the frame silently;
+  - it MUST NOT send `media_key_nack` or any other key re-request, MUST NOT start or request a rekey, MUST NOT raise a
+    "missing key" or "wrong key" state, and MUST NOT end the call because of it;
+  - its only visible effect is an internal decrypt-failure counter (rate-limited log, §11.6 rules: counts and media
+    kind only);
+  - a keyframe request for loss recovery (`video_keyframe_request`, §8.7) keeps its existing rate limit (1 per
+    second) and is not a key request; it MUST NOT be sent more often because of tag failures.
+  A receiver that can see the local send ssrcs of the call (the union over the call's sender handlers) SHOULD
+  classify a frame whose `ivSsrc` is one of them as `REFLECTED` before the AEAD step and drop it with no observer
+  callback at all (§11.6). A tag failure on a frame whose `ivSsrc` is not local is an ordinary decryption failure
+  and takes the existing failure path. In 1:1 calls the key only changes through a signed rekey round (§3.7), so a
+  decryption failure never asks the peer for a key.
 
 ### 11.8 Window garbage collection tied to keys
 
 Installing key material into a slot compares the new material with the slot's current material in constant time.
 
-- **Different** (a new key, a zeroed retirement, or a random overwrite): clear `bit(slot)` from the `slotMask` of every
+- **Different** (a new key, or a random-byte retirement; a retirement with zeros is not allowed, §3.7.2 R-SLOT): clear `bit(slot)` from the `slotMask` of every
   window, then erase every window whose `slotMask` is now 0. This is safe: every frame such a window ever accepted was
   sealed under a key that is no longer installed, so a replay of it fails the tag.
 - **Identical** (an idempotent re-install): no change. Resetting here would re-open replay.
@@ -1838,6 +1936,8 @@ receiving key handler and its windows MUST therefore survive that teardown (§11
 handler would open a fresh window for an old ssrc and accept a replayed frame of the current epoch once. The periodic
 rekey (`docs/GROUP_CALLS_V2.md` §12.6) bounds the lifetime of any key that is replayable at all.
 
+Previous: 2026-10-01 (v5 review round: R-ROLE and R-SLOT in §3.7.2, R-KCMAC on every round in §3.7.1,
+R-ROUND in §3.1, R-EARBUD §3.7.3, R-CERT in §3.8, reflection handling §11.5/§11.7, random-byte slot retirement).
 Previous: 2026-10-01 (§3 rewritten: single JSON dialect, signed transcript v5 §3.7 with
 OFFER/ACCEPT DTLS fingerprints, DTLS certificate binding §3.8, directional 1:1 frame keys,
 fail-closed KCMAC; §4 SAS bound to ACCEPT v5; §6 hard-switch note; new §11 frame E2EE wire

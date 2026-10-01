@@ -102,21 +102,52 @@ public final class CallDtlsContext: @unchecked Sendable {
 
 /// Process-wide registry of the per-call `CallDtlsContext`s, keyed by the lowercased call id.
 ///
-/// Only the last few contexts are retained: a call needs its context for its whole life, and the
-/// registry has no notion of call end, so older entries are evicted by insertion order.
+/// **Lifetime (R-CERT).** A call's certificate is pinned for the whole call. A context becomes
+/// *live* when a PeerConnection is bound to it (`hold`) and *signed* when its fingerprint was read
+/// for a handshake bundle (`fingerprint(forCallId:)`); live contexts are never evicted, whatever
+/// number of other calls' OFFERs arrive meanwhile, until `release` (the call ended). Only the last
+/// few NOT-live contexts (an OFFER that is merely ringing) are retained, evicted by insertion
+/// order. A call id whose context was signed is never given a second certificate: once it is
+/// released (or dropped by the safety cap) the id is retired and `context(forCallId:)` answers
+/// `nil` for it, so a late re-key can never sign a different fingerprint than the one the peer
+/// pinned (which would end the call with `dtls_fp_mismatch`).
 public final class CallDtlsContextStore: @unchecked Sendable {
     public static let shared = CallDtlsContextStore()
 
     private let lock = NSLock()
     private var byCall: [String: CallDtlsContext] = [:]
+    /// Registry keys in insertion order.
     private var order: [String] = []
-    private static let retained = 4
+    /// Keys protected from eviction (a call in progress), in the order they were held.
+    private var live: [String] = []
+    /// Keys whose fingerprint was read for a bundle (they have signed, or are about to).
+    private var signed: Set<String> = []
+    /// Signed call ids that no longer have a context: never regenerated.
+    private var retired: Set<String> = []
+    private var retiredOrder: [String] = []
 
-    public init() {}
+    /// Not-live contexts kept (ringing OFFERs).
+    static let retained = 4
+    /// Safety cap on live contexts, in case a call end is never reported.
+    static let liveCap = 8
+    /// Retired call ids remembered.
+    static let retiredCap = 256
+
+    private let generator: (String) -> CallDtlsContext?
+
+    public init() {
+        self.generator = { CallDtlsContextStore.generate(callId: $0) }
+    }
+
+    /// Tests: a generator that does not need the WebRTC binary.
+    init(generator: @escaping (String) -> CallDtlsContext?) {
+        self.generator = generator
+    }
 
     /// The context of `callId`, generating the call's certificate on first use. `nil` when the
-    /// certificate cannot be generated (or on a host without WebRTC) — the caller must then fail
-    /// the call: a 1:1 call without a pinned certificate is never set up.
+    /// certificate cannot be generated (or on a host without WebRTC), or when the call id already
+    /// signed with a certificate that is gone — the caller must then fail the call: a 1:1 call
+    /// without its pinned certificate is never set up.
     public func context(forCallId callId: String) -> CallDtlsContext? {
         let key = callId.lowercased()
         guard !key.isEmpty else { return nil }
@@ -125,26 +156,54 @@ public final class CallDtlsContextStore: @unchecked Sendable {
             lock.unlock()
             return existing
         }
+        if retired.contains(key) {
+            lock.unlock()
+            return nil
+        }
         lock.unlock()
         // The context keeps the call id EXACTLY as the caller of `context(forCallId:)` spelled it
         // (the frame keys of WIRE_SPEC 3.7.2 are derived from the exact transcript string); only
         // the registry key is lower-cased.
-        guard let created = Self.generate(callId: callId) else { return nil }
+        guard let created = generator(callId) else { return nil }
         lock.lock()
         defer { lock.unlock() }
         if let raced = byCall[key] { return raced }
+        if retired.contains(key) { return nil }
         byCall[key] = created
         order.append(key)
-        while order.count > Self.retained {
-            let evicted = order.removeFirst()
-            byCall.removeValue(forKey: evicted)
-        }
+        evictIfNeeded()
         return created
     }
 
-    /// The call's own fingerprint (33 bytes), generating the certificate on first use.
+    /// The call's own fingerprint (33 bytes), generating the certificate on first use. Reading it
+    /// is what the signed handshake does, so it marks the call id as signed AND live: from here on
+    /// the context is never evicted and never regenerated.
     public func fingerprint(forCallId callId: String) -> Data? {
-        return context(forCallId: callId)?.fingerprint
+        guard let ctx = context(forCallId: callId) else { return nil }
+        let key = callId.lowercased()
+        lock.lock()
+        signed.insert(key)
+        holdLocked(key)
+        lock.unlock()
+        return ctx.fingerprint
+    }
+
+    /// Keep the context of `callId` (a PeerConnection of the call is bound to it) until `release`.
+    public func hold(callId: String) {
+        let key = callId.lowercased()
+        guard !key.isEmpty else { return }
+        lock.lock()
+        holdLocked(key)
+        lock.unlock()
+    }
+
+    /// The call ended: drop its context. A call id that had signed is retired (never regenerated).
+    public func release(callId: String) {
+        let key = callId.lowercased()
+        guard !key.isEmpty else { return }
+        lock.lock()
+        dropLocked(key)
+        lock.unlock()
     }
 
     /// The context of `callId` if one exists; never generates.
@@ -158,7 +217,46 @@ public final class CallDtlsContextStore: @unchecked Sendable {
         lock.lock()
         byCall.removeAll()
         order.removeAll()
+        live.removeAll()
+        signed.removeAll()
+        retired.removeAll()
+        retiredOrder.removeAll()
         lock.unlock()
+    }
+
+    // MARK: - Locked helpers (the lock is held)
+
+    private func holdLocked(_ key: String) {
+        guard byCall[key] != nil, !live.contains(key) else { return }
+        live.append(key)
+        while live.count > Self.liveCap {
+            // The oldest hold that never signed goes first; a signed call is only ever dropped
+            // when every live context has signed (a pathological number of simultaneous calls).
+            let victim = live.first(where: { !signed.contains($0) }) ?? live[0]
+            dropLocked(victim)
+        }
+    }
+
+    private func dropLocked(_ key: String) {
+        byCall.removeValue(forKey: key)
+        order.removeAll { $0 == key }
+        live.removeAll { $0 == key }
+        if signed.remove(key) != nil {
+            retired.insert(key)
+            retiredOrder.append(key)
+            while retiredOrder.count > Self.retiredCap {
+                retired.remove(retiredOrder.removeFirst())
+            }
+        }
+    }
+
+    private func evictIfNeeded() {
+        // Only contexts that are not live count against the retention window.
+        var notLive = order.filter { !live.contains($0) }
+        while notLive.count > Self.retained {
+            let victim = notLive.removeFirst()
+            dropLocked(victim)
+        }
     }
 
     private static func generate(callId: String) -> CallDtlsContext? {

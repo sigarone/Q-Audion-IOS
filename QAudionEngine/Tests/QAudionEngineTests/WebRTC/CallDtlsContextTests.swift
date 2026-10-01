@@ -99,6 +99,114 @@ final class CallDtlsContextTests: XCTestCase {
         XCTAssertNotEqual(other.fingerprint, ctx.fingerprint)
     }
 
+    // MARK: - Store lifetime (R-CERT)
+
+    /// A store whose certificates are fingerprint-only fakes, and a counter of how many
+    /// certificates were generated per call id.
+    private final class Counting: @unchecked Sendable {
+        private let lock = NSLock()
+        private var counts: [String: Int] = [:]
+        func bump(_ id: String) -> Int {
+            lock.lock(); defer { lock.unlock() }
+            counts[id.lowercased(), default: 0] += 1
+            return counts[id.lowercased()]!
+        }
+        func count(_ id: String) -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return counts[id.lowercased(), default: 0]
+        }
+    }
+
+    private func makeStore(_ counting: Counting) -> CallDtlsContextStore {
+        CallDtlsContextStore(generator: { callId in
+            let n = counting.bump(callId)
+            #if canImport(WebRTC)
+            return CallDtlsContext(callId: callId, certificate: nil, fingerprint: F.fingerprint("self-\(callId)-\(n)"))
+            #else
+            return CallDtlsContext(callId: callId, fingerprint: F.fingerprint("self-\(callId)-\(n)"))
+            #endif
+        })
+    }
+
+    /// The live call's context must survive any number of other calls' OFFERs (the registry used
+    /// to keep the last 4 by insertion order, so a 5th OFFER evicted the live call and the next
+    /// re-key signed a new certificate).
+    func testLiveCallContextSurvivesMoreThanFourOtherOffers() throws {
+        let counting = Counting()
+        let store = makeStore(counting)
+        let fp = try XCTUnwrap(store.fingerprint(forCallId: "live-call"))
+        let ctx = try XCTUnwrap(store.existing(forCallId: "live-call"))
+        for i in 0..<12 {
+            XCTAssertNotNil(store.context(forCallId: "other-\(i)"))
+            // Other calls' OFFERs may also be answered with a fingerprint read (a ringing call).
+            if i % 3 == 0 { _ = store.fingerprint(forCallId: "other-\(i)") }
+        }
+        XCTAssertTrue(store.existing(forCallId: "live-call") === ctx, "the live call's context was evicted")
+        XCTAssertEqual(store.fingerprint(forCallId: "LIVE-CALL"), fp, "a re-key must sign the same certificate")
+        XCTAssertEqual(counting.count("live-call"), 1, "a second certificate was generated for the live call")
+    }
+
+    /// A PeerConnection-bound (held) context is protected too, even before anything is signed.
+    func testHeldContextSurvivesOtherOffers() throws {
+        let counting = Counting()
+        let store = makeStore(counting)
+        let ctx = try XCTUnwrap(store.context(forCallId: "ringing"))
+        store.hold(callId: "Ringing")
+        for i in 0..<6 { _ = store.context(forCallId: "noise-\(i)") }
+        XCTAssertTrue(store.existing(forCallId: "ringing") === ctx)
+    }
+
+    /// Contexts that are neither held nor signed (an OFFER merely ringing) are still bounded.
+    func testUnheldContextsAreStillEvictedInInsertionOrder() {
+        let store = makeStore(Counting())
+        for i in 0..<(CallDtlsContextStore.retained + 3) { _ = store.context(forCallId: "ring-\(i)") }
+        XCTAssertNil(store.existing(forCallId: "ring-0"))
+        XCTAssertNotNil(store.existing(forCallId: "ring-\(CallDtlsContextStore.retained + 2)"))
+    }
+
+    /// Once a call id has signed, it never gets a second certificate: after the call ended (or the
+    /// context was dropped) the id is retired and the store refuses to generate again.
+    func testSignedCallIdIsNeverRegenerated() throws {
+        let counting = Counting()
+        let store = makeStore(counting)
+        _ = try XCTUnwrap(store.fingerprint(forCallId: "signed-call"))
+        store.release(callId: "signed-call")
+        XCTAssertNil(store.existing(forCallId: "signed-call"))
+        XCTAssertNil(store.context(forCallId: "signed-call"))
+        XCTAssertNil(store.fingerprint(forCallId: "SIGNED-CALL"))
+        XCTAssertEqual(counting.count("signed-call"), 1)
+    }
+
+    /// An id that never signed is not retired by a release (a declined ring-time context).
+    func testReleaseOfAnUnsignedCallDoesNotRetireIt() throws {
+        let store = makeStore(Counting())
+        _ = try XCTUnwrap(store.context(forCallId: "declined"))
+        store.release(callId: "declined")
+        XCTAssertNotNil(store.context(forCallId: "declined"))
+    }
+
+    /// The live cap drops held-but-unsigned contexts before any signed (live call) context.
+    func testLiveCapNeverDropsASignedCallBeforeAnUnsignedHold() throws {
+        let counting = Counting()
+        let store = makeStore(counting)
+        _ = try XCTUnwrap(store.fingerprint(forCallId: "the-call"))
+        for i in 0..<(CallDtlsContextStore.liveCap * 2) {
+            _ = store.context(forCallId: "held-\(i)")
+            store.hold(callId: "held-\(i)")
+        }
+        XCTAssertNotNil(store.existing(forCallId: "the-call"))
+        XCTAssertEqual(counting.count("the-call"), 1)
+    }
+
+    func testStoreIsThreadSafe() {
+        let store = makeStore(Counting())
+        DispatchQueue.concurrentPerform(iterations: 64) { i in
+            _ = store.fingerprint(forCallId: "c-\(i % 5)")
+            store.hold(callId: "c-\(i % 7)")
+            if i % 11 == 0 { store.release(callId: "c-\(i % 5)") }
+        }
+    }
+
     // MARK: - Hash store (SAS binding)
 
     func testTranscriptHashStoreKeyedByLowercasedCallId() {

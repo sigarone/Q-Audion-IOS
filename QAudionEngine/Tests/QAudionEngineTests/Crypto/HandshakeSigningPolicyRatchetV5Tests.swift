@@ -21,7 +21,7 @@ final class HandshakeSigningPolicyRatchetV5Tests: XCTestCase {
             sigV5B64: sig.base64EncodedString(),
             dtlsFingerprintText: F.fingerprintText("offerer"),
             transcript: t,
-            pinnedKey: nil, serverFetchedKey: nil,
+            pinnedKey: nil, serverFetchedKey: pubRaw,
             advertisedV4: false,
             advertisedRatchetV5: advertisedRatchetV5,
             ratchetV5CapablePinned: pinnedCapable)

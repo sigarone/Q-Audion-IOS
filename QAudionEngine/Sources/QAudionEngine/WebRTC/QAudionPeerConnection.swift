@@ -1231,7 +1231,7 @@ public final class QAudionPeerConnection: NSObject {
     // MARK: - Native video FrameCryptor (insertable streams)
 
     /// Create the per-call native FrameCryptor holder (idempotent). Does NOT
-    /// require the K_video key yet — the key is published later via `setKey` on
+    /// require the frame keys yet — they are published later via `installKeys` on
     /// the returned holder. Creating it early (at call setup) avoids the
     /// receiver-attach-before-key deadlock.
     @discardableResult

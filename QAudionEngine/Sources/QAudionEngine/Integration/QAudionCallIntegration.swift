@@ -122,6 +122,35 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Keyed by lowercased callId, cleared in `onCallEnded`.
     private var peerDtlsFingerprintByCall: [String: Data] = [:]
 
+    /// R-SLOT: the signed `rekeyRound` of every session key this integration derived, per call
+    /// (lowercased callId -> SHA-256(sessionKey) -> round). The key round epoch of a 1:1 call is
+    /// `E = rekeyRound - 1`, taken from the round the handshake signed — never from a local
+    /// counter, so a round that does not complete leaves a gap on both sides alike. Cleared in
+    /// `onCallEnded`.
+    private var keyRoundByCall: [String: [Data: UInt32]] = [:]
+
+    /// Remember which signed round produced `key` (called right after the session is initialised,
+    /// before any callback announces the key).
+    func recordKeyRound(callId: String, key: Data, round: UInt32) {
+        let digest = Data(SHA256.hash(data: key))
+        lock.withLock { keyRoundByCall[callId.lowercased(), default: [:]][digest] = round }
+    }
+
+    /// The signed `rekeyRound` (>= 1) of the handshake round that derived `key`, `nil` when this
+    /// integration did not derive it.
+    public func keyRound(forSessionKey key: Data, callId: String) -> UInt32? {
+        let digest = Data(SHA256.hash(data: key))
+        return lock.withLock { keyRoundByCall[callId.lowercased()]?[digest] }
+    }
+
+    /// R-SLOT: the key round epoch `E = rekeyRound - 1` (the initial round is E = 0). It selects the
+    /// FrameCryptor ring slot (`E mod 16`) and is the `key_epoch` of §8.7 for audio and video alike.
+    /// `nil` for a round below 1, which no valid handshake carries.
+    public static func keyEpoch(forRekeyRound round: UInt32) -> Int32? {
+        guard round >= 1, round - 1 <= UInt32(Int32.max) else { return nil }
+        return Int32(round - 1)
+    }
+
     /// True when this call's session key (and therefore its SAS words) is bound to the signed v5
     /// handshake transcript, which contains both signer identity keys and both DTLS fingerprints.
     /// Unconditional for every call that completed the JSON handshake; false only for calls that
@@ -929,7 +958,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// recompute `offer_binding = SHA-256(OFFER_v5)` when it later verifies the matching ACCEPT.
     /// Overwritten by every re-key round (the ACCEPT of round N answers round N's OFFER). Cleared
     /// with the rest of the per-call state in `onCallEnded`.
-    private var sentOfferTranscriptByCall: [String: Data] = [:]
+    var sentOfferTranscriptByCall: [String: Data] = [:]
 
     /// W-KCMAC (ship step 5) — the RAW fingerprint list WE advertised in the OFFER
     /// (`onAndroidCallSetupStarted`'s `advertisedPskFingerprints`), stashed so the
@@ -2071,6 +2100,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                    innerAudioAadV1: innerAadNegotiated, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch)
+            recordKeyRound(callId: callId, key: combined, round: innerAadEpoch)
             // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
             fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyRound, generation: entryGeneration)
             lock.withLock { state = .active }
@@ -2128,8 +2158,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                let peerId = v4PeerSik {
                 onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId)
             }
-            // vkey-v1: JSON responder — `combined` is the post-PSK-mix
-            // session key and the IKM for K_video.
+            // JSON responder — `combined` is the post-PSK-mix session key; the call controller
+            // derives the directional frame keys of this round from it.
             onVideoKeyEstablished?(combined)
 
             // W-KCMAC (ship step 5) — responder leg. Fires AFTER the session key
@@ -2467,6 +2497,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                    innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
+            recordKeyRound(callId: callId, key: combined, round: innerAadEpochCaller)
             // W-HSROUNDTIMING — third breadcrumb: decapsulation + session-key
             // derivation actually completed (engine.initSession didn't
             // throw). Paired with hs-offer-sent/hs-accept-received above —
@@ -2514,20 +2545,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             onPqcSessionKeyEstablished?(combined)
             // W-MEDIAATACCEPT (option b) — §6: JSON caller ACCEPT-received path.
             onSessionKeyForCall?(combined, callId)
-            // NOT display-only (it used to be, hence the old comment here).
-            // AppState feeds this straight into `resolvePskBytes`, which is the
-            // HKDF *salt* for K_video — so a value that fails to resolve there
-            // silently swaps the salt for the literal fallback and the two legs
-            // derive different video keys (purple screen, AES-GCM open failures,
-            // no other symptom). `selectedFpStr` is `bundle.selectedPskFingerprint`
-            // = the W-PSKBLIND **wire** value: since bb8affd that is a per-call
-            // blinded HMAC tag, NOT the static SHA-256(psk) fingerprint the
-            // consumer matches on — so it never resolved and iOS-as-initiator
-            // always fell back to the literal salt while Android salted with the
-            // raw PSK. Resolve the echo to the actual PSK (same helper both
-            // derivation branches above already use) and hand over that PSK's
-            // canonical static fingerprint, which is what the consumer expects.
-            // The responder path (line ~1772) was already correct: it emits
+            // The consumers match on the STATIC fingerprint of the PSK (the in-call key panel's
+            // vault lookup and the key-confirmation transcript), not on the wire echo.
+            // `selectedFpStr` is `bundle.selectedPskFingerprint` = the W-PSKBLIND **wire** value:
+            // since bb8affd that is a per-call blinded HMAC tag, NOT the static SHA-256(psk)
+            // fingerprint, so it would never resolve there. Resolve the echo to the actual PSK
+            // (same helper both derivation branches above already use) and hand over that PSK's
+            // canonical static fingerprint. The responder path was already correct: it emits
             // `selectedFp`, kept in static form precisely for this.
             let establishedPskFp: String? = Self.pskForEchoedSelection(
                 echo: selectedFpStr,
@@ -2535,7 +2559,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 ownEphemeralX25519Pub: local.x25519Priv.publicKey.rawRepresentation
             ).map { PskAdvertising.canonicalFingerprint(forPsk: $0) }
             if !selectedFpStr.isEmpty && establishedPskFp == nil {
-                print("[QAudionCallIntegration] ⚠️ ACCEPT echoed selection did not resolve to a vault PSK callId=\(callId.prefix(8))… — K_video will use the literal salt and WILL diverge from the peer")
+                print("[QAudionCallIntegration] ⚠️ ACCEPT echoed selection did not resolve to a vault PSK callId=\(callId.prefix(8))… — the PSK panel and the key confirmation will not see it")
             }
             onPqcSessionKeyEstablishedWithPsk?(combined, establishedPskFp)
             // Phase 18 — v4 bootstrap (initiator leg). Mirrors Android
@@ -2589,7 +2613,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 let sentBinding = HandshakeTranscript.offerBinding(sentOfferT)
                 onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId)
             }
-            // vkey-v1: JSON caller — `combined` is the IKM for K_video.
+            // JSON caller — `combined` is the session key the directional frame keys derive from.
             onVideoKeyEstablished?(combined)
 
             // W-KCMAC (ship step 5) — initiator leg, the CALLER-side twin of the
@@ -2606,7 +2630,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let kcCallerPeerSupportsMix = bundle.capabilities?.pskMixV1 ?? false
             let kcCallerN: Int
             let kcCallerMixFingerprints: [Data]
-            // W-KCMACBLIND — same defect class as the K_video salt fix above,
+            // W-KCMACBLIND — same defect class as the static-fingerprint fix above,
             // same file, found by the follow-up sweep for other consumers of
             // `selectedFpStr`. The RESPONDER'S mirror of this block (:1817-1819)
             // hex-decodes `selectedFp`, the STATIC form; using the raw wire echo
@@ -2614,7 +2638,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // every PSK call iOS placed — a false S1 KC_FAILED "active attack"
             // verdict, which `ContactsStore.applyAssuranceOutcome` then persists
             // as a suspended contact. `establishedPskFp` (:2177) is the same
-            // already-resolved static fingerprint the K_video salt now uses —
+            // already-resolved static fingerprint the PSK panel uses —
             // reusing it here is also what makes `kcCallerN` agree with whether
             // a PSK actually entered the session key, instead of reporting 1
             // whenever the echo was merely non-empty.
@@ -2794,8 +2818,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Build `OFFER_v5` from an OFFER bundle's RAW (base64-decoded) fields. `signerKeyRaw` is the
     /// signer's identity key (the LOCAL pub when signing, the bundle's own key when verifying) and
     /// `dtlsFingerprint` the OFFERER's certificate fingerprint. Returns nil if a required field
-    /// fails to decode or the round/nonce is absent (the transcript is meaningless without them).
-    private static func offerTranscript(
+    /// fails to decode or the round/nonce is absent. R-ROUND: `rekeyRound` MUST be present and >= 1
+    /// (the initial round is 1); a missing or 0 round is malformed (nil), never defaulted.
+    static func offerTranscript(
         from bundle: AndroidHandshakeBundle,
         callId: String,
         signerKeyRaw: Data,
@@ -2803,7 +2828,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ) -> Data? {
         guard let pqcB64 = bundle.pqcPublicKey, let pqcRaw = Data(base64Encoded: pqcB64),
               let x25B64 = bundle.x25519PublicKey, let x25Raw = Data(base64Encoded: x25B64),
-              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(UInt32.max),
               let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
             return nil
         }
@@ -2831,8 +2856,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Build `ACCEPT_v5` from an ACCEPT bundle's RAW ciphertext fields, the `offerBinding`
     /// (`SHA-256(OFFER_v5)`, 32 bytes) it must answer and the ACCEPTOR's certificate fingerprint.
     /// `bundle.pskFingerprints`/`pskRoles` are THIS ACCEPT's own advertised list; the nonce/round
-    /// are the echo of the OFFER's. Returns nil if a required field fails to decode.
-    private static func acceptTranscript(
+    /// are the echo of the OFFER's. Returns nil if a required field fails to decode or the round
+    /// is missing or < 1 (R-ROUND).
+    static func acceptTranscript(
         from bundle: AndroidHandshakeBundle,
         callId: String,
         signerKeyRaw: Data,
@@ -2842,7 +2868,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard let ct = bundle.ciphertext,
               let pqcRaw = Data(base64Encoded: ct.pqc),
               let x25Raw = Data(base64Encoded: ct.x25519),
-              let roundInt = bundle.rekeyRound, roundInt >= 0, roundInt <= Int(UInt32.max),
+              let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(UInt32.max),
               let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
             return nil
         }
@@ -2871,9 +2897,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// This call's own DTLS certificate fingerprint (33 bytes). A handshake never starts without
     /// it: the certificate is generated before anything is signed (WIRE_SPEC §3.4 step 1).
-    private func localDtlsFingerprint(callId: String) throws -> Data {
+    func localDtlsFingerprint(callId: String) throws -> Data {
         guard let fp = provideLocalDtlsFingerprint?(callId), DtlsFingerprint.isWellFormedBinary(fp) else {
-            throw IntegrationError.handshakeAborted(code: "dtls_cert_unavailable")
+            // R-CERT: a call that already signed a bundle (it sent an OFFER, or completed its first
+            // round) never gets a second certificate. Its context missing now means it must not be
+            // replaced silently: the call ends with `dtls_fp_mismatch`. A call that never signed
+            // simply cannot start (no certificate).
+            let key = callId.lowercased()
+            let signedBefore = lock.withLock {
+                sentOfferTranscriptByCall[key] != nil
+                    || sessionInitializedByCall.contains(callId) || sessionInitializedByCall.contains(key)
+            }
+            if signedBefore { reportHandshakeFatal(callId: callId, reason: "dtls_fp_mismatch") }
+            throw IntegrationError.handshakeAborted(code: signedBefore ? "dtls_fp_mismatch" : "dtls_cert_unavailable")
         }
         return fp
     }
@@ -3743,6 +3779,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         rekeyRoundByCall.removeAll()
         lastAcceptedRekeyRoundByCall.removeAll()
         peerDtlsFingerprintByCall.removeAll()
+        keyRoundByCall.removeAll()
         // W-KCMAC — same reasoning, the stashed sent-OFFER PSK advert list.
         sentOfferPskFingerprintsByCall.removeAll()
         // W-KCMACROLES — the parallel role list is stashed and cleared in lockstep

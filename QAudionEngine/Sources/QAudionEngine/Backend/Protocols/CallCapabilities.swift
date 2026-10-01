@@ -31,7 +31,7 @@ public enum CallCapabilities {
     public static let ratchetV3: String = "ratchet-v3"
 
     /// Earbud-video phone-level key (`vkey-v1`). When BOTH sides advertise
-    /// this tag the video FrameCryptor is keyed off a dedicated K_video
+    /// this tag the video FrameCryptor was once keyed off a dedicated video key
     /// (HKDF of the session key with domain-separation label
     /// `Q-AUDION-PHONE-VIDEO-V1` + transcript binding) instead of the raw
     /// audio/control PQC session key. Mirrors `VKEY_V1` in Android
@@ -1296,7 +1296,7 @@ public enum CallCapabilities {
         public var useRatchetV3: Bool { agreedTags.contains(CallCapabilities.ratchetV3) }
 
         /// True iff both sides advertise ``vkeyV1``. When `true` the video
-        /// FrameCryptor must be keyed off the dedicated K_video instead of
+        /// FrameCryptor was once keyed off a dedicated video key instead of
         /// the audio/control PQC session key. Derived from ``agreedTags``
         /// — no wire or init change.
         public var useVideoKey: Bool { agreedTags.contains(CallCapabilities.vkeyV1) }

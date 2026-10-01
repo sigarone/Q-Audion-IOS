@@ -50,12 +50,43 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
             .authenticated(tofuPinKey: c.pubRaw, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
     }
 
-    /// Genuine first contact (no pin, no server key) pins the bundle key.
-    func testBundleTofuFirstContactReturnsPinCandidate() throws {
+    /// No pin and no server key (the identity fetch failed or has not landed): the bundle key is
+    /// never trusted blindly and never pinned. The call is not dropped (W-NOBRICK) but media is
+    /// held pending the SAS: `.abort("identity_unresolved")`, like Android.
+    func testNoPinAndNoServerKeyHoldsMediaAndNeverPinsTheBundleKey() throws {
         let c = try makeCase(seed: 5)
+        XCTAssertEqual(evaluate(c, v4: true), .abort(code: "identity_unresolved"))
+        // Even a perfectly valid signature under the bundle's own key changes nothing.
+        let v = evaluate(c)
+        if case .authenticated = v { XCTFail("an unresolved identity must never be authenticated") }
+        if case .authenticatedRepinFromPublished = v { XCTFail("an unresolved identity must never be re-pinned") }
+    }
+
+    /// The server-published per-device set is a server source: a member bundle key is accepted
+    /// (and is the pin candidate), a non-member is an unauthenticated change.
+    func testPublishedSetWithoutPinOrServerKey() throws {
+        let c = try makeCase(seed: 6)
+        let other = F.signer(seed: 7).pubRaw
+        let member = HandshakeSigningPolicy.evaluate(
+            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV5B64: c.sigB64,
+            dtlsFingerprintText: c.fpText, transcript: c.transcript,
+            pinnedKey: nil, serverFetchedKey: nil, publishedKeySet: [c.pubRaw, other], advertisedV4: false)
         XCTAssertEqual(
-            evaluate(c, v4: true),
-            .authenticated(tofuPinKey: c.pubRaw, v4Capable: true, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
+            member,
+            .authenticated(tofuPinKey: c.pubRaw, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
+        let nonMember = HandshakeSigningPolicy.evaluate(
+            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV5B64: c.sigB64,
+            dtlsFingerprintText: c.fpText, transcript: c.transcript,
+            pinnedKey: nil, serverFetchedKey: nil, publishedKeySet: [other], advertisedV4: false)
+        XCTAssertEqual(nonMember, .abort(code: "identity_key_mismatch"))
+    }
+
+    /// A pin keeps working when the server fetch failed (the offline local-pin path).
+    func testPinAloneStillAuthenticatesWhenTheServerFetchFailed() throws {
+        let c = try makeCase(seed: 8)
+        XCTAssertEqual(
+            evaluate(c, pinned: c.pubRaw),
+            .authenticated(tofuPinKey: nil, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
     }
 
     /// An existing pin is never re-pinned from `.authenticated` (write-once).

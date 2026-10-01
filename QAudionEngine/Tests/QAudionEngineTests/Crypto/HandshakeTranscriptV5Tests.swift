@@ -251,7 +251,7 @@ final class HandshakeTranscriptV5Tests: XCTestCase {
         let keyB64 = b.offererKey.base64EncodedString()
         let verdict = HandshakeSigningPolicy.evaluate(
             signerIdentityKeyB64: keyB64, sigV5B64: sigB64, dtlsFingerprintText: b.offererFpText,
-            transcript: b.offer, pinnedKey: nil, serverFetchedKey: nil, advertisedV4: true,
+            transcript: b.offer, pinnedKey: nil, serverFetchedKey: b.offererKey, advertisedV4: true,
             advertisedSrtpDirKeyV1: true, advertisedRatchetV5: true)
         XCTAssertEqual(
             verdict,
@@ -262,7 +262,7 @@ final class HandshakeTranscriptV5Tests: XCTestCase {
             ((vector["inputs"] as! [String: Any])["acceptor"] as! [String: Any])["dtlsFingerprintBinHex"] as! String))
         let tampered = HandshakeSigningPolicy.evaluate(
             signerIdentityKeyB64: keyB64, sigV5B64: sigB64, dtlsFingerprintText: b.offererFpText,
-            transcript: swapped.offer, pinnedKey: nil, serverFetchedKey: nil, advertisedV4: true)
+            transcript: swapped.offer, pinnedKey: nil, serverFetchedKey: b.offererKey, advertisedV4: true)
         XCTAssertEqual(tampered, .abort(code: "sig_invalid"))
     }
 

@@ -1295,9 +1295,10 @@ final class AppState: ObservableObject {
         }
         return callPqcSessionKey
     }
-    /// W-KEYSLOTROTATE — completed-rekey count for THIS call's session key
-    /// (0 = first real ML-KEM key; +1 each time sasReady re-fires for a
-    /// rekey). The transitional SAS key never advances it. Forwarded to the
+    /// W-KEYSLOTROTATE / R-SLOT — the key round epoch E = rekeyRound - 1 of THIS
+    /// call's current session key (0 = the initial real ML-KEM key), taken from
+    /// the signed round that derived it (a missed round leaves a gap). The
+    /// transitional SAS key never sets it. Forwarded to the
     /// controller BEFORE every pqcSessionKey delivery so the FrameCryptor
     /// ring slot (epoch % 16) matches Android's.
     var callPqcRekeyEpoch: Int = -1
@@ -1913,7 +1914,15 @@ final class AppState: ObservableObject {
     /// leg's key-confirmation start is deferred until its ACCEPT is released): kept (one per
     /// call) and verified as soon as the state exists, instead of being dropped and then failing
     /// the 5 s window.
-    private var kcEarlyInbound: [String: (raw: String, senderId: String)] = [:]
+    ///
+    /// R-KCMAC: held for at most `KcMacRoundRules.earlyHoldSeconds` (10 s) — an older one is
+    /// stale and is dropped, not verified.
+    private var kcEarlyInbound: [String: (raw: String, senderId: String, at: Date)] = [:]
+    /// R-KCMAC: the peer MAC verified for each key round of this call that is already DECIDED, kept for
+    /// the whole call. An inbound MAC byte-identical to one of them (a retransmit, or the previous
+    /// round's MAC arriving after the next round was armed) is dropped silently — it must never be
+    /// judged against the live round's context (where it would fail and end a healthy call).
+    private var kcDecidedPeerMacs: [String: [Data]] = [:]
     /// Read by `CallService.getKeyConfirmationTelemetry` at call teardown so
     /// the `psk_mix_n`/`kc_mac_result`/`assurance_state`/`expected_but_missing`
     /// fields can ride the EXISTING `call.audio.diag` emission (no new
@@ -6629,7 +6638,8 @@ final class AppState: ObservableObject {
             // #2 (server-fetch trust source): warm the caller's server identity
             // key now, BEFORE handleIncomingWebRtcOffer runs the §5c verify, so
             // resolveServerPeerKey can cross-check the OFFER's signer key. Race
-            // loser (verify before fetch lands) → cache miss → bundle-TOFU.
+            // loser (verify before fetch lands, and no pin yet) → cache miss → the bundle key is NOT
+            // trusted: media is held pending the SAS (`identity_unresolved`), never a blind pin.
             self.prefetchServerPeerKey(senderId)
             let callType = data["call_type"] as? String ?? "audio"
             let callUUID = UUID(uuidString: callIdStr) ?? UUID()
@@ -6716,20 +6726,9 @@ final class AppState: ObservableObject {
                let calling = provider.callingApi as? BCryptoCallingApiImpl {
                 calling.bindIncomingCallId(callIdStr)
             }
-            // earbud-relay-v1 — the caller's audio key lives in its
-            // earbud FIRMWARE: no SW PQC OFFER will ever arrive. Start
-            // the counterparty handshake (HSINIT) IMMEDIATELY: the
-            // earbud-side phone buffers early PDUs (replay=8) while it
-            // brings up the BLE leg, and Android peers expect HSINIT
-            // "well before" their j1 subscriber is alive.
-            if CallCapabilities.peerAdvertisedEarbudRelay(self.pendingPeerCapabilities),
-               !callIdStr.isEmpty {
-                let earbudCallId = callIdStr
-                let earbudPeer = senderId
-                Task { @MainActor [weak self] in
-                    self?.earbudCounterparty.start(callId: earbudCallId, peerId: earbudPeer)
-                }
-            }
+            // R-EARBUD: the earbud-relay-v1 counterparty handshake is retired (it yields a key with
+            // no signed OFFER_v5/ACCEPT_v5 behind it). The capability, an unsigned field the server
+            // relays, never starts anything here: every 1:1 call runs the signed v5 handshake.
             // CallKit must run from MainActor — its CXProvider state
             // machine refuses cross-thread mutations.
             DispatchQueue.main.async {
@@ -7585,6 +7584,9 @@ final class AppState: ObservableObject {
         // The exact wire call id (the context's frame keys derive from the transcript string).
         let cid = wireCallId ?? ""
         controller.dtlsContext = cid.isEmpty ? nil : CallDtlsContextStore.shared.context(forCallId: cid)
+        // R-CERT: the call's certificate is held for the whole call (never evicted by other calls'
+        // OFFERs) until `endCall` releases it.
+        if controller.dtlsContext != nil { CallDtlsContextStore.shared.hold(callId: cid) }
         controller.isHandshakeOfferer = isOfferer
         controller.onDtlsFingerprintFailure = { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -7597,8 +7599,8 @@ final class AppState: ObservableObject {
     /// video upgrade arrives on a WS-relay call that never built one (the audio
     /// runs over the sealed WS relay, not WebRTC). Mirrors the wiring in
     /// `handleIncomingWebRtcOffer` (kept separate so that proven path is
-    /// untouched) and seeds the PQC session key + sovereign/KMS PSK so the
-    /// native video FrameCryptor derives the same K_video as Android (v1.0.700).
+    /// untouched) and seeds the PQC session key so the native video FrameCryptor
+    /// derives the directional frame keys of the current round (same as audio).
     @MainActor
     private func makeUpgradeResponderController() -> QAudionWebRtcCallController? {
         guard let provider = liveProvider else { return nil }
@@ -7766,8 +7768,8 @@ final class AppState: ObservableObject {
         controller.onActiveCandidatePairRemoteHost = { [weak self] host in
             Task { @MainActor [weak self] in self?.vpnService.setCallMediaHost(host) }
         }
-        // K_video parity (v1.0.700): the native video FrameCryptor needs the
-        // call's session key + the sovereign/KMS PSK salt BEFORE the answer.
+        // The native video FrameCryptor needs the call's session key (the IKM of the round's
+        // directional frame keys) BEFORE the answer.
         controller.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
         // G7 — feeds a cryptor: assert this key is actually for the call
         // this controller is being built for, not a foreign one still
@@ -7902,7 +7904,7 @@ final class AppState: ObservableObject {
                     // the camera back (iOS↔Android video upgrade stayed black).
                     // Caps are applied INSIDE the build method AFTER the PC exists
                     // (they live on the PC) so peerNegotiated() is non-nil and the
-                    // native video FrameCryptor gets keyed with K_video.
+                    // native video FrameCryptor gets keyed with the round's frame keys.
                     answerSdp = try await controller.acceptUpgradeOfferBuildingPeerConnection(
                         callerId: pending.senderId, remoteSdp: pending.sdp,
                         peerCapabilities: self.pendingPeerCapabilities)
@@ -8249,13 +8251,16 @@ final class AppState: ObservableObject {
         guard !mediaReadySentKeys.contains(dedupKey) else { return }
         mediaReadySentKeys.insert(dedupKey)
         let midLabel: String = midValue.isEmpty ? "-" : midValue
-        RTLog.info("call", "call_media_ready → sender (mid=\(midLabel), dir=recv, epoch=0)")
+        // R-SLOT / §8.7: `key_epoch` is the key round epoch E of the key the receiver cryptor was
+        // keyed with (0 for the initial round, R - 1 for a call upgraded to video in round R).
+        let readyEpoch = Int(max(callPqcRekeyEpoch, 0))
+        RTLog.info("call", "call_media_ready → sender (mid=\(midLabel), dir=recv, epoch=\(readyEpoch))")
         Task {
             try? await impl.sendCallMediaReady(
                 callId: callId,
                 recipientId: peerId,
                 mid: midValue,
-                keyEpoch: 0,
+                keyEpoch: readyEpoch,
                 dir: "recv",
                 media: "video")
         }
@@ -8704,12 +8709,13 @@ final class AppState: ObservableObject {
               let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
               let callId = impl.getActiveCallId() else { return }
         let midValue: String = lastInboundVideoMid ?? ""
+        let readyEpoch = Int(max(callPqcRekeyEpoch, 0))   // R-SLOT: the LIVE key round epoch
         Task {
             try? await impl.sendCallMediaReady(
                 callId: callId,
                 recipientId: peerId,
                 mid: midValue,
-                keyEpoch: 0,
+                keyEpoch: readyEpoch,
                 dir: "recv",
                 media: "video")
         }
@@ -8885,6 +8891,9 @@ final class AppState: ObservableObject {
         default: code = 3
         }
         RTLog.error("call", "hsfatal r=\(code)")
+        // R-CERT: the call is over; release its certificate before the (possibly already
+        // unbound) teardown.
+        CallDtlsContextStore.shared.release(callId: callId)
         self.callService.sendControlHangup(reason: reason)
         if let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
            let cid = impl.getActiveCallId(),
@@ -9357,7 +9366,7 @@ final class AppState: ObservableObject {
             // only stored on the inbound call_incoming path (callee), so an
             // iOS-as-caller WS-relay audio call had pendingPeerCapabilities == nil
             // at video-upgrade time → agreedTags empty → videoSealer latched
-            // .legacy → no K_video cryptor → one-way black video. Storing them
+            // .legacy → no native video cryptor → one-way black video. Storing them
             // here makes the on-demand upgrade responder negotiate sframe/vkey/
             // aes256 correctly in BOTH call directions.
             // ROOT-CAUSE FIX (2026-07-12): this handler runs on the WS delegate
@@ -9413,25 +9422,8 @@ final class AppState: ObservableObject {
                     self.peerCapabilityBinding.store(callId: cid, capabilities: pc)
                 }
             }
-            // earbud-relay-v1 (caller side) — the callee answered from a
-            // phone whose bonded earbud owns the audio key. The SW PQC
-            // OFFER we already shipped will never be ACCEPTed; run the
-            // counterparty handshake instead. The callId comes from the
-            // envelope (or the bound active call as fallback).
-            if CallCapabilities.peerAdvertisedEarbudRelay(peerCaps) {
-                let envelopeCallId = (data["call_id"] as? String) ?? ""
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let cid = !envelopeCallId.isEmpty
-                        ? envelopeCallId
-                        : ((self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? "")
-                    guard !cid.isEmpty, let peer = self.callContactId else {
-                        print("[AppState] earbud caps on call_answer but no callId/peer — counterparty NOT started")
-                        return
-                    }
-                    self.earbudCounterparty.start(callId: cid, peerId: peer)
-                }
-            }
+            // R-EARBUD: no earbud counterparty handshake on the answer either (retired, see the
+            // call_incoming handler): the signed ACCEPT_v5 is the only way a 1:1 key is agreed.
             if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                 // ROOT-CAUSE FIX (2026-07-12): off the WS delegate BACKGROUND
                 // thread, this reads webRtcController (@MainActor stored state)
@@ -13817,6 +13809,9 @@ final class AppState: ObservableObject {
     private func handleKcMacReady(_ event: QAudionCallIntegration.KcMacReadyEvent) {
         let key = event.callId.lowercased()
         let state = KeyConfirmationCallState(event: event)
+        // R-KCMAC: one context per key round. The peer MAC verified for every DECIDED round is kept
+        // for the whole call in `kcDecidedPeerMacs`, so a late retransmit of an earlier round's MAC
+        // is never judged against this round.
         kcCallStates[key]?.deadlineTask?.cancel()
         kcCallStates[key] = state
 
@@ -13855,7 +13850,9 @@ final class AppState: ObservableObject {
         }
 
         // A peer MAC that raced ahead of this handler.
-        if let early = kcEarlyInbound.removeValue(forKey: key) {
+        // R-KCMAC: only a MAC held for at most 10 s is still verified; an older one is stale.
+        if let early = kcEarlyInbound.removeValue(forKey: key),
+           KcMacRoundRules.isEarlyHoldFresh(heldAt: early.at, now: Date()) {
             handleInboundKcMac(callId: event.callId, raw: early.raw, senderId: early.senderId)
         }
     }
@@ -13884,27 +13881,32 @@ final class AppState: ObservableObject {
                 print("[AppState] KCMAC dropped — no pending key-confirmation state for callId=\(callId.prefix(8))…")
                 return
             }
-            kcEarlyInbound[key] = (raw: raw, senderId: senderId)
-            print("[AppState] KCMAC early — held until the key-confirmation state exists callId=\(callId.prefix(8))…")
+            // A retransmit of a round already decided is not "early" for anything.
+            if KcMacRoundRules.isDuplicate(raw: raw, decidedPeerMacs: kcDecidedPeerMacs[key] ?? []) { return }
+            holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId)
             return
         }
         guard state.peerId == senderId else {
             print("[AppState] KCMAC dropped — sender=\(senderId.prefix(8))… does not match call peer=\(state.peerId.prefix(8))…")
             return
         }
+        // R-KCMAC: a duplicate (retransmit) of the MAC already verified for ANY decided round of
+        // this call is dropped silently — never judged against the live round, where it would fail
+        // and end a healthy call. The duplicate test comes BEFORE the judgment.
+        if KcMacRoundRules.isDuplicate(raw: raw, decidedPeerMacs: kcDecidedPeerMacs[key] ?? []) {
+            print("[AppState] KCMAC duplicate of a decided round dropped callId=\(callId.prefix(8))…")
+            return
+        }
         // Already decided (verified/wrong, or the 5000ms deadline already fired
-        // `.absent`) — a late/duplicate KCMAC must not re-open the verdict.
+        // `.absent`) — a late KCMAC must not re-open the verdict.
         guard !state.resultRecorded else {
             // A re-key round: the peer's MAC for the NEXT round can overtake that round's own
             // handshake completion on this side, i.e. arrive while only the previous (decided)
             // round's state exists. Dropping it would let the next round's 5 s window expire and
-            // end a healthy call. A duplicate of the DECIDED round's own MAC verifies against that
-            // round and is dropped; anything else is held (one per call) for the next round's
-            // state, where it is verified fail-closed.
-            if callContactId == senderId,
-               !Self.isDuplicateOfDecidedKcMac(raw: raw, state: state) {
-                kcEarlyInbound[key] = (raw: raw, senderId: senderId)
-                print("[AppState] KCMAC early (next round) — held until the key-confirmation state exists callId=\(callId.prefix(8))…")
+            // end a healthy call. It is held (one at a time, small, at most 10 s) for the next
+            // round's state, where it is judged fail-closed.
+            if callContactId == senderId {
+                holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId)
             }
             return
         }
@@ -13941,19 +13943,24 @@ final class AppState: ObservableObject {
         state.kcStatus = .verified
         state.resultRecorded = true
         state.deadlineTask?.cancel()
+        // R-KCMAC: the verified peer MAC of this decided round is remembered for the rest of the call.
+        kcDecidedPeerMacs[key, default: []].append(Data(mac))
         emitKeyConfirmationTelemetry(callId: callId, state: state)
     }
 
-    /// True when `raw` (a `KCMAC:` payload) is the peer's valid MAC for the round `state` already
-    /// decided, i.e. a retransmit of that round's own message.
-    private static func isDuplicateOfDecidedKcMac(raw: String, state: KeyConfirmationCallState) -> Bool {
-        guard let kcKey = state.kcKey, let transcript = state.transcript,
-              let bytes = Data(base64Encoded: raw), bytes.count == 33 else { return false }
-        let expectedPeerRole: UInt8 = state.isInitiator ? 0x02 : 0x01
-        guard bytes[bytes.startIndex] == expectedPeerRole else { return false }
-        let mac = Data(bytes.suffix(from: bytes.index(after: bytes.startIndex)))
-        return KeyConfirmation.verify(
-            received: mac, kcKey: kcKey, asInitiator: !state.isInitiator, transcript: transcript)
+    /// R-KCMAC: hold a peer MAC that arrived while no round is armed and undecided, to be judged when
+    /// the next round is armed. At most one at a time (a further one is dropped silently while a fresh
+    /// one is held), at most 512 characters, and held for at most 10 s (`handleKcMacReady` drops an
+    /// older one). Holding never fails the call by itself.
+    @MainActor
+    private func holdEarlyKcMac(key: String, callId: String, raw: String, senderId: String) {
+        let now = Date()
+        guard KcMacRoundRules.mayHoldEarly(raw: raw, heldAt: kcEarlyInbound[key]?.at, now: now) else {
+            print("[AppState] KCMAC early dropped (one already held, or too large) callId=\(callId.prefix(8))…")
+            return
+        }
+        kcEarlyInbound[key] = (raw: raw, senderId: senderId, at: now)
+        print("[AppState] KCMAC early — held until the next key-confirmation round is armed callId=\(callId.prefix(8))…")
     }
 
     /// W-KCMAC/W-ASSURANCE/W-FLOOR/W-NFCBADGE — compute `AssuranceState.decide()`'s
@@ -14124,6 +14131,7 @@ final class AppState: ObservableObject {
         kcCallStates[key]?.deadlineTask?.cancel()
         kcCallStates.removeValue(forKey: key)
         kcEarlyInbound.removeValue(forKey: key)
+        kcDecidedPeerMacs.removeValue(forKey: key)
         keyConfirmationTelemetryByCall.removeValue(forKey: key)
         finalAssuranceByCall.removeValue(forKey: key)
     }
@@ -14935,8 +14943,8 @@ final class AppState: ObservableObject {
             // thread-safe UserDefaults cache populated by
             // `prefetchServerPeerKey(_:)` (kicked at call_incoming / startCall).
             // Falls back to any QR-paired ContactsStore key. A cache MISS
-            // returns nil so the verifier falls through to bundle-TOFU on
-            // genuine first contact (never a hard abort). NOTE: this is gated
+            // returns nil: with no pin either, the verifier then holds media pending the SAS
+            // (`identity_unresolved`; never a blind pin of the bundle key, never a hard abort). NOTE: this is gated
             // on the 2026-06-23 publish fix being fleet-wide — the server must
             // hold each peer's SIGNING key (== its handshake bundle key), else
             // a cached pre-fix device key would trip identity_key_mismatch.
@@ -16237,8 +16245,8 @@ final class AppState: ObservableObject {
     /// BEFORE the handshake verify needs it (kicked at call_incoming for the
     /// caller and at startCall for the callee). Safe to call repeatedly; ONLY a
     /// valid RAW 32-byte key is ever written (404 / transport error / garbage →
-    /// no write, so the verifier falls through to bundle-TOFU rather than
-    /// aborting). Fire-and-forget; captures only locals so it never retains
+    /// no write, so the verifier holds media pending the SAS (no pin yet) rather than
+    /// trusting the bundle key or aborting). Fire-and-forget; captures only locals so it never retains
     /// self.
     private func prefetchServerPeerKey(_ userId: String) {
         guard !userId.isEmpty, let provider = liveProvider else { return }
@@ -19624,6 +19632,9 @@ extension AppState {
         // not on the `CallingApi` protocol.
         let wireCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
         let endCallId = (wireCallId ?? (callLogId == "none" ? nil : callLogId))?.lowercased()
+        // R-CERT: the call is over, its DTLS context is released (and, having signed, its id is
+        // retired: never given a second certificate).
+        if let wireCallId, !wireCallId.isEmpty { CallDtlsContextStore.shared.release(callId: wireCallId) }
 
         // P0-3 — a call that ends (hangup, decline, or error) while its
         // identity-unverified media gate was never released (user never
@@ -21106,8 +21117,22 @@ extension AppState {
                 // first real one (from the -1 floor) or a completed rekey —
                 // does. The transitional SAS key never reaches this handler,
                 // and lastCountedPqcKey resets with the call.
+                // R-SLOT (WIRE_SPEC §3.7.2): the key round epoch is E = rekeyRound - 1 of the SIGNED
+                // round that derived this very key — never a local count, so a round that did not
+                // complete leaves a gap on both sides alike. The round is looked up by the key's
+                // value (not "the latest round"), so a second round completing before this
+                // notification runs cannot renumber it. The count above stays only as the fallback
+                // for a key this app has no handshake record of (it is logged: numeric verdict).
                 if self.lastCountedPqcKey != key {
-                    self.callPqcRekeyEpoch += 1
+                    let activeId = self.canonicalActiveCallId() ?? ""
+                    let round = (self.callService.callIntegration?.keyRound(forSessionKey: key, callId: activeId))
+                        ?? (self.responderCallIntegration?.keyRound(forSessionKey: key, callId: activeId))
+                    if let round, let epoch = QAudionCallIntegration.keyEpoch(forRekeyRound: round) {
+                        self.callPqcRekeyEpoch = Int(epoch)
+                    } else {
+                        RTLog.warn("call", "keyepoch src=2")
+                        self.callPqcRekeyEpoch += 1
+                    }
                     self.lastCountedPqcKey = key
                 }
                 // M-10: the broker has now overwritten callPqcSessionKey
@@ -25881,8 +25906,8 @@ extension AppState {
         // W-SRTPKEYFWDRACE (2026-08-29) — pull-seed from the durable
         // `callPqcSessionKey` store at controller-creation time, exactly
         // like the video-upgrade-only controller already does two call
-        // sites above (`makeUpgradeResponderController`, "K_video parity"
-        // — line ~5925). This MAIN call path never had that safety net:
+        // sites above (`makeUpgradeResponderController`, the same pull-seed
+        // of the session key). This MAIN call path never had that safety net:
         // the only delivery mechanism was `wireSasReadyToController`'s
         // async NotificationCenter forward, a one-shot push that silently
         // dropped the key if it fired before this controller existed (live

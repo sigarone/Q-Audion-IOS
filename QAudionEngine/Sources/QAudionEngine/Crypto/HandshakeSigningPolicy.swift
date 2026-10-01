@@ -30,7 +30,8 @@ public enum HandshakeSigningPolicy {
     /// The verdict the orchestration acts on after evaluating a received bundle.
     public enum Verdict: Equatable {
         /// Signature present, valid, and identity matches the pin (or the server-fetched key, or
-        /// the first-seen TOFU candidate). `tofuPinKey` is set whenever the peer had NO pin yet.
+        /// a server-published key). `tofuPinKey` is set whenever the peer had NO pin yet (the key was
+        /// then authenticated by the server, never taken from the bundle alone).
         case authenticated(tofuPinKey: Data?, v4Capable: Bool, srtpDirKeyV1Capable: Bool, ratchetV5Capable: Bool)
         /// D11 trust-on-publish: the bundle key DIFFERS from the per-(peer,device) pin (or there is
         /// no pin yet) but IS a member of the server-published per-device set, and its OWN
@@ -41,6 +42,7 @@ public enum HandshakeSigningPolicy {
         /// `transcript_unbuildable`.
         case malformed(code: String)
         /// Invalid signature / unknown identity (`sig_invalid`, `identity_key_mismatch`,
+        /// `identity_unresolved` = no pin and no server key to verify against,
         /// `ratchet_v5_downgrade`): W-NOBRICK — the call is NOT dropped, media is held pending the
         /// SAS, the observed key is NOT pinned.
         case abort(code: String)
@@ -48,7 +50,7 @@ public enum HandshakeSigningPolicy {
 
     /// Constant-time-ish membership test of a 32-byte Ed25519 pubkey in the server-published
     /// per-device set. The keys are PUBLIC identity keys, so `Data ==` is acceptable; empty/nil
-    /// set => never a member (degrade to pin-only TOFU; never a fatal mismatch).
+    /// set => never a member (no floor; never a fatal mismatch).
     static func isMember(_ key: Data, of set: Set<Data>?) -> Bool {
         guard let set = set, !set.isEmpty, key.count == 32 else { return false }
         return set.contains(key)
@@ -93,16 +95,24 @@ public enum HandshakeSigningPolicy {
         guard let transcript = transcript else { return .malformed(code: "transcript_unbuildable") }
 
         // --- Resolve the TRUSTED key (§5c) ------------------------------------------------
-        // Prefer the pin, then the server/QR key. The bundle key is trusted only on genuine first
-        // contact (no pin, no server key) — and even then it is pinned only AFTER the signature
-        // verifies under it.
+        // Prefer the pin, then the server/QR key, then the server-published per-device set. With NONE
+        // of the three (no pin, and the server identity fetch failed or has not landed) there is no
+        // authoritative identity to verify against: the bundle key is NEVER trusted blindly and
+        // never pinned. Like Android, the verdict is `.abort("identity_unresolved")` — the call is
+        // not dropped (W-NOBRICK), media is held pending the in-call SAS, which the session key
+        // (bound to the v5 transcript, hence to the signer key and both DTLS fingerprints) covers.
         let trustedKey: Data
         if let pin = pinnedKey {
             trustedKey = pin
         } else if let server = serverFetchedKey {
             trustedKey = server
-        } else {
+        } else if let set = publishedKeySet, !set.isEmpty {
+            // The published set is a server source too: a bundle key that is a member of it is
+            // server-authenticated; any other key is an unauthenticated change.
+            guard isMember(bundleKey, of: set) else { return .abort(code: "identity_key_mismatch") }
             trustedKey = bundleKey
+        } else {
+            return .abort(code: "identity_unresolved")
         }
 
         let bundleInSet = isMember(bundleKey, of: publishedKeySet)
