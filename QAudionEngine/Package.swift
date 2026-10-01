@@ -159,7 +159,7 @@ let package = Package(
         // WebRTC with H265/HEVC + AES-256-GCM FrameCryptor — patched build of
         // webrtc-sdk M144 (same RTC* API as 144.7559.10). Two patches applied
         // in sequence: (1) DeriveKeys(..., password.size()==32?256:128) forces
-        // AES-256-GCM when a 32-byte K_video is set (stock binary hardcodes
+        // AES-256-GCM when a 32-byte frame key is set (stock binary hardcodes
         // 128); (2) native-pli.patch (W-NATIVEPLI, 2026-08-26) adds an
         // unconditional, rate-limited FrameCryptionState.kDecryptionFailed
         // notification on a real decrypt-tag-mismatch — the native signal
@@ -183,20 +183,27 @@ let package = Package(
         // previous release webrtc-ios-aes256-m144-native-pli (sha256 dbaefe2aff6eabff...
         // 95701b9) is untouched.
         //
-        // I1 (webrtc-plan.md v2 §3.3) — M150 hardened WebRTC, 2026-09-29.
-        // sigarone/webrtc-aes256-build release webrtc-ios-m150-a256-dplc-4
-        // (run 36598552180, gates G1-G9 passed, build-provenance attested):
-        // webrtc-sdk/webrtc@ba469aa2093b, BoringSSL@f91f1447, Opus@55513e81;
-        // strict transport (DTLS 1.3 + TLS_AES_256_GCM_SHA384 only, SRTP
-        // AEAD_AES_256_GCM only, X25519MLKEM768 first), FrameCryptor
-        // AES-256 only, deep PLC + OSCE, FEC floor, P8 runtime tuning API.
-        // device arm64 + simulator arm64 only. Rollback: the M144 nokeylog
-        // release (url .../webrtc-ios-aes256-m144-native-pli-nokeylog/
-        // WebRTC.xcframework.zip, checksum 7af8d47f...a68cb).
+        // M150 hardened WebRTC, release webrtc-ios-m150-a256-dplc-9
+        // (sigarone/webrtc-aes256-build, build run 36849361774, build repo main
+        // 0a91a575; gates G1-G8 and G10 passed, build-provenance attestation
+        // present for the zip). Same base as dplc-4 (webrtc-sdk/webrtc@ba469aa2093b,
+        // BoringSSL@f91f1447, Opus@55513e81): strict transport (DTLS 1.3 +
+        // TLS_AES_256_GCM_SHA384 only, SRTP AEAD_AES_256_GCM only,
+        // X25519MLKEM768 first), FrameCryptor AES-256 only, deep PLC + OSCE,
+        // FEC floor, P8 runtime tuning API. New in dplc-9: P12 receiver-side
+        // frame anti-replay window (per-sender counter in the FrameCryptor IV,
+        // replayed or too-old frames are dropped, verified by the replay marker
+        // in every Mach-O slice). The -lk variant is no longer built. Device
+        // arm64 + simulator arm64 only.
+        // Checksum = SwiftPM checksum of the zip (SHA256 of WebRTC.xcframework.zip),
+        // recomputed locally from the downloaded asset and equal to the value
+        // published in the release record.
+        // Rollback: the previous releases (webrtc-ios-m150-a256-dplc-4, and the M144
+        // nokeylog build webrtc-ios-aes256-m144-native-pli-nokeylog) stay untouched.
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-m150-a256-dplc-4/WebRTC.xcframework.zip",
-            checksum: "e1a2579293bd9e2ee78e3fa9fd4172b4bf379384356f037ec3796e985d51ba76"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-m150-a256-dplc-9/WebRTC.xcframework.zip",
+            checksum: "68d4c630d09576b432bc7cae94f476e57c3c5e3b66b636d748c377e25acc2e9a"
         ),
         .target(
             name: "QAudionEngine",
