@@ -66,10 +66,10 @@ public enum CallCapabilities {
 
     /// Phase 2 kill-switch — AES-256 SFrame video path.
     ///
-    /// `false` (DEFAULT / OFF): AES-128 LiveKit FrameCryptor active. ``sframeAes256V1``
+    /// `false` (DEFAULT / OFF): AES-128 FrameCryptor active. ``sframeAes256V1``
     ///   is NOT included in ``local``. Legacy Android / Desktop peers can video-call normally.
     ///
-    /// `true` (ON): AES-256 path active (LiveKit FrameCryptor with a 32-byte key driving
+    /// `true` (ON): AES-256 path active (FrameCryptor with a 32-byte key driving
     ///   AES-256-GCM). ``sframeAes256V1`` IS included in ``local``. A call with a peer
     ///   that does NOT advertise this tag will have video disabled fail-closed inside
     ///   ``QAudionPeerConnection``.
@@ -1298,7 +1298,7 @@ public enum CallCapabilities {
         /// True iff BOTH peers advertised ``sframeAes256V1``. This is the
         /// Phase 2 gate for the AES-256-GCM FrameCryptor path.
         ///
-        /// - `true`  → both sides run AES-256 LiveKit FrameCryptor.
+        /// - `true`  → both sides run the AES-256 FrameCryptor.
         /// - `false` → either side is on AES-128; when ``v4SFrameAes256Enabled``
         ///             is `true` (this build IS AES-256) the video track is
         ///             disabled fail-closed inside ``QAudionPeerConnection``

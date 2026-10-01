@@ -3918,7 +3918,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // the AES-256 gate satisfied). Strictly an upgrade: a peer that
         // still does NOT advertise aes256 keeps the fail-closed .legacy
         // latch (never auto-downgrade — downgrades stay explicit/close-only,
-        // and `.native`/`.sframe` picks are never touched).
+        // and a `.native` pick is never touched).
         if case .legacy = videoSealer,
            let negotiated = peerNegotiated(),
            negotiated.useSFrame,

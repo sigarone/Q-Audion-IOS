@@ -108,10 +108,10 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///
     /// W-ADMPARITY (adversarial review, 2026-09-08) — an EARLIER version of
     /// this fix picked `.audioEngine` for that call, on the reasoning that
-    /// this app's own `LiveKit` dependency already runs it in production —
-    /// for GROUP calls. That reasoning does not carry over: `LiveKit` builds
-    /// and owns an entirely separate `RTCPeerConnectionFactory` internally
-    /// (see `LiveKitGroupCallRoom.swift`), with its own CallKit/session
+    /// the group-call media stack once used (a former SDK, since removed) ran it in production —
+    /// for GROUP calls. That reasoning does not carry over: that SDK built
+    /// and owned an entirely separate `RTCPeerConnectionFactory` internally,
+    /// with its own CallKit/session
     /// integration this class's 1:1 path does not share, and this app
     /// already fences the two apart precisely BECAUSE they cannot safely
     /// share one hardware audio unit (`AudioCapture.start()`'s group-call
@@ -242,8 +242,8 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         let encoderFactory = HevcPreferredVideoEncoderFactory()
         let decoderFactory = HevcPreferredVideoDecoderFactory()
         // nil config = APM defaults (unchanged AEC/NS/AGC/HPF toggle state
-        // versus today — same as LiveKit's own `.init()`, whose designated
-        // initializer's params are all nullable so this is equivalent).
+        // versus today — `.init()` is equivalent: the designated
+        // initializer's params are all nullable).
         // BOTH delegate params are deliberately left `nil` here — see
         // W-RXFALLBACKINJECT-2 below for why passing either through this
         // initializer is silently a no-op on this pinned fork.

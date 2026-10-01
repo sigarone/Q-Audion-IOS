@@ -44,7 +44,7 @@ public final class HevcPreferredVideoEncoderFactory: NSObject, RTCVideoEncoderFa
         // every created encoder).
         //
         // H265/HEVC: build the VideoToolbox encoder directly. The webrtc-sdk
-        // (LiveKit) binary ships RTCVideoEncoderH265 but its
+        // binary ships RTCVideoEncoderH265 but its
         // RTCDefaultVideoEncoderFactory does NOT list/handle H265 by default
         // (it's gated, same as upstream libwebrtc), so the delegate would return
         // nil. Constructing it here is what actually lets iOS ENCODE H265.

@@ -524,15 +524,15 @@ public final class GroupSession {
         )
     }
 
-    // MARK: - LiveKit SFU media-key sink (non-mutating reads)
+    // MARK: - Group media key sink (non-mutating reads)
 
     /// NON-MUTATING read of our OWN current send-chain key (a COPY). Used as
-    /// the LiveKit SFU media key sink: under the SFU, `encryptForGroup` is
+    /// the group media key sink: under the SFU, `encryptForGroup` is
     /// NOT called for media, so `sendChain.ck` never advances per-frame and
     /// equals `SK_0` for the current epoch. Feeding the RAW 32-byte `SK_0`
-    /// to the LiveKit key provider (keyed under our own userId; base64 is
+    /// to the frame key provider (keyed under our own userId; base64 is
     /// only the wire/carrier form, decoded at the provider boundary — see
-    /// `LiveKitGroupCallRoom.rawKeyMaterial`, W-GRPKEY256) makes every
+    /// the raw-key-material helper, W-GRPKEY256) makes every
     /// receiver derive the identical per-participant AES-256-GCM frame key.
     /// Returns `nil` if the send chain is empty (should never happen for a
     /// bootstrapped state). Does NOT step the ratchet — callers get a
@@ -547,7 +547,7 @@ public final class GroupSession {
 
     /// NON-MUTATING read of a remote sender's current recv-chain key (a
     /// COPY), i.e. the `SK_0` we installed from their `sender_key_init` /
-    /// `_rotate`. The LiveKit media key for that participant's frames is
+    /// `_rotate`. The media key for that participant's frames is
     /// `base64(SK_0)` keyed under THAT sender's userId. Returns `nil` when
     /// we have not yet installed a chain for `senderId` (their bootstrap
     /// envelope has not arrived). Does NOT step the ratchet. Mirrors

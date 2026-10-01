@@ -13568,10 +13568,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Caller-side dispatch for Android JSON ACCEPT. iOS originator
-    /// path currently emits QUAD only, so this branch is reached only
-    /// when iOS-originated JSON is added later (TODO). Wired now for
-    /// forward-compatibility.
+    /// Caller-side dispatch for the signed JSON ACCEPT_v5 (the only 1:1 handshake dialect).
     @MainActor
     private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
         // Sender-identity check (2026-07-11 — same reasoning/fix as
@@ -19604,8 +19601,8 @@ extension AppState {
             callService.sendControlHangup(reason: "local_hangup")
         }
 
-        // W517: send call_hangup for non-WebRTC paths (QUAD binary iOS↔Android
-        // and all incoming calls). The WebRTC path uses sendHangupAndClose()
+        // W517: send call_hangup for calls without a WebRTC controller (e.g. one that never
+        // reached media, and incoming calls). The WebRTC path uses sendHangupAndClose()
         // below — skip here to avoid double-hangup.
         // callingApi.activeCallId is pre-bound: outgoing via sendCallOfferWithId,
         // incoming via bindIncomingCallId (AppState.wireIncomingCallHandlers).
