@@ -281,15 +281,20 @@ final class GroupE2eeHardeningTests: XCTestCase {
         XCTAssertTrue(coordinator.heldKeys(of: userB).isEmpty)
     }
 
-    func testARetransmittedOrDifferentKeyLeavesNoLiveCopyBehind() throws {
+    func testARetransmittedKeyLeavesNoLiveCopyBehindAndAReplacingKeyWipesTheOldOne() throws {
         let (coordinator, _) = make()
         coordinator.onRoster(epoch: 4, members: [selfUser, userB], pseudonyms: pseudonyms)
         coordinator.onEnvelope(key(epoch: 4, fill: 0x11), from: userB)
         let held = try XCTUnwrap(coordinator.heldKeys(of: userB)[4])
         coordinator.onEnvelope(key(epoch: 4, fill: 0x11), from: userB)
-        coordinator.onEnvelope(key(epoch: 4, fill: 0x99), from: userB)
-        XCTAssertFalse(held.isWiped, "the installed key is untouched")
+        XCTAssertFalse(held.isWiped, "a retransmission leaves the installed key untouched")
         XCTAssertEqual(held.data, Data(repeating: 0x11, count: 32))
+        // A different key for the same (member, epoch) replaces it: the old buffer is zeroed.
+        coordinator.onEnvelope(key(epoch: 4, fill: 0x99), from: userB)
+        XCTAssertTrue(held.isWiped, "the replaced key is zeroed")
+        let replacement = try XCTUnwrap(coordinator.heldKeys(of: userB)[4])
+        XCTAssertFalse(replacement.isWiped)
+        XCTAssertEqual(replacement.data, Data(repeating: 0x99, count: 32))
     }
 
     func testAKeyOutOfTheRingWindowIsWiped() throws {

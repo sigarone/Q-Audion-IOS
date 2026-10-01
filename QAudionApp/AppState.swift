@@ -9116,7 +9116,13 @@ final class AppState: ObservableObject {
         ws.registerHandler(type: "error") { [weak self] _, data in
             let code = (data["code"] as? String) ?? "?"
             let msg = (data["message"] as? String) ?? "Errore server"
+            // The refusal of a group create / join / media request arrives as this envelope
+            // (single handler slot, so it is fed to the group call manager from here): while
+            // a group call has no media path yet it ends the attempt at once instead of
+            // after the 10-30 s timeouts (iOS deviation 19).
+            let errorCallId = data["call_id"] as? String
             DispatchQueue.main.async {
+                self?.groupCallManager?.handleServerError(code: code, callId: errorCallId)
                 self?.errorMessage = "[" + code + "] " + msg
             }
         }
@@ -25028,7 +25034,9 @@ extension AppState {
     }
 
     /// `group_call_ended` for a call we never joined (spec 2.6: creator hung up,
-    /// 45 s ring timeout, answered on another device).
+    /// 45 s ring timeout, declined or answered on another device: the server tells the
+    /// user's other devices `declined` / `answered_elsewhere`, so the ring does not keep
+    /// ringing here until the local 45 s timer).
     @MainActor
     func groupRingEnded(callId: String, reason: String) {
         guard incomingGroupCallInvite?.callId == callId else { return }

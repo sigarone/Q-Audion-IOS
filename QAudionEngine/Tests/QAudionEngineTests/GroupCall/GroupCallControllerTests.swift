@@ -66,6 +66,7 @@ final class FakeMediaLink: GroupMediaLink, @unchecked Sendable {
 final class FakeMediaBackend: GroupMediaBackend, @unchecked Sendable {
     var onMissingKey: ((String) -> Void)?
     var onDecryptFailure: ((String) -> Void)?
+    var onCryptorOk: ((String) -> Void)?
 
     private let lock = NSLock()
     private var _links: [FakeMediaLink] = []
@@ -148,12 +149,15 @@ final class ControllerHarness: @unchecked Sendable {
     private var _states: [GroupCallController.State] = []
     var controlSendResult = true
 
-    init(iceRefreshRetrySeconds: Double = 60, mediaReadyTimeoutSeconds: Double = 10) {
+    init(iceRefreshRetrySeconds: Double = 60, mediaReadyTimeoutSeconds: Double = 10,
+         tokenReplyTimeoutSeconds: Double = 8, tokenRetryBackoffSeconds: [Double] = [6, 12, 24, 48]) {
         let ws = BCryptoWebSocketClient(config: BackendConfig(serverUrl: "https://example.invalid"))
         manager = BCryptoGroupCallManager(ws: ws, selfUserId: Self.selfUser, nameResolver: { $0 })
         controller = GroupCallController(manager: manager, backend: backend, audio: audio, pathMonitor: paths,
                                          iceRefreshRetrySeconds: iceRefreshRetrySeconds,
-                                         mediaReadyTimeoutSeconds: mediaReadyTimeoutSeconds)
+                                         mediaReadyTimeoutSeconds: mediaReadyTimeoutSeconds,
+                                         tokenReplyTimeoutSeconds: tokenReplyTimeoutSeconds,
+                                         tokenRetryBackoffSeconds: tokenRetryBackoffSeconds)
         manager.sendOverride = { [weak self] type, data in
             self?.lock.lock(); self?._sent.append((type, data)); self?.lock.unlock()
         }
@@ -223,12 +227,13 @@ final class ControllerHarness: @unchecked Sendable {
         return backend.links.first
     }
 
-    /// createCall (the creating side of a 1:1 -> group promotion) -> update -> media_ready
-    /// -> link started. The call id is the one the manager minted.
+    /// createCall (the creating side of a 1:1 -> group promotion) -> media_ready -> link started.
+    /// The call id is the one the manager minted. The server sends the creator NO
+    /// `group_call_update` until somebody joins, so none is injected here: the creator asks for
+    /// its media by itself, right after the create.
     func createAndConnect(startMuted: Bool) async -> FakeMediaLink? {
         guard let id = controller.createCall(invitees: [Self.peerB], promotedFromCallId: "one-to-one-call",
                                              startMuted: startMuted) else { return nil }
-        manager.onGroupUpdate?(update(epoch: 1, withMedia: false, callId: id))
         manager.onMediaReady?(ready(callId: id))
         _ = await waitUntil { !self.backend.links.isEmpty && self.backend.links[0].calls.contains { $0.hasPrefix("start") } }
         return backend.links.first
@@ -547,10 +552,71 @@ final class GroupCallControllerTests: XCTestCase {
         let h = ControllerHarness()
         guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
         link.emit(.tokenRefresh("periodic"))
+        // A round that is already being retried covers the next trigger (single-flight).
         link.emit(.tokenRefresh("ws_reconnect"))
-        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_refresh" }.count, 2)
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_refresh" }.count, 1)
         let refresh = h.sent.first { $0.type == "group_call_media_refresh" }
         XCTAssertEqual(refresh?.data["call_id"] as? String, ControllerHarness.callId)
+        h.controller.leave()
+    }
+
+    // MARK: Janus token refresh: timeout + retry (LC-6)
+
+    private func refreshCount(_ h: ControllerHarness) -> Int { h.sentTypes.filter { $0 == "group_call_media_refresh" }.count }
+
+    /// The server drops an over-budget refresh without an answer and the app socket can lose a
+    /// frame: the token lives 600 s, so one lost request must not wait for the next 300 s tick.
+    func testAnUnansweredTokenRefreshIsAskedAgainAndGivesUpWithARejoinBeforeTheTokenExpires() async {
+        let h = ControllerHarness(tokenReplyTimeoutSeconds: 0.05, tokenRetryBackoffSeconds: [0.05, 0.05])
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.tokenRefresh("periodic"))
+        XCTAssertEqual(refreshCount(h), 1)
+        let three = await h.waitUntil { self.refreshCount(h) == 3 }
+        XCTAssertTrue(three, "an attempt, then two more after the pauses")
+        // Nobody answered any of them: the media is rejoined while the old token is still good.
+        let rejoined = await h.waitUntil { h.sent.contains { $0.type == "group_call_media_rejoin" } }
+        XCTAssertTrue(rejoined)
+        XCTAssertEqual(h.sent.first { $0.type == "group_call_media_rejoin" }?.data["reason"] as? String, "token_refresh")
+        XCTAssertEqual(refreshCount(h), 3, "no attempt beyond the round")
+        h.controller.leave()
+    }
+
+    func testAnAnsweredTokenRefreshStopsItsRetries() async {
+        let h = ControllerHarness(tokenReplyTimeoutSeconds: 0.05, tokenRetryBackoffSeconds: [0.05, 0.05])
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.tokenRefresh("periodic"))
+        h.manager.onMediaToken?(GroupCallWire.MediaToken(callId: ControllerHarness.callId, sessionToken: "fresh-1", ttlSeconds: 600))
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(refreshCount(h), 1)
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"))
+        XCTAssertTrue(link.calls.contains("token=fresh-1"))
+        // The next periodic refresh starts a new round.
+        link.emit(.tokenRefresh("periodic"))
+        XCTAssertEqual(refreshCount(h), 2)
+        h.controller.leave()
+    }
+
+    func testALateAnswerOfALaterAttemptEndsTheRound() async {
+        let h = ControllerHarness(tokenReplyTimeoutSeconds: 0.4, tokenRetryBackoffSeconds: [0.05, 0.05])
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.tokenRefresh("periodic"))
+        _ = await h.waitUntil { self.refreshCount(h) == 2 }
+        h.manager.onMediaToken?(GroupCallWire.MediaToken(callId: ControllerHarness.callId, sessionToken: "fresh-2", ttlSeconds: 600))
+        try? await Task.sleep(nanoseconds: 900_000_000)
+        XCTAssertEqual(refreshCount(h), 2, "answered: nothing more is asked")
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"))
+        h.controller.leave()
+    }
+
+    func testATokenRefreshOfALinkThatWasReplacedIsNeverRetried() async {
+        let h = ControllerHarness(tokenReplyTimeoutSeconds: 0.05, tokenRetryBackoffSeconds: [0.05, 0.05])
+        guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
+        link.emit(.tokenRefresh("periodic"))
+        h.manager.onMediaReady?(h.ready())          // a fresh hand-out replaces the link (and carries its own token)
+        _ = await h.waitUntil { h.backend.links.count == 2 }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(refreshCount(h), 1, "the old link's round is over")
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"))
         h.controller.leave()
     }
 
@@ -599,16 +665,16 @@ final class GroupCallControllerTests: XCTestCase {
         h.controller.leave()
     }
 
-    func testAThrottledAnswerToTheRefreshKeepsTheLiveLinkButAnyOtherRefusalStillEndsIt() async {
+    func testAnyRefusalOfTheRefreshEndsTheMediaTheServerNeverAnswersAThrottledOne() async {
         let h = ControllerHarness()
         guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
         link.emit(.iceRefresh)
-        h.manager.onMediaUnavailable?(ControllerHarness.callId, .throttled)
-        XCTAssertFalse(link.calls.contains("close"), "a rate-limited refresh is not a broken media path")
-        XCTAssertTrue(h.errors.isEmpty)
-        h.manager.onMediaUnavailable?(ControllerHarness.callId, .notMember)
-        let ended = await h.waitUntil { h.errors.contains(.notMember) }
-        XCTAssertTrue(ended, "a refusal that means something is still an error")
+        // The server drops an over-budget request without any answer: a reason it never sends
+        // (this one) is an unknown reason, a visible error like every other refusal.
+        h.manager.onMediaUnavailable?(ControllerHarness.callId, GroupCallWire.UnavailableReason(wire: "throttled"))
+        let ended = await h.waitUntil { h.errors.contains(.other("throttled")) }
+        XCTAssertTrue(ended, "a refusal means something: it is an error")
+        XCTAssertTrue(link.calls.contains("close"))
     }
 
     func testAnUnansweredRefreshIsAskedAgainThreeTimesAtMostThenLeftToTheNextHour() async {
@@ -675,6 +741,133 @@ final class GroupCallControllerTests: XCTestCase {
         let twice = await h.waitUntil(4) { h.sentTypes.filter { $0 == "group_call_media_join" }.count == 2 }
         XCTAssertTrue(twice)
         XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"))
+        h.controller.leave()
+    }
+
+    // MARK: creator media start (SIG-2 / LC-1)
+
+    /// The server never sends the creator a `group_call_update` until somebody joins: the
+    /// creator must ask for its media right after the create, like Android and desktop, instead
+    /// of waiting for the first invitee to accept (a promotion from a 1:1 is abandoned after 30 s).
+    func testTheCreatorAsksForItsMediaRightAfterTheCreateWithoutAnyUpdate() async {
+        let h = ControllerHarness()
+        let id = h.controller.createCall(invitees: [ControllerHarness.peerB], promotedFromCallId: "one-to-one-call")
+        XCTAssertNotNil(id)
+        XCTAssertEqual(h.sentTypes, ["group_call_create", "group_call_media_join"], "both frames, in order, no update needed")
+        XCTAssertEqual(h.sent[1].data["call_id"] as? String, id)
+        // The first update (an invitee joined) does not ask a second time.
+        h.manager.onGroupUpdate?(h.update(epoch: 2, withMedia: false, callId: id ?? ""))
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, 1)
+        h.controller.leave()
+    }
+
+    func testTheCreatorsMediaComesUpWithoutAnyUpdate() async {
+        let h = ControllerHarness()
+        let link = await h.createAndConnect(startMuted: false)
+        XCTAssertNotNil(link, "media_ready alone builds the link")
+        XCTAssertTrue(h.controller.hasMediaLink)
+        h.controller.leave()
+    }
+
+    // MARK: refused media (SIG-6 / LC-7)
+
+    func testAnEntitlementDenialOfTheMediaEndsTheAttemptOnceAndIsNeverRetried() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: false))
+        h.manager.onMediaUnavailable?(ControllerHarness.callId, .entitlement)
+        XCTAssertEqual(h.errors, [.entitlementRequired])
+        XCTAssertEqual(h.controller.state, .idle)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"), "asking again cannot change the answer")
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, 1)
+    }
+
+    func testACorrelatedServerErrorWhileTheMediaIsBeingSetUpFailsFast() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: false))        // media_join sent, no answer yet
+        h.manager.handleServerError(code: "entitlement_required", callId: ControllerHarness.callId)
+        XCTAssertEqual(h.errors, [.entitlementRequired], "no 10-15 s wait for a media_ready that will not come")
+        XCTAssertEqual(h.controller.state, .idle)
+        XCTAssertTrue(h.sentTypes.contains("group_call_leave"))
+    }
+
+    /// The `error` envelope is shared by every feature (a chat, the 1:1 call a group is promoted
+    /// from): one that does not name our call is not the answer of our request, however soon it
+    /// arrives, and must not end a group attempt.
+    func testAnErrorThatNamesNoCallNeverEndsAGroupAttempt() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.handleServerError(code: "?", callId: nil)
+        h.manager.handleServerError(code: "rate_limited", callId: "")
+        XCTAssertTrue(h.errors.isEmpty)
+        XCTAssertNotEqual(h.controller.state, .idle)
+        XCTAssertFalse(h.sentTypes.contains("group_call_leave"))
+        h.controller.leave()
+    }
+
+    // MARK: another device of the account holds the seat (server D24)
+
+    /// This device's `group_call_media_join` was refused because another live device of the account
+    /// holds the seat: the call ends HERE, and no `group_call_leave` goes out (a leave is per account:
+    /// it would remove the seat from under the device that holds it).
+    func testAnsweredElsewhereOnTheMediaJoinEndsTheCallHereWithoutALeave() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: false))
+        h.manager.handleMediaUnavailable(data: ["call_id": ControllerHarness.callId, "reason": "answered_elsewhere"])
+        XCTAssertEqual(h.controller.state, .idle)
+        XCTAssertNil(h.controller.currentCallId)
+        XCTAssertTrue(h.errors.isEmpty, "not a media failure: no error path, no retry")
+        XCTAssertFalse(h.sentTypes.contains("group_call_leave"), "the holder's seat is not ours to give up")
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertFalse(h.sentTypes.contains("group_call_media_rejoin"))
+        XCTAssertEqual(h.sentTypes.filter { $0 == "group_call_media_join" }.count, 1)
+    }
+
+    /// The refusal of this device's `group_call_join` is a `group_call_ended {answered_elsewhere}` for
+    /// the call it is joining: with no update and no media it would sit in "connecting" for ever.
+    func testAnsweredElsewhereOnTheRefusedJoinEndsTheCallHereWithoutALeave() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.handleGroupCallEnded(data: ["call_id": ControllerHarness.callId, "reason": "answered_elsewhere"])
+        XCTAssertEqual(h.controller.state, .idle)
+        XCTAssertNil(h.controller.currentCallId)
+        XCTAssertFalse(h.sentTypes.contains("group_call_leave"))
+    }
+
+    func testAServerErrorOfAnotherCallOrWithALiveMediaPathChangesNothing() async {
+        let h = ControllerHarness()
+        h.controller.join(callId: ControllerHarness.callId)
+        h.manager.handleServerError(code: "x", callId: "another-call")
+        XCTAssertTrue(h.errors.isEmpty, "another call's error is not ours")
+        XCTAssertNotEqual(h.controller.state, .idle)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: false))
+        h.manager.onMediaReady?(h.ready())
+        _ = await h.waitUntil { h.controller.hasMediaLink }
+        h.manager.handleServerError(code: "x", callId: ControllerHarness.callId)
+        h.manager.handleServerError(code: "x", callId: nil)
+        XCTAssertTrue(h.errors.isEmpty, "with a running media path an error is about something else")
+        XCTAssertTrue(h.controller.hasMediaLink)
+        h.controller.leave()
+    }
+
+    // MARK: decrypt / key plumbing
+
+    func testACryptorThatDecryptsAgainIsPassedToTheCoordinator() async {
+        let h = ControllerHarness()
+        _ = await h.joinAndConnect()
+        h.manager.onGroupUpdate?(h.update(epoch: 2))
+        h.backend.onDecryptFailure?(ControllerHarness.pseudoB)
+        h.backend.onCryptorOk?(ControllerHarness.pseudoB)
+        // The failing run is over before its first second: not one nack is ever sent for it.
+        try? await Task.sleep(nanoseconds: 1_300_000_000)
+        let nacks = h.control.filter { entry in
+            if case .envelope(.nack) = GroupKeyEnvelope.parse(json: entry.json) { return true }
+            return false
+        }
+        XCTAssertTrue(nacks.isEmpty)
         h.controller.leave()
     }
 

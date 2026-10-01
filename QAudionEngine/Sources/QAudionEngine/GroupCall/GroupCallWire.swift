@@ -144,9 +144,13 @@ public enum GroupCallWire {
         case roomCreateFailed
         case notMember
         case full
-        /// Not in the spec's list: the server rate-limits repeated joins of the
-        /// same member and answers this instead of `group_call_media_ready`.
-        case throttled
+        /// The member that would establish the room does not hold the group-video
+        /// entitlement: the server answers the denial of `group_call_media_join` with this
+        /// instead of a bare `error`. Fatal and never retried, asking again cannot change it.
+        case entitlement
+        /// Anything else, a reason a newer server adds included: handled generically (a
+        /// visible error, no retry), never guessed at. The server never answers a request
+        /// that is over its budget (spec 10.2), so there is no "throttled" reason either.
         case other(String)
 
         public init(wire: String) {
@@ -155,15 +159,10 @@ public enum GroupCallWire {
             case "room_create_failed": self = .roomCreateFailed
             case "not_member": self = .notMember
             case "full": self = .full
-            case "throttled": self = .throttled
+            case "entitlement", "entitlement_required": self = .entitlement
             default: self = .other(String(wire.prefix(32)))
             }
         }
-
-        /// Only a throttled join is worth retrying on its own; every other
-        /// reason ends the attempt with a visible error (there is no relay
-        /// fallback any more).
-        public var isTransient: Bool { self == .throttled }
     }
 
     // MARK: - group_call_update (S->C, spec §2.1)

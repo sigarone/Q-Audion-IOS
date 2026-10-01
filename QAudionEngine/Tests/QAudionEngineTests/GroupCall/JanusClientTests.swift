@@ -127,6 +127,16 @@ final class VideoRoomModelTests: XCTestCase {
         XCTAssertEqual(VideoRoomEvent.parse(["unpublished": "p"]), .unpublished("p"))
         XCTAssertEqual(VideoRoomEvent.parse(["leaving": "p"]), .leaving("p"))
         XCTAssertEqual(VideoRoomEvent.parse(["leaving": "ok", "reason": "kicked"]), .kicked)
+        // Janus tells EVERYBODY `kicked: <id>` when somebody is kicked: it names a participant, it
+        // is only about us when the id is ours (the session compares it with its pseudonym).
+        XCTAssertEqual(VideoRoomEvent.parse(["videoroom": "event", "kicked": "p"]), .participantKicked("p"))
+        // A `leaving: <id>` that carries the same reason names ANOTHER participant too.
+        XCTAssertEqual(VideoRoomEvent.parse(["leaving": "p", "reason": "kicked"]), .leaving("p"))
+        XCTAssertEqual(VideoRoomEvent.parse(["videoroom": "event", "mid": "1", "substream": 2, "temporal": 1]),
+                       .substream(mid: "1", substream: 2, temporal: 1))
+        XCTAssertEqual(VideoRoomEvent.parse(["videoroom": "event", "mid": 3, "substream": 0]),
+                       .substream(mid: "3", substream: 0, temporal: nil))
+        XCTAssertEqual(VideoRoomEvent.parse(["videoroom": "event", "substream": 2]), .other("event"), "no mid, nothing to confirm")
         XCTAssertEqual(VideoRoomEvent.parse(["videoroom": "destroyed"]), .destroyed)
         XCTAssertEqual(VideoRoomEvent.parse(["videoroom": "event", "configured": "ok"]), .other("event"))
         if case .attached(let streams) = VideoRoomEvent.parse(["videoroom": "attached", "streams": [["type": "audio", "mid": "0", "feed_id": "p", "feed_mid": "0"]]]) {

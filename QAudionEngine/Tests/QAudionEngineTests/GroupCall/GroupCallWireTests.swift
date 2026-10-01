@@ -75,10 +75,12 @@ final class GroupCallWireTests: XCTestCase {
         XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "room_create_failed"), .roomCreateFailed)
         XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "not_member"), .notMember)
         XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "full"), .full)
-        XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "throttled"), .throttled)
+        XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "entitlement"), .entitlement)
+        XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "entitlement_required"), .entitlement)
+        // The server never answers a request that is over its budget (spec 10.2), so there is no
+        // "throttled" reason: were one ever sent, it is an unknown reason like any other.
+        XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "throttled"), .other("throttled"))
         XCTAssertEqual(GroupCallWire.UnavailableReason(wire: "surprise"), .other("surprise"))
-        XCTAssertTrue(GroupCallWire.UnavailableReason.throttled.isTransient)
-        XCTAssertFalse(GroupCallWire.UnavailableReason.full.isTransient)
     }
 
     func testMediaTokenParsesAndRefusesMissingFields() throws {

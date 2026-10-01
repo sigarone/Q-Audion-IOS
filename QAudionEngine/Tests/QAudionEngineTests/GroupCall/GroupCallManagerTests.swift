@@ -83,6 +83,23 @@ final class GroupCallManagerTests: XCTestCase {
         XCTAssertEqual(manager.state, .creating)
     }
 
+    /// The server sends `group_call_update` to EVERY device of a participant: a device that is not
+    /// in the call (another device of the same account joined it) must not turn `.active` with a
+    /// phantom roster, which refuses every later `createGroupCall`.
+    func testAnUpdateWhileNoCallIsActiveIsDroppedAndDoesNotBlockTheNextCreate() {
+        let (manager, _) = makeManager()
+        let updates = LockedBox(0)
+        manager.onGroupUpdate = { _ in updates.mutate { $0 += 1 } }
+        let states = LockedBox<[BCryptoGroupCallManager.State]>([])
+        manager.onStateChanged = { state in states.mutate { $0.append(state) } }
+        manager.handleGroupCallUpdate(data: ["call_id": callId, "participants": ["user-self", "user-b"], "sender_key_epoch": 3])
+        XCTAssertEqual(updates.value, 0)
+        XCTAssertEqual(manager.state, .idle)
+        XCTAssertTrue(manager.participants.isEmpty)
+        XCTAssertEqual(states.value, [])
+        XCTAssertNotNil(manager.createGroupCall(recipients: ["user-b"]), "the manager is still free for a new call")
+    }
+
     // MARK: group_call_ended
 
     func testEndedForTheActiveCallEndsItAndReportsTheReason() {
@@ -95,6 +112,101 @@ final class GroupCallManagerTests: XCTestCase {
         XCTAssertEqual(ended.value, [callId, "ended"])
         XCTAssertEqual(manager.state, .ended)
         XCTAssertNil(manager.callId)
+    }
+
+    /// `ring_timeout` / `declined` are about a RING: the invitee presses Accept a moment before the
+    /// server's timer fires, joins, and the notice for the ring arrives with the live call id. It must
+    /// not tear the call down (the server then still processes the join, which would leave a ghost
+    /// participant).
+    func testRingOnlyEndReasonsDoNotEndTheCallWeAreIn() {
+        let (manager, _) = makeManager()
+        manager.joinGroupCall(callId: callId)
+        manager.onActiveCallEnded = { _, _ in XCTFail("a ring notice is not the end of the call") }
+        for reason in ["ring_timeout", "declined"] {
+            manager.handleGroupCallEnded(data: ["call_id": callId, "reason": reason])
+        }
+        manager.handleGroupCallEnded(data: ["reason": "ring_timeout"])
+        XCTAssertEqual(manager.state, .creating)
+        XCTAssertEqual(manager.callId, callId)
+    }
+
+    func testEndedAndAnUnknownReasonStillEndTheActiveCall() {
+        for reason in ["ended", "some_future_reason"] {
+            let (manager, _) = makeManager()
+            manager.joinGroupCall(callId: callId)
+            let ended = LockedBox<[String]>([])
+            manager.onActiveCallEnded = { id, why in ended.mutate { $0 = [id, why] } }
+            manager.handleGroupCallEnded(data: ["call_id": callId, "reason": reason])
+            XCTAssertEqual(ended.value, [callId, reason])
+            XCTAssertEqual(manager.state, .ended)
+        }
+    }
+
+    /// Another live device of the account holds the seat (server D24): for the call this device is
+    /// joining or in, `answered_elsewhere` is its end HERE, locally, without a `group_call_leave`
+    /// (a leave is per account and would remove the seat from under the device that holds it). The
+    /// same goes for its `group_call_media_unavailable` form.
+    func testAnsweredElsewhereEndsTheCallWeAreInLocallyAndSendsNoLeave() {
+        for viaMedia in [false, true] {
+            let (manager, sent) = makeManager()
+            manager.joinGroupCall(callId: callId)
+            let ended = LockedBox<[String]>([])
+            manager.onActiveCallEnded = { id, why in ended.mutate { $0 = [id, why] } }
+            manager.onMediaUnavailable = { _, _ in XCTFail("not a media failure: it is the end of the call here") }
+            if viaMedia {
+                manager.handleMediaUnavailable(data: ["call_id": callId, "reason": "answered_elsewhere"])
+            } else {
+                manager.handleGroupCallEnded(data: ["call_id": callId, "reason": "answered_elsewhere"])
+            }
+            XCTAssertEqual(ended.value, [callId, "answered_elsewhere"])
+            XCTAssertEqual(manager.state, .ended)
+            XCTAssertNil(manager.callId)
+            XCTAssertFalse(sent().contains { $0.type == "group_call_leave" }, "the holder keeps the seat")
+        }
+    }
+
+    func testAnsweredElsewhereDismissesTheRingOfACallWeAreNotIn() {
+        let (manager, _) = makeManager()
+        let ring = LockedBox<[String]>([])
+        manager.onRingEnded = { id, reason in ring.mutate { $0 = [id, reason] } }
+        manager.handleGroupCallEnded(data: ["call_id": "ringing-call", "reason": "answered_elsewhere"])
+        XCTAssertEqual(ring.value, ["ringing-call", "answered_elsewhere"])
+    }
+
+    /// The delayed `.ended -> .idle` reset must not overwrite a call started inside its second.
+    func testTheDelayedIdleResetNeverOverwritesACallJoinedInsideIt() async throws {
+        let (manager, _) = makeManager()
+        manager.endedResetDelaySeconds = 0.15
+        let states = LockedBox<[BCryptoGroupCallManager.State]>([])
+        manager.onStateChanged = { state in states.mutate { $0.append(state) } }
+        manager.joinGroupCall(callId: callId)
+        manager.leaveGroupCall()
+        XCTAssertEqual(manager.state, .ended)
+        manager.joinGroupCall(callId: "22222222-3333-4444-5555-666666666666")
+        XCTAssertEqual(manager.state, .creating)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertEqual(manager.state, .creating, "a stale idle reset would have overwritten the new call")
+        XCTAssertEqual(manager.callId, "22222222-3333-4444-5555-666666666666")
+        XCTAssertFalse(states.value.contains(.idle))
+    }
+
+    func testTheIdleResetStillHappensWhenNothingElseDid() async throws {
+        let (manager, _) = makeManager()
+        manager.endedResetDelaySeconds = 0.1
+        manager.joinGroupCall(callId: callId)
+        manager.leaveGroupCall()
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(manager.state, .idle)
+    }
+
+    func testAServerErrorIsPassedOnWithItsCodeAndAnEmptyCallIdIsNone() {
+        let (manager, _) = makeManager()
+        let seen = LockedBox<[String]>([])
+        manager.onServerError = { code, id in seen.mutate { $0.append("\(code)|\(id ?? "-")") } }
+        manager.handleServerError(code: "entitlement_required", callId: callId)
+        manager.handleServerError(code: "?", callId: "")
+        manager.handleServerError(code: "?", callId: nil)
+        XCTAssertEqual(seen.value, ["entitlement_required|\(callId)", "?|-", "?|-"])
     }
 
     func testEndedForACallWeNeverJoinedIsARingGoingAway() {

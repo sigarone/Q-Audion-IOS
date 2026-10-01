@@ -156,6 +156,22 @@ final class GroupSdpRulesTests: XCTestCase {
         XCTAssertTrue(out.contains("usedtx=0"))
     }
 
+    /// Janus 1.4.2 keeps a sticky `disabled` flag per rid: a layer that is inactive in ONE offer
+    /// (`~h`) is echoed as `~h` forever, and libwebrtc then switches it off again. The offer never
+    /// marks a layer inactive.
+    func testAPublisherOfferNeverMarksASimulcastLayerInactive() {
+        let offer = [
+            "v=0", "o=- 1 2 IN IP4 127.0.0.1", "s=-", "t=0 0",
+            "m=video 9 UDP/TLS/RTP/SAVPF 96", "a=mid:1", "a=sendonly", "a=rtpmap:96 VP8/90000",
+            "a=rid:l send", "a=rid:m send", "a=rid:h send", "a=simulcast:send l;m;~h",
+        ].joined(separator: "\r\n") + "\r\n"
+        let out = GroupSdpRules.mungeLocal(offer, role: .publisherOffer)
+        XCTAssertTrue(out.contains("a=simulcast:send l;m;h\r\n"), out)
+        XCTAssertFalse(out.contains("~"), "no rid is ever offered as inactive")
+        XCTAssertTrue(out.contains("a=rid:h send"), "the rid lines themselves are untouched")
+        XCTAssertEqual(GroupSdpRules.activateSimulcastLayers(out), out, "idempotent")
+    }
+
     func testSubscriberAnswerAnswersPassive() {
         let out = GroupSdpRules.mungeLocal(sdp(), role: .subscriberAnswer)
         XCTAssertTrue(out.contains("a=setup:passive"))
