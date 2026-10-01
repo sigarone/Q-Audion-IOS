@@ -406,8 +406,10 @@ enum LogRedactor {
         var lastEnd = text.startIndex
         for m in matches {
             guard let r = Range(m.range, in: text) else { continue }
+            // Left side: `=` is the key=value separator of a log line (end_reason=TOKEN), not a base64
+            // member (padding only ever ends a run), so only `+ / -` glue a token to a longer run.
             if r.lowerBound > text.startIndex,
-               blobAdjacentChars.contains(text[text.index(before: r.lowerBound)]) {
+               ["+", "/", "-"].contains(text[text.index(before: r.lowerBound)]) {
                 continue
             }
             if r.upperBound < text.endIndex,
