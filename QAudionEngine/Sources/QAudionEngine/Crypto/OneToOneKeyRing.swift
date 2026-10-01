@@ -16,38 +16,60 @@ import Security
 ///
 /// The tracker is pure bookkeeping (no WebRTC types): the cryptor that owns the ring calls
 /// ``install(slot:senderSlot:)`` after it has set the new round's keys and overwrites each returned
-/// slot with ``randomRetiredKey()`` for both participants.
+/// slot with ``randomRetiredKey()``: the RECEIVE key (remote participant) for `remote`, the
+/// own-direction key (local participant) for `local`.
+///
+/// R-RING is about what the RECEIVER accepts, so the receive side is retired strictly: after every
+/// install only {current, previously installed} hold a real receive key. The own-direction key
+/// only seals this device's OUTBOUND frames and cannot be used to inject anything inbound; it is
+/// additionally kept for the slot the own sender still announces, so the sender is never cut off
+/// from under itself while it waits to switch.
 public struct OneToOneKeyRingTracker: Equatable {
+
+    /// The slots to overwrite with random bytes after an install (each ascending).
+    public struct Retirement: Equatable {
+        /// Slots whose receive key (remote participant) is overwritten.
+        public var remote: [Int32]
+        /// Slots whose own-direction key (local participant) is overwritten.
+        public var local: [Int32]
+        public static let none = Retirement(remote: [], local: [])
+    }
 
     /// The slot of the round installed last, `nil` before the first install.
     public private(set) var current: Int32?
     /// The slot of the round installed before `current`, `nil` until a second round is installed.
     public private(set) var previous: Int32?
-    /// Every slot that currently holds a REAL key (installed and not yet retired).
-    public private(set) var holdingRealKey: Set<Int32> = []
+    /// Every slot that currently holds a REAL receive key (installed and not yet retired).
+    public private(set) var holdingRemoteKey: Set<Int32> = []
+    /// Every slot that currently holds a REAL own-direction key.
+    public private(set) var holdingLocalKey: Set<Int32> = []
 
     public init() {}
 
     /// Record that the keys of a round were just set at `slot` and return the slots that must now
-    /// be overwritten with random bytes (ascending).
+    /// be overwritten with random bytes.
     ///
     /// - Installing the slot that is already current is a re-publish of the same round (the
     ///   install sites are idempotent): nothing changes and nothing is retired.
-    /// - `senderSlot` is the slot this device's OWN sender is still announcing: it is the key that
-    ///   seals our outbound frames, so it is never retired from under the sender; it is retired by
-    ///   a later install, once the sender has moved on.
+    /// - `senderSlot` is the slot this device's OWN sender is still announcing: its own-direction
+    ///   key is not retired from under the sender (a later install retires it once the sender has
+    ///   moved on). Its receive key is retired like any other.
     @discardableResult
-    public mutating func install(slot: Int32, senderSlot: Int32? = nil) -> [Int32] {
-        if current == slot { return [] }
+    public mutating func install(slot: Int32, senderSlot: Int32? = nil) -> Retirement {
+        if current == slot { return .none }
         previous = current
         current = slot
-        holdingRealKey.insert(slot)
-        var live: Set<Int32> = [slot]
-        if let previous { live.insert(previous) }
-        if let senderSlot { live.insert(senderSlot) }
-        let retired = holdingRealKey.subtracting(live)
-        holdingRealKey.subtract(retired)
-        return retired.sorted()
+        holdingRemoteKey.insert(slot)
+        holdingLocalKey.insert(slot)
+        var liveRemote: Set<Int32> = [slot]
+        if let previous { liveRemote.insert(previous) }
+        var liveLocal = liveRemote
+        if let senderSlot { liveLocal.insert(senderSlot) }
+        let retiredRemote = holdingRemoteKey.subtracting(liveRemote)
+        let retiredLocal = holdingLocalKey.subtracting(liveLocal)
+        holdingRemoteKey.subtract(retiredRemote)
+        holdingLocalKey.subtract(retiredLocal)
+        return Retirement(remote: retiredRemote.sorted(), local: retiredLocal.sorted())
     }
 
     /// 32 random bytes from the system CSPRNG, never all zero. Used to overwrite a retired slot.

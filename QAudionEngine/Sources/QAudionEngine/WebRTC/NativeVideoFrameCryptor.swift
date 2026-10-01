@@ -143,16 +143,18 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
         keyProvider.setKey(send, with: slot, forParticipant: OneToOneFrameParticipant.local)
         keyProvider.setKey(recv, with: slot, forParticipant: OneToOneFrameParticipant.remote)
         hasKey = true
-        // R-RING: exactly {current, previously installed} stay live; every other slot this ring
-        // ever held is overwritten with RANDOM bytes (never zeros: the native cryptor accepts 32
-        // zero bytes as a valid key). The slot the own sender still announces is kept until a
-        // later install, once the sender has moved on.
+        // R-RING: the receive side keeps exactly {current, previously installed} live; every other
+        // slot is overwritten with RANDOM bytes (never zeros: the native cryptor accepts 32 zero
+        // bytes as a valid key). The own-direction key at the slot the own sender still announces
+        // is kept until a later install, once the sender has moved on.
         let retired = ringTracker.install(slot: slot, senderSlot: Int32(currentSenderKeyIndex))
-        for old in retired {
-            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.local)
+        for old in retired.remote {
             keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.remote)
         }
-        print("[NativeVideoFrameCryptor] keys installed at slot \(slot) retired=\(retired.count)")
+        for old in retired.local {
+            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.local)
+        }
+        print("[NativeVideoFrameCryptor] keys installed at slot \(slot) retired=\(retired.remote.count)")
         return true
     }
 
