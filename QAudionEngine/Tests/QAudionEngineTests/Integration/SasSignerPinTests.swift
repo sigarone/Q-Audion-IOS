@@ -14,9 +14,12 @@ final class SasSignerPinTests: XCTestCase {
     private let keyA = F.signer(seed: 61)
     private let keyB = F.signer(seed: 62)
 
-    /// A signed OFFER_v5 bundle of `round` under `signer` (every value synthetic).
+    /// A signed OFFER_v5 bundle of `round` under `signer` (every value synthetic). `signedBy` signs the
+    /// transcript with ANOTHER private key while the bundle still claims `signer`'s public key (a relay
+    /// replaying the peer's public key over its own key material).
     private func signedOffer(
-        signer: (priv: Curve25519.Signing.PrivateKey, pubRaw: Data), round: Int
+        signer: (priv: Curve25519.Signing.PrivateKey, pubRaw: Data), round: Int,
+        signedBy: Curve25519.Signing.PrivateKey? = nil
     ) throws -> AndroidHandshakeBundle {
         let unsigned = AndroidHandshakeBundle(
             kind: .offer, callId: F.callId,
@@ -26,7 +29,7 @@ final class SasSignerPinTests: XCTestCase {
         let t = try XCTUnwrap(QAudionCallIntegration.offerTranscript(
             from: unsigned, callId: F.callId, signerKeyRaw: signer.pubRaw,
             dtlsFingerprint: F.fingerprint("offerer")))
-        let sig = try signer.priv.signature(for: t)
+        let sig = try (signedBy ?? signer.priv).signature(for: t)
         return AndroidHandshakeBundle(
             kind: .offer, callId: F.callId,
             pqcPublicKey: unsigned.pqcPublicKey, x25519PublicKey: unsigned.x25519PublicKey,
@@ -74,15 +77,50 @@ final class SasSignerPinTests: XCTestCase {
         XCTAssertNil(integ.signerKeyAwaitingSas(callId: F.callId, sessionKey: Data(repeating: 0x33, count: 32)))
     }
 
-    /// A rekey OFFER signed by ANOTHER key that lands while the SAS of round 1 is on screen must not be
-    /// adoptable by confirming round 1's words: the lookup is by the round of the compared session key.
-    func testLaterUnresolvedRoundWithAnotherKeyCannotBeAdoptedByConfirmingTheEarlierRound() throws {
+    /// A rekey OFFER signed by ANOTHER key that lands while the SAS of round 1 is on screen (or between the
+    /// comparison and the tap) puts the call in conflict: neither round can be adopted and the confirmation
+    /// is refused (before the Opus review round 2's key was adoptable when the tap read round 2's key).
+    func testLaterUnresolvedRoundWithAnotherKeyPutsTheCallInConflict() throws {
         let integ = QAudionCallIntegration()
         _ = verdict(integ, try signedOffer(signer: keyA, round: 1))
         _ = verdict(integ, try signedOffer(signer: keyB, round: 2))
         let k1 = Data(repeating: 0x11, count: 32)
+        let k2 = Data(repeating: 0x22, count: 32)
         integ.recordKeyRound(callId: F.callId, key: k1, round: 1)
-        XCTAssertEqual(integ.signerKeyAwaitingSas(callId: F.callId, sessionKey: k1), keyA.pubRaw)
+        integ.recordKeyRound(callId: F.callId, key: k2, round: 2)
+        XCTAssertNil(integ.signerKeyAwaitingSas(callId: F.callId, sessionKey: k1))
+        XCTAssertNil(integ.signerKeyAwaitingSas(callId: F.callId, sessionKey: k2))
+        XCTAssertEqual(integ.sasSignerAdoption(callId: F.callId, sessionKey: k1), .refused)
+        XCTAssertEqual(integ.sasSignerAdoption(callId: F.callId, sessionKey: k2), .refused)
+    }
+
+    /// A relay replays the peer's PUBLIC key over its own key material: the round is `sig_invalid` (the
+    /// signature is checked even with no pin and no server key), never remembered as the peer's, and it
+    /// puts the call in conflict, so confirming any words of the call releases nothing.
+    func testRoundClaimingTheCandidateKeyWithoutItsSignatureIsSigInvalidAndAConflict() throws {
+        let integ = QAudionCallIntegration()
+        XCTAssertEqual(verdict(integ, try signedOffer(signer: keyA, round: 1)), .abort(code: "identity_unresolved"))
+        XCTAssertEqual(
+            verdict(integ, try signedOffer(signer: keyA, round: 2, signedBy: keyB.priv)), .abort(code: "sig_invalid"))
+        let k1 = Data(repeating: 0x11, count: 32)
+        let k2 = Data(repeating: 0x22, count: 32)
+        integ.recordKeyRound(callId: F.callId, key: k1, round: 1)
+        integ.recordKeyRound(callId: F.callId, key: k2, round: 2)
+        XCTAssertEqual(integ.sasSignerAdoption(callId: F.callId, sessionKey: k1), .refused)
+        XCTAssertEqual(integ.sasSignerAdoption(callId: F.callId, sessionKey: k2), .refused)
+    }
+
+    /// An honest rekey by the same key keeps the call clean: the live round's key is adopted.
+    func testRekeyBySameKeyBeforeTheConfirmationStaysAdoptable() throws {
+        let integ = QAudionCallIntegration()
+        _ = verdict(integ, try signedOffer(signer: keyA, round: 1))
+        _ = verdict(integ, try signedOffer(signer: keyA, round: 2))
+        let k2 = Data(repeating: 0x22, count: 32)
+        integ.recordKeyRound(callId: F.callId, key: k2, round: 2)
+        XCTAssertEqual(integ.sasSignerAdoption(callId: F.callId, sessionKey: k2), .adopt(keyA.pubRaw))
+        // a session key of no recorded round has nothing to adopt, and is not a conflict either
+        XCTAssertEqual(
+            integ.sasSignerAdoption(callId: F.callId, sessionKey: Data(repeating: 0x33, count: 32)), .notApplicable)
     }
 
     // MARK: - after the confirmation
@@ -176,6 +214,35 @@ final class CallScopedSasPinBookTests: XCTestCase {
         XCTAssertNil(book.signerAwaitingSas(callId: "c1", round: 4))
         XCTAssertEqual(book.signerAwaitingSas(callId: "c1", round: 5), key)
         XCTAssertEqual(book.signerAwaitingSas(callId: "c1", round: 12), key)
+    }
+
+    func testConflictRuleCandidateIsNeverReplacedAndAnotherAbortTaintsTheCall() {
+        let book = CallScopedSasPinBook()
+        // another key after the candidate: conflict, nothing adoptable, the candidate is not swapped
+        book.noteUnresolved(callId: "c1", round: 1, signerKey: key)
+        XCTAssertFalse(book.isConflicted(callId: "c1"))
+        book.noteUnresolved(callId: "c1", round: 2, signerKey: other)
+        XCTAssertTrue(book.isConflicted(callId: "C1"))
+        XCTAssertNil(book.signerAwaitingSas(callId: "c1", round: 1))
+        XCTAssertNil(book.signerAwaitingSas(callId: "c1", round: 2))
+        // an abort other than identity_unresolved BEFORE the first unresolved round taints the candidate that follows
+        book.noteOtherAbort(callId: "c2")
+        XCTAssertFalse(book.isConflicted(callId: "c2"), "no unresolved round: the ordinary path applies")
+        book.noteUnresolved(callId: "c2", round: 2, signerKey: key)
+        XCTAssertTrue(book.isConflicted(callId: "c2"))
+        XCTAssertNil(book.signerAwaitingSas(callId: "c2", round: 2))
+        // after the confirmation the book no longer judges rounds (the call-scoped pin does)
+        book.noteUnresolved(callId: "c3", round: 1, signerKey: key)
+        book.confirm(callId: "c3", key: key)
+        book.noteOtherAbort(callId: "c3")
+        book.noteUnresolved(callId: "c3", round: 2, signerKey: other)
+        XCTAssertFalse(book.isConflicted(callId: "c3"))
+        XCTAssertEqual(book.confirmedSigner(callId: "c3"), key)
+        // clearing forgets the conflict too
+        book.clear(callId: "c1")
+        XCTAssertFalse(book.isConflicted(callId: "c1"))
+        book.noteUnresolved(callId: "c1", round: 1, signerKey: other)
+        XCTAssertEqual(book.signerAwaitingSas(callId: "c1", round: 1), other)
     }
 
     func testStoredPinWinsOverTheCallScopedPin() {

@@ -168,6 +168,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         sasPins.signerAwaitingSas(callId: callId, round: keyRound(forSessionKey: sessionKey, callId: callId))
     }
 
+    /// What the user's SAS confirmation of the live round (`sessionKey`) does: `.refused` when the call
+    /// is in SAS-PIN conflict (a round its unresolved signer key cannot vouch for), `.adopt(key)` when the
+    /// live round was `identity_unresolved` (its signer key is pinned), `.notApplicable` otherwise.
+    public func sasSignerAdoption(callId: String, sessionKey: Data) -> SasSignerAdoption {
+        if sasPins.isConflicted(callId: callId) { return .refused }
+        if let key = signerKeyAwaitingSas(callId: callId, sessionKey: sessionKey) { return .adopt(key) }
+        return .notApplicable
+    }
+
     /// The user confirmed the SAS words of the round whose signer key is `key`: it is now this call's
     /// pin, so later key rounds of the call verify under it.
     public func confirmSasSigner(callId: String, key: Data) {
@@ -2998,10 +3007,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             advertisedRatchetV5: bundle.capabilities?.ratchetV5 ?? false,
             ratchetV5CapablePinned: isPeerRatchetV5Pinned?(peerId) ?? false
         )
-        // No pin and no server key: the round's signer key is remembered (never trusted) so that the
-        // user's SAS confirmation of THIS round can pin it.
-        if case .abort(let code) = verdict, code == "identity_unresolved" {
-            sasPins.noteUnresolved(callId: callId, round: bundle.rekeyRound, signerKey: bundleKey)
+        // No pin and no server key: the round's signer key (its signature verified under it) is
+        // remembered, never trusted, so that the user's SAS confirmation of THIS round can pin it. Any
+        // other abort of the call before that confirmation is a round the key cannot vouch for
+        // (`CallScopedSasPinBook` conflict rule).
+        if case .abort(let code) = verdict {
+            if code == "identity_unresolved" {
+                sasPins.noteUnresolved(callId: callId, round: bundle.rekeyRound, signerKey: bundleKey)
+            } else {
+                sasPins.noteOtherAbort(callId: callId)
+            }
         }
         return InboundCheck(verdict: verdict, transcript: transcript, peerFingerprint: peerFingerprint)
     }

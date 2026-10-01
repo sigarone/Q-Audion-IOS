@@ -112,6 +112,13 @@ public enum HandshakeSigningPolicy {
             guard isMember(bundleKey, of: set) else { return .abort(code: "identity_key_mismatch") }
             trustedKey = bundleKey
         } else {
+            // SAS-PIN: the signature is still checked under the bundle key (proof of possession), so only
+            // a round that key really signed is `identity_unresolved`, and a SAS confirmation of the call
+            // can only ever pin (or vouch for) a key that signed its rounds. A bundle claiming a key it did
+            // not sign with is `sig_invalid`, like on every other path.
+            guard HandshakeTranscript.verify(transcript: transcript, signature: signature, signerIdentityKey: bundleKey) else {
+                return .abort(code: "sig_invalid")
+            }
             return .abort(code: "identity_unresolved")
         }
 

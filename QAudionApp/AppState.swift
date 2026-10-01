@@ -1042,24 +1042,31 @@ final class AppState: ObservableObject {
     ///      so the caller can bind the SAS record to it and the contact shows as verified from then on.
     /// Never pins without this explicit confirmation, never overwrites an existing pin that differs
     /// (`identity_key_mismatch` keeps its behaviour), and only for a session key bound to the signed v5
-    /// transcript. Returns the confirmed signer key when this call adopted one, else `nil`. Call it BEFORE
-    /// the confirmation is recorded.
+    /// transcript. Returns `.adopt(key)` when this call adopted the live round's signer key, `.refused`
+    /// when the call is in SAS-PIN conflict (a round of it was not signed by its unresolved signer key: the
+    /// caller must then record and release NOTHING), `.notApplicable` otherwise (the ordinary path). Call
+    /// it BEFORE the confirmation is recorded.
     @discardableResult
-    func adoptSasConfirmedSignerKeyIfUnresolved() -> Data? {
+    func adoptSasConfirmedSignerKeyIfUnresolved() -> SasSignerAdoption {
         guard let peer = callContactId, !peer.isEmpty,
               let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
-              let sessionKey = callPqcSessionKey, !sessionKey.isEmpty else { return nil }
+              let sessionKey = callPqcSessionKey, !sessionKey.isEmpty else { return .notApplicable }
         var found: (integration: QAudionCallIntegration, key: Data)?
         for candidate in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
-            if let key = candidate.signerKeyAwaitingSas(callId: activeCallId, sessionKey: sessionKey) {
+            let adoption = candidate.sasSignerAdoption(callId: activeCallId, sessionKey: sessionKey)
+            if adoption == .refused {
+                RTLog.warn("call", "saspin adopt=0 conflict=2")
+                return .refused
+            }
+            if let key = adoption.adoptedKey {
                 found = (candidate, key)
                 break
             }
         }
-        guard let hit = found else { return nil }
+        guard let hit = found else { return .notApplicable }
         guard hit.integration.isSessionKeyTranscriptBound(callId: activeCallId) else {
             RTLog.warn("call", "saspin adopt=0 gate=1")
-            return nil
+            return .notApplicable
         }
         let store = PeerIdentityPinStore()
         let deviceId = peerDeviceId(for: peer)
@@ -1067,7 +1074,7 @@ final class AppState: ObservableObject {
             storedPin: store.pinnedKey(contactId: peer, deviceId: deviceId), confirmedKey: hit.key) {
         case .conflict:
             RTLog.warn("call", "saspin adopt=0 conflict=1")
-            return nil
+            return .notApplicable
         case .alreadyPinned:
             RTLog.info("call", "saspin adopt=1 durable=2")
         case .pin:
@@ -1081,7 +1088,7 @@ final class AppState: ObservableObject {
             }
         }
         hit.integration.confirmSasSigner(callId: activeCallId, key: hit.key)
-        return hit.key
+        return .adopt(hit.key)
     }
 
     /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both

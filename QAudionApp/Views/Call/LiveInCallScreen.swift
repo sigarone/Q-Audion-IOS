@@ -523,7 +523,14 @@ struct LiveInCallScreen: View {
         appState.adoptPendingIdentityRotationIfEligible()
         // SAS-PIN — with no pin and no server key (`identity_unresolved`) this confirmation is what
         // pins the signer key of the compared round (call-scoped and durable); see the AppState function.
-        let adoptedSignerKey = appState.adoptSasConfirmedSignerKeyIfUnresolved()
+        let adoption = appState.adoptSasConfirmedSignerKeyIfUnresolved()
+        guard adoption != .refused else {
+            // 4 = SAS-PIN conflict: a round of this call was not signed by its unresolved signer key, so the
+            // words cannot vouch for the live keys. Nothing is recorded, pinned or released.
+            RTLog.warn("call", "sasConfirm noop=1 reason=4")
+            return
+        }
+        let adoptedSignerKey = adoption.adoptedKey
         guard let identityTag = sasIdentityTag(for: peer)
                 ?? adoptedSignerKey.map({ SasVerificationStore.identityTag(forPinnedKey: $0) }) else {
             RTLog.warn("call", "sasConfirm noop=1 reason=3")  // 3 = no pinned identity tag
