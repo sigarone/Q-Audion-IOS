@@ -24,11 +24,17 @@ public struct GroupInboundVideoStat: Equatable, Sendable {
     public let mid: String
     public let packetsLost: Int
     public let packetsReceived: Int
+    /// Size of the last decoded frame (0 = none yet): which simulcast layer really flows,
+    /// the confirmation of a layer switch (`GroupLayerPolicy.onFrameSize`).
+    public let frameWidth: Int
+    public let frameHeight: Int
 
-    public init(mid: String, packetsLost: Int, packetsReceived: Int) {
+    public init(mid: String, packetsLost: Int, packetsReceived: Int, frameWidth: Int = 0, frameHeight: Int = 0) {
         self.mid = mid
         self.packetsLost = packetsLost
         self.packetsReceived = packetsReceived
+        self.frameWidth = frameWidth
+        self.frameHeight = frameHeight
     }
 }
 
@@ -442,7 +448,8 @@ public final class GroupMediaSession: @unchecked Sendable {
     private func registerVideoStreamsLocked() {
         for entry in remotePublishers.values {
             for stream in entry.streams where stream.isVideo && !stream.disabled {
-                policy.register(key: Self.key(feed: entry.id, mid: stream.mid))
+                policy.register(key: Self.key(feed: entry.id, mid: stream.mid),
+                                confirmsLayerSwitches: !stream.isScreenShare)
             }
         }
     }
@@ -649,9 +656,18 @@ public final class GroupMediaSession: @unchecked Sendable {
 
     // MARK: - Layer policy
 
+    private static func publisherMid(of key: String) -> String {
+        key.split(separator: "|").last.map(String.init) ?? key
+    }
+
     private func evaluatePolicy() {
         lock.lock()
-        let actions = policy.evaluate(nowMs: nowMs())
+        let now = nowMs()
+        let actions = policy.evaluate(nowMs: now)
+        // Janus sends at most one PLI per second per publisher stream and never retries a
+        // skipped one: a switch it has not confirmed in time is asked for again, identically
+        // (at most three re-sends per switch, then it is given up on).
+        let confirmations = policy.checkConfirmations(nowMs: now)
         var changed = false
         var reports: [GroupTelemetryEvent] = []
         for action in actions {
@@ -661,16 +677,26 @@ public final class GroupMediaSession: @unchecked Sendable {
             case .configure(let key, let substream, let temporal, let from, let reason):
                 desiredLayers[key] = (substream: substream, temporal: temporal)
                 appliedLayers[key] = nil
-                reports.append(GroupTelemetry.layer(mid: key.split(separator: "|").last.map(String.init) ?? key,
+                reports.append(GroupTelemetry.layer(mid: Self.publisherMid(of: key),
                                                     from: from, to: substream, reason: reason))
             }
+        }
+        var resent = false
+        for item in confirmations.resend {
+            // Forgetting that it was applied makes the next apply send the very same layer.
+            appliedLayers[item.key] = nil
+            resent = true
+            reports.append(GroupTelemetry.layerResend(mid: Self.publisherMid(of: item.key), to: item.substream, attempt: item.attempt))
+        }
+        for item in confirmations.abandoned {
+            reports.append(GroupTelemetry.layerUnconfirmed(mid: Self.publisherMid(of: item.key), to: item.substream))
         }
         lock.unlock()
         // Reported HERE, in order and before the `configure` it describes can be sent
         // (it used to hop onto a background queue: a report that arrived after the
         // request it belongs to, or seconds late on a loaded machine).
         for report in reports { emit(.telemetry(report)) }
-        if changed { scheduleReconcile() } else if !actions.isEmpty { scheduleLayerApply() }
+        if changed { scheduleReconcile() } else if !actions.isEmpty || resent { scheduleLayerApply() }
     }
 
     private func scheduleLayerApply() {
@@ -781,6 +807,10 @@ public final class GroupMediaSession: @unchecked Sendable {
         for video in stats.videos {
             guard let stream = subscriberStreams[video.mid], let feed = stream.feedId, let feedMid = stream.feedMid else { continue }
             let key = Self.key(feed: feed, mid: feedMid)
+            // The size of what is decoded tells which layer is really flowing.
+            if video.frameWidth > 0, video.frameHeight > 0 {
+                policy.onFrameSize(key: key, width: video.frameWidth, height: video.frameHeight)
+            }
             if let previous = lastStats[video.mid] {
                 policy.onLossSample(key: key,
                                     packetsLostDelta: video.packetsLost - previous.packetsLost,
@@ -820,6 +850,14 @@ public final class GroupMediaSession: @unchecked Sendable {
                             }
                         }
                     }
+                case .substream(let mid, let substream, _):
+                    // Janus says it switched a simulcast layer: that confirms the `configure`
+                    // that asked for it.
+                    lock.lock()
+                    if let stream = subscriberStreams[mid], let feed = stream.feedId, let feedMid = stream.feedMid {
+                        policy.onSubstreamConfirmed(key: Self.key(feed: feed, mid: feedMid), substream: substream)
+                    }
+                    lock.unlock()
                 default:
                     break
                 }
@@ -829,6 +867,12 @@ public final class GroupMediaSession: @unchecked Sendable {
             case .publishers(let list): mergePublishers(list)
             case .unpublished(let id), .leaving(let id): if id != "ok" { removePublisher(id) }
             case .kicked: emit(.kicked)
+            case .participantKicked(let id):
+                // Janus broadcasts `kicked: <id>` to everybody, and the server kicks on every
+                // ordinary leave: only our OWN pseudonym means we were kicked (any other is
+                // that publisher going away). Treating every one as our own kick made every
+                // phone in the room rejoin its media each time somebody left.
+                if id == room.pseudonym { emit(.kicked) } else { removePublisher(id) }
             case .destroyed: emit(.needsRejoin("room_destroyed"))
             default: break
             }

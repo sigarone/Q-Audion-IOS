@@ -13,8 +13,9 @@ import Foundation
 ///  * connection loss asks the server for a `group_call_media_rejoin` with a
 ///    short backoff (0.5 / 1 / 2 s), at most three times inside a minute, and
 ///    the counter is forgiven once the media has been stable for 30 s;
-///  * `throttled` (the server rate-limits repeated joins) is waited out;
-///  * everything else the server says is shown as a clear error.
+///  * everything else the server says is shown as a clear error (the server never answers
+///    a request that is over its budget, so an unanswered one is waited out by the
+///    controller's media-ready timeout, not here).
 public struct GroupMediaRecoveryPolicy: Sendable {
 
     public enum Trigger: Equatable, Sendable {
@@ -44,8 +45,6 @@ public struct GroupMediaRecoveryPolicy: Sendable {
         public var rejoinBackoffMs: [Int64] = [500, 1_000, 2_000]
         public var rejoinWindowMs: Int64 = 60_000
         public var stableAfterMs: Int64 = 30_000
-        public var throttledDelayMs: Int64 = 2_000
-        public var throttledMaxRetries = 3
         public var movedMax = 5
 
         public init() {}
@@ -54,7 +53,6 @@ public struct GroupMediaRecoveryPolicy: Sendable {
     public let config: Config
     private var rejoinTimes: [Int64] = []
     private var retriedJanusError = false
-    private var throttledRetries = 0
     private var movedCount = 0
     private var activeSinceMs: Int64?
 
@@ -76,7 +74,6 @@ public struct GroupMediaRecoveryPolicy: Sendable {
         if let since = activeSinceMs, nowMs - since >= config.stableAfterMs {
             rejoinTimes.removeAll()
             retriedJanusError = false
-            throttledRetries = 0
             movedCount = 0
         }
         activeSinceMs = nil
@@ -109,14 +106,11 @@ public struct GroupMediaRecoveryPolicy: Sendable {
 
         case .mediaUnavailable(let reason):
             switch reason {
-            case .throttled:
-                throttledRetries += 1
-                if throttledRetries > config.throttledMaxRetries { return .fail(.mediaLost) }
-                return .sendMediaJoin(delayMs: config.throttledDelayMs)
             case .noNode: return .fail(.noNode)
             case .roomCreateFailed: return .fail(.roomCreateFailed)
             case .notMember: return .fail(.notMember)
             case .full: return .fail(.full)
+            case .entitlement: return .fail(.entitlementRequired)
             case .other(let code): return .fail(.other(code))
             }
         }
@@ -130,6 +124,9 @@ public enum GroupCallMediaError: Equatable, Sendable {
     case roomCreateFailed
     case full
     case notMember
+    /// The server refused to establish the room for a member without the group-video
+    /// entitlement (iOS deviation 19): said once, never retried.
+    case entitlementRequired
     /// DTLS pin mismatch or a transport below the required level.
     case transportPolicy
     case mediaLost

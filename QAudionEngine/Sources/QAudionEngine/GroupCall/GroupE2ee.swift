@@ -178,17 +178,33 @@ public protocol GroupE2eeEnvironment: AnyObject {
 ///    30 minutes without a roster change) it generates K[self,E], installs it
 ///    for our own pseudonym, sends it to every OTHER current member and switches
 ///    our send index to E mod 16 once all members acked or after 1500 ms,
-///    whichever comes first, then forces a key frame.
+///    whichever comes first, then forces a key frame. Every epoch has its own
+///    pending switch and timer: a newer epoch never cancels an older, still valid
+///    one (epochs that bump faster than the 1.5 s window would otherwise keep the
+///    send slot where it was until the churn stops, and everyone who joined in
+///    between would hear nothing). Only a LEAVE discards the older pending
+///    switches: they would move the send slot to a key the leaver holds.
 ///  * Receivers install K[M,E] the moment it arrives at slot E mod 16 for M's
 ///    pseudonym and ack it. A key whose epoch is older than ours is refused, and
-///    so is a key whose `p` is not the pseudonym the roster gives its sender.
+///    so is a key whose `p` is not the pseudonym the roster gives its sender. A
+///    different key for a (member, epoch) already held REPLACES it (a member that
+///    restarted inside the server's ghost grace re-joins without an epoch bump and
+///    draws a new key for the same epoch), unless the epoch is older than the
+///    newest one held for that member (its slot may already be retired).
 ///  * 10 s after a sender switched to a newer epoch, its older ring slots are
 ///    overwritten with random bytes (receivers), and the sender wipes its own
 ///    older keys: a key that leaks later opens nothing that is still in flight.
 ///  * A frame with a missing key triggers `media_key_nack` (at most 4, every
-///    2 s per member); we answer at most 4 nacks per requester per epoch, and a
-///    nack that is ahead of our roster is not answered until the roster update
-///    arrives (which distributes our key of that epoch to every member).
+///    2 s per member). The native cryptor reports MISSING_KEY once per episode, so
+///    the first nack goes out at once and a timer repeats it while the key is
+///    still missing (a nack or its answer lost on the way is asked for again; a
+///    report that came before the roster named the sender is acted on as soon as
+///    it does). A run of DECRYPTION_FAILED that lasts longer than a second (a
+///    stale key in the slot the sender switched to) asks the same way for the
+///    CURRENT epoch, out of the same budget. We answer at most 4 nacks per
+///    requester per epoch, and a nack that is ahead of our roster is not answered
+///    until the roster update arrives (which distributes our key of that epoch to
+///    every member).
 ///  * Every key held here lives in a `GroupKeyBuffer` that is zeroed when the key
 ///    is retired, replaced, dropped or the call ends.
 ///
@@ -210,8 +226,26 @@ public final class GroupE2eeCoordinator {
         public var retireDelayMs: Int64 = 10_000
         /// Spec §12.7: nacks answered per requester per epoch.
         public var nackAnswerMax = 4
+        /// A run of DECRYPTION_FAILED of one sender must outlast this before it is nacked: one
+        /// report proves little (the sender may still be on the previous epoch's slot).
+        public var decryptNackAfterMs: Int64 = 1_000
+        /// A missing-key watch that finds nothing to do (the sender is not nameable yet, or
+        /// the key of the current epoch is already installed) gives up after this many ticks.
+        public var missingWatchIdleTicks = 8
 
         public init() {}
+    }
+
+    private struct PendingSwitch {
+        /// Members whose ack of this epoch's key is still awaited.
+        var awaiting: Set<String>
+        var timer: GroupE2eeTimer?
+    }
+
+    /// A run of DECRYPTION_FAILED of one sender, opened under `epoch`.
+    private struct DecryptRun {
+        var epoch: UInt32
+        var sinceMs: Int64
     }
 
     private struct PendingKey {
@@ -237,8 +271,14 @@ public final class GroupE2eeCoordinator {
     private var pseudonyms: [String: String] = [:]
     private var ownKeys: [UInt32: GroupKeyBuffer] = [:]
     private var installed: [String: [UInt32: GroupKeyBuffer]] = [:]
-    private var awaitingAcks: Set<String> = []
-    private var switchTimer: GroupE2eeTimer?
+    /// Epochs whose send-slot switch still waits for its acks or its timer.
+    private var pendingSwitches: [UInt32: PendingSwitch] = [:]
+    /// pseudonym -> the timer that keeps asking for its key while the cryptor lacks it.
+    private var missingWatches: [String: GroupE2eeTimer] = [:]
+    private var missingIdleTicks: [String: Int] = [:]
+    /// user -> the failing run, and the timer that turns a long one into nacks.
+    private var decryptRuns: [String: DecryptRun] = [:]
+    private var decryptTimers: [String: GroupE2eeTimer] = [:]
     private var ownRetireTimer: GroupE2eeTimer?
     private var retireTimers: [String: GroupE2eeTimer] = [:]
     private var pending: [PendingKey] = []
@@ -268,6 +308,7 @@ public final class GroupE2eeCoordinator {
     public func onRoster(epoch newEpoch: UInt32, members newMembers: [String], pseudonyms newPseudonyms: [String: String]) {
         guard !stopped else { return }
         guard newEpoch >= epoch else { return }
+        let someoneLeft = !Set(members).subtracting(newMembers).isEmpty
         members = newMembers
         pseudonyms = newPseudonyms
         let departed = Set(installed.keys).subtracting(newMembers)
@@ -277,15 +318,19 @@ public final class GroupE2eeCoordinator {
             retireTimers[user]?.cancel()
             retireTimers[user] = nil
             nackState[user] = nil
+            endDecryptRun(of: user)
             lastResendMs = lastResendMs.filter { !$0.key.hasPrefix("\(user)|") }
             nackAnswers = nackAnswers.filter { !$0.key.hasPrefix("\(user)|") }
         }
-        awaitingAcks.formIntersection(newMembers)
+        if someoneLeft {
+            // The older keys went to the leaver too: a switch to one of them is pointless,
+            // the roster that carries the departure starts a newer epoch. A join-only bump
+            // never discards anything.
+            for pendingEpoch in Array(pendingSwitches.keys) where pendingEpoch < newEpoch { dropPendingSwitch(pendingEpoch) }
+        }
+        for pendingEpoch in Array(pendingSwitches.keys) { pendingSwitches[pendingEpoch]?.awaiting.formIntersection(newMembers) }
         if newEpoch > epoch {
             epoch = newEpoch
-            switchTimer?.cancel()
-            switchTimer = nil
-            awaitingAcks = []
             // "max 4 nacks every 2 s" is per missing (member, epoch): the budget
             // spent on an older epoch must not silence the nack for this one.
             nackState.removeAll()
@@ -294,8 +339,14 @@ public final class GroupE2eeCoordinator {
         }
         distributeOwnKeyIfNeeded()
         // Everyone still awaited left the call: nobody is left to wait for.
-        if newEpoch == epoch, awaitingAcks.isEmpty, ownKeys[epoch] != nil { switchSendIndex() }
+        let settled = pendingSwitches.filter { $0.value.awaiting.isEmpty }.keys.max()
+        if let target = settled { switchSendIndex(to: target) }
         flushPending()
+    }
+
+    private func dropPendingSwitch(_ target: UInt32) {
+        pendingSwitches[target]?.timer?.cancel()
+        pendingSwitches[target] = nil
     }
 
     // MARK: Control envelopes
@@ -308,9 +359,12 @@ public final class GroupE2eeCoordinator {
             guard keyEpoch >= epoch, let buffer = GroupKeyBuffer(key) else { return }
             receiveKey(from: user, epoch: keyEpoch, index: index, key: buffer, claimedPseudonym: claimedPseudonym)
         case .ack(_, let ackEpoch):
-            guard ackEpoch == epoch else { return }
-            awaitingAcks.remove(user)
-            if awaitingAcks.isEmpty { switchSendIndex() }
+            // Only an epoch whose switch is still pending counts (a stale, future or
+            // already switched one changes nothing).
+            guard var awaited = pendingSwitches[ackEpoch] else { return }
+            awaited.awaiting.remove(user)
+            pendingSwitches[ackEpoch] = awaited
+            if awaited.awaiting.isEmpty { switchSendIndex(to: ackEpoch) }
         case .nack(_, let nackEpoch):
             // A nack for an epoch NEWER than ours means the requester's roster is
             // ahead of ours (spec §12.7): nothing is answered until our own update
@@ -324,25 +378,160 @@ public final class GroupE2eeCoordinator {
     /// The native FrameCryptor of the receiver of `pseudonym` reported a
     /// missing key.
     public func onMissingKey(pseudonym: String) {
-        guard !stopped, let user = pseudonyms.first(where: { $0.value == pseudonym })?.key, user != selfUserId else { return }
+        guard !stopped else { return }
         env.emit(GroupTelemetry.e2ee(.missingKey, epoch: epoch))
+        missingKeyStep(pseudonym: pseudonym, fromTimer: false)
+    }
+
+    /// One look at a sender whose key the cryptor lacks: sends the nack the budget and the
+    /// spacing allow, and keeps (or starts) the timer that looks again while it makes sense.
+    private func missingKeyStep(pseudonym: String, fromTimer: Bool) {
+        guard let user = pseudonyms.first(where: { $0.value == pseudonym })?.key else {
+            // Not nameable yet (the roster has not arrived): nothing to ask for, look again.
+            keepWatchingMissingKey(pseudonym: pseudonym, idle: true, fromTimer: fromTimer)
+            return
+        }
+        guard user != selfUserId, members.contains(user), epoch > 0 else {
+            if user == selfUserId || !members.contains(user) {
+                stopWatchingMissingKey(pseudonym: pseudonym)
+            } else {
+                keepWatchingMissingKey(pseudonym: pseudonym, idle: true, fromTimer: fromTimer)
+            }
+            return
+        }
+        // The key of the current epoch is here: the sender is ahead of us (its frames use
+        // a slot we hold no key for yet), nothing a nack for OUR epoch could fix.
+        if (installed[user]?.keys.max() ?? 0) >= epoch {
+            stopWatchingMissingKey(pseudonym: pseudonym)
+            return
+        }
         let now = env.nowMs()
         let state = nackState[user] ?? (attempts: 0, lastMs: Int64.min / 4)
-        guard state.attempts < config.nackMaxAttempts, now - state.lastMs >= config.nackIntervalMs else { return }
+        if state.attempts >= config.nackMaxAttempts {
+            stopWatchingMissingKey(pseudonym: pseudonym)
+            return
+        }
+        guard now - state.lastMs >= config.nackIntervalMs else {
+            keepWatchingMissingKey(pseudonym: pseudonym, idle: false, fromTimer: fromTimer)
+            return
+        }
         nackState[user] = (attempts: state.attempts + 1, lastMs: now)
         env.emit(GroupTelemetry.e2ee(.nack, epoch: epoch))
         send(.nack(callId: callId, epoch: epoch), to: user)
+        if state.attempts + 1 < config.nackMaxAttempts {
+            keepWatchingMissingKey(pseudonym: pseudonym, idle: false, fromTimer: fromTimer)
+        } else {
+            stopWatchingMissingKey(pseudonym: pseudonym)
+        }
     }
 
+    private func keepWatchingMissingKey(pseudonym: String, idle: Bool, fromTimer: Bool) {
+        if idle {
+            let ticks = (missingIdleTicks[pseudonym] ?? 0) + (fromTimer ? 1 : 0)
+            if ticks > config.missingWatchIdleTicks {
+                stopWatchingMissingKey(pseudonym: pseudonym)
+                return
+            }
+            missingIdleTicks[pseudonym] = ticks
+        } else {
+            missingIdleTicks[pseudonym] = 0
+        }
+        if fromTimer { missingWatches[pseudonym] = nil }
+        guard missingWatches[pseudonym] == nil else { return }
+        missingWatches[pseudonym] = env.schedule(afterMs: config.nackIntervalMs) { [weak self] in
+            guard let self = self, !self.stopped else { return }
+            self.missingWatches[pseudonym] = nil
+            self.missingKeyStep(pseudonym: pseudonym, fromTimer: true)
+        }
+    }
+
+    private func stopWatchingMissingKey(pseudonym: String) {
+        missingWatches[pseudonym]?.cancel()
+        missingWatches[pseudonym] = nil
+        missingIdleTicks[pseudonym] = nil
+    }
+
+    /// The native cryptor of `pseudonym` decrypts again: a missing-key watch and a failing
+    /// run of that sender are over.
+    public func onCryptorOk(pseudonym: String) {
+        guard !stopped else { return }
+        stopWatchingMissingKey(pseudonym: pseudonym)
+        if let user = pseudonyms.first(where: { $0.value == pseudonym })?.key { endDecryptRun(of: user) }
+    }
+
+    /// The native cryptor of `pseudonym` reported DECRYPTION_FAILED. One report proves
+    /// little, so it only opens a run: when the run is still open `decryptNackAfterMs`
+    /// later (no OK from the cryptor, no key installed, no departure, the same epoch still
+    /// current) that member is asked for the CURRENT epoch's key, out of the same budget as
+    /// a missing key. A run that spans an epoch change starts over.
     public func onDecryptFailure(pseudonym: String) {
         guard !stopped else { return }
         env.emit(GroupTelemetry.e2ee(.decryptFail, epoch: epoch))
+        guard let user = pseudonyms.first(where: { $0.value == pseudonym })?.key,
+              user != selfUserId, members.contains(user), epoch > 0 else { return }
+        if decryptRuns[user] == nil { decryptRuns[user] = DecryptRun(epoch: epoch, sinceMs: env.nowMs()) }
+        if decryptTimers[user] == nil { scheduleDecryptCheck(of: user, afterMs: config.decryptNackAfterMs + 1) }
+    }
+
+    private func scheduleDecryptCheck(of user: String, afterMs: Int64) {
+        decryptTimers[user] = env.schedule(afterMs: afterMs) { [weak self] in
+            guard let self = self, !self.stopped else { return }
+            self.decryptTimers[user] = nil
+            self.checkDecryptRun(of: user)
+        }
+    }
+
+    private func endDecryptRun(of user: String) {
+        decryptRuns[user] = nil
+        decryptTimers[user]?.cancel()
+        decryptTimers[user] = nil
+    }
+
+    private func checkDecryptRun(of user: String) {
+        guard var run = decryptRuns[user], members.contains(user), epoch > 0 else {
+            endDecryptRun(of: user)
+            return
+        }
+        let now = env.nowMs()
+        if run.epoch != epoch {
+            // The roster moved on: the failures so far belong to the previous epoch.
+            run = DecryptRun(epoch: epoch, sinceMs: now)
+            decryptRuns[user] = run
+            scheduleDecryptCheck(of: user, afterMs: config.decryptNackAfterMs + 1)
+            return
+        }
+        if now - run.sinceMs <= config.decryptNackAfterMs {
+            scheduleDecryptCheck(of: user, afterMs: config.decryptNackAfterMs - (now - run.sinceMs) + 1)
+            return
+        }
+        let state = nackState[user] ?? (attempts: 0, lastMs: Int64.min / 4)
+        if state.attempts >= config.nackMaxAttempts {
+            endDecryptRun(of: user)
+            return
+        }
+        if now - state.lastMs >= config.nackIntervalMs {
+            nackState[user] = (attempts: state.attempts + 1, lastMs: now)
+            env.emit(GroupTelemetry.e2ee(.nack, epoch: epoch))
+            send(.nack(callId: callId, epoch: epoch), to: user)
+            if state.attempts + 1 >= config.nackMaxAttempts {
+                endDecryptRun(of: user)
+                return
+            }
+            scheduleDecryptCheck(of: user, afterMs: config.nackIntervalMs)
+        } else {
+            scheduleDecryptCheck(of: user, afterMs: config.nackIntervalMs - (now - state.lastMs))
+        }
     }
 
     public func stop() {
         stopped = true
-        switchTimer?.cancel()
-        switchTimer = nil
+        for pendingEpoch in Array(pendingSwitches.keys) { dropPendingSwitch(pendingEpoch) }
+        for timer in missingWatches.values { timer.cancel() }
+        missingWatches.removeAll()
+        missingIdleTicks.removeAll()
+        for timer in decryptTimers.values { timer.cancel() }
+        decryptTimers.removeAll()
+        decryptRuns.removeAll()
         ownRetireTimer?.cancel()
         ownRetireTimer = nil
         for timer in retireTimers.values { timer.cancel() }
@@ -353,7 +542,6 @@ public final class GroupE2eeCoordinator {
         installed.removeAll()
         for entry in pending { entry.key.wipe() }
         pending.removeAll()
-        awaitingAcks.removeAll()
         nackState.removeAll()
         nackAnswers.removeAll()
     }
@@ -370,26 +558,32 @@ public final class GroupE2eeCoordinator {
         ownKeys = ownKeys.filter { GroupE2ee.withinRing($0.key, newest: epoch) }
         env.installKey(key.data, index: GroupE2ee.keyIndex(forEpoch: epoch), participantId: selfPseudonym)
         let recipients = members.filter { $0 != selfUserId }
-        awaitingAcks = Set(recipients)
-        for user in recipients { sendKey(to: user, epoch: epoch, attempt: 0) }
-        env.emit(GroupTelemetry.e2ee(.keySent, epoch: epoch))
+        let target = epoch
+        // Its own pending switch, with its own timer: an earlier epoch's one is still valid.
+        pendingSwitches[target] = PendingSwitch(awaiting: Set(recipients), timer: nil)
+        for user in recipients { sendKey(to: user, epoch: target, attempt: 0) }
+        env.emit(GroupTelemetry.e2ee(.keySent, epoch: target))
         if recipients.isEmpty {
-            switchSendIndex()
+            switchSendIndex(to: target)
         } else {
-            let target = epoch
-            switchTimer = env.schedule(afterMs: config.ackWaitMs) { [weak self] in
-                guard let self = self, self.epoch == target else { return }
-                self.switchSendIndex()
+            let timer = env.schedule(afterMs: config.ackWaitMs) { [weak self] in
+                self?.switchSendIndex(to: target)
             }
+            pendingSwitches[target]?.timer = timer
         }
     }
 
-    private func switchSendIndex() {
-        guard sendingEpoch != epoch, ownKeys[epoch] != nil else { return }
-        switchTimer?.cancel()
-        switchTimer = nil
-        sendingEpoch = epoch
-        env.setSendKeyIndex(GroupE2ee.keyIndex(forEpoch: epoch))
+    /// Moves our send slot to `target` (acked by everyone, or the wait is over). Switching
+    /// makes every older pending switch moot: the send slot never moves backwards.
+    private func switchSendIndex(to target: UInt32) {
+        guard !stopped, pendingSwitches[target] != nil else { return }
+        guard target > sendingEpoch, ownKeys[target] != nil else {
+            dropPendingSwitch(target)
+            return
+        }
+        for pendingEpoch in Array(pendingSwitches.keys) where pendingEpoch <= target { dropPendingSwitch(pendingEpoch) }
+        sendingEpoch = target
+        env.setSendKeyIndex(GroupE2ee.keyIndex(forEpoch: target))
         env.requestKeyFrame()
         scheduleOwnRetire()
     }
@@ -498,10 +692,28 @@ public final class GroupE2eeCoordinator {
             key.wipe()
             return
         }
+        let newestHeld = installed[user]?.keys.max()
         if let existing = installed[user]?[keyEpoch] {
-            // A retransmission of the very same key is acked again; a
-            // different key for the same (member, epoch) is never accepted.
-            if existing.matches(key) { send(.ack(callId: callId, epoch: keyEpoch), to: user) }
+            // A retransmission of the very same key is acked again.
+            if existing.matches(key) {
+                send(.ack(callId: callId, epoch: keyEpoch), to: user)
+                key.wipe()
+                return
+            }
+            // A DIFFERENT key for a (member, epoch) we hold: that member restarted inside the
+            // server's ghost grace, re-joined without an epoch bump and drew a new key for
+            // the same epoch (Android and desktop replace it as well; refusing it would leave
+            // this member's media undecryptable until the next epoch). The pseudonym binding
+            // and the epoch check above already authenticated the sender. Never for an epoch
+            // older than the newest one held for that member: its slot may be retired.
+            guard keyEpoch >= (newestHeld ?? 0) else {
+                key.wipe()
+                return
+            }
+            existing.wipe()
+        } else if let newest = newestHeld, keyEpoch < newest {
+            // Older than what we hold for this sender: its slot may already be retired,
+            // never reopen it.
             key.wipe()
             return
         }
@@ -513,6 +725,9 @@ public final class GroupE2eeCoordinator {
         perUser = perUser.filter { GroupE2ee.withinRing($0.key, newest: newest) }
         installed[user] = perUser
         nackState[user] = nil
+        stopWatchingMissingKey(pseudonym: pseudonym)
+        // New key material for this sender: whatever was failing to decrypt is judged afresh.
+        endDecryptRun(of: user)
         scheduleRetire(of: user)
         env.emit(GroupTelemetry.e2ee(.keyInstalled, epoch: keyEpoch))
         send(.ack(callId: callId, epoch: keyEpoch), to: user)

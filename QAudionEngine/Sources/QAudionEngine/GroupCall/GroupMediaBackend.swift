@@ -76,6 +76,8 @@ public protocol GroupMediaBackend: AnyObject {
     /// participant (a publisher pseudonym).
     var onMissingKey: ((String) -> Void)? { get set }
     var onDecryptFailure: ((String) -> Void)? { get set }
+    /// A receiver cryptor decrypts again: a failing run of that sender is over.
+    var onCryptorOk: ((String) -> Void)? { get set }
 
     /// Fresh key store for a new call.
     func beginCall()

@@ -202,6 +202,97 @@ final class GroupLayerPolicyTests: XCTestCase {
         XCTAssertEqual(policy.ceiling(key: a), 0)
     }
 
+    // MARK: confirmation of a switch (R1)
+
+    /// Janus sends at most one PLI per second per publisher stream and never retries a skipped one, so
+    /// a switch can stay stuck on the old substream: an unconfirmed `configure` is asked for again.
+    func testAnUnconfirmedConfigureIsAskedAgainEveryFourSecondsAtMostThreeTimesThenGivenUp() {
+        let policy = makePolicy([a])
+        policy.setTile(key: a, tile: .fullscreen, visible: true)
+        _ = policy.evaluate(nowMs: 0)                                        // configure substream 2
+        XCTAssertEqual(policy.awaitedSubstream(key: a), 2)
+        XCTAssertTrue(policy.checkConfirmations(nowMs: 3_999).isEmpty)
+        XCTAssertEqual(policy.checkConfirmations(nowMs: 4_000).resend, [GroupLayerPolicy.Resend(key: a, substream: 2, attempt: 1)])
+        XCTAssertTrue(policy.checkConfirmations(nowMs: 7_999).isEmpty, "the window restarts with each re-send")
+        XCTAssertEqual(policy.checkConfirmations(nowMs: 8_000).resend, [GroupLayerPolicy.Resend(key: a, substream: 2, attempt: 2)])
+        XCTAssertEqual(policy.checkConfirmations(nowMs: 12_000).resend, [GroupLayerPolicy.Resend(key: a, substream: 2, attempt: 3)])
+        let last = policy.checkConfirmations(nowMs: 16_000)
+        XCTAssertTrue(last.resend.isEmpty, "at most three re-sends per switch")
+        XCTAssertEqual(last.abandoned, [GroupLayerPolicy.Abandoned(key: a, substream: 2)])
+        XCTAssertTrue(policy.checkConfirmations(nowMs: 100_000).isEmpty, "given up on: nothing more")
+        XCTAssertNil(policy.awaitedSubstream(key: a))
+        XCTAssertEqual(policy.currentSubstream(key: a), 2, "the layer stays as it was requested")
+    }
+
+    func testAJanusSubstreamEventConfirmsTheSwitch() {
+        let policy = makePolicy([a])
+        policy.setTile(key: a, tile: .fullscreen, visible: true)
+        _ = policy.evaluate(nowMs: 0)
+        policy.onSubstreamConfirmed(key: a, substream: 1)                     // another layer: not this switch
+        XCTAssertEqual(policy.awaitedSubstream(key: a), 2)
+        policy.onSubstreamConfirmed(key: a, substream: 2)
+        XCTAssertNil(policy.awaitedSubstream(key: a))
+        XCTAssertTrue(policy.checkConfirmations(nowMs: 60_000).isEmpty)
+    }
+
+    func testTheSizeOfTheDecodedFramesConfirmsTheSwitchByTheirLongSide() {
+        let policy = makePolicy([a])
+        policy.setTile(key: a, tile: .fullscreen, visible: true)
+        _ = policy.evaluate(nowMs: 0)
+        policy.onFrameSize(key: a, width: 640, height: 360)                   // still the middle layer
+        XCTAssertEqual(policy.awaitedSubstream(key: a), 2)
+        policy.onFrameSize(key: a, width: 0, height: 0)                       // says nothing
+        XCTAssertEqual(policy.awaitedSubstream(key: a), 2)
+        policy.onFrameSize(key: a, width: 720, height: 1280)                  // a portrait stream counts like a landscape one
+        XCTAssertNil(policy.awaitedSubstream(key: a))
+    }
+
+    func testSubstreamForSizeClassesTheLadderByTheLongSide() {
+        XCTAssertEqual(GroupLayerPolicy.substreamForSize(width: 320, height: 180), 0)
+        XCTAssertEqual(GroupLayerPolicy.substreamForSize(width: 479, height: 270), 0)
+        XCTAssertEqual(GroupLayerPolicy.substreamForSize(width: 480, height: 270), 1)
+        XCTAssertEqual(GroupLayerPolicy.substreamForSize(width: 640, height: 360), 1)
+        XCTAssertEqual(GroupLayerPolicy.substreamForSize(width: 959, height: 540), 1)
+        XCTAssertEqual(GroupLayerPolicy.substreamForSize(width: 960, height: 540), 2)
+        XCTAssertEqual(GroupLayerPolicy.substreamForSize(width: 1280, height: 720), 2)
+        XCTAssertNil(GroupLayerPolicy.substreamForSize(width: 0, height: 0))
+        XCTAssertNil(GroupLayerPolicy.substreamForSize(width: -1, height: -5))
+    }
+
+    func testANewConfigureReplacesTheUnconfirmedOneAndStartsItsOwnWindow() {
+        let policy = makePolicy([a])
+        policy.setTile(key: a, tile: .fullscreen, visible: true)
+        _ = policy.evaluate(nowMs: 0)                                        // substream 2, unconfirmed
+        policy.setTile(key: a, tile: .grid, visible: true)
+        _ = policy.evaluate(nowMs: 2_000)                                    // substream 1 replaces it
+        XCTAssertEqual(policy.awaitedSubstream(key: a), 1)
+        XCTAssertTrue(policy.checkConfirmations(nowMs: 4_000).isEmpty, "the old window must not time the new request")
+        XCTAssertEqual(policy.checkConfirmations(nowMs: 6_000).resend, [GroupLayerPolicy.Resend(key: a, substream: 1, attempt: 1)])
+    }
+
+    func testAnUnsubscribedStreamIsNeverAskedAgain() {
+        let policy = makePolicy([a, b])
+        policy.setTile(key: a, tile: .fullscreen, visible: true)
+        _ = policy.evaluate(nowMs: 0)
+        policy.setTile(key: a, tile: .fullscreen, visible: false)
+        _ = policy.evaluate(nowMs: 100)                                      // unsubscribed
+        let late = policy.checkConfirmations(nowMs: 4_100)
+        XCTAssertEqual(late.resend.map { $0.key }, [b], "only the stream that is still subscribed")
+        policy.unregister(key: b)
+        XCTAssertTrue(policy.checkConfirmations(nowMs: 20_000).isEmpty)
+    }
+
+    /// A screen share is not simulcast: no `substream` event, frame sizes of its own: a switch of it
+    /// is never awaited, so it never costs three pointless re-sends and a telemetry event.
+    func testAScreenShareStreamNeverAwaitsAConfirmation() {
+        let policy = GroupLayerPolicy()
+        policy.register(key: "feedS|2", confirmsLayerSwitches: false)
+        policy.setTile(key: "feedS|2", tile: .fullscreen, visible: true)
+        XCTAssertEqual(configures(policy.evaluate(nowMs: 0)).count, 1)
+        XCTAssertNil(policy.awaitedSubstream(key: "feedS|2"))
+        XCTAssertTrue(policy.checkConfirmations(nowMs: 60_000).isEmpty)
+    }
+
     // MARK: bookkeeping
 
     func testUnregisteredStreamsAreForgotten() {

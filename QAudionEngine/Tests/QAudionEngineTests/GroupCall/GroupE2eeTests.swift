@@ -254,15 +254,56 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         XCTAssertEqual(env.sendIndexes, env.installs.map { $0.index })
     }
 
-    func testANewEpochCancelsThePendingSwitchOfTheOldOne() {
+    /// Epoch bumps that come closer together than the 1.5 s window (several people joining) must
+    /// not starve the send slot: every epoch has its own pending switch and timer, and everybody
+    /// who joined meanwhile does not hold the older slot's key.
+    func testANewerEpochNeverCancelsTheStillValidPendingSwitchOfAnOlderOne() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 5, members: [selfUser, userB], pseudonyms: pseudonyms)           // due at +1500
+        env.advance(1_000)
+        coordinator.onRoster(epoch: 6, members: [selfUser, userB, userC], pseudonyms: pseudonyms)   // a JOIN: due at +2500
+        env.advance(499)
+        XCTAssertTrue(env.sendIndexes.isEmpty)
+        env.advance(1)                                        // epoch 5's own window ends
+        XCTAssertEqual(env.sendIndexes, [5], "epoch 5's switch was not cancelled by epoch 6")
+        XCTAssertEqual(coordinator.sendingEpoch, 5)
+        env.advance(1_000)                                    // epoch 6's window ends
+        XCTAssertEqual(env.sendIndexes, [5, 6])
+        XCTAssertEqual(coordinator.sendingEpoch, 6)
+    }
+
+    /// Only a LEAVE discards the older pending switches: they would move the send slot to a key the
+    /// leaver holds.
+    func testALeaveDiscardsTheOlderPendingSwitchesButAJoinDoesNot() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 5, members: [selfUser, userB, userC], pseudonyms: pseudonyms)
+        env.advance(500)
+        coordinator.onRoster(epoch: 6, members: [selfUser, userB], pseudonyms: pseudonyms)           // userC left
+        env.advance(1_500)
+        XCTAssertEqual(env.sendIndexes, [6], "the switch to epoch 5 (a key userC holds) never happens")
+    }
+
+    func testAnAckCompletesTheSwitchOfItsOwnEpochEvenWhenANewerOneIsPending() {
         let (coordinator, env) = make()
         coordinator.onRoster(epoch: 5, members: [selfUser, userB], pseudonyms: pseudonyms)
-        env.advance(1_000)
+        coordinator.onRoster(epoch: 6, members: [selfUser, userB, userC], pseudonyms: pseudonyms)
+        coordinator.onEnvelope(.ack(callId: call, epoch: 5), from: userB)
+        XCTAssertEqual(env.sendIndexes, [5])
+        coordinator.onEnvelope(.ack(callId: call, epoch: 6), from: userB)
+        XCTAssertEqual(env.sendIndexes, [5], "userC has not acked epoch 6 yet")
+        coordinator.onEnvelope(.ack(callId: call, epoch: 6), from: userC)
+        XCTAssertEqual(env.sendIndexes, [5, 6])
+    }
+
+    func testSwitchingToANewerEpochMakesTheOlderPendingOneMoot() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 5, members: [selfUser, userB], pseudonyms: pseudonyms)
         coordinator.onRoster(epoch: 6, members: [selfUser, userB], pseudonyms: pseudonyms)
-        env.advance(1_000)                                    // the epoch-5 timer would have fired here
-        XCTAssertTrue(env.sendIndexes.isEmpty)
-        env.advance(500)
+        coordinator.onEnvelope(.ack(callId: call, epoch: 6), from: userB)
         XCTAssertEqual(env.sendIndexes, [6])
+        env.advance(5_000)
+        coordinator.onEnvelope(.ack(callId: call, epoch: 5), from: userB)
+        XCTAssertEqual(env.sendIndexes, [6], "the send slot never moves backwards")
     }
 
     func testAStaleRosterIsIgnoredAndASameEpochRosterOnlyUpdatesPseudonyms() {
@@ -382,7 +423,7 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         XCTAssertEqual(env.installs[0].index, 10)
     }
 
-    func testARetransmittedKeyIsAckedAgainButNotReinstalledAndADifferentKeyIsRefused() {
+    func testARetransmittedKeyIsAckedAgainButNotReinstalled() {
         let (coordinator, env) = make()
         coordinator.onRoster(epoch: 4, members: [selfUser, userB], pseudonyms: pseudonyms)
         env.installs.removeAll()
@@ -391,9 +432,35 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         coordinator.onEnvelope(mediaKey(epoch: 4, fill: 5), from: userB)
         XCTAssertEqual(env.installs.count, 1)
         XCTAssertEqual(env.parsedSent().count, 2, "two acks")
+    }
+
+    /// A member that restarts inside the server's ghost grace re-joins WITHOUT an epoch bump and draws a
+    /// NEW key for the same epoch. Android and desktop replace the old one; keeping it would leave this
+    /// member's audio and video undecryptable until the next epoch.
+    func testADifferentKeyForTheSameMemberAndEpochReplacesTheOldOneAndIsAcked() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 4, members: [selfUser, userB], pseudonyms: pseudonyms)
+        coordinator.onEnvelope(mediaKey(epoch: 4, fill: 5), from: userB)
+        env.installs.removeAll()
+        env.sent.removeAll()
         coordinator.onEnvelope(mediaKey(epoch: 4, fill: 6), from: userB)
-        XCTAssertEqual(env.installs.count, 1, "a different key for the same (member, epoch) is never accepted")
-        XCTAssertEqual(env.parsedSent().count, 2)
+        XCTAssertEqual(env.installs, [.init(key: Data(repeating: 6, count: 32), index: 4, participantId: GroupCallFixtures.pseudoB)])
+        XCTAssertEqual(env.parsedSent().map { $0.envelope }, [.ack(callId: call, epoch: 4)])
+        XCTAssertEqual(coordinator.heldKeys(of: userB)[4]?.data, Data(repeating: 6, count: 32))
+    }
+
+    /// The slot of an older epoch may already be retired (overwritten with random bytes): a key that is
+    /// older than the newest one held for that member never reopens it.
+    func testAKeyOlderThanTheNewestOneHeldForTheMemberIsNeverInstalled() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 4, members: [selfUser, userB], pseudonyms: pseudonyms)
+        coordinator.onEnvelope(mediaKey(epoch: 5, fill: 1), from: userB)                 // B is already one epoch ahead
+        env.installs.removeAll()
+        env.sent.removeAll()
+        coordinator.onEnvelope(mediaKey(epoch: 4, fill: 2), from: userB)                 // not older than OUR epoch, older than B's newest
+        XCTAssertTrue(env.installs.isEmpty)
+        XCTAssertTrue(env.sent.isEmpty, "no ack for a refused key")
+        XCTAssertEqual(Set(coordinator.heldKeys(of: userB).keys), [5])
     }
 
     func testAKeyFromAnUnknownSenderIsHeldUntilTheRosterIntroducesThem() {
@@ -464,18 +531,95 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         XCTAssertTrue(env.e2eeEvents().contains("nack"))
     }
 
-    func testAnInstalledKeyResetsTheNackBudget() {
+    func testAnInstalledKeyOfTheCurrentEpochEndsTheNackingOfThatSender() {
         let (coordinator, env) = make()
         coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
-        for _ in 0..<4 {
-            coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
-            env.now += 2_000
-        }
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
         coordinator.onEnvelope(mediaKey(epoch: 3, fill: 3), from: userB)
         env.sent.removeAll()
         env.now += 2_000
+        // The key of the current epoch is here: a sender that is still undecryptable is ahead of
+        // us (its frames use a slot we hold no key for yet), nothing a nack for OUR epoch can fix.
         coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
-        XCTAssertEqual(env.parsedSent().count, 1)
+        env.advance(30_000)
+        XCTAssertTrue(env.parsedSent().isEmpty)
+    }
+
+    // MARK: missing key: the nack is repeated by a timer (E2EE-5)
+
+    private func nackCount(_ env: FakeE2eeEnvironment) -> Int {
+        env.parsedSent().filter { if case .nack = $0.envelope { return true } else { return false } }.count
+    }
+
+    /// The native cryptor reports MISSING_KEY once per episode: one report must be enough, a nack (or
+    /// its answer) that was lost on the way is asked for again every 2 s, at most four times.
+    func testOneMissingKeyReportIsNackedAgainByATimerUpToTheBudget() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        XCTAssertEqual(nackCount(env), 1)
+        env.advance(1_999)
+        XCTAssertEqual(nackCount(env), 1)
+        env.advance(1)
+        XCTAssertEqual(nackCount(env), 2)
+        env.advance(2_000)
+        XCTAssertEqual(nackCount(env), 3)
+        env.advance(2_000)
+        XCTAssertEqual(nackCount(env), 4)
+        env.advance(60_000)
+        XCTAssertEqual(nackCount(env), 4, "bounded: four attempts")
+    }
+
+    func testTheMissingKeyTimerStopsWhenTheKeyArrivesOrTheCryptorDecryptsAgain() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        coordinator.onEnvelope(mediaKey(epoch: 3, fill: 3), from: userB)
+        env.advance(30_000)
+        XCTAssertEqual(nackCount(env), 1, "the key arrived: nothing more is asked")
+        // A second episode, ended by the cryptor itself.
+        coordinator.onRoster(epoch: 4, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        coordinator.onCryptorOk(pseudonym: GroupCallFixtures.pseudoB)
+        env.advance(30_000)
+        XCTAssertEqual(nackCount(env), 1)
+    }
+
+    func testAMissingKeyReportedBeforeTheRosterNamesTheSenderIsActedOnOnceItDoes() {
+        let (coordinator, env) = make()
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)       // no roster at all yet
+        XCTAssertEqual(nackCount(env), 0)
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.advance(2_000)
+        XCTAssertEqual(nackCount(env), 1, "the timer found the sender nameable and the epoch started")
+    }
+
+    func testAReportForASenderNobodyCanNameGivesUpAfterAFewTicks() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onMissingKey(pseudonym: String(repeating: "ee", count: 16))
+        for _ in 0..<20 { env.advance(2_000) }
+        XCTAssertTrue(env.sent.isEmpty)
+    }
+
+    func testTheMissingKeyTimerEndsWithTheCallAndWhenTheMemberLeaves() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        env.sent.removeAll()
+        coordinator.onRoster(epoch: 4, members: [selfUser], pseudonyms: [selfUser: GroupCallFixtures.pseudoA])
+        env.advance(30_000)
+        XCTAssertEqual(nackCount(env), 0, "B left: nobody to ask")
+        coordinator.onRoster(epoch: 5, members: [selfUser, userB], pseudonyms: pseudonyms)
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        coordinator.stop()
+        env.sent.removeAll()
+        env.advance(30_000)
+        XCTAssertTrue(env.sent.isEmpty)
     }
 
     func testTheNackBudgetOfAnOlderEpochDoesNotSilenceTheNextEpoch() {
@@ -565,13 +709,93 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         XCTAssertTrue(env.sendIndexes.isEmpty)
     }
 
-    func testDecryptFailureIsReportedAsTelemetryOnly() {
+    func testASingleDecryptFailureIsReportedAndNacksNothingAtOnce() {
         let (coordinator, env) = make()
         coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
         env.sent.removeAll()
         coordinator.onDecryptFailure(pseudonym: GroupCallFixtures.pseudoB)
         XCTAssertTrue(env.e2eeEvents().contains("decrypt_fail"))
-        XCTAssertTrue(env.sent.isEmpty)
+        XCTAssertTrue(env.sent.isEmpty, "one report proves little: the sender may still be on the previous slot")
+    }
+
+    // MARK: decryption-failed run (E2EE-4)
+
+    /// A slot that holds a WRONG key (retired, ring wrapped, a key replaced behind our back) reports
+    /// DECRYPTION_FAILED, never MISSING_KEY: without this nack the sender stays silent for us until
+    /// the next epoch.
+    func testARunOfDecryptionFailuresLongerThanASecondNacksTheCurrentEpochFromTheSameBudget() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onDecryptFailure(pseudonym: GroupCallFixtures.pseudoB)
+        env.advance(1_000)
+        XCTAssertEqual(nackCount(env), 0, "the run has to outlast a second")
+        env.advance(1)
+        XCTAssertEqual(nackCount(env), 1)
+        let first = env.parsedSent().first { if case .nack = $0.envelope { return true } else { return false } }
+        XCTAssertEqual(first?.envelope, GroupKeyEnvelope.nack(callId: call, epoch: 3), "the CURRENT epoch")
+        XCTAssertEqual(first?.user, userB)
+        env.advance(2_000)
+        env.advance(2_000)
+        env.advance(2_000)
+        XCTAssertEqual(nackCount(env), 4)
+        env.advance(60_000)
+        XCTAssertEqual(nackCount(env), 4, "bounded: the same four-nack budget as a missing key")
+        // The budget is shared: a missing key report has none left either.
+        coordinator.onMissingKey(pseudonym: GroupCallFixtures.pseudoB)
+        XCTAssertEqual(nackCount(env), 4)
+    }
+
+    func testADecryptionFailureThatTheCryptorRecoversFromNacksNothing() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onDecryptFailure(pseudonym: GroupCallFixtures.pseudoB)
+        env.advance(500)
+        coordinator.onCryptorOk(pseudonym: GroupCallFixtures.pseudoB)
+        env.advance(30_000)
+        XCTAssertEqual(nackCount(env), 0)
+    }
+
+    func testANewKeyOfTheSenderEndsTheFailingRun() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onDecryptFailure(pseudonym: GroupCallFixtures.pseudoB)
+        env.advance(500)
+        coordinator.onEnvelope(mediaKey(epoch: 3, fill: 9), from: userB)        // new key material: judged afresh
+        env.advance(30_000)
+        XCTAssertEqual(nackCount(env), 0)
+    }
+
+    func testADecryptionRunThatSpansAnEpochChangeStartsOver() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onDecryptFailure(pseudonym: GroupCallFixtures.pseudoB)
+        env.advance(500)
+        coordinator.onRoster(epoch: 4, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.advance(501)                                      // the first check: the roster moved on, the run restarts
+        XCTAssertEqual(nackCount(env), 0)
+        env.advance(1_000)
+        XCTAssertEqual(nackCount(env), 0, "a second of the NEW epoch has not passed")
+        env.advance(1)
+        let nacks = env.parsedSent().compactMap { item -> GroupKeyEnvelope? in
+            if case .nack = item.envelope { return item.envelope } else { return nil }
+        }
+        XCTAssertEqual(nacks, [.nack(callId: call, epoch: 4)])
+    }
+
+    func testADecryptionFailureOfOurselvesOrAnUnknownSenderOrAMemberWhoLeftNacksNobody() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 3, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.sent.removeAll()
+        coordinator.onDecryptFailure(pseudonym: GroupCallFixtures.pseudoA)
+        coordinator.onDecryptFailure(pseudonym: String(repeating: "ee", count: 16))
+        coordinator.onDecryptFailure(pseudonym: GroupCallFixtures.pseudoB)
+        coordinator.onRoster(epoch: 4, members: [selfUser], pseudonyms: [selfUser: GroupCallFixtures.pseudoA])
+        env.advance(30_000)
+        XCTAssertEqual(nackCount(env), 0)
     }
 
     func testTelemetryNeverCarriesKeyBytes() {

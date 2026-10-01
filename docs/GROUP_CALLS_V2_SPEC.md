@@ -66,7 +66,7 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
   refresh and never a new path; any other hand-out replaces the link): the new
   `ice_servers` go to both PeerConnections through `setConfiguration`, the fresh `session_token`
   replaces the old one, the media is not touched. An unanswered refresh is asked again after 60 s
-  (three attempts a round); a `throttled` answer to it does not cost the live link.
+  (three attempts a round).
 
 ## 4. Client Janus protocol
 
@@ -218,9 +218,12 @@ Therefore:
    started, publishing between its `publishers` entry and our request) is NOT a broken media
    path: the feed is skipped until its next `publishers` event, and a first subscriber join that
    got it drops that (now unusable) subscriber handle + PeerConnection and starts clean next time.
-2. **`group_call_media_unavailable` reason `throttled`.** Besides the four reasons of the spec, the
-   client tolerates `throttled` (the server rate-limiting repeated joins of one member): it is
-   retried after 2 s (at most 3 times), every other reason is a visible error.
+2. **`group_call_media_unavailable` reasons.** Besides the four reasons of the spec the client knows
+   `entitlement` (see 19). The server never answers a request that is over its budget (spec 10.2:
+   dropped without a reply), so there is NO `throttled` reason (the old tolerance for one is
+   removed): every reason, an unknown one of a newer server included, is one visible error and ends
+   the attempt, nothing is retried on the strength of it. An unanswered request is waited out by the
+   10 s media-ready timeout.
 3. **Camera toggle is a `configure`, not a renegotiation.** The publisher PC always carries a
    (disabled) simulcast video transceiver; the camera on/off flips `configure {video}` and the
    capturer. `publish` is sent with `video:false` when the call starts as an audio call.
@@ -283,3 +286,47 @@ Therefore:
 18. **Nack ahead of the roster (section 12.7).** A nack for an epoch newer than ours is not
     answered: the roster update that follows distributes our key of that epoch to every member, the
     requester included, which is the answer; nothing is queued.
+19. **Refused requests: the `error` envelope and the `entitlement` reason.** The server answers a
+    refused create / join / media request with a generic `error` envelope (and, once it adds them,
+    `call_id` and `code`). The app layer feeds it to the group call manager (single handler slot):
+    while the call has no media path yet (a first join, a rejoin, a creator's start) an `error` that
+    names the live call, or an uncorrelated one that arrives within 3 s of our own request, ends the
+    attempt at once (`entitlement_required` is the entitlement error, everything else a generic media
+    error) instead of after the 10-30 s timeouts; with a running media path an `error` changes
+    nothing. `group_call_media_unavailable {reason: "entitlement"}` (also spelled
+    `entitlement_required`) is the same fatal, never-retried error. Unknown reasons stay generic.
+20. **The creator asks for its media at once.** The server sends the creator of a call no
+    `group_call_update` until somebody joins, so `createCall` sends `group_call_media_join` right
+    after `group_call_create` (Android and desktop do the same): the room, and the group-video
+    entitlement check, belong to the creator, and a promotion from a 1:1 call does not depend on how
+    soon the peer accepts.
+21. **Session-token refresh is acknowledged (section 11).** The 300 s `group_call_media_refresh` is a
+    single-flight round: each attempt waits 8 s for its `group_call_media_token` and is repeated
+    after 6 / 12 / 24 / 48 s (+-25 %); a round that never gets an answer rejoins the media while the
+    old token is still good.
+22. **Epoch switches, key replacement, nack timers (sections 5.3, 5.4).** Every epoch has its own
+    pending send-slot switch and 1.5 s timer; a newer epoch never cancels an older valid one, only a
+    leave discards the older ones. A different key for a (member, epoch) already held REPLACES it (a
+    member that restarted inside the server's ghost grace re-joins without an epoch bump and draws a
+    new key for that epoch), unless the epoch is older than the newest held for that member. The
+    native cryptor reports MISSING_KEY once per episode, so a timer repeats the nack every 2 s (at
+    most 4, per (member, epoch)); a run of DECRYPTION_FAILED longer than 1 s nacks the current epoch
+    out of the same budget.
+23. **Whose kick.** Janus broadcasts `kicked: <id>` to every participant (the server kicks on every
+    ordinary leave): only an id equal to our own pseudonym, or the `leaving: "ok", reason: "kicked"`
+    sent to our handle, is our kick (a rejoin). For anybody else it is that publisher going away.
+24. **Layer switches are confirmed (section 4.6).** Janus sends at most one PLI per second per
+    publisher stream and never retries a skipped one, so every subscriber `configure` of a camera
+    stream is tracked until the `substream` event or the decoded frame size (by long side: below 480
+    `l`, below 960 `m`, else `h`) confirms it; unconfirmed after 4 s it is sent again, at most
+    3 times, then given up on (`group.layer_resend` / `group.layer_unconfirmed` telemetry).
+25. **Offers never mark a simulcast layer inactive.** Janus 1.4.2 keeps a sticky per-rid `disabled`
+    flag: a layer inactive in one offer is echoed `~rid` in every later answer and libwebrtc then
+    switches it off again. The publisher offer is stripped of every `~` in `a=simulcast` and the
+    publish policy's intended active layers are re-applied after each answer.
+26. **Ring-only `group_call_ended` reasons.** `ring_timeout`, `declined` and
+    `answered_elsewhere` (the server tells the user's other devices when one joined) only dismiss a
+    ring; for the call this device is in or joining they change nothing (an accept racing the 45 s
+    timer must not tear the call down and leave a ghost participant). A `group_call_update` for a
+    call this device is not in is dropped (another device of the same account joined it), and the
+    delayed `.ended -> .idle` reset of the manager never overwrites a call started inside its second.

@@ -71,10 +71,20 @@ final class GroupMediaRecoveryPolicyTests: XCTestCase {
         XCTAssertEqual(policy.handle(.mediaUnavailable(.other("x")), nowMs: 0), .fail(.other("x")))
     }
 
-    func testThrottledJoinsAreWaitedOutThenGiveUp() {
+    func testAnEntitlementDenialIsOneFatalErrorNeverRetried() {
         var policy = GroupMediaRecoveryPolicy()
-        for _ in 0..<3 { XCTAssertEqual(policy.handle(.mediaUnavailable(.throttled), nowMs: 0), .sendMediaJoin(delayMs: 2_000)) }
-        XCTAssertEqual(policy.handle(.mediaUnavailable(.throttled), nowMs: 0), .fail(.mediaLost))
+        for _ in 0..<5 {
+            XCTAssertEqual(policy.handle(.mediaUnavailable(.entitlement), nowMs: 0), .fail(.entitlementRequired))
+        }
+        XCTAssertTrue(GroupCallMediaError.entitlementRequired.isFatal)
+    }
+
+    func testAnUnknownReasonIsAGenericFatalErrorNeverRetried() {
+        var policy = GroupMediaRecoveryPolicy()
+        for _ in 0..<5 {
+            XCTAssertEqual(policy.handle(.mediaUnavailable(GroupCallWire.UnavailableReason(wire: "throttled")), nowMs: 0),
+                           .fail(.other("throttled")))
+        }
     }
 
     func testCameraErrorsAreNotFatal() {

@@ -1481,6 +1481,11 @@ class GroupCallViewModel: ObservableObject {
                 localized: "group_call.media_error.not_member",
                 defaultValue: "Non risulti tra i partecipanti di questa chiamata.",
                 comment: "Snackbar — the server says we are not a participant of the group call we tried to reach media for, the call is then ended")
+        case .entitlementRequired:
+            return String(
+                localized: "group_call.media_error.entitlement",
+                defaultValue: "Il tuo piano non include le videochiamate di gruppo.",
+                comment: "Snackbar — the server refused to open the media room of the group call because this account does not hold the group-call entitlement; the call is then ended")
         case .transportPolicy:
             return String(
                 localized: "group_call.media_error.transport_policy",
