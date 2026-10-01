@@ -78,6 +78,18 @@ final class KcMacRoundRulesTests: XCTestCase {
         }
     }
 
+    /// Decided peer MACs are kept for the rest of the call, bounded at 256 (the oldest drops first).
+    func testDecidedPeerMacsAreKeptAndBoundedAt256() {
+        XCTAssertEqual(KcMacRoundRules.maxDecidedPeerMacs, 256)
+        var decided: [Data] = []
+        for i in 0..<300 {
+            KcMacRoundRules.recordDecided(Data([UInt8(i & 0xFF), UInt8(i >> 8)]), in: &decided)
+        }
+        XCTAssertEqual(decided.count, 256)
+        XCTAssertEqual(decided.first, Data([UInt8(44), UInt8(0)]), "the 44 oldest were dropped")
+        XCTAssertEqual(decided.last, Data([UInt8(299 & 0xFF), UInt8(299 >> 8)]))
+    }
+
     func testEarlyMacIsHeldForAtMostTenSeconds() {
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         XCTAssertEqual(KcMacRoundRules.earlyHoldSeconds, 10)

@@ -1367,7 +1367,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     @discardableResult
     public func performPqcReKey(callId: String, peerId: String, timeoutSec: Double = 8.0, armedPeriodMs: Int64? = nil) async -> Bool {
         let (canProceed, sendOpaqueRaw) = lock.withLock { () -> (Bool, ((String) async throws -> Void)?) in
-            guard isCaller, state == .active, pendingReKeyAttempt == nil else { return (false, nil) }
+            // R-REKEY-INIT: only the caller ever initiates a rekey; the callee only responds.
+            guard RekeyRolePolicy.mayInitiateRekey(
+                isCaller: isCaller, isActive: state == .active, hasPendingAttempt: pendingReKeyAttempt != nil)
+            else { return (false, nil) }
             return (true, retrySenderClosure)
         }
         guard canProceed, let sendOpaqueRaw else {

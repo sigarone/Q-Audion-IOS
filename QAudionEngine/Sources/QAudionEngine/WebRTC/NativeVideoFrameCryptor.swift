@@ -143,9 +143,21 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
         keyProvider.setKey(send, with: slot, forParticipant: OneToOneFrameParticipant.local)
         keyProvider.setKey(recv, with: slot, forParticipant: OneToOneFrameParticipant.remote)
         hasKey = true
-        print("[NativeVideoFrameCryptor] keys installed at slot \(slot)")
+        // R-RING: exactly {current, previously installed} stay live; every other slot this ring
+        // ever held is overwritten with RANDOM bytes (never zeros: the native cryptor accepts 32
+        // zero bytes as a valid key). The slot the own sender still announces is kept until a
+        // later install, once the sender has moved on.
+        let retired = ringTracker.install(slot: slot, senderSlot: Int32(currentSenderKeyIndex))
+        for old in retired {
+            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.local)
+            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.remote)
+        }
+        print("[NativeVideoFrameCryptor] keys installed at slot \(slot) retired=\(retired.count)")
         return true
     }
+
+    /// R-RING bookkeeping of the 1:1 key ring (the slots that hold a real key). Guarded by `lock`.
+    private var ringTracker = OneToOneKeyRingTracker()
 
     /// Switch THIS device's own outbound video frames to announce [slot]
     /// (the slot `installKey` just installed). Call this only once the

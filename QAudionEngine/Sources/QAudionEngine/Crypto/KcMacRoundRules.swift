@@ -59,6 +59,18 @@ public enum KcMacRoundRules {
         return decidedPeerMacs.contains(peerMac)
     }
 
+    /// Most decided peer MACs remembered per call (the oldest is dropped first).
+    public static let maxDecidedPeerMacs = 256
+
+    /// Remember the verified peer MAC of a decided round for the rest of the call, bounded at
+    /// `maxDecidedPeerMacs` (like desktop) so a very long call cannot grow the list without limit.
+    public static func recordDecided(_ mac: Data, in decided: inout [Data]) {
+        decided.append(mac)
+        if decided.count > maxDecidedPeerMacs {
+            decided.removeFirst(decided.count - maxDecidedPeerMacs)
+        }
+    }
+
     /// Whether an early MAC may be held now: it is small enough and no other early MAC is held
     /// (a held one that is older than `earlyHoldSeconds` no longer counts: it is stale).
     public static func mayHoldEarly(raw: String, heldAt: Date?, now: Date) -> Bool {

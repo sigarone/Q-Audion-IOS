@@ -7203,23 +7203,35 @@ final class AppState: ObservableObject {
         // `media`) is actually armed for this EXACT epoch do we short-
         // circuit to `attemptRekeySwitch` and skip the legacy handling;
         // any other `key_epoch > 0` event falls through UNCHANGED.
-        ws.onCallMediaReady = { [weak self] callId, senderId, _, keyEpoch, _, media in
+        // R-READY: the two readies are told apart by `MediaReadyRouting` (a REKEY ready carries no
+        // `mid` and matches the armed gate's epoch; a first-video ready carries the video `mid`
+        // and its `key_epoch` is the key round epoch E of its key, which is NOT 0 for a call that
+        // upgrades to video in a later round). An audio ready never has first-video meaning.
+        ws.onCallMediaReady = { [weak self] callId, senderId, mid, keyEpoch, _, media in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 #if canImport(WebRTC)
-                if keyEpoch > 0,
-                   let epoch = Int32(exactly: keyEpoch),
-                   self.isInCall,
+                if self.isInCall,
                    let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
                    let activeCallId = impl.getActiveCallId(),
                    callId.caseInsensitiveCompare(activeCallId) == .orderedSame,
                    self.callContactId == senderId,
-                   let controller = self.webRtcController as? QAudionWebRtcCallController,
-                   controller.rekeySwitchGateArmedEpoch(media: media) == epoch {
-                    controller.attemptRekeySwitch(media: media, epoch: epoch)
-                    return
+                   let controller = self.webRtcController as? QAudionWebRtcCallController {
+                    let route = MediaReadyRouting.route(
+                        media: media, mid: mid, keyEpoch: keyEpoch,
+                        armedEpoch: { controller.rekeySwitchGateArmedEpoch(media: $0) })
+                    switch route {
+                    case .rekeyReady(let kind, let epoch):
+                        controller.attemptRekeySwitch(media: kind, epoch: epoch)
+                        return
+                    case .ignore:
+                        return
+                    case .firstVideoReady:
+                        break
+                    }
                 }
                 #endif
+                if media == "audio" { return }
                 self.handleInboundKeyframeSignal(
                     callId: callId, senderId: senderId, kind: "call_media_ready")
             }
@@ -13944,7 +13956,7 @@ final class AppState: ObservableObject {
         state.resultRecorded = true
         state.deadlineTask?.cancel()
         // R-KCMAC: the verified peer MAC of this decided round is remembered for the rest of the call.
-        kcDecidedPeerMacs[key, default: []].append(Data(mac))
+        KcMacRoundRules.recordDecided(Data(mac), in: &kcDecidedPeerMacs[key, default: []])
         emitKeyConfirmationTelemetry(callId: callId, state: state)
     }
 
@@ -21121,17 +21133,22 @@ extension AppState {
                 // round that derived this very key — never a local count, so a round that did not
                 // complete leaves a gap on both sides alike. The round is looked up by the key's
                 // value (not "the latest round"), so a second round completing before this
-                // notification runs cannot renumber it. The count above stays only as the fallback
-                // for a key this app has no handshake record of (it is logged: numeric verdict).
+                // notification runs cannot renumber it.
+                // R-E-STRICT: there is NO local-counter fallback. A key whose signed round cannot be
+                // resolved ends the call (`handshake_malformed`): a counted epoch would silently
+                // disagree with the peer's after the first missed round, and every frame would land
+                // in an empty ring slot.
                 if self.lastCountedPqcKey != key {
                     let activeId = self.canonicalActiveCallId() ?? ""
                     let round = (self.callService.callIntegration?.keyRound(forSessionKey: key, callId: activeId))
                         ?? (self.responderCallIntegration?.keyRound(forSessionKey: key, callId: activeId))
-                    if let round, let epoch = QAudionCallIntegration.keyEpoch(forRekeyRound: round) {
+                    switch RekeyRolePolicy.resolveKeyEpoch(signedRound: round) {
+                    case .epoch(let epoch):
                         self.callPqcRekeyEpoch = Int(epoch)
-                    } else {
-                        RTLog.warn("call", "keyepoch src=2")
-                        self.callPqcRekeyEpoch += 1
+                    case .endCall(let reason):
+                        RTLog.error("call", "keyepoch unresolved=1")
+                        self.handleHandshakeFatal(callId: activeId, reason: reason)
+                        return
                     }
                     self.lastCountedPqcKey = key
                 }
