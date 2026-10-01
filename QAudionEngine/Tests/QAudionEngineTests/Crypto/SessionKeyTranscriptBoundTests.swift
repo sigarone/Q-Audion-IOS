@@ -23,14 +23,9 @@ import CryptoKit
 /// HKDF reconstruction of the exact `info`/`salt` layout this fix's own doc
 /// claims.
 ///
-/// W-HSCAPKEYFIX (2026-09-03) — this KDF/SAS construction itself was NEVER
-/// the bug. The reason it never actually ran on a live Android↔iOS call was a
-/// SEPARATE issue one layer up the stack: the wire capability bit that gates
-/// it (`AndroidHandshakeBundle.Capabilities.hsTranscriptBindV1`, formerly
-/// misspelled `transcriptBindV1` on this platform only) never negotiated
-/// `true` between real peers because the JSON key name didn't match Android's
-/// — see `QAudionCallIntegration.hsTranscriptBindV1Enabled`'s doc for the
-/// full account. Fixed there; nothing in this file's KDF/SAS math changed.
+/// Under transcript v5 this KDF/SAS binding is unconditional (no capability gate): the hash is
+/// `SHA-256(ACCEPT_v5)`. The v5 KAT (`HandshakeTranscriptV5Tests`) pins the same construction
+/// against the shared vectors.
 final class SessionKeyTranscriptBoundTests: XCTestCase {
 
     private func fixedBytes(_ n: Int, seed: UInt8) -> Data {

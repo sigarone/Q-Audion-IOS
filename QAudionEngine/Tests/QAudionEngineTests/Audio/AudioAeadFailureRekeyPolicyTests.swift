@@ -8,6 +8,12 @@ import XCTest
 /// as `ReKeySchedulerTests`' pure-state-machine coverage.
 final class AudioAeadFailureRekeyPolicyTests: XCTestCase {
 
+    /// WIRE_SPEC §11.7 — in a 1:1 call a receiver MUST NOT start or request a rekey because of tag
+    /// failures (reflected / replayed / injected frames): the audio-AEAD-failure rekey trigger is off.
+    func testTheFailureBurstNeverTriggersARekeyUnderV5() {
+        XCTAssertFalse(AudioAeadFailureRekeyPolicy.triggerEnabled)
+    }
+
     // MARK: - AudioAeadFailureRekeyPolicy.isFailureBurst (pure predicate)
 
     func testIsFailureBurstFalseBelowCount() {

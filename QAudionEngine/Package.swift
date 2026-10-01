@@ -29,13 +29,11 @@ let package = Package(
         // Binaries hosted on GitHub Releases (sigarone CDN) — no more throttling
         // from download.onnxruntime.ai which was capping CI runners at ~5 KB/s.
         .package(url: "https://github.com/sigarone/onnxruntime-spm", exact: "1.24.2"),
-        // WebRTC is a local .binaryTarget (see `targets`) — webrtc-sdk (LiveKit
-        // ecosystem) build 144.7559.10 WITH H265/HEVC (VideoToolbox
-        // RTCVideoEncoderH265/RTCVideoDecoderH265). The old stasel/sigarone fork
-        // (M147) had NO H265 encoder → iOS offered only H264/VP8/VP9/AV1 while
-        // Android is H265-only → SDP video negotiated codec=null. Module/API
-        // unchanged (`import WebRTC`, RTC*) so it is a drop-in. (No `.package`
-        // line — a binaryTarget needs no dependency entry.)
+        // WebRTC is a local .binaryTarget (see `targets`): the strict M150 build with H265/HEVC
+        // (VideoToolbox RTCVideoEncoderH265/RTCVideoDecoderH265), AES-256 only. Android is
+        // H265-only, so the iOS build must offer H265 too, else the SDP video negotiates
+        // codec=null. Module/API: `import WebRTC`, RTC*. (No `.package` line — a binaryTarget
+        // needs no dependency entry.)
         // W500: GRDB for local persistence (conversation + message store).
         // Note: GRDB-SQLCipher is NOT a valid SPM product in groue/GRDB.swift —
         // SQLCipher integration is available only via CocoaPods/xcframework.
@@ -56,9 +54,9 @@ let package = Package(
         // Package.resolved now committed at
         // QAudionApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/.
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
-        // Group calls v2: no LiveKit / client-sdk-swift dependency any more. Group media runs on the
-        // ONE strict WebRTC binaryTarget below (the same `RTCPeerConnectionFactory` as 1:1 calls),
-        // against qjanus (Janus VideoRoom) with native FrameCryptor E2EE — see `GroupCall/`.
+        // Group media runs on the ONE strict WebRTC binaryTarget below (the same
+        // `RTCPeerConnectionFactory` as 1:1 calls), against qjanus (Janus VideoRoom) with native
+        // FrameCryptor E2EE — see `GroupCall/`.
         // W610 (REMOVED 2026-09-14): embedded Tor support for iOS has been
         // removed entirely, on every platform, not just deprioritized here.
         // Product decision: this app's censorship-bypass need is bypassing
@@ -161,7 +159,7 @@ let package = Package(
         // WebRTC with H265/HEVC + AES-256-GCM FrameCryptor — patched build of
         // webrtc-sdk M144 (same RTC* API as 144.7559.10). Two patches applied
         // in sequence: (1) DeriveKeys(..., password.size()==32?256:128) forces
-        // AES-256-GCM when a 32-byte K_video is set (stock binary hardcodes
+        // AES-256-GCM when a 32-byte frame key is set (stock binary hardcodes
         // 128); (2) native-pli.patch (W-NATIVEPLI, 2026-08-26) adds an
         // unconditional, rate-limited FrameCryptionState.kDecryptionFailed
         // notification on a real decrypt-tag-mismatch — the native signal
@@ -185,20 +183,27 @@ let package = Package(
         // previous release webrtc-ios-aes256-m144-native-pli (sha256 dbaefe2aff6eabff...
         // 95701b9) is untouched.
         //
-        // I1 (webrtc-plan.md v2 §3.3) — M150 hardened WebRTC, 2026-09-29.
-        // sigarone/webrtc-aes256-build release webrtc-ios-m150-a256-dplc-4
-        // (run 36598552180, gates G1-G9 passed, build-provenance attested):
-        // webrtc-sdk/webrtc@ba469aa2093b, BoringSSL@f91f1447, Opus@55513e81;
-        // strict transport (DTLS 1.3 + TLS_AES_256_GCM_SHA384 only, SRTP
-        // AEAD_AES_256_GCM only, X25519MLKEM768 first), FrameCryptor
-        // AES-256 only, deep PLC + OSCE, FEC floor, P8 runtime tuning API.
-        // device arm64 + simulator arm64 only. Rollback: the M144 nokeylog
-        // release (url .../webrtc-ios-aes256-m144-native-pli-nokeylog/
-        // WebRTC.xcframework.zip, checksum 7af8d47f...a68cb).
+        // M150 hardened WebRTC, release webrtc-ios-m150-a256-dplc-9
+        // (sigarone/webrtc-aes256-build, build run 36849361774, build repo main
+        // 0a91a575; gates G1-G8 and G10 passed, build-provenance attestation
+        // present for the zip). Same base as dplc-4 (webrtc-sdk/webrtc@ba469aa2093b,
+        // BoringSSL@f91f1447, Opus@55513e81): strict transport (DTLS 1.3 +
+        // TLS_AES_256_GCM_SHA384 only, SRTP AEAD_AES_256_GCM only,
+        // X25519MLKEM768 first), FrameCryptor AES-256 only, deep PLC + OSCE,
+        // FEC floor, P8 runtime tuning API. New in dplc-9: P12 receiver-side
+        // frame anti-replay window (per-sender counter in the FrameCryptor IV,
+        // replayed or too-old frames are dropped, verified by the replay marker
+        // in every Mach-O slice). The -lk variant is no longer built. Device
+        // arm64 + simulator arm64 only.
+        // Checksum = SwiftPM checksum of the zip (SHA256 of WebRTC.xcframework.zip),
+        // recomputed locally from the downloaded asset and equal to the value
+        // published in the release record.
+        // Rollback: the previous releases (webrtc-ios-m150-a256-dplc-4, and the M144
+        // nokeylog build webrtc-ios-aes256-m144-native-pli-nokeylog) stay untouched.
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-m150-a256-dplc-4/WebRTC.xcframework.zip",
-            checksum: "e1a2579293bd9e2ee78e3fa9fd4172b4bf379384356f037ec3796e985d51ba76"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-m150-a256-dplc-9/WebRTC.xcframework.zip",
+            checksum: "68d4c630d09576b432bc7cae94f476e57c3c5e3b66b636d748c377e25acc2e9a"
         ),
         .target(
             name: "QAudionEngine",
@@ -269,7 +274,6 @@ let package = Package(
                 // any automated guard.
                 .copy("Resources/cross_platform_vectors.json"),
                 .copy("Video/Resources/sframe-video-kat.json"),
-                .copy("Crypto/Resources/handshake-sig-kat.json"),
                 .copy("Crypto/Resources/psk-mix-v1-kat.json"),
                 // W-GRPAUDIOKEY (2026-08-27) — group-call SFU-outage
                 // fallback-audio session/frame-key derivation, byte-for-byte
@@ -292,7 +296,6 @@ let package = Package(
                 // apps/qaudion-firmware/tools/kat/kms-v2/{session-key-v3,hs-bundle-v1}-kat.json).
                 // session-KDF schema:3 (info_v3 = label||ct_bind||selected_fp_or_zero32)
                 // + the D3-WIRE signed hs-bundle-v1 canon (Ed25519 OFFER/ACCEPT).
-                .copy("Resources/kat/session-key-v3-kat.json"),
                 .copy("Resources/kat/hs-bundle-v1-kat.json"),
                 // gap A2 / ADR-014a — vendored byte-copy of
                 // apps/qaudion-android-new/qaudion-engine/src/test/resources/kms-prebootstrap-kat.json.
@@ -325,7 +328,11 @@ let package = Package(
                 // Group calls v2 (spec 5.3): byte-exact frame-crypto vectors shared with the
                 // desktop's frame cryptor (two senders, epochs 1..17, key ring wrap). Synthetic
                 // keys only; see GroupE2eeKatTests.
-                .copy("GroupCall/Resources/group-calls-v2-frame-crypto.json")
+                .copy("GroupCall/Resources/group-calls-v2-frame-crypto.json"),
+                // Transcript v5 + DTLS fingerprint binding (WIRE_SPEC 3.7 / 3.8): byte-exact
+                // transcripts, signatures, KDF / SAS / KCMAC and frame-key vectors, shared with the
+                // desktop. Synthetic keys and certificates only; see HandshakeTranscriptV5Tests.
+                .copy("Crypto/Resources/handshake-sig-v5-kat.json")
             ]
         )
     ]

@@ -2878,7 +2878,7 @@ final class CallService: @unchecked Sendable {
         // AudioAeadFailureRekeyPolicy.triggerEnabled is ever flipped back off.
         let shouldTrigger = audioAeadFailureMeter.noteFailure(nowMs: nowMs)
         audioAeadFailureLock.unlock()
-        // W-AUDIOAEADREKEY kill switch — see AudioAeadFailureRekeyPolicy
+        // W-AUDIOAEADREKEY kill switch (OFF under v5, WIRE_SPEC §11.7) — see AudioAeadFailureRekeyPolicy
         // .triggerEnabled's own doc for the current on/off state and why.
         guard shouldTrigger, AudioAeadFailureRekeyPolicy.triggerEnabled else { return }
         onAudioAeadFailureBurst?()
@@ -2928,14 +2928,9 @@ final class CallService: @unchecked Sendable {
                     lastAliveAtMs = now
                     continue
                 }
-                // Earbud exemption — the phone relays sealed frames it never
-                // decodes on that path, so the decode stamp is legitimately
-                // silent there (same carve-out as Android's isEarbudCall).
-                let peerCaps = self.getPeerCapabilities?(self.getCallId?())
-                if CallCapabilities.peerAdvertisedEarbudRelay(peerCaps) {
-                    lastAliveAtMs = now
-                    continue
-                }
+                // R-EARBUD: no earbud exemption. The earbud-relay-v1 path is retired, and the
+                // capability is an unsigned field the server relays: honouring it here would let
+                // a forged tag switch the dead-media watchdog off for a call.
                 // W-MEDIADEADSRTP — growth, not absolute value: a counter
                 // that stands still means nothing arrived since the last
                 // tick. -1 (no audio inbound-rtp row) can never register as

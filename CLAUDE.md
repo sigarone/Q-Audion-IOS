@@ -177,8 +177,7 @@ these were `channel.cc` "Changing voice/video state", `thread.cc` "took Nms to d
 "Updating local candidate type", `cpu_info.cc`); WARNING and ERROR lines stay (TURN "Connection with server
 failed", `RTCAudioSession` "Failed to setActive", ...) and can hold IP addresses, which the shipper redactor
 handles. Limits: builds up to 1.0.1181 still print; the callback still receives the key prints in memory
-(`handleNativeLogLine` only pattern-matches, it must never store `message`); at the time `LiveKitWebRTC` (group calls) was a
-separate WebRTC copy with its own debug level, untouched here (group calls v2 later removed LiveKit: the app now links a single WebRTC binary); rebuilding WebRTC without the two prints is the
+(`handleNativeLogLine` only pattern-matches, it must never store `message`); the app links a single WebRTC binary; rebuilding WebRTC without the two prints is the
 complete fix, and `KeyMaterialScrubber` stays as defence in depth.
 
 **W-VPIOOBS / W-VPIOWD / W-BYPASSDUCK (branch `fix/vpio-observability-suppressor`) -- VP-IO

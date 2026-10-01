@@ -39,7 +39,8 @@ import Foundation
 ///   ACCEPT side is what the OFFER-side's mutual-NFC-in-common signal reads), full
 ///   SHA-256 hex (64 chars)
 /// - `selectedPskFingerprint`: String?  — ACCEPT only
-/// - `sigV2`: String?  — W-TRANSCRIPTV2 (ship step 4), b64 Ed25519 sig over transcript v2
+/// - `sigV5`: String  — b64 Ed25519 signature over transcript v5 (WIRE_SPEC §3.7), REQUIRED
+/// - `dtlsFingerprint`: String  — `"sha-256 AB:CD:..."`, the signer's DTLS certificate (§3.8), REQUIRED
 /// - `strongBoxPublicKey`: B64?  — OFFER only, Android StrongBox-bound P-256
 /// - `x25519PublicKey`: B64 X25519 pub (32 bytes raw) — OFFER only
 ///
@@ -139,11 +140,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // (unrecognised key), and iOS's `"transcriptBindV1": true` decode
         // to `nil` on Android (`ignoreUnknownKeys = true` swallows it
         // silently). Net effect: this bit could never actually negotiate
-        // `true` on a real Android↔iOS call, so the fix always silently
-        // fell back to the legacy KDF/SAS. Renamed to match Android's wire
-        // spelling exactly. The KDF/SAS byte layout itself was never wrong
-        // — see `QAudionCallIntegration.hsTranscriptBindV1Enabled`'s doc
-        // for the cross-platform KAT convergence evidence.
+        // `true` on a real Android↔iOS call. Renamed to match Android's wire
+        // spelling exactly. Under transcript v5 the KDF/SAS binding is
+        // unconditional; this bit is only one of the nine signed CAPS bytes.
         public let hsTranscriptBindV1: Bool?
 
         // MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4)
@@ -249,52 +248,20 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     // legacy peer's bundle stays byte-wire-identical.
     public let pskRoles: [Int]?
 
-    // Phase-10b handshake signing (§1 of HANDSHAKE-SIGNING-SPEC.md) — TWO OPTIONAL fields,
-    // appended LAST to mirror Android's additive `HandshakeBundleCodec` change. Both default
-    // to nil; `JSONEncoder` omits nil keys, so a bundle that doesn't carry them is byte-wire-
-    // identical to the legacy unsigned bundle (no break for already-deployed peers).
+    // Handshake signing, transcript v5 (WIRE_SPEC §3.1 / §3.7 / §3.8) — the ONLY signing dialect;
+    // `signature` and `sigV2`..`sigV4` no longer exist. Both signing fields and `dtlsFingerprint`
+    // are REQUIRED in every OFFER and ACCEPT (every client emits them); a bundle missing any of
+    // them is malformed and the call ends. Decoded as optional only so a malformed peer bundle
+    // parses far enough to be rejected with a precise reason instead of vanishing in the decoder.
     //
-    // The signature is computed over the explicit §3 length-prefixed `HandshakeTranscript`
-    // (NOT this JSON), so JSON canonicalization is irrelevant to cross-platform parity.
+    // The signature is computed over the explicit length-prefixed `HandshakeTranscript` (NOT this
+    // JSON), so JSON canonicalization is irrelevant to cross-platform parity.
     public let signerIdentityKey: String?   // base64 (no-wrap, padded) of the 32-byte Ed25519 long-term identity pubkey
-    public let signature: String?           // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature
-
-    // W-TRANSCRIPTV2 (multi-PSK-mixing SYNTHESIS.md ship step 4) — dual-signed transcript
-    // rollout. base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over
-    // `HandshakeTranscript`'s NEW v2 transcript (`offerV2`/`acceptV2`), computed by the SAME
-    // signer alongside (never instead of) `signature`. `nil` on legacy builds (pre-this-step)
-    // and on the unsigned path — verification prefers `sigV2` when present and falls back to
-    // verifying `signature` against the v1 transcript exactly as before when absent, so a
-    // peer that hasn't shipped this step yet is never rejected. APPENDED LAST so existing
-    // peers' wire bytes are unchanged (`JSONEncoder` omits nil keys via `encodeIfPresent`),
-    // same convention as `signerIdentityKey`/`signature`/`pskRoles` above. Mirrors Android
-    // `HandshakeBundleCodec.HandshakeBundle.sigV2` (commit d3244418) / Desktop
-    // `AndroidOfferBundle.sigV2`/`AndroidAcceptBundle.sigV2` (commit c6bf155).
-    public let sigV2: String?
-
-    // CALL-3/CALL-4 (HSID-002 remainder, 2026-09-02 protocol audit) — v3
-    // dual-signature rollout, mirroring `sigV2`'s own additive introduction.
-    // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over
-    // `HandshakeTranscript`'s NEW v3 transcript (`offerV3`/`acceptV3`),
-    // computed by the SAME signer ALONGSIDE (never instead of) `signature`
-    // and `sigV2`. `nil` on any build that hasn't shipped this fix and on the
-    // unsigned path — verification only attempts v3 when this AND
-    // `capabilities.hsTranscriptBindV1` are both present; a peer that hasn't
-    // shipped it is verified exactly as before (v2-then-v1), never rejected.
-    // APPENDED LAST so existing peers' wire bytes are unchanged.
-    public let sigV3: String?
-
-    /// Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) — v4
-    /// dual-signature rollout, mirroring `sigV3`'s own additive introduction. base64 (no-wrap,
-    /// padded) of the 64-byte Ed25519 detached signature over `HandshakeTranscript`'s NEW v4
-    /// transcript (`offerV4`/`acceptV4`), computed by the SAME signer ALONGSIDE (never instead
-    /// of) `signature`, `sigV2` and `sigV3`. `nil` on any build that hasn't shipped this fix and
-    /// on the unsigned path — verification prefers `sigV4` when present and falls back to
-    /// `sigV3`/v3 then `sigV2`/v2 then `signature`/v1 exactly as before this fix existed when
-    /// absent, so a peer that hasn't shipped it is never rejected. APPENDED LAST so existing
-    /// peers' wire bytes are unchanged. Mirrors Android `HandshakeBundleCodec.HandshakeBundle
-    /// .sigV4` / Desktop `AndroidOfferBundle.sigV4`/`AndroidAcceptBundle.sigV4`.
-    public let sigV4: String?
+    public let sigV5: String?               // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over OFFER_v5 / ACCEPT_v5
+    /// The signer's own DTLS certificate fingerprint, canonical text form `"sha-256 AB:CD:..."`
+    /// (`DtlsFingerprint.canonicalText`). The OFFER carries the offerer's, the ACCEPT the
+    /// acceptor's; both are bound into the signed transcript (`DTLSFP`).
+    public let dtlsFingerprint: String?
 
     /// CALL-3 — the call's own random 64-bit freshness nonce (raw 8 bytes,
     /// base64 no-wrap/padded), generated once at call start.
@@ -354,10 +321,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         selectedPskFingerprint: String? = nil,
         pskRoles: [Int]? = nil,
         signerIdentityKey: String? = nil,
-        signature: String? = nil,
-        sigV2: String? = nil,
-        sigV3: String? = nil,
-        sigV4: String? = nil,
+        sigV5: String? = nil,
+        dtlsFingerprint: String? = nil,
         rekeyNonce: String? = nil,
         rekeyRound: Int? = nil,
         rekeyNextPeriodMs: Int? = nil
@@ -374,10 +339,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.selectedPskFingerprint = selectedPskFingerprint
         self.pskRoles = pskRoles
         self.signerIdentityKey = signerIdentityKey
-        self.signature = signature
-        self.sigV2 = sigV2
-        self.sigV3 = sigV3
-        self.sigV4 = sigV4
+        self.sigV5 = sigV5
+        self.dtlsFingerprint = dtlsFingerprint
         self.rekeyNonce = rekeyNonce
         self.rekeyRound = rekeyRound
         self.rekeyNextPeriodMs = rekeyNextPeriodMs

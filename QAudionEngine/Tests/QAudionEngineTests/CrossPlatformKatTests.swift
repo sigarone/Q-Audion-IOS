@@ -15,17 +15,7 @@ import CryptoKit
 /// contract surface enumerable in one place.
 final class CrossPlatformKatTests: XCTestCase {
 
-    // MARK: - SAS — pinned KAT (W338)
-
-    func test_W338_SAS_pinnedKat_bookshelf_pupil_blockade() throws {
-        // sessionKey = bytes(range(32))
-        // expected: bookshelf, pupil, blockade, mural, drifter, snapshot
-        let key = Data((0..<32).map { UInt8($0) })
-        let sas = try ComputeSasUseCase.invoke(sessionKey: key)
-        XCTAssertEqual(sas.words,
-                       ["bookshelf", "pupil", "blockade", "mural", "drifter", "snapshot"],
-                       "SAS KAT drift — engine now produces different words for the canonical vector. Fix the salt or info before changing this expectation.")
-    }
+    // MARK: - SAS — transcript-bound (v5): see ComputeSasUseCaseTests / HandshakeTranscriptV5Tests.
 
     // MARK: - PgpSasWordList — fixed 256-entry list
 

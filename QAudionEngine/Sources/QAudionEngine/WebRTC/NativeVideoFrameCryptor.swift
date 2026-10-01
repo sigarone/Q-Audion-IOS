@@ -10,18 +10,21 @@ import WebRTC
 /// WHY native (not the old codec-layer `SFrameVideoEncoderDecorator`): the
 /// codec-layer cryptor seals the encoded frame BEFORE RTP packetization, and the
 /// H265 packetizer then reshapes the NALUs so the bytes reaching the peer's
-/// decoder no longer match what was sealed → AES-GCM unseal fails
-/// (`[LiveKitVideoCryptor] decoder open failed`). The native FrameCryptor
+/// decoder no longer match what was sealed → AES-GCM unseal fails. The native FrameCryptor
 /// encrypts AFTER packetization (codec-agnostic), so H265 works, and it is
 /// wire-compatible with Android which uses the same native cryptor.
 ///
 /// Config (ALL must match Android for cross-platform decrypt):
-///   algorithm = AES-GCM (32-byte key ⇒ AES-256-GCM), key index 0, shared-key
-///   mode, ratchetSalt EMPTY, ratchetWindowSize 0, no magic bytes,
+///   algorithm = AES-GCM (32-byte key ⇒ AES-256-GCM), PER-PARTICIPANT key mode
+///   (transcript v5, owner decision O1: directional 1:1 frame keys),
+///   ratchetSalt EMPTY, ratchetWindowSize 0, no magic bytes,
 ///   failureTolerance -1, keyRingSize 16, discardFrameWhenCryptorNotReady true,
-///   key-derivation HKDF. The key is the RAW 32-byte K_video — the native binary
-///   runs its own Stage-2 HKDF (salt=∅, info=128×0x00, L=32) on top, identical
-///   across iOS/Android/Desktop.
+///   key-derivation HKDF. The keys are the two DIRECTIONAL 32-byte frame keys of
+///   the key round (`OneToOneFrameKeys`): the SENDER cryptor uses the local
+///   participant id holding the own-direction key, the RECEIVER cryptor the
+///   remote participant id holding the peer-direction key; the ring slot is
+///   `epoch % 16`. The native binary runs its own Stage-2 HKDF (salt=∅,
+///   info=128×0x00, L=32) on top, identical across iOS/Android/Desktop.
 ///
 /// CLAUDE.md §16: this is a new file but takes ONLY RTC* + Data/String params —
 /// never `AppState` — so it does not trip the Sendable-inference build break.
@@ -35,7 +38,6 @@ import WebRTC
 public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     public let keyProvider: RTCFrameCryptorKeyProvider
     private let factory: RTCPeerConnectionFactory
-    private let participantId: String
     private var senderCryptor: RTCFrameCryptor?
     private var receiverCryptor: RTCFrameCryptor?
     private var hasKey = false
@@ -66,9 +68,8 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
     /// @MainActor themselves.
     public var onDecryptFailure: (() -> Void)?
 
-    public init(factory: RTCPeerConnectionFactory, participantId: String) {
+    public init(factory: RTCPeerConnectionFactory) {
         self.factory = factory
-        self.participantId = participantId
         // EXACT Android params (PeerConnectionHolder.kt:354-370). Use the FULL
         // initializer so failureTolerance / keyRingSize /
         // discardFrameWhenCryptorNotReady / keyDerivationAlgorithm are pinned
@@ -77,7 +78,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
         self.keyProvider = RTCFrameCryptorKeyProvider(
             ratchetSalt: Data(),                 // ByteArray(0)
             ratchetWindowSize: 0,
-            sharedKeyMode: true,                 // sharedKey = true
+            sharedKeyMode: false,                // per-participant keys (directional 1:1 keys)
             uncryptedMagicBytes: nil,            // ByteArray(0) → nil
             failureTolerance: -1,                // infinite (never auto-disable)
             keyRingSize: 16,
@@ -123,28 +124,42 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
         return senderCryptor != nil
     }
 
-    /// Install [kVideo] into the decode ring at [slot] — this ALONE is what
-    /// lets this device decode a peer's frames already tagged with this
-    /// slot/epoch (the receiver is driven entirely by the on-wire key
-    /// index, never by this device's own sender state). Callable
-    /// immediately upon deriving the key; does NOT touch this device's own
-    /// outbound frames (see `switchSender`). Safe to call before OR after
-    /// the cryptors are attached — the native KeyProvider drops inbound
-    /// frames until a key is present (discardFrameWhenCryptorNotReady), so
-    /// attach-before-key is fine. Returns `false` if the key is the wrong
-    /// size (nothing installed).
-    public func installKey(_ kVideo: Data, slot: Int32) -> Bool {
-        guard kVideo.count == 32 else {
-            print("[NativeVideoFrameCryptor] installKey ignored — key is \(kVideo.count) bytes, expected 32")
+    /// Install the two directional frame keys into the ring at [slot]: [send] under the local
+    /// participant id (this device's own outbound direction), [recv] under the remote participant
+    /// id (the peer's direction). This ALONE is what lets this device decode a peer's frames
+    /// already tagged with this slot/epoch (the receiver is driven entirely by the on-wire key
+    /// index, never by this device's own sender state). Callable immediately upon deriving the
+    /// keys; does NOT touch this device's own outbound frames (see `switchSender`). Safe to call
+    /// before OR after the cryptors are attached — the native KeyProvider drops inbound frames
+    /// until a key is present (discardFrameWhenCryptorNotReady), so attach-before-key is fine.
+    /// Returns `false` if a key is the wrong size (nothing installed).
+    public func installKeys(send: Data, recv: Data, slot: Int32) -> Bool {
+        guard send.count == 32, recv.count == 32 else {
+            print("[NativeVideoFrameCryptor] installKeys ignored — key sizes \(send.count)/\(recv.count), expected 32")
             return false
         }
         lock.lock(); defer { lock.unlock() }
         currentKeyIndex = Int(slot)
-        keyProvider.setSharedKey(kVideo, with: slot)
+        keyProvider.setKey(send, with: slot, forParticipant: OneToOneFrameParticipant.local)
+        keyProvider.setKey(recv, with: slot, forParticipant: OneToOneFrameParticipant.remote)
         hasKey = true
-        print("[NativeVideoFrameCryptor] key installed at slot \(slot)")
+        // R-RING: the receive side keeps exactly {current, previously installed} live; every other
+        // slot is overwritten with RANDOM bytes (never zeros: the native cryptor accepts 32 zero
+        // bytes as a valid key). The own-direction key at the slot the own sender still announces
+        // is kept until a later install, once the sender has moved on.
+        let retired = ringTracker.install(slot: slot, senderSlot: Int32(currentSenderKeyIndex))
+        for old in retired.remote {
+            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.remote)
+        }
+        for old in retired.local {
+            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.local)
+        }
+        print("[NativeVideoFrameCryptor] keys installed at slot \(slot) retired=\(retired.remote.count)")
         return true
     }
+
+    /// R-RING bookkeeping of the 1:1 key ring (the slots that hold a real key). Guarded by `lock`.
+    private var ringTracker = OneToOneKeyRingTracker()
 
     /// Switch THIS device's own outbound video frames to announce [slot]
     /// (the slot `installKey` just installed). Call this only once the
@@ -223,7 +238,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 
         let built = RTCFrameCryptor(factory: factory,
                                     rtpSender: sender,
-                                    participantId: participantId,
+                                    participantId: OneToOneFrameParticipant.local,
                                     algorithm: .aesGcm,
                                     keyProvider: keyProvider)
 
@@ -262,7 +277,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 
         let built = RTCFrameCryptor(factory: factory,
                                     rtpReceiver: receiver,
-                                    participantId: participantId,
+                                    participantId: OneToOneFrameParticipant.remote,
                                     algorithm: .aesGcm,
                                     keyProvider: keyProvider)
 
@@ -365,7 +380,7 @@ public final class NativeVideoFrameCryptor: NSObject, @unchecked Sendable {
 /// header on this box — the framework is a remote binaryTarget, see
 /// `QAudionEngine/Package.swift`): `RTCFrameCryptorDelegate` and the
 /// `RTCFrameCryptorState` case names below are asserted from the public
-/// webrtc-sdk/LiveKit-fork ObjC SDK this vendored build is patched from
+/// webrtc-sdk ObjC SDK this vendored build is patched from
 /// (`webrtc-sdk/webrtc.git@m144_release`, commit `df1011be` — the SAME
 /// upstream commit the Android AES256 patch is built against, per
 /// `Package.swift`'s binaryTarget comment) — NOT grep-verified against the
@@ -386,7 +401,7 @@ extension NativeVideoFrameCryptor: RTCFrameCryptorDelegate {
                              with state: RTCFrameCryptorState) {
         switch state {
         case .decryptionFailed, .missingKey, .internalError:
-            print("[NativeVideoFrameCryptor] W-KFFAST: receiver cryptor state=\(state.rawValue) participantId=\(participantId) — requesting peer keyframe")
+            print("[NativeVideoFrameCryptor] W-KFFAST: receiver cryptor state=\(state.rawValue) — requesting peer keyframe")
             onDecryptFailure?()
         default:
             break

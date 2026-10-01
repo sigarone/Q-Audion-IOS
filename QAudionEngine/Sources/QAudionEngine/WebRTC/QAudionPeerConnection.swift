@@ -253,6 +253,44 @@ public final class QAudionPeerConnection: NSObject {
     /// must repeat that same override from the ORIGINAL value, not the
     /// default.
     private let iceTransportPolicy: RTCIceTransportPolicy
+
+    // MARK: - DTLS certificate binding (WIRE_SPEC §3.8)
+
+    /// The call's DTLS context: its explicit per-call ECDSA certificate (put in
+    /// `RTCConfiguration.certificate`), its fingerprint, and the PEER fingerprint the signed
+    /// handshake pinned. Without a context (or without its certificate) no PeerConnection is
+    /// created: a 1:1 call never runs on a certificate nobody pinned.
+    private let dtlsContext: CallDtlsContext?
+
+    /// Fired ONCE when a DTLS fingerprint check fails; the argument is the verdict-only stage:
+    /// `sdp_remote`, `sdp_local`, `stats` or `pin_timeout`. The app ends the call with reason
+    /// `dtls_fp_mismatch`. Carries no value of any fingerprint.
+    public var onDtlsFingerprintFailure: ((String) -> Void)?
+    /// Fired when check (b) passed and the media gate opened (verdict only).
+    public var onDtlsMediaGateOpened: (() -> Void)?
+
+    private let dtlsStateLock = NSLock()
+    private var _dtlsMediaGateOpen = false
+    private var _dtlsFailureReported = false
+    private var _dtlsStatsGeneration = 0
+    private var _dtlsPinTimeoutArmed = false
+    /// How long a remote description may wait for the peer fingerprint to be pinned.
+    private static let peerPinTimeoutSeconds: Double = 45
+    /// Check (b): how long the negotiated certificates may stay unreported after `connected`.
+    private static let dtlsStatsDeadlineSeconds: Double = 5
+    private static let dtlsStatsRetrySeconds: Double = 0.25
+
+    /// True once check (b) passed. While false: local tracks stay disabled and remote audio/video
+    /// stays unrendered. The FrameCryptor is NEVER disabled as a gate (a disabled cryptor passes
+    /// clear text).
+    public var dtlsMediaGateOpen: Bool {
+        dtlsStateLock.lock(); defer { dtlsStateLock.unlock() }
+        return _dtlsMediaGateOpen
+    }
+
+    /// The local video track's wanted `isEnabled` (the user's camera intent), applied only while
+    /// the DTLS media gate is open.
+    private var videoTrackWantedEnabled = true
     /// TRACK B (2026-09-29) — resolved once at `init` from
     /// `dtlsAnswerPassiveKillSwitchProvider`; `false` (the default) keeps the
     /// fresh-answer DTLS-server fix active, `true` reverts to libwebrtc's
@@ -486,9 +524,11 @@ public final class QAudionPeerConnection: NSObject {
                 iceServers: [RTCIceServer],
                 iceTransportPolicy: RTCIceTransportPolicy = .all,
                 delegate: Delegate?,
+                dtlsContext: CallDtlsContext?,
                 dtlsPqcRequiredProvider: (() -> Bool)? = nil,
                 dtlsAnswerPassiveKillSwitchProvider: (() -> Bool)? = nil) {
         self.factory = factory
+        self.dtlsContext = dtlsContext
         self.audioProcessingModule = audioProcessingModule
         self.delegate = delegate
         self.iceTransportPolicy = iceTransportPolicy
@@ -530,6 +570,13 @@ public final class QAudionPeerConnection: NSObject {
         // and all media flows through TURN — needed for restricted
         // carrier-NAT environments.
         config.iceTransportPolicy = iceTransportPolicy
+        // WIRE_SPEC §3.8 (F3) — the call's own explicit ECDSA P-256 certificate, generated before
+        // the handshake signed anything. No certificate, no PeerConnection.
+        guard let certificate = dtlsContext?.certificate else {
+            print("[WebRTC] PeerConnection NOT created — no per-call DTLS certificate")
+            return
+        }
+        config.certificate = certificate
         guard let pc = factory.peerConnection(with: config,
                                               constraints: mediaConstraints,
                                               delegate: self) else {
@@ -998,7 +1045,10 @@ public final class QAudionPeerConnection: NSObject {
         guard let pc = peerConnection, localVideoTrack == nil else { return nil }
         let source = factory.videoSource(forScreenCast: isScreencast)
         let track = factory.videoTrack(with: source, trackId: videoTrackId)
-        track.isEnabled = true
+        // WIRE_SPEC §3.6 — held until the DTLS media gate opens (then `openDtlsMediaGate` applies
+        // `videoTrackWantedEnabled`).
+        videoTrackWantedEnabled = true
+        track.isEnabled = dtlsMediaGateOpen
         // W-DUPETRANSCEIVER (2026-07-28) — createOffer() pre-allocates a
         // sendrecv video transceiver on every call's INITIAL offer (BUG2 fix,
         // see its own kdoc there) specifically so a LATER mid-call
@@ -1181,14 +1231,14 @@ public final class QAudionPeerConnection: NSObject {
     // MARK: - Native video FrameCryptor (insertable streams)
 
     /// Create the per-call native FrameCryptor holder (idempotent). Does NOT
-    /// require the K_video key yet — the key is published later via `setKey` on
+    /// require the frame keys yet — they are published later via `installKeys` on
     /// the returned holder. Creating it early (at call setup) avoids the
     /// receiver-attach-before-key deadlock.
     @discardableResult
-    public func ensureNativeVideoCryptor(participantId: String) -> NativeVideoFrameCryptor {
+    public func ensureNativeVideoCryptor() -> NativeVideoFrameCryptor {
         nativeCryptorCreationLock.lock(); defer { nativeCryptorCreationLock.unlock() }
         if let c = nativeVideoCryptor { return c }
-        let c = NativeVideoFrameCryptor(factory: factory, participantId: participantId)
+        let c = NativeVideoFrameCryptor(factory: factory)
         nativeVideoCryptor = c
         return c
     }
@@ -1226,10 +1276,10 @@ public final class QAudionPeerConnection: NSObject {
     /// ``CallCapabilities/isNativeSrtpEnabledLocally`` is off for this call.
     ///
     /// - Parameters:
-    ///   - key: 32-byte raw PQC session key (same key the sealed-DataChannel
-    ///     path uses — no K_video-style derivation for audio, matching
-    ///     Android's `installLiveMediaKeys` -> `setAudioSrtpKey`).
-    ///   - participantId: passed straight to `NativeAudioFrameCryptor`.
+    ///   - sendKey / recvKey: the two DIRECTIONAL 32-byte frame keys of the key round
+    ///     (`OneToOneFrameKeys`, transcript v5 / owner decision O1): the key this
+    ///     device's own frames are encrypted with, and the key the peer's frames
+    ///     are decrypted with.
     ///   - rxSink: PCM-TAP PARITY — called with each little-endian Int16
     ///     mono 48 kHz chunk of the REMOTE peer's decoded audio, the moment
     ///     the receiver track is enabled (wired from `didAdd rtpReceiver`,
@@ -1241,8 +1291,8 @@ public final class QAudionPeerConnection: NSObject {
     ///     mic's captured audio (Tier 1 "voce come chiave" equivalent).
     @discardableResult
     public func activateNativeAudioSrtp(
-        key: Data,
-        participantId: String,
+        sendKey: Data,
+        recvKey: Data,
         slot: Int32 = 0,
         txSink: @escaping (Data) -> Void,
         diag: ((String) -> Void)? = nil
@@ -1317,8 +1367,8 @@ public final class QAudionPeerConnection: NSObject {
             print("[WebRTC] IOS-C4b: audio transceiver was rewired by JSEP — re-resolved to the live object")
             audioTransceiver = transceiver
         }
-        guard key.count == 32 else {
-            print("[WebRTC] IOS-C4b: activateNativeAudioSrtp refused — key is \(key.count) bytes, expected 32")
+        guard sendKey.count == 32, recvKey.count == 32 else {
+            print("[WebRTC] IOS-C4b: activateNativeAudioSrtp refused — key sizes \(sendKey.count)/\(recvKey.count), expected 32")
             return false
         }
         // Fail-closed: reject an all-zero (earbud-SPE placeholder) key, same
@@ -1326,12 +1376,12 @@ public final class QAudionPeerConnection: NSObject {
         // unreachable (CallCapabilities withholds audioSrtpV1 whenever
         // earbudPaired), belt-and-braces in case that invariant is ever
         // violated by a future change.
-        guard key.contains(where: { $0 != 0 }) else {
+        guard sendKey.contains(where: { $0 != 0 }), recvKey.contains(where: { $0 != 0 }) else {
             print("[WebRTC] IOS-C4b: activateNativeAudioSrtp refused — all-zero (earbud-SPE placeholder) key")
             return false
         }
 
-        let cryptor = resolvedNativeAudioCryptor(participantId: participantId)
+        let cryptor = resolvedNativeAudioCryptor()
         // WIRE_SPEC §8.7 v1.2 (Task 4, completing Task 3's split) — this
         // call site handles BOTH initial activation and later rekeys of
         // native audio-srtp (see `installAudioSrtpIfPossible`'s own doc —
@@ -1346,7 +1396,7 @@ public final class QAudionPeerConnection: NSObject {
         // is already validated as 32 bytes non-all-zero above, so
         // `installKey` here always succeeds (guard kept for defense in
         // depth, matching `setKey`'s own original guard discipline).
-        _ = cryptor.installKey(key, slot: slot)
+        _ = cryptor.installKeys(send: sendKey, recv: recvKey, slot: slot)
 
         // W-AUDIOSENDPICK — carry an already-created mic track onto the live
         // sender instead of minting a second one: the track (with its PCM
@@ -1465,8 +1515,8 @@ public final class QAudionPeerConnection: NSObject {
     /// mid-call rebind (`rebindAudioReceiverCryptorPostNegotiation`)
     /// unchanged, same as video's.
     @discardableResult
-    public func ensureNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
-        resolvedNativeAudioCryptor(participantId: participantId)
+    public func ensureNativeAudioCryptor() -> NativeAudioFrameCryptor {
+        resolvedNativeAudioCryptor()
     }
 
     /// W-NATIVESRTPDIAG (this task) — single creation point for
@@ -1476,7 +1526,7 @@ public final class QAudionPeerConnection: NSObject {
     /// ``attachAudioReceiverCryptor``) creates it first. Idempotent —
     /// returns the existing instance if one is already there, same as the
     /// three inline `nativeAudioCryptor ?? { ... }()` blocks this replaces.
-    private func resolvedNativeAudioCryptor(participantId: String) -> NativeAudioFrameCryptor {
+    private func resolvedNativeAudioCryptor() -> NativeAudioFrameCryptor {
         // W-CRYPTORQUEUE (2026-09-27) — same check-then-set race as
         // `ensureNativeVideoCryptor`, same fix. See that method's doc on
         // `nativeCryptorCreationLock` (shared between video and audio: the
@@ -1484,7 +1534,7 @@ public final class QAudionPeerConnection: NSObject {
         // is simpler to reason about than two for a section this cheap).
         nativeCryptorCreationLock.lock(); defer { nativeCryptorCreationLock.unlock() }
         if let existing = nativeAudioCryptor { return existing }
-        let c = NativeAudioFrameCryptor(factory: factory, participantId: participantId)
+        let c = NativeAudioFrameCryptor(factory: factory)
         c.onFrameCryptorStateChange = { [weak self] line in
             self?.onNativeAudioFrameCryptorStateChange?(line)
         }
@@ -1500,9 +1550,8 @@ public final class QAudionPeerConnection: NSObject {
     /// write-once).
     @discardableResult
     public func attachAudioReceiverCryptor(_ receiver: RTCRtpReceiver,
-                                           participantId: String,
                                            rxSink: @escaping (Data) -> Void) -> Bool {
-        let cryptor = resolvedNativeAudioCryptor(participantId: participantId)
+        let cryptor = resolvedNativeAudioCryptor()
         let attached = cryptor.attachReceiver(receiver)
         if let track = receiver.track as? RTCAudioTrack, audioRxTap == nil {
             let tap = NativeAudioPcmTap(sink: rxSink)
@@ -1549,7 +1598,9 @@ public final class QAudionPeerConnection: NSObject {
     /// `APP_VOCAB` alongside this line (`pcinit`, `nudge` — see that
     /// script's own W-CALLERUNMUTELOST comment).
     private func applyNativeSenderMuteState(_ muted: Bool, source: String) {
-        localAudioSrtpTrack?.isEnabled = !muted
+        // WIRE_SPEC §3.6 — the local track also stays disabled until the DTLS media gate opened
+        // (check (b)); `openDtlsMediaGate` re-applies the latched intent when it does.
+        localAudioSrtpTrack?.isEnabled = !muted && dtlsMediaGateOpen
         onNativeSenderMuteApplied?("audiosrtp muteapply m=\(muted ? 1 : 0) src=\(source)")
     }
 
@@ -1690,7 +1741,8 @@ public final class QAudionPeerConnection: NSObject {
             print("[WebRTC] setVideoMuted(false) refused — video is fail-closed (no frame E2EE)")
             return
         }
-        localVideoTrack?.isEnabled = !muted
+        videoTrackWantedEnabled = !muted
+        localVideoTrack?.isEnabled = !muted && dtlsMediaGateOpen
     }
 
     /// F-02 (2026-07-26) — refuse to carry video that is not frame-encrypted.
@@ -1727,12 +1779,14 @@ public final class QAudionPeerConnection: NSObject {
     public func reopenVideoAfterE2eeAgreed() {
         guard videoFailClosed else { return }
         videoFailClosed = false
-        localVideoTrack?.isEnabled = true
+        // The DTLS media gate (check (b)) still applies: nothing is enabled before it opened.
+        let gateOpen = dtlsMediaGateOpen
+        localVideoTrack?.isEnabled = videoTrackWantedEnabled && gateOpen
         for sender in peerConnection?.senders ?? [] {
-            (sender.track as? RTCVideoTrack)?.isEnabled = true
+            (sender.track as? RTCVideoTrack)?.isEnabled = gateOpen
         }
         for receiver in peerConnection?.receivers ?? [] {
-            (receiver.track as? RTCVideoTrack)?.isEnabled = true
+            (receiver.track as? RTCVideoTrack)?.isEnabled = gateOpen
         }
         print("[WebRTC] video fail-close LIFTED — peer capabilities now include sframe-v1")
     }
@@ -1880,6 +1934,8 @@ public final class QAudionPeerConnection: NSObject {
             iceServers: iceServers,
             nativeSrtpEnabledLocally: nativeSrtpEnabledForThisCall)
         config.iceTransportPolicy = iceTransportPolicy
+        // setConfiguration refuses a changed certificate set: keep this call's certificate.
+        config.certificate = dtlsContext?.certificate
         let applied = pc.setConfiguration(config)
         print("[WebRTC] updateIceServers: setConfiguration applied=\(applied) serverCount=\(iceServers.count)")
         return applied
@@ -1987,6 +2043,11 @@ public final class QAudionPeerConnection: NSObject {
             let mungedText = NativeAudioSdpPolicy.apply(baseMungedText, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
             let munged = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(munged.sdp, tag: iceRestart ? "LOCAL_OFFER_ICE_RESTART" : "LOCAL_OFFER")
+            // WIRE_SPEC §3.5 — check (a), local: the SDP we are about to apply and send must carry
+            // exactly our own pinned certificate fingerprint, after every munging above.
+            guard let checker = self, checker.checkLocalSdp(munged.sdp) else {
+                completion(.failure(WebRTCError.dtlsFingerprint("sdp_local"))); return
+            }
             self?.peerConnection?.setLocalDescription(munged, completionHandler: { setErr in
                 if let setErr = setErr {
                     completion(.failure(setErr))
@@ -2061,6 +2122,11 @@ public final class QAudionPeerConnection: NSObject {
             let mungedText = NativeAudioSdpPolicy.apply(baseMungedText, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
             let pinnedSdp = mungedText == sdp.sdp ? sdp : RTCSessionDescription(type: sdp.type, sdp: mungedText)
             logH265FmtpLines(pinnedSdp.sdp, tag: "LOCAL_ANSWER")
+            // WIRE_SPEC §3.5 — check (a), local: after the passive-role rewrite and every other
+            // munging above, the answer must still carry exactly our own pinned fingerprint.
+            guard let checker = self, checker.checkLocalSdp(pinnedSdp.sdp) else {
+                completion(.failure(WebRTCError.dtlsFingerprint("sdp_local"))); return
+            }
             self?.peerConnection?.setLocalDescription(pinnedSdp, completionHandler: { setErr in
                 if let setErr = setErr {
                     completion(.failure(setErr))
@@ -2086,7 +2152,31 @@ public final class QAudionPeerConnection: NSObject {
     }
 
     private func applyRemoteSdp(type: RTCSdpType, sdp: String, completion: @escaping (Error?) -> Void) {
+        guard peerConnection != nil, let context = dtlsContext else {
+            completion(WebRTCError.notInitialized)
+            return
+        }
+        // WIRE_SPEC §3.4 step 3 — never call setRemoteDescription before the peer's signed bundle
+        // has been received, verified and its DTLS fingerprint pinned. A remote SDP that arrives
+        // earlier (the call_offer SDP of a ring-time setup, an early call_answer) is buffered here
+        // and applied, in order, the moment the pin lands.
+        context.whenPeerPinned { [weak self] fpPeer in
+            guard let self = self else { completion(WebRTCError.notInitialized); return }
+            self.applyPinnedRemoteSdp(type: type, sdp: sdp, fpPeer: fpPeer, completion: completion)
+        }
+        armPeerPinTimeoutIfNeeded(context)
+    }
+
+    /// Check (a), remote (WIRE_SPEC §3.5): the SDP must carry exactly the pinned peer fingerprint
+    /// before it is applied. A mismatch ends the call; the SDP is NOT applied.
+    private func applyPinnedRemoteSdp(type: RTCSdpType, sdp: String, fpPeer: Data,
+                                      completion: @escaping (Error?) -> Void) {
         guard let pc = peerConnection else { completion(WebRTCError.notInitialized); return }
+        guard DtlsFingerprint.checkSdp(sdp, expected: fpPeer) else {
+            reportDtlsFailure(stage: "sdp_remote")
+            completion(WebRTCError.dtlsFingerprint("sdp_remote"))
+            return
+        }
         // IOS-C4b / W-SRTPPTIME — munging the INBOUND SDP constrains OUR OWN
         // encoder even against a peer that sends unmunged defaults (Android
         // applies the same policy bidirectionally — see AudioSdpPolicy's own
@@ -2097,6 +2187,13 @@ public final class QAudionPeerConnection: NSObject {
         // preferences even against a peer that sends unmunged defaults.
         let baseMunged = AudioSdpPolicy.apply(sdp)
         let munged = NativeAudioSdpPolicy.apply(baseMunged, nativeSrtpEnabled: CallCapabilities.isNativeSrtpEnabledLocally)
+        // Check (a) again on the EXACT text that is applied: the policies above only rewrite audio
+        // attributes, but what libwebrtc receives is what must carry the pinned fingerprint.
+        guard DtlsFingerprint.checkSdp(munged, expected: fpPeer) else {
+            reportDtlsFailure(stage: "sdp_remote")
+            completion(WebRTCError.dtlsFingerprint("sdp_remote"))
+            return
+        }
         logH265FmtpLines(munged, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: munged)
         pc.setRemoteDescription(desc, completionHandler: completion)
@@ -2219,11 +2316,170 @@ public final class QAudionPeerConnection: NSObject {
         establishedVideoReceiverTransceiver = nil
     }
 
+    // MARK: - DTLS certificate binding: funnel, stats gate (WIRE_SPEC §3.5, §3.6)
+
+    /// Check (a), local (§3.5): `sdp` must carry exactly this call's own certificate fingerprint.
+    /// On failure the call ends (`dtls_fp_mismatch`, stage `sdp_local`) and `false` is returned.
+    fileprivate func checkLocalSdp(_ sdp: String) -> Bool {
+        guard let context = dtlsContext, DtlsFingerprint.checkSdp(sdp, expected: context.fingerprint) else {
+            reportDtlsFailure(stage: "sdp_local")
+            return false
+        }
+        return true
+    }
+
+    /// Report a failed DTLS fingerprint check, once per PeerConnection. Verdict only: no value of
+    /// any fingerprint ever leaves this class.
+    fileprivate func reportDtlsFailure(stage: String) {
+        dtlsStateLock.lock()
+        let already = _dtlsFailureReported
+        _dtlsFailureReported = true
+        dtlsStateLock.unlock()
+        guard !already else { return }
+        print("[WebRTC] DTLS fingerprint check FAILED stage=\(stage) — ending the call")
+        onDtlsFingerprintFailure?(stage)
+    }
+
+    /// A remote description waits for the peer pin; if the pin never arrives (the peer's signed
+    /// bundle never reached us) the call cannot proceed, so it ends.
+    fileprivate func armPeerPinTimeoutIfNeeded(_ context: CallDtlsContext) {
+        guard context.peerFingerprint == nil else { return }
+        dtlsStateLock.lock()
+        let armed = _dtlsPinTimeoutArmed
+        _dtlsPinTimeoutArmed = true
+        dtlsStateLock.unlock()
+        guard !armed else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.peerPinTimeoutSeconds) { [weak self] in
+            guard let self = self, self.peerConnection != nil, context.peerFingerprint == nil else { return }
+            self.reportDtlsFailure(stage: "pin_timeout")
+        }
+    }
+
+    /// Check (b) (§3.6): every time the PC reaches `connected`, compare the negotiated DTLS
+    /// certificates (`RTCCertificateStats` of the transport's local/remote certificate ids) with
+    /// the pinned fingerprints. Retries every 250 ms for up to 5 s; a mismatch, or no verdict in
+    /// that time, ends the call. A pass opens the media gate.
+    fileprivate func startDtlsStatsCheck() {
+        guard dtlsContext != nil else { return }
+        // A new transition to `connected` (a DTLS restart, a reconnect) is verified from scratch:
+        // media that an earlier pass released is held again until THIS generation passes.
+        closeDtlsMediaGate()
+        dtlsStateLock.lock()
+        _dtlsStatsGeneration += 1
+        let generation = _dtlsStatsGeneration
+        dtlsStateLock.unlock()
+        runDtlsStatsAttempt(generation: generation, startedAt: Date())
+    }
+
+    private func runDtlsStatsAttempt(generation: Int, startedAt: Date) {
+        dtlsStateLock.lock()
+        let current = (generation == _dtlsStatsGeneration)
+        dtlsStateLock.unlock()
+        guard current, let pc = peerConnection, let context = dtlsContext else { return }
+        let deadlineReached = Date().timeIntervalSince(startedAt) >= Self.dtlsStatsDeadlineSeconds
+        guard let fpPeer = context.peerFingerprint else {
+            retryOrFailDtlsStats(generation: generation, startedAt: startedAt, deadlineReached: deadlineReached)
+            return
+        }
+        pc.statistics { [weak self] report in
+            guard let self = self else { return }
+            // A newer transition to `connected` superseded this attempt while its stats call was in
+            // flight: that snapshot may pre-date the transition (a different DTLS session), so it must
+            // never open the gate the newer generation just closed. The newer attempt decides.
+            self.dtlsStateLock.lock()
+            let stillCurrent = (generation == self._dtlsStatsGeneration)
+            self.dtlsStateLock.unlock()
+            guard stillCurrent else { return }
+            var records: [DtlsFingerprint.StatsRecord] = []
+            for (_, stat) in report.statistics {
+                let type = stat.type
+                guard type == "transport" || type == "certificate" else { continue }
+                var values: [String: String] = [:]
+                for key in ["dtlsState", "localCertificateId", "remoteCertificateId", "fingerprint", "fingerprintAlgorithm"] {
+                    if let text = stat.values[key] as? String { values[key] = text }
+                }
+                records.append(DtlsFingerprint.StatsRecord(id: stat.id, type: type, values: values))
+            }
+            switch DtlsFingerprint.checkStats(records, fpSelf: context.fingerprint, fpPeer: fpPeer) {
+            case .pass:
+                print("[WebRTC] DTLS fingerprint check (b) ok — media gate opens")
+                self.openDtlsMediaGate()
+            case .mismatch:
+                self.reportDtlsFailure(stage: "stats")
+            case .pending:
+                self.retryOrFailDtlsStats(generation: generation, startedAt: startedAt,
+                                          deadlineReached: Date().timeIntervalSince(startedAt) >= Self.dtlsStatsDeadlineSeconds)
+            }
+        }
+    }
+
+    private func retryOrFailDtlsStats(generation: Int, startedAt: Date, deadlineReached: Bool) {
+        if deadlineReached {
+            reportDtlsFailure(stage: "stats")
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Self.dtlsStatsRetrySeconds) { [weak self] in
+            self?.runDtlsStatsAttempt(generation: generation, startedAt: startedAt)
+        }
+    }
+
+    /// Close the media gate again (a new check generation): local audio/video tracks and remote RTP
+    /// audio/video are disabled until `openDtlsMediaGate` runs. A no-op while the gate is closed.
+    /// The FrameCryptors are never touched.
+    private func closeDtlsMediaGate() {
+        dtlsStateLock.lock()
+        let wasOpen = _dtlsMediaGateOpen
+        _dtlsMediaGateOpen = false
+        dtlsStateLock.unlock()
+        guard wasOpen else { return }
+        localAudioSrtpTrack?.isEnabled = false
+        localVideoTrack?.isEnabled = false
+        if let pc = peerConnection {
+            for receiver in pc.receivers {
+                if let audio = receiver.track as? RTCAudioTrack, usingNativeAudioSrtp { audio.isEnabled = false }
+                if let video = receiver.track as? RTCVideoTrack { video.isEnabled = false }
+            }
+        }
+        print("[WebRTC] DTLS media gate closed — a new connection is verified before media flows")
+    }
+
+    /// Open the media gate: local audio/video tracks go back to the user's intent, remote RTP
+    /// audio/video is rendered again. Idempotent. The FrameCryptors are never touched.
+    private func openDtlsMediaGate() {
+        dtlsStateLock.lock()
+        let wasOpen = _dtlsMediaGateOpen
+        _dtlsMediaGateOpen = true
+        dtlsStateLock.unlock()
+        guard !wasOpen else { return }
+        // Local audio: re-apply the latched intent (only meaningful once the sender cryptor is
+        // confirmed attached; `activateNativeAudioSrtp` applies it itself otherwise).
+        if localAudioSrtpTrack != nil, nativeSenderCryptorAttached {
+            applyNativeSenderMuteState(pendingAudioSrtpMuted, source: "act")
+        }
+        if let video = localVideoTrack, !videoFailClosed {
+            video.isEnabled = videoTrackWantedEnabled
+        }
+        if let pc = peerConnection {
+            for receiver in pc.receivers {
+                if let audio = receiver.track as? RTCAudioTrack, usingNativeAudioSrtp {
+                    audio.isEnabled = true
+                }
+                if let video = receiver.track as? RTCVideoTrack, !videoFailClosed {
+                    video.isEnabled = true
+                }
+            }
+        }
+        onDtlsMediaGateOpened?()
+    }
+
     // MARK: - Errors
 
     public enum WebRTCError: Error, Equatable {
         case notInitialized
         case sdpFailed(String)
+        /// A DTLS fingerprint check failed (stage: `sdp_remote`, `sdp_local`, `stats`,
+        /// `pin_timeout`). Verdict only.
+        case dtlsFingerprint(String)
     }
 }
 
@@ -2251,6 +2507,11 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
     /// observer that failure was silently unobserved on iOS (same asymmetric
     /// gap already found + fixed on Android this session, onConnectionChange).
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
+        // WIRE_SPEC §3.6 — check (b) runs on EVERY transition to `connected` (the first time and
+        // after any DTLS restart); local tracks and remote RTP media stay held until it passes.
+        if newState == .connected {
+            startDtlsStatsCheck()
+        }
         delegate?.peerConnection(self, didChangeConnectionState: newState)
     }
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
@@ -2339,6 +2600,9 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
             // `PeerConnectionHolder.onTrack`'s AUDIO_SRTP_V1 branch.
             if peerCallCapabilities?.useAudioSrtp == true {
                 usingNativeAudioSrtp = true
+                // WIRE_SPEC §3.6 — remote RTP audio is not played until the DTLS media gate
+                // opened (check (b)); `openDtlsMediaGate` enables it.
+                audio.isEnabled = dtlsMediaGateOpen
                 delegate?.peerConnection(self, didReceiveNativeAudioSrtpReceiver: rtpReceiver)
                 delegate?.peerConnection(self, didReceiveRemoteAudioTrack: audio)
             } else {
@@ -2357,6 +2621,9 @@ extension QAudionPeerConnection: RTCPeerConnectionDelegate {
             }
         }
         if let video = rtpReceiver.track as? RTCVideoTrack {
+            // WIRE_SPEC §3.6 — remote video is not rendered until the DTLS media gate opened
+            // (and never while video is fail-closed); `openDtlsMediaGate` enables it.
+            video.isEnabled = dtlsMediaGateOpen && !videoFailClosed
             // CALLEE-UPGRADE-PURPLE FIX (2026-07-01) — mirror of Android 39ea0e5f
             // (`shouldIgnorePhantomVideoTransceiver`): on a callee-initiated video
             // upgrade the peer's libwebrtc (M144) can mint a DUPLICATE phantom

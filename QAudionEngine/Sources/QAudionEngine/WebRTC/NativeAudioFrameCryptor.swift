@@ -12,26 +12,25 @@ import WebRTC
 /// audio and video use independent epoch counters and must never share a key
 /// ring slot space.
 ///
-/// Config (ALL must match Android for cross-platform decrypt — see
-/// `PeerConnectionHolder.applyAudioFrameCryptionKey`, `CallCapabilities.kt`
-/// :354-370 for video's identical params, reused verbatim for audio):
-///   algorithm = AES-GCM (32-byte key => AES-256-GCM), shared-key mode,
+/// Config (ALL must match Android for cross-platform decrypt):
+///   algorithm = AES-GCM (32-byte key => AES-256-GCM), PER-PARTICIPANT key mode
+///   (transcript v5, owner decision O1: directional 1:1 frame keys),
 ///   ratchetSalt EMPTY, ratchetWindowSize 0, no magic bytes, failureTolerance
 ///   -1, keyRingSize 16, discardFrameWhenCryptorNotReady true, key-derivation
-///   HKDF. The key is the RAW 32-byte PQC session key — no K_video-style
-///   derivation for audio (Android installs the raw session key directly,
-///   `installLiveMediaKeys` -> `setAudioSrtpKey`).
+///   HKDF. The keys are the two DIRECTIONAL 32-byte frame keys derived per key
+///   round from the transcript-bound session key (`OneToOneFrameKeys`): the
+///   SENDER cryptor uses the local participant id holding the own-direction
+///   key, the RECEIVER cryptor the remote participant id holding the
+///   peer-direction key; the ring slot is `epoch % 16`.
 ///
 /// Symbol provenance: `RTCFrameCryptor`/`RTCFrameCryptorKeyProvider`/
 /// `RTCKeyDerivationAlgorithm`/`RTCFrameCryptorDelegate`/
 /// `RTCFrameCryptorState` are the EXACT symbols `NativeVideoFrameCryptor`
-/// already uses successfully in this repo's own `WebRTC` binaryTarget (not
-/// `LiveKitWebRTC` — that is a separate, prefixed dependency used only for
-/// group calls) — this file is a structural sibling, not a new API surface.
+/// already uses successfully in this repo's own `WebRTC` binaryTarget — this
+/// file is a structural sibling, not a new API surface.
 public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     public let keyProvider: RTCFrameCryptorKeyProvider
     private let factory: RTCPeerConnectionFactory
-    private let participantId: String
     private var senderCryptor: RTCFrameCryptor?
     private var receiverCryptor: RTCFrameCryptor?
     /// W-AUDIORXREBIND (2026-09-26) — `receiverId` of the receiver the
@@ -86,13 +85,12 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
     /// `lock` on that thread at all.
     private let stateChangeQueue = DispatchQueue(label: "qaudion.webrtc.audio-cryptor-state")
 
-    public init(factory: RTCPeerConnectionFactory, participantId: String) {
+    public init(factory: RTCPeerConnectionFactory) {
         self.factory = factory
-        self.participantId = participantId
         self.keyProvider = RTCFrameCryptorKeyProvider(
             ratchetSalt: Data(),
             ratchetWindowSize: 0,
-            sharedKeyMode: true,
+            sharedKeyMode: false,
             uncryptedMagicBytes: nil,
             failureTolerance: -1,
             keyRingSize: 16,
@@ -118,26 +116,41 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
         return senderCryptor != nil
     }
 
-    /// Install [key] into the decode ring at [slot] — this ALONE is what
-    /// lets this device decode a peer's frames already tagged with this
-    /// slot/epoch (the receiver is driven entirely by the on-wire key
-    /// index, never by this device's own sender state). Callable
-    /// immediately upon deriving the key; does NOT touch this device's own
-    /// outbound frames (see `switchSender`). Safe to call before OR after
-    /// the cryptors are attached. Returns `false` if the key is the wrong
-    /// size (nothing installed).
-    public func installKey(_ key: Data, slot: Int32) -> Bool {
-        guard key.count == 32 else {
-            print("[NativeAudioFrameCryptor] installKey ignored — key is \(key.count) bytes, expected 32")
+    /// Install the two directional frame keys into the ring at [slot]: [send] under the local
+    /// participant id (this device's own outbound direction), [recv] under the remote participant
+    /// id (the peer's direction). This ALONE is what lets this device decode a peer's frames
+    /// already tagged with this slot/epoch (the receiver is driven entirely by the on-wire key
+    /// index, never by this device's own sender state). Callable immediately upon deriving the
+    /// keys; does NOT touch this device's own outbound frames (see `switchSender`). Safe to call
+    /// before OR after the cryptors are attached. Returns `false` if a key is the wrong size
+    /// (nothing installed).
+    public func installKeys(send: Data, recv: Data, slot: Int32) -> Bool {
+        guard send.count == 32, recv.count == 32 else {
+            print("[NativeAudioFrameCryptor] installKeys ignored — key sizes \(send.count)/\(recv.count), expected 32")
             return false
         }
         lock.lock(); defer { lock.unlock() }
         currentKeyIndex = Int(slot)
-        keyProvider.setSharedKey(key, with: slot)
+        keyProvider.setKey(send, with: slot, forParticipant: OneToOneFrameParticipant.local)
+        keyProvider.setKey(recv, with: slot, forParticipant: OneToOneFrameParticipant.remote)
         hasKey = true
-        print("[NativeAudioFrameCryptor] key installed at slot \(slot)")
+        // R-RING: the receive side keeps exactly {current, previously installed} live; every other
+        // slot is overwritten with RANDOM bytes (never zeros: the native cryptor accepts 32 zero
+        // bytes as a valid key). The own-direction key at the slot the own sender still announces
+        // is kept until a later install, once the sender has moved on.
+        let retired = ringTracker.install(slot: slot, senderSlot: Int32(currentSenderKeyIndex))
+        for old in retired.remote {
+            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.remote)
+        }
+        for old in retired.local {
+            keyProvider.setKey(OneToOneKeyRingTracker.randomRetiredKey(), with: old, forParticipant: OneToOneFrameParticipant.local)
+        }
+        print("[NativeAudioFrameCryptor] keys installed at slot \(slot) retired=\(retired.remote.count)")
         return true
     }
+
+    /// R-RING bookkeeping of the 1:1 key ring (the slots that hold a real key). Guarded by `lock`.
+    private var ringTracker = OneToOneKeyRingTracker()
 
     /// Switch THIS device's own outbound audio frames to announce [slot]
     /// (the slot `installKey` just installed). Call this only once the
@@ -198,7 +211,7 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
 
         let built = RTCFrameCryptor(factory: factory,
                                     rtpSender: sender,
-                                    participantId: participantId,
+                                    participantId: OneToOneFrameParticipant.local,
                                     algorithm: .aesGcm,
                                     keyProvider: keyProvider)
 
@@ -241,7 +254,7 @@ public final class NativeAudioFrameCryptor: NSObject, @unchecked Sendable {
 
         let built = RTCFrameCryptor(factory: factory,
                                     rtpReceiver: receiver,
-                                    participantId: participantId,
+                                    participantId: OneToOneFrameParticipant.remote,
                                     algorithm: .aesGcm,
                                     keyProvider: keyProvider)
 
@@ -390,7 +403,7 @@ extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
             }
             switch state {
             case .decryptionFailed, .missingKey, .internalError:
-                print("[NativeAudioFrameCryptor] \(role) cryptor state=\(state.rawValue) participantId=\(participantId)")
+                print("[NativeAudioFrameCryptor] \(role) cryptor state=\(state.rawValue)")
                 // Unchanged semantics: only the RECEIVER side drives the
                 // pre-existing rekey-skew signal (audio has no keyframe
                 // request to make on a sender-side failure the way video
