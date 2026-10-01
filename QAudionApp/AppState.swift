@@ -7583,10 +7583,10 @@ final class AppState: ObservableObject {
     ) {
         // The exact wire call id (the context's frame keys derive from the transcript string).
         let cid = wireCallId ?? ""
-        controller.dtlsContext = cid.isEmpty ? nil : CallDtlsContextStore.shared.context(forCallId: cid)
         // R-CERT: the call's certificate is held for the whole call (never evicted by other calls'
-        // OFFERs) until `endCall` releases it.
-        if controller.dtlsContext != nil { CallDtlsContextStore.shared.hold(callId: cid) }
+        // OFFERs) until `endCall` releases it. Held in the same step that looks it up, so no OFFER
+        // can evict it in between.
+        controller.dtlsContext = cid.isEmpty ? nil : CallDtlsContextStore.shared.context(forCallId: cid, hold: true)
         controller.isHandshakeOfferer = isOfferer
         controller.onDtlsFingerprintFailure = { [weak self] _ in
             Task { @MainActor [weak self] in

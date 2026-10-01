@@ -148,11 +148,28 @@ public final class CallDtlsContextStore: @unchecked Sendable {
     /// certificate cannot be generated (or on a host without WebRTC), or when the call id already
     /// signed with a certificate that is gone — the caller must then fail the call: a 1:1 call
     /// without its pinned certificate is never set up.
-    public func context(forCallId callId: String) -> CallDtlsContext? {
+    public func context(forCallId callId: String, hold: Bool = false) -> CallDtlsContext? {
+        acquire(callId: callId, markSigned: false, hold: hold)
+    }
+
+    /// The call's own fingerprint (33 bytes), generating the certificate on first use. Reading it
+    /// is what the signed handshake does, so it marks the call id as signed AND live: from here on
+    /// the context is never evicted and never regenerated.
+    public func fingerprint(forCallId callId: String) -> Data? {
+        acquire(callId: callId, markSigned: true, hold: true)?.fingerprint
+    }
+
+    /// Look up (or create) the context and apply `markSigned` / `hold` in the SAME critical section
+    /// that inserts it. Doing the marking in a second step left a window in which the fresh, not yet
+    /// live context could be evicted by other calls' OFFERs: the caller would then use (and sign)
+    /// the evicted certificate while the store generated a different one on the next lookup, which
+    /// the peer ends with `dtls_fp_mismatch`.
+    private func acquire(callId: String, markSigned: Bool, hold: Bool) -> CallDtlsContext? {
         let key = callId.lowercased()
         guard !key.isEmpty else { return nil }
         lock.lock()
         if let existing = byCall[key] {
+            markLocked(key, markSigned: markSigned, hold: hold)
             lock.unlock()
             return existing
         }
@@ -167,25 +184,17 @@ public final class CallDtlsContextStore: @unchecked Sendable {
         guard let created = generator(callId) else { return nil }
         lock.lock()
         defer { lock.unlock() }
-        if let raced = byCall[key] { return raced }
+        if let raced = byCall[key] {
+            markLocked(key, markSigned: markSigned, hold: hold)
+            return raced
+        }
         if retired.contains(key) { return nil }
         byCall[key] = created
         order.append(key)
+        // Marked BEFORE the eviction pass, so a live context is never the victim of its own insert.
+        markLocked(key, markSigned: markSigned, hold: hold)
         evictIfNeeded()
         return created
-    }
-
-    /// The call's own fingerprint (33 bytes), generating the certificate on first use. Reading it
-    /// is what the signed handshake does, so it marks the call id as signed AND live: from here on
-    /// the context is never evicted and never regenerated.
-    public func fingerprint(forCallId callId: String) -> Data? {
-        guard let ctx = context(forCallId: callId) else { return nil }
-        let key = callId.lowercased()
-        lock.lock()
-        signed.insert(key)
-        holdLocked(key)
-        lock.unlock()
-        return ctx.fingerprint
     }
 
     /// Keep the context of `callId` (a PeerConnection of the call is bound to it) until `release`.
@@ -225,6 +234,11 @@ public final class CallDtlsContextStore: @unchecked Sendable {
     }
 
     // MARK: - Locked helpers (the lock is held)
+
+    private func markLocked(_ key: String, markSigned: Bool, hold: Bool) {
+        if markSigned { signed.insert(key) }
+        if hold || markSigned { holdLocked(key) }
+    }
 
     private func holdLocked(_ key: String) {
         guard byCall[key] != nil, !live.contains(key) else { return }

@@ -156,6 +156,31 @@ final class CallDtlsContextTests: XCTestCase {
         XCTAssertTrue(store.existing(forCallId: "ringing") === ctx)
     }
 
+    /// A context created with `hold: true` is live from its very first instant: the other calls'
+    /// OFFERs that arrive right after cannot evict it (no lookup-then-hold window), and a
+    /// fingerprint read afterwards still returns the certificate the PeerConnection was given.
+    func testContextCreatedHeldIsNeverEvictedAndKeepsItsCertificate() throws {
+        let counting = Counting()
+        let store = makeStore(counting)
+        let ctx = try XCTUnwrap(store.context(forCallId: "Bound", hold: true))
+        for i in 0..<(CallDtlsContextStore.retained * 3) { _ = store.context(forCallId: "noise-\(i)") }
+        XCTAssertTrue(store.existing(forCallId: "bound") === ctx)
+        XCTAssertEqual(store.fingerprint(forCallId: "bound"), ctx.fingerprint)
+        XCTAssertEqual(counting.count("bound"), 1)
+    }
+
+    /// A call whose certificate is first read for signing is signed and live in the same step: the
+    /// fingerprint returned is that of the context the store keeps, even under a burst of OFFERs.
+    func testFingerprintReadIsAtomicWithTheInsert() throws {
+        let counting = Counting()
+        let store = makeStore(counting)
+        let fp = try XCTUnwrap(store.fingerprint(forCallId: "first-sign"))
+        for i in 0..<(CallDtlsContextStore.retained * 3) { _ = store.context(forCallId: "burst-\(i)") }
+        XCTAssertEqual(store.existing(forCallId: "first-sign")?.fingerprint, fp)
+        XCTAssertEqual(store.fingerprint(forCallId: "first-sign"), fp)
+        XCTAssertEqual(counting.count("first-sign"), 1)
+    }
+
     /// Contexts that are neither held nor signed (an OFFER merely ringing) are still bounded.
     func testUnheldContextsAreStillEvictedInInsertionOrder() {
         let store = makeStore(Counting())
