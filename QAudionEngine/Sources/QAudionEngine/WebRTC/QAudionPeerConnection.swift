@@ -2354,6 +2354,9 @@ public final class QAudionPeerConnection: NSObject {
     /// that time, ends the call. A pass opens the media gate.
     fileprivate func startDtlsStatsCheck() {
         guard dtlsContext != nil else { return }
+        // A new transition to `connected` (a DTLS restart, a reconnect) is verified from scratch:
+        // media that an earlier pass released is held again until THIS generation passes.
+        closeDtlsMediaGate()
         dtlsStateLock.lock()
         _dtlsStatsGeneration += 1
         let generation = _dtlsStatsGeneration
@@ -2404,6 +2407,26 @@ public final class QAudionPeerConnection: NSObject {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Self.dtlsStatsRetrySeconds) { [weak self] in
             self?.runDtlsStatsAttempt(generation: generation, startedAt: startedAt)
         }
+    }
+
+    /// Close the media gate again (a new check generation): local audio/video tracks and remote RTP
+    /// audio/video are disabled until `openDtlsMediaGate` runs. A no-op while the gate is closed.
+    /// The FrameCryptors are never touched.
+    private func closeDtlsMediaGate() {
+        dtlsStateLock.lock()
+        let wasOpen = _dtlsMediaGateOpen
+        _dtlsMediaGateOpen = false
+        dtlsStateLock.unlock()
+        guard wasOpen else { return }
+        localAudioSrtpTrack?.isEnabled = false
+        localVideoTrack?.isEnabled = false
+        if let pc = peerConnection {
+            for receiver in pc.receivers {
+                if let audio = receiver.track as? RTCAudioTrack, usingNativeAudioSrtp { audio.isEnabled = false }
+                if let video = receiver.track as? RTCVideoTrack { video.isEnabled = false }
+            }
+        }
+        print("[WebRTC] DTLS media gate closed — a new connection is verified before media flows")
     }
 
     /// Open the media gate: local audio/video tracks go back to the user's intent, remote RTP

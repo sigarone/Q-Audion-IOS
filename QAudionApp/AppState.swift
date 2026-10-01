@@ -7582,7 +7582,8 @@ final class AppState: ObservableObject {
     private func bindDtlsContext(
         _ controller: QAudionWebRtcCallController, wireCallId: String?, isOfferer: Bool
     ) {
-        let cid = (wireCallId ?? "").lowercased()
+        // The exact wire call id (the context's frame keys derive from the transcript string).
+        let cid = wireCallId ?? ""
         controller.dtlsContext = cid.isEmpty ? nil : CallDtlsContextStore.shared.context(forCallId: cid)
         controller.isHandshakeOfferer = isOfferer
         controller.onDtlsFingerprintFailure = { [weak self] _ in

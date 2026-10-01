@@ -33,6 +33,8 @@ public final class CallDtlsContext: @unchecked Sendable {
         case conflict
     }
 
+    /// The call id exactly as the first user of the context wrote it (the signed handshake's call
+    /// id string; not case-normalised).
     public let callId: String
     /// This side's own fingerprint: `u8(alg=1) || SHA-256(DER certificate)` (33 bytes).
     public let fingerprint: Data
@@ -124,7 +126,10 @@ public final class CallDtlsContextStore: @unchecked Sendable {
             return existing
         }
         lock.unlock()
-        guard let created = Self.generate(callId: key) else { return nil }
+        // The context keeps the call id EXACTLY as the caller of `context(forCallId:)` spelled it
+        // (the frame keys of WIRE_SPEC 3.7.2 are derived from the exact transcript string); only
+        // the registry key is lower-cased.
+        guard let created = Self.generate(callId: callId) else { return nil }
         lock.lock()
         defer { lock.unlock() }
         if let raced = byCall[key] { return raced }

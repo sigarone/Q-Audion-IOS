@@ -82,6 +82,23 @@ final class CallDtlsContextTests: XCTestCase {
         XCTAssertEqual(count, 20)
     }
 
+    /// The store keeps the call id exactly as first spelled (frame keys derive from the transcript
+    /// string, which may be upper-case in a KAT), while the lookup ignores case. Needs a real
+    /// certificate, so it only runs where the WebRTC binary is linked.
+    func testStoreKeepsTheExactCallIdAndLooksUpCaseInsensitively() throws {
+        let store = CallDtlsContextStore()
+        guard let ctx = store.context(forCallId: "01HXTestCallID") else {
+            throw XCTSkip("no certificate generator on this host")
+        }
+        XCTAssertEqual(ctx.callId, "01HXTestCallID")
+        XCTAssertTrue(store.context(forCallId: "01hxtestcallid") === ctx)
+        XCTAssertTrue(store.existing(forCallId: "01HXTESTCALLID") === ctx)
+        XCTAssertTrue(DtlsFingerprint.isWellFormedBinary(ctx.fingerprint))
+        // A second call gets another certificate (calls stay unlinkable).
+        let other = try XCTUnwrap(store.context(forCallId: "another-call"))
+        XCTAssertNotEqual(other.fingerprint, ctx.fingerprint)
+    }
+
     // MARK: - Hash store (SAS binding)
 
     func testTranscriptHashStoreKeyedByLowercasedCallId() {

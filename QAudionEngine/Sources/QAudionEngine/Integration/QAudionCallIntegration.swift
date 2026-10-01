@@ -3767,56 +3767,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     // MARK: - earbud-relay-v1 (HW firmware) counterparty install
 
-    /// Install the session key produced by the earbud counterparty
-    /// handshake (`EarbudHandshakeResponder.Step.done`) — the
-    /// earbud-relay-v1 equivalent of the PQC OFFER/ACCEPT completion
-    /// branches above.
+    /// earbud-relay-v1 counterparty install — RETIRED under transcript v5 (fail-closed).
     ///
-    /// On an `earbud-relay-v1` call the peer phone NEVER runs the SW
-    /// PqcHandshake (its key lives in the earbud firmware), so none of
-    /// the opaque OFFER/ACCEPT paths fire: this method is the single
-    /// completion site. It mirrors the JSON-responder branch
-    /// byte-for-byte: AdaptivePadding audio scheme (the wire the
-    /// firmware/Android relay speaks), `.active` transition, and the
-    /// same key-established callbacks so SAS + K_video derivation reuse
-    /// the existing app wiring. K_counter == K_spe (CRUX KAT), so
-    /// `ComputeSasUseCase.invoke(sessionKey:)` yields the SAME 6 words
-    /// the earbud side derives via `nsc_get_sas_entropy`.
-    ///
-    /// Idempotent per callId via `sessionInitializedByCall` (same dedup
-    /// the OFFER paths use).
+    /// The earbud-relay-v1 counterparty handshake (`EarbudHandshakeResponder`) yields a key with no
+    /// signed OFFER_v5/ACCEPT_v5 behind it: there is no transcript to bind the session key, the SAS
+    /// and the key confirmation to, and no signed DTLS certificate fingerprint to pin. Under the v5
+    /// hard switch such a session would be weaker than every other 1:1 call, so no session is
+    /// installed and the call keeps no key (the app logs the failure). Re-enabling it needs a v5
+    /// counterparty handshake on the earbud side (a firmware change).
     public func completeEarbudCounterparty(callId: String, sessionKey: Data) throws {
-        // W-STALESEALER — this function is not `async` (no `await` is possible
-        // anywhere below), so reading the generation here is equivalent to
-        // reading it at the exact instant `onRelaySessionReady` fires below.
-        let entryGeneration = provideCallGeneration?() ?? -1
-        let normalized = callId.lowercased()
-        let alreadyInit = lock.withLock { () -> Bool in
-            let r = sessionInitializedByCall.contains(normalized)
-            if !r { sessionInitializedByCall.insert(normalized) }
-            return r
-        }
-        if alreadyInit {
-            print("[QAudionCallIntegration] earbud counterparty: session already initialised for callId=\(callId.prefix(8))… — skipping")
-            return
-        }
-        try engine.initialize()
-        try engine.initSession(sharedSecret: sessionKey, adaptivePadding: true)
-        onRelaySessionReady?(sessionKey, callId, entryGeneration)
-        lock.withLock { state = .active }
-        offerRetryTask?.cancel()
-        offerRetryTask = nil
-        onStateChanged?(.active)
-        onPqcSessionKeyEstablished?(sessionKey)
-        // W-MEDIAATACCEPT (option b) — §6: earbud-counterparty completion
-        // path (R7: unaffected by the ring-signaling-only mode itself, but
-        // CallKeyStore isolation is a universal property, not a PQC-only one).
-        onSessionKeyForCall?(sessionKey, callId)
-        // vkey-v1: K_counter is the IKM for the phone-level K_video on
-        // sovereign-earbud calls (parallel handshake gating happens in
-        // the app layer via the negotiated tags).
-        onVideoKeyEstablished?(sessionKey)
-        print("[QAudionCallIntegration] earbud counterparty COMPLETE for callId=\(callId.prefix(8))… — session active (CRUX K_counter installed)")
+        print("[QAudionCallIntegration] earbud counterparty key NOT installed (retired under transcript v5) callId=\(callId.prefix(8))…")
+        throw IntegrationError.handshakeAborted(code: "earbud_relay_retired")
     }
 
     // MARK: - W529: idempotent OFFER retry timer
