@@ -106,6 +106,7 @@ import sys
 import json
 import time
 import shlex
+import functools
 import hashlib
 import argparse
 import unicodedata
@@ -483,6 +484,12 @@ SERVER_DROP_SUBSTRINGS = [
     "transcript", "ssid", "device_name", "devicename",
 ]
 
+# W-KEYWORDS 2026-09-24 (red-team finding 3, ported from ship-ios-logs.py): the words
+# derived key / raw key, and secret / slat / salt / *key(s) followed within a few non-word
+# characters by an opening bracket, drop the WHOLE line whatever the group holds.
+RE_KEY_MATERIAL = re.compile(
+    r"(?:derived|raw)[\s_\-]*key|(?:secret|slat|salt|\w*keys?)\W{0,8}[\[({<]")
+
 RE_RESIDUAL_B64 = re.compile(r"[A-Za-z0-9+/=_\-]{12,}")
 RE_RESIDUAL_HEX = re.compile(r"\b[0-9a-fA-F]{12,}\b")
 
@@ -521,6 +528,267 @@ RE_FREEWORD = re.compile(r"^[A-Za-z][A-Za-z'\-]{2,}$")
 # rather than counting it as one free word. Same defense as ship-ios-logs.py.
 RE_MIXED_ALNUM_SECRET = re.compile(
     r"^(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]{8,}$")
+
+# ---------------------------------------------------------------------------
+# FREE-WORD PLAUSIBILITY (W-FREEWORD 2026-09-24; ported from ship-ios-logs.py,
+# red-team finding 1: the positive gate never asked whether a token reads like a
+# word, so base26/base52 blocks of 3-11 letters between structural tokens shipped).
+#
+# The gate above only COUNTED "free" words; it never asked whether a token reads
+# like a word. Any alphabetic token of 3-11 letters was accepted as ordinary
+# text, so a secret written in base26 / base52 (letters only), cut into
+# 11-letter blocks and interleaved with structural tokens ("... <block> active
+# <block> ice=connected ...") shipped VERBATIM: the red-team round-tripped 32
+# synthetic bytes through the shipped body. Sibling holes in the same gate: a
+# 1-2 character token was "neutral" (unlimited), an UNPROTECTED key=value token
+# was structural whatever followed the '=' / ':' (`k=abcdefghi`, `abcdefghijk:`),
+# a "number" token could carry 5 trailing letters (`1abcdefghij`), a token with
+# non-ASCII look-alike letters was judged as free text, and a comma list of
+# <= 7 numbers per token (`1,2,3,4,5,6,7 8,9,...`) dodged the byte-list rule.
+# Now EVERY token that reaches the gate must earn its place:
+#   * a word is KNOWN (TELEMETRY_VOCAB / APP_VOCAB, or a camel/Pascal compound of
+#     known words) or it must LOOK like a word: clean case shape (lower,
+#     Capitalized, UPPER, or 2-4 camel parts -- aBcDeFgHiJk, the shape of a
+#     base52/base62 block, is rejected), a vowel, no run of 5 consonants or 5
+#     vowels, no tripled letter, vowels >= 20% of a 5+ letter word, and no
+#     bigram that (almost) never occurs in English / app identifiers;
+#   * the number of words that are NOT known is capped per body
+#     (MAX_UNKNOWN_WORDS). A lexical filter cannot stop an encoder that emits
+#     pronounceable words -- the cap bounds what one body can carry;
+#   * kv keys and values, number units, "id-like" values (a hex id prefix such as
+#     to=8bc24df8 stays readable; so does a number of 6+ digits; at most
+#     MAX_IDLIKE_TOKENS of them per body: the 14-day corpus has 2 at most, and 3
+#     hex blocks / big numbers per body would carry a third of a 16-byte key), 1-2 letter
+#     tokens, runs of number tokens and separator-joined tokens follow the same
+#     rules (_gate_kv_ok / _num_token_ok / _ident_ok). A bare number token is one
+#     number (or two joined by one separator); 3+ numbers in one token fail.
+#   * NOT closed: single numbers between vocabulary words ("rtt 1234 ok 5678 ...",
+#     23 bits per number) look exactly like the call-statistics lines that make
+#     up much of the corpus; only the key-byte list rules (1c-bis) stop the
+#     natural ways of printing a key as numbers. Documented residual.
+# A failed check is a HARD FAIL: the body falls back to the attribute summary.
+# APP_VOCAB = the words the app itself prints (class / state / enum names),
+# here: the server's own slog vocabulary (keys / msg words). The server
+# budgets are more generous than the iOS leg (no corpus to tune on: the call lane
+# is rare and a failed check only falls back to the attribute summary).
+# ---------------------------------------------------------------------------
+MAX_UNKNOWN_WORDS = 3     # per body: words that are neither TELEMETRY_VOCAB nor APP_VOCAB
+UNKNOWN_MAX_LEN = 9       # an unknown word longer than this is not a plausible word
+MAX_IDLIKE_TOKENS = 2     # per body: hex id prefixes (4-8 hex) + numbers of 6+ digits
+MAX_NUM_RUN = 3           # consecutive bare number tokens
+
+APP_VOCAB = frozenset("""
+    accepted answered api audio auto-tracked busy bytes callee caller calls
+    canceled cancelled cause client code conn connection count create
+    created creator crypto declined delete device devices dtls duration
+    elapsed end epoch err error expired file files get group groups hangup
+    http https ice id invited invitees ip join joined key keys kms leave
+    left level media method mid missed ms msg node opus participant
+    participants patch path pcm peer post processing pt put ready reason
+    receiver recipient rejected rekey relay room rtcp rtp rtt rx sdp seal
+    sec sender seq server session sfu size srtp ssrc state status stun tcp
+    time timeout tls total tracked turn tus tx udp unseal user users video
+    ws wss
+""".split())
+
+# Second letters that (almost) never follow the first in English / app
+# identifiers (fewer than 6 of ~13k distinct words): a random letter block hits
+# one of them with high probability (a random 11-letter block passes ~4%).
+_BIGRAM_FORBID = {
+    "a": "jo",
+    "b": "hqxz",
+    "c": "jwxz",
+    "d": "qxz",
+    "f": "hjkqvxz",
+    "g": "bjkqvxz",
+    "h": "cgjkpqvwxz",
+    "i": "wy",
+    "j": "bcdfghjklmnpqrtvwxyz",
+    "k": "hjkqvxz",
+    "l": "hjqwxz",
+    "m": "gjqrvwxz",
+    "n": "x",
+    "o": "q",
+    "p": "jqxz",
+    "q": "abcdefghijklmnopqrtvwxyz",
+    "r": "jqz",
+    "s": "jxz",
+    "t": "jkqz",
+    "u": "hjkqvwy",
+    "v": "dghjklmqtwxyz",
+    "w": "bfgjkmquvxyz",
+    "x": "bgjklnoqrsuvwxz",
+    "y": "hjkquvxy",
+    "z": "bcdfghjklmnpqrstuvwxy",
+}
+_RE_CASE_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
+_CAMEL_SHORT_OK = frozenset(
+    "of to in on at is as if or by id up no ok do go it my re us".split())
+_RE_CONS5 = re.compile(r"[^aeiouy]{5}")
+_RE_VOW5 = re.compile(r"[aeiouy]{5}")
+_RE_TRIPLE = re.compile(r"(.)\1\1")
+_RE_ID_SPLIT = re.compile(r"[^A-Za-z0-9]+")
+_RE_ALNUM_RUNS = re.compile(r"[A-Za-z]+|[0-9]+")
+_RE_PH_INSIDE = re.compile(r"\[REDACTED:[a-z]+\]")
+_RE_KV_GATE = re.compile(r"^([A-Za-z][A-Za-z0-9_.\-]*)[=:](.*)$", re.DOTALL)
+_RE_HEX_PREFIX = re.compile(r"^(?:0x)?[0-9a-fA-F]{4,8}$")
+_RE_BIGNUM = re.compile(r"\d{6}")
+_RE_NUMTOK = re.compile(r"^[+\-]?\d{1,9}(?:[.,:]\d{1,9})?[.,:]?([A-Za-z%]{0,5})$")
+_GATE_WRAP = "[](){}<>.,:;!?\"'"          # wrappers stripped before judging a token
+_KV_VAL_STRIP = "()[]{}<>,;:.!?\"'`/\\*"
+# units a bare number token may carry (35ms 1.5s 64kbps 48khz 20dbfs 3x 12%).
+_NUM_UNITS = frozenset(
+    "ms us ns s sec secs min mins h hz khz mhz kbps mbps gbps bps fps kb mb gb "
+    "b db dbfs dbm px x k m g kib mib pkts pps %".split())
+
+
+def _word_known(low):
+    return low in TELEMETRY_VOCAB or low in APP_VOCAB
+
+
+def _case_shape_ok(w):
+    """w: ASCII letters, case preserved. lower / Capitalized / UPPER, or clean
+    camel/Pascal (2-4 parts, every part after the first 3+ letters, or a common
+    2-letter word, or a 2-letter acronym)."""
+    if len(w) < 2 or w.islower() or w.isupper():
+        return True
+    if w[0].isupper() and w[1:].islower():
+        return True
+    parts = _RE_CASE_PARTS.findall(w)
+    if len(parts) < 2 or len(parts) > 4:
+        return False
+    for p in parts[1:]:
+        if (len(p) >= 3 or p.lower() in _CAMEL_SHORT_OK or _word_known(p.lower())
+                or (p.isupper() and len(p) == 2)):
+            continue
+        return False
+    return True
+
+
+def _lex_ok(low):
+    """True if the lower-case letter string reads like a word (see 1e-bis)."""
+    n = len(low)
+    if n <= 2 or _word_known(low):
+        return True
+    vowels = sum(1 for c in low if c in "aeiouy")
+    if (vowels == 0 or _RE_CONS5.search(low) or _RE_VOW5.search(low)
+            or _RE_TRIPLE.search(low)):
+        return False
+    if n >= 5 and vowels * 5 < n:
+        return False
+    for a, b in zip(low, low[1:]):
+        if b in _BIGRAM_FORBID.get(a, ""):
+            return False
+    return True
+
+
+@functools.lru_cache(maxsize=16384)
+def _word_ok(w):
+    """(ok, n_unknown) for one ASCII-letter piece: case shape + known/lexical.
+    n_unknown = how many of its camel/Pascal parts are not app vocabulary; an
+    unknown part must read like a word and is at most UNKNOWN_MAX_LEN letters
+    (a long random block is never "a word we have not seen yet")."""
+    if len(w) > 24 or not _case_shape_ok(w):
+        return False, 0
+    low = w.lower()
+    if _word_known(low):
+        return True, 0
+    subs = [s.lower() for s in _RE_CASE_PARTS.findall(w)]
+    unknown = 0
+    for s in subs:
+        if _word_known(s):
+            continue
+        if len(s) > UNKNOWN_MAX_LEN or not _lex_ok(s):
+            return False, 0
+        unknown += 1
+    return True, unknown
+
+
+@functools.lru_cache(maxsize=16384)
+def _ident_ok(tok):
+    """(ok, n_unknown_words) for an identifier-like token (kv key / value, or a
+    gate token that is not a placeholder / number / kv). Non-ASCII letters,
+    digits or marks (look-alikes) fail; the token splits on non-alphanumerics
+    into <= 4 pieces; a piece is digits (<= 5), a word (_word_ok) or a short
+    letter/digit mix (h264, p2p, x25519: <= 3 alternations)."""
+    for ch in tok:
+        if ch > "\x7f" and unicodedata.category(ch)[0] in "LMN":
+            return False, 0
+    if _word_known(tok.lower()):
+        return True, 0                    # the whole token is vocabulary (w-callawake)
+    pieces = [p for p in _RE_ID_SPLIT.split(tok) if p]
+    if len(pieces) > 8 or sum(1 for p in pieces if p.isdigit()) > 2:
+        return False, 0                   # 1,2,3,4,5,6,7 / 1.2.3.4: a number list
+    unknown = 0
+    for p in pieces:
+        if p.isdigit():
+            if len(p) > 5:
+                return False, 0
+            continue
+        if p.isalpha():
+            ok, n = _word_ok(p)
+            if not ok or (n and len(pieces) > 4):
+                return False, 0
+            unknown += n
+            continue
+        if _word_known(p.lower()):
+            continue
+        if len(pieces) > 4:
+            return False, 0       # long joined tokens: every piece must be known
+        runs = _RE_ALNUM_RUNS.findall(p)
+        if len(runs) > 3:
+            return False, 0
+        for r in runs:
+            if r.isdigit():
+                if len(r) > 5:
+                    return False, 0
+            elif len(r) >= 3 and not _word_ok(r)[0]:
+                return False, 0
+        unknown += 1
+    return True, unknown
+
+
+def _is_bignum(tok):
+    """A number token of 6+ digits (an "id-like" value: budgeted per body)."""
+    return _RE_BIGNUM.search(tok) is not None
+
+
+def _num_token_ok(tok):
+    """A bare number token: one number, or two joined by ONE '.' ',' ':' (12.5,
+    1,234, 1:23), an optional trailing separator and, optionally, a known unit
+    suffix. A longer comma list (1,2,3,4,5,6,7) is not a number: the corpus has
+    none, and 7 bytes per token dodged the >= 8-number list rule."""
+    m = _RE_NUMTOK.match(tok)
+    if not m:
+        return False
+    unit = m.group(1)
+    return not unit or unit.lower() in _NUM_UNITS
+
+
+def _gate_kv_ok(tok):
+    """Judge an UNPROTECTED key=value / key:value gate token (the old gate
+    trusted everything after the separator). Returns (ok, is_idlike, n_unknown_words):
+    is_idlike = the value is a hex id prefix or a number of 6+ digits. The key must read like an identifier; the value must be
+    empty, a [REDACTED:*] placeholder, a number (+ known unit), a short hex id
+    prefix, or identifier-like."""
+    m = _RE_KV_GATE.match(tok)
+    if not m:
+        return False, False, 0
+    ok, unknown = _ident_ok(m.group(1))
+    if not ok:
+        return False, False, 0
+    v = _RE_PH_INSIDE.sub("", m.group(2)).strip(_KV_VAL_STRIP)
+    if not v:
+        return True, False, unknown
+    if _num_token_ok(v):
+        return True, _is_bignum(v), unknown
+    if _RE_HEX_PREFIX.match(v):
+        return True, True, unknown
+    ok, n = _ident_ok(v)
+    if not ok:
+        return False, False, 0
+    return True, False, unknown + n
+
 
 BODY_CAP = 512
 
@@ -569,23 +837,49 @@ def _has_residual_secret(body):
 
 def _passes_structured_gate(scrubbed):
     """POSITIVE allow-list. Ships ONLY if recognizably structured telemetry.
-    (Same two-condition gate as ship-ios-logs.py.)"""
+    (Same conditions as ship-ios-logs.py: (A) free-word run cap, (B) free words
+    must not dominate, (C) W-FREEWORD every token must be plausible: words known
+    or word-like with a per-body cap on unknown words, key=value values / numbers
+    / hex prefixes / separator-joined tokens checked too.)"""
     run_n = 0
     free = 0
     structural = 0
+    unknown = 0
+    idlike = 0
+    numrun = 0
     for tok in scrubbed.split():
         if RE_PLACEHOLDER_TOKEN.match(tok):
             run_n = 0
+            numrun = 0
             structural += 1
             continue
         if RE_KV_TOKEN.match(tok):
+            ok, is_idlike, n_unk = _gate_kv_ok(tok)
+            if not ok:
+                return False
+            if is_idlike:
+                idlike += 1
+                if idlike > MAX_IDLIKE_TOKENS:
+                    return False
+            unknown += n_unk
+            if unknown > MAX_UNKNOWN_WORDS:
+                return False
+            run_n = 0
+            numrun = 0
+            structural += 1
+            continue
+        if RE_NUM_TOKEN.match(tok) and _num_token_ok(tok):
+            numrun += 1
+            if numrun > MAX_NUM_RUN:
+                return False
+            if _is_bignum(tok):
+                idlike += 1
+                if idlike > MAX_IDLIKE_TOKENS:
+                    return False
             run_n = 0
             structural += 1
             continue
-        if RE_NUM_TOKEN.match(tok):
-            run_n = 0
-            structural += 1
-            continue
+        numrun = 0
         if RE_PUNCT_TOKEN.match(tok):
             run_n = 0
             continue
@@ -596,22 +890,30 @@ def _passes_structured_gate(scrubbed):
         core = tok.strip("[](){}<>.,:;!?\"'").lower()
         if RE_MIXED_ALNUM_SECRET.match(core):
             return False
+        eff = _RE_PH_INSIDE.sub("", tok).strip(_GATE_WRAP + "*")
         if core in TELEMETRY_VOCAB:
+            if eff.isalpha() and not _case_shape_ok(eff):
+                return False
             run_n = 0
             structural += 1
             continue
         if len(core) <= 2:
-            continue
-        if RE_FREEWORD.match(core):
-            run_n += 1
-            free += 1
-            if run_n > MAX_FREEWORD_RUN:
-                return False
+            if eff.isalpha() and not _word_known(eff.lower()):
+                unknown += 1
+                if unknown > MAX_UNKNOWN_WORDS:
+                    return False
             continue
         run_n += 1
         free += 1
         if run_n > MAX_FREEWORD_RUN:
             return False
+        if eff:
+            ok, n_unk = _ident_ok(eff)
+            if not ok:
+                return False
+            unknown += n_unk
+            if unknown > MAX_UNKNOWN_WORDS:
+                return False
     if free == 0:
         return True
     if structural == 0:
@@ -654,6 +956,8 @@ def redact_body(orig_line, scope_safe, attrs):
     for needle in SERVER_DROP_SUBSTRINGS:
         if needle in low:
             return False, ""
+    if RE_KEY_MATERIAL.search(low):
+        return False, ""
 
     if _is_sdp_line(norm):
         return False, ""
@@ -2365,6 +2669,39 @@ def run_selftest():
     ops_check("single/burst-distinct-ns", len(ts35) == 3 and st35e["call"] == 3
               and ts35 == [ts35[0], ts35[0] + 1, ts35[0] + 2], repr(ts35))
 
+    # 36. RED-TEAM HARDENING 2026-09-24 (ported from ship-ios-logs.py: W-KEYWORDS
+    #     + W-FREEWORD). Every value is SYNTHETIC (the bytes 1..32 / letter runs).
+    hd = 'level=INFO msg="call status: active" call_id=91fe5cf7 '
+    for tail in ("derived_key ok", "raw_key [ABCD:EFGH]", "raw key computed",
+                 "salt [ab:cd]", "slat (7)", "session_key [x]", "secret {a b}"):
+        _k, _b = redact_body(hd + tail, True, {})
+        if _k and _b:
+            failures.append("LEAK[key-words]: line was not dropped: %r" % tail)
+    _n = int.from_bytes(bytes(range(1, 33)), "big")
+    _s = ""
+    while _n:
+        _n, _r = divmod(_n, 26)
+        _s = "abcdefghijklmnopqrstuvwxyz"[_r] + _s
+    for _k11 in (3, 5, 8, 11):
+        _bl = [_s[i:i + _k11] for i in range(0, len(_s), _k11)]
+        for _line in (hd + " active ".join(_bl) + " ok",
+                      hd + " state=active ".join(_bl) + " ok"):
+            _kk, _bb = redact_body(_line, True, {})
+            _got = [b for b in _bl if b in _bb.split()] if _kk else []
+            if len(_got) > MAX_UNKNOWN_WORDS or any(len(b) >= 10 for b in _got):
+                failures.append("LEAK[freeword/%d]: %d letter block(s) survived"
+                                % (_k11, len(_got)))
+    for _blk in ("aBcDeFgHiJk", "1abcdefghij"):
+        _kk, _bb = redact_body(hd + _blk + " ok", True, {})
+        if _kk and _blk in _bb:
+            failures.append("LEAK[freeword/shape]: %r survived" % _blk)
+    _kk, _bb = redact_body(hd + "x=abcdefghi y=jklmnopqr z=stuvwxyza w=bcdefghij", True, {})
+    if _kk and sum(1 for v in ("abcdefghi", "jklmnopqr", "stuvwxyza", "bcdefghij") if v in _bb) > MAX_UNKNOWN_WORDS:
+        failures.append("LEAK[freeword/kv]: kv value carriers survived")
+    _kk, _bb = redact_body(hd + "seq=12 rtt=35ms", True, {})
+    if not _kk or "[summary]" in _bb or "seq=12" not in _bb:
+        failures.append("REGRESS[freeword]: plain structured call line altered: %r" % _bb)
+
     out("=" * 72)
     out("SELF-TEST: server-leg privacy redaction + join-key reconcile")
     out("=" * 72)
@@ -2393,6 +2730,9 @@ def run_selftest():
     out("  int-only telemetry (idle + active) of exact safe shape; poison-pill")
     out("  fail_count round-trips through state; record-shape disclosure is")
     out("  shape-only (no body/value leak).")
+    out("  key-material words (derived/raw key, secret/slat/salt/*key + a bracket")
+    out("  group) drop the whole line; free-word letter blocks / mixed-case blocks /")
+    out("  number+letter tokens / kv value carriers are capped (W-FREEWORD).")
     out("  RESULT: GO")
     return 0
 
