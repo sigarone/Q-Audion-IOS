@@ -39,6 +39,9 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
     private var candidateByCall: [String: Data] = [:]
     /// Calls with a round (before the confirmation) the candidate key cannot vouch for.
     private var taintedCalls: Set<String> = []
+    /// Calls where a round judged `identity_unresolved` (its verification raced the confirmation) carried
+    /// a key other than the confirmed one.
+    private var lateConflictCalls: Set<String> = []
 
     /// Bound on remembered unresolved rounds per call (oldest rounds drop first).
     static let maxRoundsPerCall = 8
@@ -54,8 +57,14 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
         let id = callId.lowercased()
         guard !id.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
-        // Once confirmed, later rounds are judged against the call-scoped pin, not by this book.
-        if confirmedByCall[id] != nil { return }
+        // Once confirmed, later rounds are judged against the call-scoped pin, not by this book. The one
+        // exception is a round whose verification read the book just BEFORE the confirmation landed (it
+        // was judged unresolved, not against the pin): signed by another key, it must never be released by
+        // a later confirmation of this call.
+        if let confirmed = confirmedByCall[id] {
+            if confirmed != key { lateConflictCalls.insert(id) }
+            return
+        }
         if let candidate = candidateByCall[id] {
             if candidate != key { taintedCalls.insert(id) }
         } else {
@@ -80,11 +89,13 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
         taintedCalls.insert(id)
     }
 
-    /// True when the call had an `identity_unresolved` round AND a round that key cannot vouch for:
-    /// a SAS confirmation of this call must be refused (nothing pinned, recorded or released).
+    /// True when the call had an `identity_unresolved` round AND a round that key cannot vouch for (or,
+    /// after the confirmation, an unresolved round of another key that raced it): a SAS confirmation of
+    /// this call must be refused (nothing pinned, recorded or released).
     public func isConflicted(callId: String) -> Bool {
         let id = callId.lowercased()
         lock.lock(); defer { lock.unlock() }
+        if lateConflictCalls.contains(id) { return true }
         return confirmedByCall[id] == nil && candidateByCall[id] != nil && taintedCalls.contains(id)
     }
 
@@ -130,6 +141,7 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
         confirmedByCall.removeValue(forKey: id)
         candidateByCall.removeValue(forKey: id)
         taintedCalls.remove(id)
+        lateConflictCalls.remove(id)
     }
 
     /// Forget every call (the integration instance is reused across calls).
@@ -139,6 +151,7 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
         confirmedByCall.removeAll()
         candidateByCall.removeAll()
         taintedCalls.removeAll()
+        lateConflictCalls.removeAll()
     }
 }
 

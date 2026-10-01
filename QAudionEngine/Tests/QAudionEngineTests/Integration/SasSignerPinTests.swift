@@ -231,13 +231,18 @@ final class CallScopedSasPinBookTests: XCTestCase {
         book.noteUnresolved(callId: "c2", round: 2, signerKey: key)
         XCTAssertTrue(book.isConflicted(callId: "c2"))
         XCTAssertNil(book.signerAwaitingSas(callId: "c2", round: 2))
-        // after the confirmation the book no longer judges rounds (the call-scoped pin does)
+        // after the confirmation the book no longer judges rounds (the call-scoped pin does): another abort
+        // and a same-key unresolved round (a verification that raced the confirmation) change nothing
         book.noteUnresolved(callId: "c3", round: 1, signerKey: key)
         book.confirm(callId: "c3", key: key)
         book.noteOtherAbort(callId: "c3")
-        book.noteUnresolved(callId: "c3", round: 2, signerKey: other)
+        book.noteUnresolved(callId: "c3", round: 2, signerKey: key)
         XCTAssertFalse(book.isConflicted(callId: "c3"))
         XCTAssertEqual(book.confirmedSigner(callId: "c3"), key)
+        // ... but an unresolved round of ANOTHER key that raced the confirmation can never be released by a
+        // later confirmation of the call
+        book.noteUnresolved(callId: "c3", round: 3, signerKey: other)
+        XCTAssertTrue(book.isConflicted(callId: "c3"))
         // clearing forgets the conflict too
         book.clear(callId: "c1")
         XCTAssertFalse(book.isConflicted(callId: "c1"))
