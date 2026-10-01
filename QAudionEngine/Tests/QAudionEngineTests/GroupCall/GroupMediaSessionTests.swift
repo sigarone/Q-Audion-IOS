@@ -92,11 +92,11 @@ final class SessionHarness: @unchecked Sendable {
     private var _events: [GroupMediaSession.Event] = []
 
     init(publishersOnJoin: [[String: Any]] = [], config: GroupMediaSession.Config? = nil, timeout: Double = 0.4,
-         fingerprintPair: String = FakeJanusServer.fingerprintPair) {
+         fingerprintPair: String = FakeJanusServer.fingerprintPair, layerPolicy: GroupLayerPolicy? = nil) {
         let serverLocal = FakeJanusServer()
         let publisherLocal = FakePublisherLink()
         let subscriberLocal = FakeSubscriberLink()
-        let policyLocal = GroupLayerPolicy()
+        let policyLocal = layerPolicy ?? GroupLayerPolicy()
         serverLocal.publishersOnJoin = publishersOnJoin
         var janusConfig = JanusClient.Config()
         janusConfig.requestTimeoutSeconds = timeout
@@ -504,6 +504,112 @@ final class GroupMediaSessionTests: XCTestCase {
         // substream 2: it is sent afterwards.
         let ok = await h.waitUntil(6) { substreams().count >= before + 3 && substreams().last == 1 }
         XCTAssertTrue(ok, "layers sent: \(substreams())")
+        h.session.close()
+    }
+
+    // MARK: layer switch confirmation (R1)
+
+    private func unconfirmedPolicy(confirmAfterMs: Int64) -> GroupLayerPolicy {
+        var layerConfig = GroupLayerPolicy.Config()
+        layerConfig.confirmAfterMs = confirmAfterMs
+        return GroupLayerPolicy(config: layerConfig)
+    }
+
+    private func configuresSent(_ h: SessionHarness, substream: Int) -> Int {
+        h.server.bodies(for: "configure").filter { ($0["streams"] as? [[String: Any]])?.first?["substream"] as? Int == substream }.count
+    }
+
+    private func telemetryCount(_ h: SessionHarness, kind: String, to: Int) -> Int {
+        h.events.filter { event in
+            if case .telemetry(let item) = event, item.kind == kind, (item.attrs["to"] as? Int) == to { return true }
+            return false
+        }.count
+    }
+
+    func testALayerSwitchJanusNeverConfirmsIsSentAgainThreeTimesThenGivenUp() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], layerPolicy: unconfirmedPolicy(confirmAfterMs: 120))
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        h.session.setTile(pseudonym: bob, tile: .fullscreen, visible: true)
+        let gaveUp = await h.waitUntil(6) { self.telemetryCount(h, kind: GroupTelemetry.Kind.layerUnconfirmed, to: 2) == 1 }
+        XCTAssertTrue(gaveUp, "telemetry: the switch to substream 2 was never confirmed")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(configuresSent(h, substream: 2), 4, "the switch itself and three identical re-sends, no more")
+        XCTAssertEqual(telemetryCount(h, kind: GroupTelemetry.Kind.layerResend, to: 2), 3)
+        let attempts = h.events.compactMap { event -> Int? in
+            if case .telemetry(let item) = event, item.kind == GroupTelemetry.Kind.layerResend, (item.attrs["to"] as? Int) == 2 {
+                return item.attrs["attempt"] as? Int
+            }
+            return nil
+        }
+        XCTAssertEqual(attempts, [1, 2, 3])
+        h.session.close()
+    }
+
+    func testAJanusSubstreamEventConfirmsTheSwitchSoItIsNeverSentAgain() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], layerPolicy: unconfirmedPolicy(confirmAfterMs: 250))
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        h.session.setTile(pseudonym: bob, tile: .fullscreen, visible: true)
+        let sent = await h.waitUntil { self.configuresSent(h, substream: 2) == 1 }
+        XCTAssertTrue(sent)
+        h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "subscriber") ?? 0,
+                       "plugindata": ["plugin": "janus.plugin.videoroom",
+                                      "data": ["videoroom": "event", "room": "r", "mid": "1", "substream": 2, "temporal": 2]]])
+        try await Task.sleep(nanoseconds: 900_000_000)
+        XCTAssertEqual(configuresSent(h, substream: 2), 1, "confirmed: never asked again")
+        XCTAssertEqual(telemetryCount(h, kind: GroupTelemetry.Kind.layerUnconfirmed, to: 2), 0)
+        XCTAssertEqual(telemetryCount(h, kind: GroupTelemetry.Kind.layerResend, to: 2), 0)
+        h.session.close()
+    }
+
+    func testTheSizeOfTheDecodedFramesConfirmsTheSwitchToo() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], layerPolicy: unconfirmedPolicy(confirmAfterMs: 250))
+        h.server.subscriberStreams = bobStreams()
+        h.subscriber.stats = GroupSubscriberStats(
+            videos: [GroupInboundVideoStat(mid: "1", packetsLost: 0, packetsReceived: 100, frameWidth: 1280, frameHeight: 720)],
+            availableIncomingBps: nil)
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        h.session.setTile(pseudonym: bob, tile: .fullscreen, visible: true)
+        let sent = await h.waitUntil { self.configuresSent(h, substream: 2) == 1 }
+        XCTAssertTrue(sent)
+        try await Task.sleep(nanoseconds: 900_000_000)
+        XCTAssertEqual(configuresSent(h, substream: 2), 1, "frames of the requested size confirm it without a Janus event")
+        XCTAssertEqual(telemetryCount(h, kind: GroupTelemetry.Kind.layerUnconfirmed, to: 2), 0)
+        h.session.close()
+    }
+
+    // MARK: whose kick (missed: F2 broader / iOS rejoin self-kick)
+
+    /// Janus tells EVERY participant `kicked: <id>` when somebody is kicked, and the server kicks on
+    /// every ordinary leave. Only OUR OWN pseudonym is our kick: for anybody else it is that publisher
+    /// going away, it must not make every phone in the room rejoin its media.
+    func testSomebodyElsesKickIsThatPublisherLeavingNotOurOwnKick() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)])
+        h.server.subscriberStreams = bobStreams()
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "publisher") ?? 0,
+                       "plugindata": ["plugin": "janus.plugin.videoroom", "data": ["videoroom": "event", "room": "r", "kicked": bob]]])
+        let gone = await h.waitUntil { h.lastPublishers()?.isEmpty == true }
+        XCTAssertTrue(gone, "the kicked publisher is removed from the room view")
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertFalse(h.events.contains { if case .kicked = $0 { return true } else { return false } }, "not our kick")
+        XCTAssertTrue(h.rejoinReasons().isEmpty)
+        h.session.close()
+    }
+
+    func testAKickBroadcastThatNamesOurOwnPseudonymIsOurKick() async throws {
+        let h = SessionHarness()
+        try await h.session.start(publishVideo: true)
+        h.server.push(["janus": "event", "session_id": 1001, "sender": h.server.handle(forRole: "publisher") ?? 0,
+                       "plugindata": ["plugin": "janus.plugin.videoroom",
+                                      "data": ["videoroom": "event", "room": "r", "kicked": GroupCallFixtures.pseudoA]]])
+        let ok = await h.waitUntil { h.events.contains { if case .kicked = $0 { return true } else { return false } } }
+        XCTAssertTrue(ok)
         h.session.close()
     }
 

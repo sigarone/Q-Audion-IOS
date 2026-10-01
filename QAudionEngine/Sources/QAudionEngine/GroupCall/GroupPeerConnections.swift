@@ -295,6 +295,9 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// How many of the three simulcast encodings the CAPTURE can feed: libwebrtc drops
     /// the top layer for a source below ~720p, so a smaller source publishes l,m (or l).
     private var sourceLayerCap = 3
+    /// How many encodings the publish policy wants active (3 = all), re-applied after every
+    /// answer (see `applyAnswer`).
+    private var requestedLayerCount = 3
 
     /// 720p and up feeds l+m+h (1280x720), 360p and up l+m, anything smaller only l.
     static func layerCap(forHeight height: Int32) -> Int {
@@ -392,6 +395,10 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         // Spec §12.8: an answer whose video is not VP8 is refused, not decoded.
         guard GroupSdpRules.activeVideoSectionsWithoutVp8(in: sdp).isEmpty else { throw GroupPeerError.sdpFailed("video_codec") }
         try await setRemote(RTCSessionDescription(type: .answer, sdp: GroupSdpRules.mungeRemote(sdp)))
+        // An answer sets every encoding's `active` from its simulcast line, and the offer
+        // never marks a layer inactive (`GroupSdpRules.activateSimulcastLayers`): the layers
+        // the thermal / congestion policy wants off are switched off again here.
+        setActiveLayers(requestedLayerCount)
     }
 
     /// Spec §12.1 teardown order. The sender cryptors stay ENABLED the whole time
@@ -475,6 +482,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// Keeps `count` of the three simulcast encodings active (1 = l only,
     /// 2 = l+m, 3 = all): the thermal / congestion policy of `GroupPublishPolicy`.
     public func setActiveLayers(_ count: Int) {
+        requestedLayerCount = count
         guard let sender = videoSender else { return }
         let allowed = min(count, sourceLayerCap)
         let parameters = sender.parameters
@@ -658,7 +666,9 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
                     videos.append(GroupInboundVideoStat(
                         mid: mid,
                         packetsLost: (stat.values["packetsLost"] as? NSNumber)?.intValue ?? 0,
-                        packetsReceived: (stat.values["packetsReceived"] as? NSNumber)?.intValue ?? 0))
+                        packetsReceived: (stat.values["packetsReceived"] as? NSNumber)?.intValue ?? 0,
+                        frameWidth: (stat.values["frameWidth"] as? NSNumber)?.intValue ?? 0,
+                        frameHeight: (stat.values["frameHeight"] as? NSNumber)?.intValue ?? 0))
                 } else if kind == "audio" {
                     levels[mid] = (stat.values["audioLevel"] as? NSNumber)?.doubleValue ?? 0
                 }

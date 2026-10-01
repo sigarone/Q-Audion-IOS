@@ -11,6 +11,7 @@ public final class WebRtcGroupMediaBackend: GroupMediaBackend, @unchecked Sendab
 
     public var onMissingKey: ((String) -> Void)?
     public var onDecryptFailure: ((String) -> Void)?
+    public var onCryptorOk: ((String) -> Void)?
 
     private let lock = NSLock()
     private var hub = GroupFrameCryptorHub()
@@ -23,6 +24,7 @@ public final class WebRtcGroupMediaBackend: GroupMediaBackend, @unchecked Sendab
         let current = currentHub
         current.onMissingKey = { [weak self] participant in self?.onMissingKey?(participant) }
         current.onDecryptFailure = { [weak self] participant in self?.onDecryptFailure?(participant) }
+        current.onCryptorOk = { [weak self] participant in self?.onCryptorOk?(participant) }
     }
 
     private var currentHub: GroupFrameCryptorHub {

@@ -120,8 +120,17 @@ public enum VideoRoomEvent: Equatable, Sendable {
     /// Subscriber: the current stream mapping (with or without a new offer).
     case attached([VideoRoomStream])
     case updated([VideoRoomStream])
-    /// We were kicked out of the room (server-side roster removal).
+    /// WE were kicked out of the room (server-side roster removal): Janus tells the kicked
+    /// handle `leaving: "ok", reason: "kicked"`.
     case kicked
+    /// Janus tells EVERY participant `kicked: <id>` when somebody is kicked, and the server
+    /// kicks on every ordinary leave (it evicts before the leaver's own session ends). It is
+    /// only about us when the id is our own pseudonym (the session decides); for anybody
+    /// else it is that publisher going away.
+    case participantKicked(String)
+    /// Subscriber: Janus switched the simulcast substream (and temporal layer) of the
+    /// subscriber-side `mid`: the confirmation of a layer `configure`.
+    case substream(mid: String, substream: Int, temporal: Int?)
     case destroyed
     case other(String)
 
@@ -129,10 +138,18 @@ public enum VideoRoomEvent: Equatable, Sendable {
         if let list = data["publishers"] { return .publishers(VideoRoomPublisher.parseList(list)) }
         if let value = data["unpublished"] { return .unpublished(idString(value)) }
         if let value = data["leaving"] {
-            if (data["reason"] as? String) == "kicked" { return .kicked }
+            // Only the plain acknowledgement to the kicked handle is "we were kicked": a
+            // `leaving: <id>` that carries the same reason names ANOTHER participant.
+            if (data["reason"] as? String) == "kicked", idString(value) == "ok" { return .kicked }
             return .leaving(idString(value))
         }
-        if (data["kicked"] as? String) != nil { return .kicked }
+        if let value = data["kicked"] { return .participantKicked(idString(value)) }
+        if let substream = (data["substream"] as? NSNumber)?.intValue {
+            let mid = data["mid"].map { idString($0) } ?? ""
+            if !mid.isEmpty {
+                return .substream(mid: mid, substream: substream, temporal: (data["temporal"] as? NSNumber)?.intValue)
+            }
+        }
         let kind = data["videoroom"] as? String ?? ""
         if kind == "destroyed" { return .destroyed }
         if kind == "attached" || kind == "updated" {

@@ -36,6 +36,8 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
     public var onMissingKey: ((String) -> Void)?
     /// ... or a decrypt failure.
     public var onDecryptFailure: ((String) -> Void)?
+    /// ... or went back to decrypting (the failing run of that sender is over).
+    public var onCryptorOk: ((String) -> Void)?
 
     public let keyProvider: RTCFrameCryptorKeyProvider
     /// Bound by `bind(factory:)` before the first PeerConnection exists: the key
@@ -257,6 +259,8 @@ extension GroupFrameCryptorHub: RTCFrameCryptorDelegate {
             onMissingKey?(participantId)
         case .decryptionFailed, .internalError:
             onDecryptFailure?(participantId)
+        case .ok:
+            onCryptorOk?(participantId)
         default:
             break
         }

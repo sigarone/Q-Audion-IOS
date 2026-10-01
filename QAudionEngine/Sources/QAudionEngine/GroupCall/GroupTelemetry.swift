@@ -25,6 +25,8 @@ public enum GroupTelemetry {
         public static let dtlsPinMismatch = "group.dtls_pin_mismatch"
         public static let e2ee = "group.e2ee"
         public static let layer = "group.layer"
+        public static let layerResend = "group.layer_resend"
+        public static let layerUnconfirmed = "group.layer_unconfirmed"
         public static let rejoin = "group.rejoin"
         public static let iceRestart = "group.ice_restart"
     }
@@ -77,6 +79,16 @@ public enum GroupTelemetry {
         GroupTelemetryEvent(kind: Kind.layer, attrs: [
             "mid": String(mid.prefix(8)), "from": from, "to": to, "reason": String(reason.prefix(24)),
         ])
+    }
+
+    /// A layer switch Janus has not confirmed in time, asked for again (attempt 1...3).
+    public static func layerResend(mid: String, to: Int, attempt: Int) -> GroupTelemetryEvent {
+        GroupTelemetryEvent(kind: Kind.layerResend, attrs: ["mid": String(mid.prefix(8)), "to": to, "attempt": attempt])
+    }
+
+    /// A layer switch given up on after its last re-send went unconfirmed.
+    public static func layerUnconfirmed(mid: String, to: Int) -> GroupTelemetryEvent {
+        GroupTelemetryEvent(kind: Kind.layerUnconfirmed, attrs: ["mid": String(mid.prefix(8)), "to": to])
     }
 
     public static func rejoin(reason: String) -> GroupTelemetryEvent {

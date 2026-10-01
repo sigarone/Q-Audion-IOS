@@ -72,6 +72,11 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     /// in the security sheet; the E2EE state machine consumes it through
     /// `onGroupUpdate`.
     private var _senderKeyEpoch: Int64 = 1
+    /// Bumped by every end and every new call (create / join): a delayed `.ended -> .idle`
+    /// reset only applies if nothing has happened since it was scheduled.
+    private var _lifecycleGeneration = 0
+    /// How long `.ended` stays visible before the manager is `.idle` again.
+    var endedResetDelaySeconds: Double = 1
 
     public var state: State { lock.lock(); defer { lock.unlock() }; return _state }
     public var callId: String? { lock.lock(); defer { lock.unlock() }; return _callId }
@@ -98,6 +103,28 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     public var onRingEnded: ((_ callId: String, _ reason: String) -> Void)?
     /// `group_call_ended` for the active call, with the server's reason.
     public var onActiveCallEnded: ((_ callId: String, _ reason: String) -> Void)?
+    /// A server `error` envelope, `(code, call_id?)`: the answer of a refused create / join /
+    /// media request. The envelope's single handler slot belongs to the app layer, which
+    /// forwards it through `handleServerError(data:)`.
+    public var onServerError: ((_ code: String, _ callId: String?) -> Void)?
+
+    /// Fed by the app layer's `error` handler (`code` "?" when the envelope has none).
+    public func handleServerError(code: String, callId: String?) {
+        onServerError?(code, (callId?.isEmpty ?? true) ? nil : callId)
+    }
+
+    /// `group_call_ended` reasons that are about a RING, never about a call this device is
+    /// in: the invitee-side ring timeout and a decline from another device. They race an
+    /// accept (the client joins a moment before the server's timer fires, or a sibling's
+    /// decline arrives after our own join): for the active call only `ended`,
+    /// `answered_elsewhere` and a reason this client does not know end it, and the server
+    /// then still processes the join.
+    static let ringOnlyEndReasons: Set<String> = ["ring_timeout", "declined"]
+    /// Another live device of this account holds the seat (server D24). For a ring it is a
+    /// dismissal; for a call this device is joining (its own join was refused) or is in, it
+    /// ends the call HERE, locally and WITHOUT a `group_call_leave`: a leave is per account
+    /// and would remove the seat from under the device that holds it.
+    static let answeredElsewhere = "answered_elsewhere"
 
     // ─── Tier-1 call features: reactions / raise-hand / mute-request ──
     // Wire contract finalized 2026-07-16. `callId` on every one of these
@@ -286,8 +313,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.lock()
         _state = .creating
         _callId = newCallId
-        // Real userId, not a "self" placeholder - matches what the server
-        // will echo back in the first `group_call_update`.
+        _lifecycleGeneration += 1
+        // Real userId, not a "self" placeholder. The server sends the creator no
+        // `group_call_update` of its own (the first one comes with the first join or the
+        // room), so this local entry is the roster until then.
         _participants = [Participant(id: selfUserId, displayName: "Tu")]
         _senderKeyEpoch = 1
         lock.unlock()
@@ -309,6 +338,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.lock()
         _state = .creating
         _callId = callId
+        _lifecycleGeneration += 1
         lock.unlock()
         onStateChanged?(.creating)
 
@@ -532,6 +562,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         let endedId = data["call_id"] as? String ?? ""
         let reason = (data["reason"] as? String) ?? "ended"
         if let active = callId, endedId.isEmpty || endedId == active {
+            if Self.ringOnlyEndReasons.contains(reason) {
+                // A ring going away for a call this device already joined (or is joining):
+                // not the end of the call.
+                print("[BCryptoGroupCallManager] group_call_ended reason=\(reason.prefix(16)) ignored for the call we are in call=\(active.prefix(8))")
+                return
+            }
             endLocally()
             onActiveCallEnded?(active, reason)
         } else if !endedId.isEmpty {
@@ -550,7 +586,16 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     func handleMediaUnavailable(data: [String: Any]) {
         guard let cid = data["call_id"] as? String, cid == callId else { return }
-        onMediaUnavailable?(cid, GroupCallWire.UnavailableReason(wire: (data["reason"] as? String) ?? ""))
+        let wireReason = (data["reason"] as? String) ?? ""
+        if wireReason == Self.answeredElsewhere {
+            // Another live device of this account holds the seat (server D24): this device's
+            // media request was refused. That is the end of the call HERE, and it must not send a
+            // `group_call_leave` (the failure path of every other reason does): that would remove
+            // the account's seat from under the device that holds it.
+            handleGroupCallEnded(data: ["call_id": cid, "reason": Self.answeredElsewhere])
+            return
+        }
+        onMediaUnavailable?(cid, GroupCallWire.UnavailableReason(wire: wireReason))
     }
 
     func handleMediaToken(data: [String: Any]) {
@@ -583,8 +628,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         }
         print("[BCryptoGroupCallManager] group_call_update RECEIVED call=\(update.callId.prefix(8)) participants=\(update.participants.count) epoch=\(update.epoch)")
         lock.lock()
-        // A stale update for another call (a previous call's tail) is dropped.
-        if let active = _callId, active != update.callId {
+        // An update for any call but the one this device is in is dropped: a previous
+        // call's tail, or one meant for ANOTHER DEVICE of the same account (the server
+        // sends it to every device of a participant). With no call at all (`_callId` nil)
+        // it must not make the manager `.active` with a phantom roster: that refuses every
+        // later `createGroupCall` (`state == .idle`).
+        guard let active = _callId, active == update.callId else {
             lock.unlock()
             return
         }
@@ -632,15 +681,24 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         _participants.removeAll()
         _senderKeyEpoch = 1
         _callId = nil
+        _lifecycleGeneration += 1
+        let generation = _lifecycleGeneration
         lock.unlock()
         onStateChanged?(.ended)
         onParticipantsChanged?([])
-        // Reset to idle after 1s
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.lock.lock()
-            self?._state = .idle
-            self?.lock.unlock()
-            self?.onStateChanged?(.idle)
+        // Reset to idle after 1 s, but only if nothing happened since: a call joined or
+        // created inside that second owns the state now, a stale `.idle` would overwrite its
+        // `.creating` / `.active` (and, through the controller, make a live call look over).
+        DispatchQueue.main.asyncAfter(deadline: .now() + endedResetDelaySeconds) { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock()
+            guard self._lifecycleGeneration == generation, self._state == .ended else {
+                self.lock.unlock()
+                return
+            }
+            self._state = .idle
+            self.lock.unlock()
+            self.onStateChanged?(.idle)
         }
     }
 }

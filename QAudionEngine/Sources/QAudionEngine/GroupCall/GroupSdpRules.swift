@@ -250,6 +250,23 @@ public enum GroupSdpRules {
         return nil
     }
 
+    // MARK: - Simulcast layers in an offer
+
+    /// Janus 1.4.2 keeps a STICKY `disabled` flag per rid: a layer that is inactive in ONE
+    /// offer (libwebrtc writes it as `~rid` in `a=simulcast`) is echoed as `~rid` in every
+    /// later answer, and libwebrtc then switches the layer off again (an answer sets each
+    /// encoding's `active` from its simulcast line), whatever the encoder policy says. So an
+    /// offer never marks a layer inactive: every layer is listed active, and the sender's
+    /// intended active flags are re-applied after each answer
+    /// (`GroupPublisherPeer.applyAnswer`). Idempotent.
+    public static func activateSimulcastLayers(_ sdp: String) -> String {
+        var out: [String] = []
+        for line in lines(of: sdp) {
+            out.append(line.hasPrefix("a=simulcast:") ? line.replacingOccurrences(of: "~", with: "") : line)
+        }
+        return out.joined(separator: "\r\n") + "\r\n"
+    }
+
     // MARK: - Audio profile
 
     /// The 1:1 Opus policy (`AudioSdpPolicy`: cbr, in-band FEC, 32 kbps,
@@ -337,6 +354,7 @@ public enum GroupSdpRules {
         out = keepOnlyVp8Video(out)
         out = applyAudioProfile(out)
         if role == .subscriberAnswer { out = forcePassiveSetup(inAnswer: out) }
+        if role == .publisherOffer { out = activateSimulcastLayers(out) }
         return out
     }
 
