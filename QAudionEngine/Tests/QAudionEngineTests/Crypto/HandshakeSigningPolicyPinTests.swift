@@ -115,7 +115,7 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
     func testSignatureOverOtherDtlsFingerprintIsInvalid() throws {
         let c = try makeCase(seed: 15)
         let swapped = F.offerTranscript(signerKey: c.pubRaw, dtls: F.fingerprint("intruder"))
-        XCTAssertEqual(evaluate(c, transcript: swapped), .abort(code: "sig_invalid"))
+        XCTAssertEqual(evaluate(c, transcript: swapped, server: c.pubRaw), .abort(code: "sig_invalid"))
     }
 
     // MARK: - F8 malformed
