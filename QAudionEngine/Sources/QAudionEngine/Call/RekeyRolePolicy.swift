@@ -8,8 +8,14 @@ public enum RekeyRolePolicy {
     /// rekey, on every platform; the callee only responds. A rekey OFFER that reaches the caller is
     /// still answered (it goes through the responder path, never into the buffer that an in-flight
     /// own round reads its ACCEPT from).
-    public static func mayInitiateRekey(isCaller: Bool, isActive: Bool, hasPendingAttempt: Bool) -> Bool {
-        isCaller && isActive && !hasPendingAttempt
+    ///
+    /// R-HELD-REKEY: while the call is held (its media waits for the user's SAS confirmation) the
+    /// caller does not start rekeys either: they are deferred until the hold is released, then run
+    /// normally. A rekey the peer started before it saw the hold is still answered and installed.
+    public static func mayInitiateRekey(
+        isCaller: Bool, isActive: Bool, hasPendingAttempt: Bool, isHeld: Bool = false
+    ) -> Bool {
+        isCaller && isActive && !hasPendingAttempt && !isHeld
     }
 
     /// What to do with a freshly derived session key.
