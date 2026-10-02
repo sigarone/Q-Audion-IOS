@@ -1,0 +1,25 @@
+# vps_known_hosts -- pinned SSH host key of the PROD call-server VPS (Aruba Milano).
+#
+# Used by ship-ios-logs.py, ship-server-logs.py, fetch-ios-live.py and
+# correlate-call.py (paramiko RejectPolicy, fail-closed: no trust-on-first-use).
+# OpenSSH known_hosts format; paramiko ignores these comment lines.
+#
+# Host:         195.231.87.110 (Aruba, prod call server, port 22)
+# Key type:     ssh-ed25519
+# Fingerprint:  SHA256:XDDSqerYgzHIFwo2amn4XQWza0DeU0TDJSZjyZBI/ZY
+# Pinned:       2026-10-02
+# Source:       live `ssh-keyscan -t ed25519` run from the Helsinki VPS, then
+#               checked (same key, byte for byte or by ssh-keygen -lf) against
+#               (1) root's /root/.ssh/known_hosts on Helsinki, (2) the PC copy
+#               BCrypto-Ops/ssh/known_hosts and (3) the fingerprint recorded
+#               in BCrypto-Ops/OPS.md (verified from 3 points on 2026-09-20).
+#
+# Only the ED25519 key is pinned on purpose. The RSA and ECDSA host keys of the
+# same server are NOT pinned: they were never verified independently. paramiko
+# moves the key type of a known host to the front of its host-key algorithm
+# list, so a server that also offers RSA/ECDSA is still verified against this
+# ED25519 key. If the server key ever changes (reinstall), verify the new
+# fingerprint out-of-band (ssh-keygen -lf on the server's
+# /etc/ssh/ssh_host_ed25519_key.pub) and replace the line below; never copy a
+# key from the connection that is being verified.
+195.231.87.110 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOZe0d2lL8RyZBt7JRS9t1pkQ8XKaFmyK1Xzx0TaRGwR
