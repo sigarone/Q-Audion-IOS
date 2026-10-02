@@ -173,9 +173,32 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertEqual(ConfirmResend.due(isCaller: true, revealBound: true, isRound1: false,
                                          ownKcMacSent: true, peerKcMacVerified: false),
                        ConfirmResend.Due(reveal: false, ownKcMac: true))
-        // the peer's MAC of the live round verified: it proves REVEAL and MAC arrived, nothing is due
+        // the peer's MAC of the live round verified and our MAC left more than 30 s ago: nothing is due
         XCTAssertFalse(ConfirmResend.due(isCaller: true, revealBound: true, isRound1: true,
                                          ownKcMacSent: true, peerKcMacVerified: true).any)
+    }
+
+    /// R-KCMAC-RESEND (four-way revision, WIRE_SPEC b2027b09): the two MACs of a round cross on the wire. A callee
+    /// verifies the caller's MAC (right behind the REVEAL) just after sending its own, so a socket replaced at that
+    /// moment loses the callee's MAC: a verified peer MAC does not show that ours arrived. Our own MAC stays due for
+    /// 2 x CONFIRM_TIMEOUT after its first send; the REVEAL is not due (the callee's MAC proves it arrived).
+    func testAVerifiedPeerMacDoesNotProveOurMacArrivedSoARecentOwnMacIsResent() {
+        XCTAssertEqual(ConfirmTimeout.recentOwnKcMacMs, 30_000)
+        // callee, round 1: the caller's MAC verified right after ours left; the socket is replaced
+        XCTAssertEqual(ConfirmResend.due(isCaller: false, revealBound: false, isRound1: true,
+                                         ownKcMacSent: true, peerKcMacVerified: true, ownKcMacRecent: true),
+                       ConfirmResend.Due(reveal: false, ownKcMac: true))
+        // caller, round 1: the callee's MAC verified; our MAC is re-sent, the REVEAL is not
+        XCTAssertEqual(ConfirmResend.due(isCaller: true, revealBound: true, isRound1: true,
+                                         ownKcMacSent: true, peerKcMacVerified: true, ownKcMacRecent: true),
+                       ConfirmResend.Due(reveal: false, ownKcMac: true))
+        // a held MAC (never sent) is never recent and never re-sent
+        XCTAssertFalse(ConfirmResend.due(isCaller: false, revealBound: false, isRound1: true,
+                                         ownKcMacSent: false, peerKcMacVerified: true, ownKcMacRecent: true).any)
+        // the time rule: recent strictly inside 30 s of the first send, never for a MAC that was not sent
+        XCTAssertTrue(ConfirmResend.isRecentOwnKcMac(sentAtMs: 1_000, nowMs: 1_000 + 29_999))
+        XCTAssertFalse(ConfirmResend.isRecentOwnKcMac(sentAtMs: 1_000, nowMs: 1_000 + 30_000))
+        XCTAssertFalse(ConfirmResend.isRecentOwnKcMac(sentAtMs: nil, nowMs: 5_000))
     }
 
     /// The budget is ONE counter of EVENTS per call, shared by duplicate-ACCEPT re-sends and re-authentications: two
@@ -225,7 +248,7 @@ final class ConfirmTimersTests: XCTestCase {
         let app = try sourceText(appPath)
         let handler = code(try slice(app, from: "private func handleSocketReauthForConfirmation() {",
                                      to: "/// W-KCMAC — verify an inbound `KCMAC:` piggy-back"))
-        let dueAt = try XCTUnwrap(handler.range(of: "guard due.any else { return }"))
+        let dueAt = try XCTUnwrap(handler.range(of: "guard due.any || !olderWires.isEmpty else { return }"))
         let takeAt = try XCTUnwrap(handler.range(of: "integration.takeResendEvent(callId: cid)"))
         XCTAssertLessThan(dueAt.lowerBound, takeAt.lowerBound, "nothing due: no budget is consumed")
         let revealAt = try XCTUnwrap(handler.range(of: "await integration.resendRevealAfterReauth(callId: cid)"))
@@ -233,6 +256,17 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertLessThan(revealAt.lowerBound, macAt.lowerBound, "the REVEAL leaves before the KCMAC")
         XCTAssertTrue(handler.contains("ownKcMacSent: state.ownMacWire != nil && state.ownMacSent"),
                       "a MAC that was never sent is never re-sent")
+        // R-KCMAC-RESEND (four-way revision): a recent own MAC is due even after the peer MAC verified, for the live
+        // round and for earlier rounds of the call
+        XCTAssertTrue(handler.contains("ownKcMacRecent: ConfirmResend.isRecentOwnKcMac(sentAtMs: state.ownMacSentAtMs, nowMs: nowMs))"))
+        XCTAssertTrue(handler.contains("sendOpaqueMessageString(recipientId: older.peerId, payload: older.wire)"))
+        XCTAssertTrue(code(app).contains("state.ownMacSentAtMs = holdOwnMac ? nil : SasCommit.monotonicNowMs()"),
+                      "the first send of an immediate MAC is timed")
+        XCTAssertTrue(code(app).contains("kcCallStates[key]?.ownMacSentAtMs = SasCommit.monotonicNowMs()"),
+                      "the first send of the callee's held round-1 MAC is timed when it is released")
+        XCTAssertTrue(code(app).contains("recent.append((wire: prevWire, peerId: prev.peerId, sentAtMs: prevAt))"),
+                      "the MAC of a replaced round stays due while it is recent")
+        XCTAssertTrue(code(app).contains("kcRecentOwnMacs.removeValue(forKey: key)"), "dropped with the call")
         XCTAssertTrue(code(app).contains("self?.handleSocketReauthForConfirmation()"), "called on every re-authentication")
         XCTAssertTrue(code(app).contains("kcCallStates[key]?.ownMacSent = true"), "the held MAC counts once it was released")
         XCTAssertTrue(code(app).contains("state.ownMacSent = !holdOwnMac"))

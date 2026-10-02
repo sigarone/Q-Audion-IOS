@@ -1126,6 +1126,9 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
 - The REVEAL timer is `CONFIRM_TIMEOUT` = 15 s (§3.7.1). It starts at the FIRST send of this device's ACCEPT (a later
   byte-identical retransmission of the ACCEPT does not restart it). No verified REVEAL when it fires:
   `sas_reveal_timeout`, with the telemetry event of R-CONFIRM-TELEMETRY. There is no early-REVEAL hold.
+- A callee device that retransmits its ACCEPT (byte-identical copies, for example while no media has arrived) stops
+  once its REVEAL has verified: the REVEAL names its ACCEPT, so the caller bound it, and every further copy would only
+  spend one unit of the caller's re-send budget (R-KCMAC-RESEND) that a later socket re-authentication may need.
 - A callee takes the commitment from the OFFER it actually answered: if several round-1 OFFERs for one `callId` arrive
   before the ACCEPT is sent, the newest replaces the stash; after the ACCEPT is sent, a different round-1 OFFER is
   dropped and the frozen commitment stays. A byte-identical OFFER re-sends the cached ACCEPT or is dropped, never a
@@ -1170,19 +1173,25 @@ REVEAL for it).
 
 **KCMAC re-send and the re-send budget (R-KCMAC-RESEND).** A message handed to a signalling socket that is
 replaced before the message reaches the peer can be lost. After its signalling socket
-re-authenticates, a device re-sends, byte-identical, its OWN KCMAC of every round whose PEER MAC it has not yet
-verified. A device re-sends only a MAC it has already sent once: a device that has no MAC of its own for a round (key not
-yet derived, or a callee whose REVEAL has not verified, R-COMMIT-KCMAC-HOLD) re-sends nothing for it and does not
-start sending it now. A callee whose REVEAL verified, and which sent its round-1 MAC, re-sends that MAC for as long
-as the caller's round-1 MAC is not verified. The receiver is unchanged: its duplicate rule (§3.7.1)
-drops an already-verified copy silently, and the sender-device rule is unaffected because the copy comes from the
-same device.
+re-authenticates, a device re-sends, byte-identical, its OWN KCMAC of every round for which the peer may still be
+waiting: every round whose PEER MAC it has not yet verified, AND every round whose own MAC it first sent less than
+`2 × CONFIRM_TIMEOUT` = 30 s before the re-authentication. Having verified the peer's MAC of a round does not show that
+the own MAC of that round arrived: the two MACs of a round cross on the wire, so the own MAC can be lost in the
+replaced socket after the peer's MAC was verified, and the peer would then wait out its window and end the call with
+`kcmac_mismatch`. 30 s is the longest window a peer waits for a MAC (§3.7.1): past it the peer has either verified the
+MAC or already ended the call. A device re-sends only a MAC it has already sent once: a device that has no MAC of its
+own for a round (key not yet derived, or a callee whose REVEAL has not verified, R-COMMIT-KCMAC-HOLD) re-sends nothing
+for it and does not start sending it now. A callee whose REVEAL verified, and which sent its round-1 MAC, re-sends that
+MAC under the same rule. The receiver is unchanged: its duplicate rule (§3.7.1) drops an already-verified copy
+silently, and the sender-device rule is unaffected because the copy comes from the same device.
 
 The budget is ONE counter per call and per device, shared by every re-send of the call: the REVEAL re-sent on a
 duplicate ACCEPT, the REVEAL and the KCMACs re-sent after a re-authentication. Only re-sends count: the first send of
 an ACCEPT, a REVEAL or a MAC is not an event and consumes nothing, so a call has 4 re-send events. An EVENT is a
-duplicate ACCEPT received by the caller, or a socket re-authentication of the device. It consumes one unit of the
-budget and re-sends in that event everything that is due; it does not consume one unit per message. The two kinds
+duplicate ACCEPT received by the caller after round 1 is bound, or a socket re-authentication of the device. A
+duplicate that arrives while the caller is still verifying the first copy (before binding) has no REVEAL to re-send:
+it is no event and consumes nothing. An event consumes one unit of the budget and re-sends in that event everything
+that is due; it does not consume one unit per message. The two kinds
 of event are independent: a duplicate ACCEPT re-sends the REVEAL and nothing else (as above), a re-authentication
 re-sends everything due (the caller's REVEAL while the callee's round-1 MAC is unverified, and the MACs above). A
 fifth event re-sends nothing.
@@ -1252,7 +1261,7 @@ across reconnects.
 | OFFER for a callId without a call context yet (it overtook `call_incoming`) | callee | not a valid first OFFER (round != 1, no valid `sasCommit`): drop, create no state, no hangup. Valid: pending-OFFER rule above |
 | OFFER for a callId that ended or was answered elsewhere | callee | drop, create no state |
 | rekey OFFER carrying `sasCommit` | callee | `handshake_malformed` |
-| identical ACCEPT | caller | drop; re-send the identical REVEAL |
+| identical ACCEPT | caller | drop; once round 1 is bound, re-send the identical REVEAL (one re-send event); before binding, drop only (no event) |
 | different round-1 ACCEPT after binding | caller | drop |
 | identical REVEAL after verification | callee | drop |
 | different REVEAL naming own ACCEPT after verification | callee | `sas_commit_mismatch` |
@@ -2563,7 +2572,11 @@ error code; and descriptor examples, three valid (file with thumbnail, voice not
 Multi-chunk negative vectors are given as a recipe on a named positive vector plus the SHA-256 of the resulting blob.
 All keys in the file are test keys derived from public labels.
 
-Latest: 2026-10-02 (evening, "no legitimate call may end after 5 s": one `CONFIRM_TIMEOUT` = 15 s in §3.7.1 for every
+Latest: 2026-10-02 (night, four-way review of the T-round: R-KCMAC-RESEND also re-sends the own KCMAC of every round
+first sent less than 30 s before the re-authentication, because a verified peer MAC does not show that the own MAC
+arrived; a duplicate ACCEPT before round 1 is bound is no re-send event; a callee stops retransmitting its ACCEPT once
+its REVEAL verified).
+Previous: 2026-10-02 (evening, "no legitimate call may end after 5 s": one `CONFIRM_TIMEOUT` = 15 s in §3.7.1 for every
 confirmation window; callee REVEAL timer 15 s; caller's round-1 KCMAC wait 30 s after its REVEAL, callee's 15 s after its
 own REVEAL verified, early-MAC hold 30 s; R-KCMAC-NOGATE (the caller's round-1 KCMAC is never gated on `call_accepted`);
 R-KCMAC-RESEND (KCMAC re-sent after a socket re-authentication, one shared re-send budget of 4); R-ANSWER-FIRST (a 1:1

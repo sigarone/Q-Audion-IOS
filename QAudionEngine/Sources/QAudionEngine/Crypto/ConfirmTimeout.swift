@@ -34,6 +34,12 @@ public enum ConfirmTimeout {
     /// re-authentication of the device's signalling socket. First sends are not events.
     public static let maxResendEvents = 4
 
+    /// R-KCMAC-RESEND (four-way revision of WIRE_SPEC, b2027b09): an own KCMAC is still re-sent on a socket
+    /// re-authentication for this long after its FIRST send, even when the peer MAC of its round already verified.
+    /// The two MACs of a round cross on the wire, so ours can be lost in the replaced socket after the peer's
+    /// verified; this is the longest window a peer waits for a MAC (the caller's round-1 wait).
+    public static let recentOwnKcMacMs = 2 * confirmTimeoutMs
+
     /// Check (b) of the DTLS binding: true once `elapsedMs` since `connected` reached the confirmation window with
     /// no verdict (`stats_timeout`: unverified, not proven benign, fail closed).
     public static func dtlsStatsWaitExpired(elapsedMs: Int) -> Bool {
@@ -136,12 +142,22 @@ public enum ConfirmResend {
     /// - `isRound1`: the live KCMAC round is round 1.
     /// - `ownKcMacSent`: this device already put its own MAC of the live round on the wire once (a callee whose REVEAL
     ///   has not verified holds it: it re-sends nothing and does not start sending it now, R-COMMIT-KCMAC-HOLD).
-    /// - `peerKcMacVerified`: the peer's MAC of the live round is verified (a verified MAC proves the REVEAL and the
-    ///   own MAC arrived).
+    /// - `peerKcMacVerified`: the peer's MAC of the live round is verified. In round 1 the callee sends its MAC only
+    ///   after the REVEAL verified, so a verified callee MAC proves the REVEAL arrived; it does NOT prove that our own
+    ///   MAC arrived (the two MACs cross on the wire).
+    /// - `ownKcMacRecent`: our own MAC of the live round was first sent less than `recentOwnKcMacMs` ago
+    ///   (`isRecentOwnKcMac`): it stays due even after the peer MAC verified.
     public static func due(isCaller: Bool, revealBound: Bool, isRound1: Bool,
-                           ownKcMacSent: Bool, peerKcMacVerified: Bool) -> Due {
-        // A verified peer MAC of the live round proves the REVEAL (round 1) and our own MAC arrived.
-        guard !peerKcMacVerified else { return Due(reveal: false, ownKcMac: false) }
-        return Due(reveal: isCaller && revealBound && isRound1, ownKcMac: ownKcMacSent)
+                           ownKcMacSent: Bool, peerKcMacVerified: Bool, ownKcMacRecent: Bool = false) -> Due {
+        let reveal = !peerKcMacVerified && isCaller && revealBound && isRound1
+        let own = ownKcMacSent && !peerKcMacVerified // MUTANT (four-way failing-first run): the recent clause removed
+        return Due(reveal: reveal, ownKcMac: own)
+    }
+
+    /// True while an own KCMAC first sent at `sentAtMs` (monotonic ms) is still re-sent on a re-authentication whatever
+    /// the peer's verdict (`recentOwnKcMacMs`). A MAC never sent (`nil`) is never recent.
+    public static func isRecentOwnKcMac(sentAtMs: Int?, nowMs: Int) -> Bool {
+        guard let sentAtMs else { return false }
+        return nowMs - sentAtMs < ConfirmTimeout.recentOwnKcMacMs
     }
 }

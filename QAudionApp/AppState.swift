@@ -2024,6 +2024,9 @@ final class AppState: ObservableObject {
         /// verified, R-COMMIT-KCMAC-HOLD): a MAC that was never sent is never re-sent. Never persisted, never logged.
         var ownMacWire: String?
         var ownMacSent = false
+        /// Monotonic ms of the FIRST send of `ownMacWire` (`SasCommit.monotonicNowMs()`), nil while it is held. It stays
+        /// due for a re-send for `ConfirmTimeout.recentOwnKcMacMs` even after the peer MAC verified (the MACs cross).
+        var ownMacSentAtMs: Int?
 
         init(event: QAudionCallIntegration.KcMacReadyEvent) {
             isRound1 = event.round == 1
@@ -2045,6 +2048,10 @@ final class AppState: ObservableObject {
     /// KCMAC for the call (R-COMMIT-SIBLING, D1). Sent by `handleInboundSasReveal` on `.sasReady`,
     /// dropped when the device leaves or the call ends.
     private var kcPendingOwnMac: [String: (wire: String, peerId: String)] = [:]
+    /// R-KCMAC-RESEND (four-way revision): our own MACs of EARLIER rounds of the call (the live round's is in its
+    /// `kcCallStates` entry), with their first-send time, re-sent on a re-authentication while they are recent
+    /// (`ConfirmResend.isRecentOwnKcMac`). Pruned on use, dropped with the call, never persisted, never logged.
+    private var kcRecentOwnMacs: [String: [(wire: String, peerId: String, sentAtMs: Int)]] = [:]
     /// A peer `KCMAC:` that arrived before this side's own `handleKcMacReady` ran (the responder
     /// leg's key-confirmation start is deferred until its ACCEPT is released): kept (one per
     /// call) and verified as soon as the state exists, instead of being dropped and then failing
@@ -14034,6 +14041,7 @@ final class AppState: ObservableObject {
             // The callee's own round-1 `kc_mac` was held until now (a sibling never sends it).
             if let pending = kcPendingOwnMac.removeValue(forKey: key), let provider = liveProvider {
                 kcCallStates[key]?.ownMacSent = true
+                kcCallStates[key]?.ownMacSentAtMs = SasCommit.monotonicNowMs()
                 OpaqueSelfEchoFilter.shared.markSent(pending.wire)
                 Task {
                     try? await provider.callingApi.sendOpaqueMessageString(recipientId: pending.peerId, payload: pending.wire)
@@ -14126,6 +14134,15 @@ final class AppState: ObservableObject {
         // for the whole call in `kcDecidedPeerMacs`, so a late retransmit of an earlier round's MAC
         // is never judged against this round.
         kcCallStates[key]?.deadlineTask?.cancel()
+        // R-KCMAC-RESEND: the MAC of the round this one replaces may still be needed by the peer (the MACs cross).
+        if let prev = kcCallStates[key], prev.ownMacSent, let prevWire = prev.ownMacWire, let prevAt = prev.ownMacSentAtMs {
+            let nowMs = SasCommit.monotonicNowMs()
+            var recent = (kcRecentOwnMacs[key] ?? []).filter { ConfirmResend.isRecentOwnKcMac(sentAtMs: $0.sentAtMs, nowMs: nowMs) }
+            if ConfirmResend.isRecentOwnKcMac(sentAtMs: prevAt, nowMs: nowMs) {
+                recent.append((wire: prevWire, peerId: prev.peerId, sentAtMs: prevAt))
+            }
+            kcRecentOwnMacs[key] = recent
+        }
         kcCallStates[key] = state
 
         guard let kcKey = event.kcKey, let transcript = event.transcript else {
@@ -14154,6 +14171,7 @@ final class AppState: ObservableObject {
         // R-KCMAC-RESEND: keep our own MAC for a re-send after a socket re-authentication (only once it was sent).
         state.ownMacWire = wire
         state.ownMacSent = !holdOwnMac
+        state.ownMacSentAtMs = holdOwnMac ? nil : SasCommit.monotonicNowMs()
         if holdOwnMac {
             kcPendingOwnMac[key] = (wire: wire, peerId: peerId)
         } else {
@@ -14278,8 +14296,9 @@ final class AppState: ObservableObject {
     /// R-KCMAC-RESEND (T4) / T5: the signalling socket of this device re-authenticated. A message handed to the old
     /// socket may have been lost. First every integration counts it for the telemetry of a later expiry. Then ONE
     /// re-send EVENT: re-send, byte-identical, everything that is due (`ConfirmResend.due`): the caller's REVEAL while
-    /// the callee's round-1 MAC is not verified, and OUR OWN KCMAC of the live round whose PEER MAC is not verified,
-    /// but only a MAC that was already sent once (a callee still holding its round-1 MAC re-sends nothing, R-COMMIT-
+    /// the callee's round-1 MAC is not verified, and OUR OWN KCMAC of the live round whose PEER MAC is not verified or
+    /// that we first sent less than `ConfirmTimeout.recentOwnKcMacMs` ago (plus such recent MACs of earlier rounds:
+    /// a verified peer MAC does not show that ours arrived), but only a MAC that was already sent once (a callee still holding its round-1 MAC re-sends nothing, R-COMMIT-
     /// KCMAC-HOLD). The event takes one unit of the per-call budget of 4 shared with the duplicate-ACCEPT re-sends;
     /// nothing due consumes none, and a fifth event re-sends nothing. The receiver drops an already-verified copy
     /// silently (duplicate rule), and the sender-device rule is unaffected (the copy comes from the same device).
@@ -14294,13 +14313,15 @@ final class AppState: ObservableObject {
         let due: ConfirmResend.Due
         var ownWire: String?
         var peerId = ""
+        let nowMs = SasCommit.monotonicNowMs()
         if let state = kcCallStates[cid] {
             due = ConfirmResend.due(
                 isCaller: integration.isSasCaller(callId: cid),
                 revealBound: integration.hasBoundSasAccept(callId: cid),
                 isRound1: state.isRound1,
                 ownKcMacSent: state.ownMacWire != nil && state.ownMacSent,
-                peerKcMacVerified: state.kcStatus == .verified)
+                peerKcMacVerified: state.kcStatus == .verified,
+                ownKcMacRecent: ConfirmResend.isRecentOwnKcMac(sentAtMs: state.ownMacSentAtMs, nowMs: nowMs))
             if due.ownKcMac { ownWire = state.ownMacWire }
             peerId = state.peerId
         } else {
@@ -14312,7 +14333,11 @@ final class AppState: ObservableObject {
                 revealBound: integration.hasBoundSasAccept(callId: cid),
                 isRound1: true, ownKcMacSent: false, peerKcMacVerified: false)
         }
-        guard due.any else { return }
+        // Own MACs of earlier rounds that are still recent: the peer may still wait for them (the MACs cross).
+        let olderWires = (kcRecentOwnMacs[cid] ?? [])
+            .filter { ConfirmResend.isRecentOwnKcMac(sentAtMs: $0.sentAtMs, nowMs: nowMs) && $0.wire != ownWire }
+        kcRecentOwnMacs[cid] = olderWires.isEmpty ? nil : olderWires
+        guard due.any || !olderWires.isEmpty else { return }
         guard integration.takeResendEvent(callId: cid) else {
             print("[AppState] re-send budget spent — nothing re-sent after the re-authentication callId=\(cid.prefix(8))…")
             return
@@ -14321,11 +14346,15 @@ final class AppState: ObservableObject {
         let wireToSend: String? = ownWire
         let peerToSend: String = peerId
         if let wireToSend { OpaqueSelfEchoFilter.shared.markSent(wireToSend) }
+        for older in olderWires { OpaqueSelfEchoFilter.shared.markSent(older.wire) }
         // The REVEAL leaves before the KCMAC, on the same ordered path, exactly as the first sends did.
         Task {
             if due.reveal { await integration.resendRevealAfterReauth(callId: cid) }
             if let wireToSend, let provider, !peerToSend.isEmpty {
                 try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerToSend, payload: wireToSend)
+            }
+            for older in olderWires where !older.peerId.isEmpty {
+                try? await provider?.callingApi.sendOpaqueMessageString(recipientId: older.peerId, payload: older.wire)
             }
         }
         print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) callId=\(cid.prefix(8))…")
@@ -14610,6 +14639,7 @@ final class AppState: ObservableObject {
         kcCallStates[key]?.deadlineTask?.cancel()
         kcCallStates.removeValue(forKey: key)
         kcPendingOwnMac.removeValue(forKey: key)
+        kcRecentOwnMacs.removeValue(forKey: key)
         kcEarlyInbound.removeValue(forKey: key)
         kcDecidedPeerMacs.removeValue(forKey: key)
         keyConfirmationTelemetryByCall.removeValue(forKey: key)
