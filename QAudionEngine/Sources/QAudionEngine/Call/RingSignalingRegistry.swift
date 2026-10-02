@@ -1,12 +1,13 @@
 import Foundation
 
 /// W-MEDIAATACCEPT (option b, owner decision 2026-09-28) — the callee's
-/// per-call state while the phone is RINGING, when `calls.ring_signaling_only`
-/// (`mode == 1`) is on: only the application-layer PQC handshake and caller-
-/// identity verification run during RING (signaling channel only). The
-/// WebRTC media plane (`QAudionWebRtcCallController`/`QAudionPeerConnection`,
-/// SDP answer, ICE, DTLS-SRTP, cryptors, audio session) starts only after the
-/// human accept — see spec §2.1/§4.
+/// per-call state while the phone is RINGING. There is ONE callee path (WIRE_SPEC §3.7.4
+/// R-ANSWER-FIRST, T2 of the v6 timer round): while the phone rings, only the application-layer
+/// handshake material is held (the OFFER is stashed, nothing is sent). No ACCEPT, no handshake timer, no
+/// PeerConnection, no SDP answer, no ICE, no DTLS-SRTP, no cryptors and no audio session exist before the
+/// human answer. There is no pre-answer mode and no flag selects another one: the former
+/// `calls.ring_signaling_only` setting is no longer read. A call without a `callId` never gets an
+/// entry here: it cannot run v6 and ends with `handshake_malformed` before any ACCEPT.
 ///
 /// Lives in `QAudionEngine` (not `QAudionApp`) because both
 /// `BCryptoCallingApiImpl` (answer/ICE send counters, §4.6) and
@@ -18,7 +19,7 @@ import Foundation
 /// same pattern as `CallCapabilities`'s `nativeSrtpSnapshotLock` and
 /// `QAudionCallIntegration`'s own `lock`.
 ///
-/// **I8:** `mode`/`native`/`kill` are latched ONCE per `callId` — the first
+/// **I8:** `native`/`kill` are latched ONCE per `callId` — the first
 /// `latch(...)` call wins; a duplicate `call_incoming` for the same call
 /// never changes them (`Entry.latchedAtMs` marks when the FIRST write
 /// happened, not the most recent).
@@ -60,11 +61,8 @@ public final class RingSignalingRegistry: @unchecked Sendable {
     }
 
     public struct Entry {
-        /// 1 = signaling-only (media plane starts at accept); 0 = legacy
-        /// (today's iOS behavior: full setup at ring).
-        public var mode: Int
         /// Effective native-SRTP snapshot for this call (post kill-switch),
-        /// latched once alongside `mode`/`kill` — I8.
+        /// latched once alongside `kill` — I8.
         public var native: Bool
         /// The `calls.native_srtp_kill` value read at latch time.
         public var kill: Bool
@@ -76,8 +74,8 @@ public final class RingSignalingRegistry: @unchecked Sendable {
         public var answerSent: Bool = false
         public var acceptReleased: Bool = false
 
-        /// T4 counters — must read 0 at accept time under `mode == 1` (I3
-        /// invariant table, §11 T4). Only incremented while `acceptedAtMs == nil`.
+        /// T4 counters — must read 0 at accept time (I3 invariant table, §11 T4).
+        /// Only incremented while `acceptedAtMs == nil`.
         public var preAcceptIce: Int = 0
         public var preAcceptAnswers: Int = 0
     }
@@ -94,18 +92,6 @@ public final class RingSignalingRegistry: @unchecked Sendable {
     /// vanished without a `call_hangup`/`call_cancel` (network loss) must
     /// not pin a slot forever.
     public static let ttlMs: Int64 = 90_000
-
-    /// Fleet-wide fallback for a callId with no latched entry yet (e.g. an
-    /// OFFER arriving before its `call_incoming`, W-OFFERBUFFER). AppState
-    /// keeps this in sync with the compiled/remote flag at login and at
-    /// every `call_incoming` — see `FeatureFlags.bool("calls.ring_signaling_only", true)`.
-    /// Guarded by `lock` like everything else here (not a hot path — read
-    /// once per ring/OFFER, not per frame).
-    private var _defaultMode: Int = 1
-    public var defaultMode: Int {
-        get { lock.lock(); defer { lock.unlock() }; return _defaultMode }
-        set { lock.lock(); _defaultMode = newValue; lock.unlock() }
-    }
 
     /// Fires (off the lock) after a `call_answer` send is recorded via
     /// `noteAnswerSent`. AppState wires this to `releaseHeldAcceptIfDue`.
@@ -133,12 +119,11 @@ public final class RingSignalingRegistry: @unchecked Sendable {
 
     // MARK: - Latch (I8: first write wins)
 
-    /// Latch the per-call plan. A `callId` empty string is never stored —
-    /// callers with no id to index by (spec §3: "iOS: con callIdStr vuoto si
-    /// forza mode=0, why=7") must go through the legacy path instead; use
-    /// `mode: 0` at the call site rather than latching here.
+    /// Latch the per-call plan. A `callId` empty string is never stored: a call with no id to index by
+    /// cannot run v6 (the commitment binds the callId) and is rejected by the caller before any ACCEPT
+    /// (T2); there is no other path to fall back to.
     @discardableResult
-    public func latch(_ callId: String, mode: Int, native: Bool, kill: Bool) -> Entry? {
+    public func latch(_ callId: String, native: Bool, kill: Bool) -> Entry? {
         guard !callId.isEmpty else { return nil }
         let id = Self.normalize(callId)
         lock.lock()
@@ -147,7 +132,7 @@ public final class RingSignalingRegistry: @unchecked Sendable {
             return existing
         }
         evictOldestIfNeededLocked()
-        let entry = Entry(mode: mode, native: native, kill: kill, latchedAtMs: Self.nowMs())
+        let entry = Entry(native: native, kill: kill, latchedAtMs: Self.nowMs())
         entries[id] = entry
         return entry
     }
@@ -178,7 +163,7 @@ public final class RingSignalingRegistry: @unchecked Sendable {
 
     /// Applies `RingSignalingDecisions.offerUpdate` under the lock. Returns
     /// `.noPlan` when there is no latched entry for this call (nothing to
-    /// update — the legacy path handles the OFFER itself in that case).
+    /// update: the caller drops an OFFER for a call that was never latched).
     @discardableResult
     public func updateOffer(_ callId: String, sdp: String, capabilities: [String]?, hasVideo: Bool) -> OfferUpdate {
         let id = Self.normalize(callId)
@@ -214,7 +199,7 @@ public final class RingSignalingRegistry: @unchecked Sendable {
     }
 
     /// T4 — `pre_accept_local_cands`. Only counts while the call hasn't
-    /// been accepted yet (I3: must read 0 at accept under `mode == 1`).
+    /// been accepted yet (I3: must read 0 at accept).
     public func noteLocalIceSent(_ callId: String) {
         let id = Self.normalize(callId)
         lock.lock(); defer { lock.unlock() }
@@ -224,7 +209,7 @@ public final class RingSignalingRegistry: @unchecked Sendable {
         entries[id] = e
     }
 
-    /// T4 — `answer` sent before accept (must read 0 under `mode == 1`), AND
+    /// T4 — `answer` sent before accept (must read 0), AND
     /// the I11 release trigger once the call HAS been accepted. `sdpEmpty`
     /// is carried only for the caller's own logging (T5/T6 `why`).
     public func noteAnswerSent(_ callId: String, sdpEmpty: Bool) {
@@ -251,18 +236,16 @@ public final class RingSignalingRegistry: @unchecked Sendable {
 
     public func shouldHoldAccept(_ callId: String, nowMs: Int64? = nil) -> Bool {
         let id = Self.normalize(callId)
-        guard !id.isEmpty else { return false }
+        // A call with no id can never be answered (it ends as `handshake_malformed`): no ACCEPT may leave.
+        guard !id.isEmpty else { return true }
         lock.lock(); defer { lock.unlock() }
         guard let e = entries[id] else {
             // No plan for this call (OFFER arrived before call_incoming,
-            // W-OFFERBUFFER) — fall back to the fleet default. Reads
-            // `_defaultMode` directly: `lock` is already held here and
-            // `NSLock` is not reentrant, so the public `defaultMode`
-            // computed property (which re-locks) would deadlock.
-            return _defaultMode == 1
+            // W-OFFERBUFFER, or the call was wiped): an ACCEPT is never sent
+            // for a call nobody answered, so hold (fail closed).
+            return true
         }
         return RingSignalingDecisions.shouldHoldAccept(
-            mode: e.mode,
             acceptedAtMs: e.acceptedAtMs,
             answerSent: e.answerSent,
             released: e.acceptReleased,
@@ -303,11 +286,9 @@ public final class RingSignalingRegistry: @unchecked Sendable {
         }
     }
 
-    /// Test-only full reset. Sets `_defaultMode` directly under the same
-    /// lock (see `shouldHoldAccept`'s note on why the public setter can't
-    /// be used here).
+    /// Test-only full reset.
     func resetForTesting() {
-        lock.lock(); entries.removeAll(); _defaultMode = 1; lock.unlock()
+        lock.lock(); entries.removeAll(); lock.unlock()
     }
 }
 
@@ -339,12 +320,11 @@ public enum RingSignalingDecisions {
     /// — building starts only from `.none`/`.awaitingSdp` (idempotent: a
     /// second accept-time call, or an offer arriving mid-build, is a no-op).
     public static func shouldStartMediaPlane(
-        mode: Int,
         accepted: Bool,
         hasSdp: Bool,
         state: RingSignalingRegistry.MediaPlaneState
     ) -> Bool {
-        guard mode == 1, accepted else { return false }
+        guard accepted else { return false }
         switch state {
         case .none, .awaitingSdp:
             return hasSdp
@@ -355,18 +335,15 @@ public enum RingSignalingDecisions {
 
     /// I11 — the callee's ACCEPT is trattenuto (held) until either its own
     /// `call_answer` is sent, or a 5s reserve timer from accept elapses.
-    /// `mode == 0` (legacy) or an already-released/answered call never
-    /// holds.
+    /// An already-released/answered call never holds.
     public static let acceptReserveMs: Int64 = 5_000
 
     public static func shouldHoldAccept(
-        mode: Int,
         acceptedAtMs: Int64?,
         answerSent: Bool,
         released: Bool,
         nowMs: Int64
     ) -> Bool {
-        guard mode == 1 else { return false }
         guard !released else { return false }
         guard let acceptedAt = acceptedAtMs else {
             // Not yet accepted at all — always hold.
@@ -380,20 +357,18 @@ public enum RingSignalingDecisions {
     /// §4.6 — whether `startAudioIOIfReady` must defer to avoid racing
     /// CallKit's `didActivate` against the still-building PeerConnection
     /// (two VoiceProcessingIO units, W-ADMFALLBACK). Only gates when the
-    /// call is BOTH signaling-only-mode AND predicted to end up native —
-    /// a call that will use the custom (non-native) audio path never needs
-    /// to wait on the PC.
+    /// call is predicted to end up native — a call that will use the custom
+    /// (non-native) audio path never needs to wait on the PC.
     public enum AudioIOGateDecision: Equatable {
         case deferGate5
         case proceed
     }
 
     public static func audioIOGate(
-        mode: Int,
         mediaPlane: RingSignalingRegistry.MediaPlaneState,
         predictedNative: Bool
     ) -> AudioIOGateDecision {
-        guard mode == 1, predictedNative else { return .proceed }
+        guard predictedNative else { return .proceed }
         switch mediaPlane {
         case .none, .awaitingSdp, .building:
             return .deferGate5

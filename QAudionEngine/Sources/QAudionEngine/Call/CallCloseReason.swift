@@ -7,8 +7,8 @@ import Foundation
 /// - `dtls_fp_mismatch`, `kcmac_mismatch`, `handshake_malformed`: the signed handshake or the key
 ///   confirmation ended the call.
 /// - `sas_commit_mismatch`, `sas_reveal_timeout` (transcript v6): the caller's SAS nonce did not open its
-///   commitment (or the REVEAL was ill-formed), or no verified REVEAL arrived within 5 s of this device's
-///   ACCEPT. Security reasons: the peer is notified like for `kcmac_mismatch`.
+///   commitment (or the REVEAL was ill-formed), or no verified REVEAL arrived within `CONFIRM_TIMEOUT` (15 s) of this
+///   device's first ACCEPT send. Security reasons: the peer is notified like for `kcmac_mismatch`.
 /// - `identity_unresolved`, `identity_key_mismatch`: the peer's identity could not be trusted (no pin and
 ///   no server key, or a key that differs from the pin); the call is held pending the SAS and was closed
 ///   before the user confirmed it.

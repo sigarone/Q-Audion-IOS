@@ -264,7 +264,7 @@ public final class QAudionPeerConnection: NSObject {
 
     /// Fired ONCE when a DTLS fingerprint check fails; the argument is the verdict-only stage:
     /// `sdp_remote`, `sdp_local`, `stats` (a real certificate mismatch), `stats_timeout` (check (b)
-    /// reached its 5 s deadline with no verdict: unverified, not proven benign; the pending causes
+    /// reached its 15 s deadline with no verdict: unverified, not proven benign; the pending causes
     /// are listed on `DtlsFingerprint.failureCode`) or `pin_timeout`. The app ends the call with
     /// reason `dtls_fp_mismatch` for ALL of them: the stage is for local logs only
     /// (`stats_timeout` is never sent on the wire). Carries no value of any fingerprint.
@@ -276,12 +276,26 @@ public final class QAudionPeerConnection: NSObject {
     private var _dtlsMediaGateOpen = false
     private var _dtlsFailureReported = false
     private var _dtlsStatsGeneration = 0
+    /// When the current check (b) generation started (the latest transition to `connected`), for the T5 expiry event.
+    private var _dtlsStatsStartedAt: Date?
     private var _dtlsPinTimeoutArmed = false
     /// How long a remote description may wait for the peer fingerprint to be pinned.
     private static let peerPinTimeoutSeconds: Double = 45
-    /// Check (b): how long the negotiated certificates may stay unreported after `connected`.
-    private static let dtlsStatsDeadlineSeconds: Double = 5
-    private static let dtlsStatsRetrySeconds: Double = 0.25
+    /// Check (b): the negotiated certificates may stay unreported for `ConfirmTimeout.confirmTimeoutMs` (15 s) after
+    /// `connected` (T3, one confirmation constant); the stats are read again every `ConfirmTimeout.dtlsStatsRetryMs`.
+    private static let dtlsStatsRetrySeconds: Double = Double(ConfirmTimeout.dtlsStatsRetryMs) / 1000
+
+    /// Milliseconds the DTLS statistics check (b) has waited since the latest `connected` (0 when none ran): the T5
+    /// `confirm_timeout` event of a `stats_timeout` end reports it.
+    public var dtlsStatsElapsedMs: Int {
+        dtlsStateLock.lock(); defer { dtlsStateLock.unlock() }
+        guard let startedAt = _dtlsStatsStartedAt else { return 0 }
+        return max(0, Int(Date().timeIntervalSince(startedAt) * 1000))
+    }
+
+    private func dtlsStatsDeadlineReached(since startedAt: Date) -> Bool {
+        ConfirmTimeout.dtlsStatsWaitExpired(elapsedMs: Int(Date().timeIntervalSince(startedAt) * 1000))
+    }
 
     /// True once check (b) passed. While false: local tracks stay disabled and remote audio/video
     /// stays unrendered. The FrameCryptor is NEVER disabled as a gate (a disabled cryptor passes
@@ -2360,7 +2374,7 @@ public final class QAudionPeerConnection: NSObject {
 
     /// Check (b) (§3.6): every time the PC reaches `connected`, compare the negotiated DTLS
     /// certificates (`RTCCertificateStats` of the transport's local/remote certificate ids) with
-    /// the pinned fingerprints. Retries every 250 ms for up to 5 s; a mismatch (stage `stats`), or
+    /// the pinned fingerprints. Retries every 250 ms for up to `CONFIRM_TIMEOUT` (15 s); a mismatch (stage `stats`), or
     /// no verdict in that time (stage `stats_timeout`: unverified, not proven benign), ends the
     /// call. A pass opens the media gate.
     fileprivate func startDtlsStatsCheck() {
@@ -2368,11 +2382,13 @@ public final class QAudionPeerConnection: NSObject {
         // A new transition to `connected` (a DTLS restart, a reconnect) is verified from scratch:
         // media that an earlier pass released is held again until THIS generation passes.
         closeDtlsMediaGate()
+        let startedAt = Date()
         dtlsStateLock.lock()
         _dtlsStatsGeneration += 1
         let generation = _dtlsStatsGeneration
+        _dtlsStatsStartedAt = startedAt
         dtlsStateLock.unlock()
-        runDtlsStatsAttempt(generation: generation, startedAt: Date())
+        runDtlsStatsAttempt(generation: generation, startedAt: startedAt)
     }
 
     private func runDtlsStatsAttempt(generation: Int, startedAt: Date) {
@@ -2380,7 +2396,7 @@ public final class QAudionPeerConnection: NSObject {
         let current = (generation == _dtlsStatsGeneration)
         dtlsStateLock.unlock()
         guard current, let pc = peerConnection, let context = dtlsContext else { return }
-        let deadlineReached = Date().timeIntervalSince(startedAt) >= Self.dtlsStatsDeadlineSeconds
+        let deadlineReached = dtlsStatsDeadlineReached(since: startedAt)
         guard let fpPeer = context.peerFingerprint else {
             retryOrFailDtlsStats(generation: generation, startedAt: startedAt, deadlineReached: deadlineReached)
             return
@@ -2412,7 +2428,7 @@ public final class QAudionPeerConnection: NSObject {
                 self.reportDtlsFailure(stage: "stats")
             case .pending:
                 self.retryOrFailDtlsStats(generation: generation, startedAt: startedAt,
-                                          deadlineReached: Date().timeIntervalSince(startedAt) >= Self.dtlsStatsDeadlineSeconds)
+                                          deadlineReached: self.dtlsStatsDeadlineReached(since: startedAt))
             }
         }
     }

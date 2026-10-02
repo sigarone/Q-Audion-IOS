@@ -1224,6 +1224,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// thread.
     public var onDtlsFingerprintFailure: ((String) -> Void)?
 
+    /// T5: milliseconds the DTLS statistics check (b) has waited since the latest `connected` (0 when none ran). The app
+    /// reads it when the failure stage is `stats_timeout`, to report the `confirm_timeout` event of that expiry.
+    public var dtlsStatsElapsedMs: Int { peerConnection?.dtlsStatsElapsedMs ?? 0 }
+
     /// The directional frame keys of the CURRENT key round (`OneToOneFrameKeys`): the key this
     /// device's outbound frames are encrypted with and the key the peer's frames are decrypted
     /// with. `nil` until a 32-byte session key and the call id are both known. The call id is the
@@ -1241,7 +1245,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Forward the PeerConnection's DTLS fingerprint verdicts: the app ends the call on a
     /// failure; the remote log carries numeric verdicts only, never a fingerprint:
     /// `dtls fail s=<n> ok=0` with `s` 1 sdp_remote, 2 sdp_local, 3 stats = a real certificate
-    /// mismatch, 4 pin_timeout, 5 stats_timeout = no verdict within the 5 s deadline (unverified,
+    /// mismatch, 4 pin_timeout, 5 stats_timeout = no verdict within the 15 s deadline (unverified,
     /// not proven benign; see `DtlsFingerprint.failureCode`), and `dtls ok=1` when check (b)
     /// passed (the pass is always the stats stage, so it carries no `s`).
     ///

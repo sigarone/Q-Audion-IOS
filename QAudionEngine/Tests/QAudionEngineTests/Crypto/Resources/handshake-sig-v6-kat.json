@@ -794,7 +794,7 @@
             "arg": null
           },
           {
-            "tMs": 7000,
+            "tMs": 17000,
             "ev": "tick",
             "arg": null
           }
@@ -802,7 +802,7 @@
         "expect": {
           "outcome": "ended",
           "reason": "sas_reveal_timeout",
-          "atMs": 7000,
+          "atMs": 17000,
           "revealsSent": null,
           "revealData": null,
           "revealBeforeKcMac": null,
@@ -902,7 +902,7 @@
             "arg": null
           },
           {
-            "tMs": 5000,
+            "tMs": 15000,
             "ev": "tick",
             "arg": null
           }
@@ -910,7 +910,7 @@
         "expect": {
           "outcome": "ended",
           "reason": "sas_reveal_timeout",
-          "atMs": 5000,
+          "atMs": 15000,
           "revealsSent": null,
           "revealData": null,
           "revealBeforeKcMac": null,
@@ -939,7 +939,7 @@
             "arg": "identical"
           },
           {
-            "tMs": 5000,
+            "tMs": 15000,
             "ev": "tick",
             "arg": null
           }
@@ -947,7 +947,7 @@
         "expect": {
           "outcome": "ended",
           "reason": "sas_reveal_timeout",
-          "atMs": 5000,
+          "atMs": 15000,
           "revealsSent": null,
           "revealData": null,
           "revealBeforeKcMac": null,

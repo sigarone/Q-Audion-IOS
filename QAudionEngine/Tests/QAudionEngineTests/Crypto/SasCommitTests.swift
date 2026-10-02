@@ -283,7 +283,7 @@ final class SasCommitTests: XCTestCase {
         XCTAssertEqual(callee.receiveReveal(data: reveal(), nowMs: 10), .dropped)
         XCTAssertTrue(callee.acceptSent(nowMs: 2_000))
         XCTAssertNil(callee.verifiedNonce, "the early REVEAL was not kept")
-        XCTAssertEqual(callee.tick(nowMs: 7_000), .end(reason: "sas_reveal_timeout"))
+        XCTAssertEqual(callee.tick(nowMs: 17_000), .end(reason: "sas_reveal_timeout"))
     }
 
     func testARevealWithoutACommitmentContextIsDropped() {
@@ -314,8 +314,8 @@ final class SasCommitTests: XCTestCase {
         callee.setAcceptHash(ownHash)
         XCTAssertTrue(callee.acceptSent(nowMs: 0))
         XCTAssertFalse(callee.acceptSent(nowMs: 2_500), "a retransmission does not restart the timer")
-        XCTAssertEqual(callee.tick(nowMs: 4_999), .none)
-        XCTAssertEqual(callee.tick(nowMs: 5_000), .end(reason: "sas_reveal_timeout"))
+        XCTAssertEqual(callee.tick(nowMs: 14_999), .none)
+        XCTAssertEqual(callee.tick(nowMs: 15_000), .end(reason: "sas_reveal_timeout"))
     }
 
     func testTheTimerNeverFiresOnceTheRevealVerifiedOrBeforeTheAcceptWasSent() {
@@ -359,24 +359,38 @@ final class SasCommitTests: XCTestCase {
         XCTAssertEqual(caller.revealWire(), reveal(), "still the REVEAL of the first one")
     }
 
-    func testADuplicateOfTheBoundAcceptResendsTheIdenticalRevealFourTimesAtMost() throws {
-        var caller = try XCTUnwrap(SasCommitCaller(callId: callId, nonce: nonce))
-        XCTAssertEqual(caller.onAccept(acceptHash: ownHash), .bindAndReveal)
-        for _ in 0..<4 {
-            XCTAssertEqual(caller.onAccept(acceptHash: ownHash), .resendReveal)
-            XCTAssertEqual(caller.revealWire(), reveal())
+    /// A duplicate of the bound ACCEPT re-sends the identical REVEAL: ONE event of the per-call budget of 4, shared
+    /// with the socket re-authentication re-sends (R-KCMAC-RESEND). The first send is not an event.
+    func testADuplicateOfTheBoundAcceptIsOneEventOfTheSharedBudgetOfFour() throws {
+        let book = SasCommitBook()
+        _ = book.beginCaller(callId: callId, nonce: nonce)
+        let (first, firstWire) = book.callerOnAccept(callId: callId, acceptHash: ownHash)
+        XCTAssertEqual(first, .bindAndReveal)
+        XCTAssertEqual(firstWire, reveal())
+        XCTAssertEqual(book.resendEventsUsed(callId: callId), 0, "the first send is not an event")
+        for used in 1...4 {
+            let (decision, wire) = book.callerOnAccept(callId: callId, acceptHash: ownHash)
+            XCTAssertEqual(decision, .resendReveal)
+            XCTAssertEqual(wire, reveal(), "byte-identical")
+            XCTAssertEqual(book.resendEventsUsed(callId: callId), used)
         }
-        XCTAssertEqual(caller.onAccept(acceptHash: ownHash), .drop, "at most 4 re-sends per call")
-        XCTAssertEqual(caller.onReauth(), .drop, "the WS re-auth shares the budget")
-        XCTAssertEqual(caller.revealsSent, 5)
+        let (fifth, fifthWire) = book.callerOnAccept(callId: callId, acceptHash: ownHash)
+        XCTAssertEqual(fifth, .drop, "at most 4 re-send events per call")
+        XCTAssertNil(fifthWire)
+        XCTAssertFalse(book.takeResendEvent(callId: callId), "the WS re-auth shares the budget")
+        XCTAssertEqual(book.resendEventsUsed(callId: callId), 4)
     }
 
+    /// A WS re-auth is one event of the same budget; the REVEAL it re-sends is the identical one, and it exists only
+    /// after binding.
     func testAWsReauthResendsWithinTheSameBudget() throws {
-        var caller = try XCTUnwrap(SasCommitCaller(callId: callId, nonce: nonce))
-        XCTAssertEqual(caller.onReauth(), .drop, "nothing to re-send before binding")
-        XCTAssertEqual(caller.onAccept(acceptHash: ownHash), .bindAndReveal)
-        XCTAssertEqual(caller.onReauth(), .resendReveal)
-        XCTAssertEqual(caller.revealWire(), reveal())
+        let book = SasCommitBook()
+        _ = book.beginCaller(callId: callId, nonce: nonce)
+        XCTAssertNil(book.callerRevealForResend(callId: callId), "nothing to re-send before binding")
+        _ = book.callerOnAccept(callId: callId, acceptHash: ownHash)
+        XCTAssertTrue(book.takeResendEvent(callId: callId))
+        XCTAssertEqual(book.callerRevealForResend(callId: callId), reveal())
+        XCTAssertEqual(book.resendEventsUsed(callId: callId), 1)
     }
 
     func testAnEndedCallZeroisesTheNonceAndNeverRevealsAgain() throws {
@@ -638,50 +652,58 @@ final class SasCommitTests: XCTestCase {
 
     // MARK: - A1 / A5: the KCMAC wait of a key round (WIRE_SPEC 3.7.1 Window rule, 3.7.4 KCMAC hold)
 
-    /// Every round that is not round 1 waits exactly 5 s from the moment its context is armed.
-    func testARekeyRoundWaitsFiveSecondsFromArming() {
+    /// Every round that is not round 1 waits CONFIRM_TIMEOUT (15 s) from the moment its context is armed (T3). A rekey
+    /// KCMAC 14 s after the round was armed is judged; the old 5 s window had already ended the call.
+    func testARekeyRoundWaitsFifteenSecondsFromArming() {
         for isInitiator in [true, false] {
+            XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
+                                                         nowMs: 1_000 + 14_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
+                                 "a rekey MAC 14 s after arming is still judged")
             XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
-                                                   nowMs: 5_999, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 1)
+                                                   nowMs: 1_000 + 14_999, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 1)
             XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
-                                                   nowMs: 6_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
+                                                   nowMs: 1_000 + 15_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
                            "the REVEAL times never stretch a rekey round")
         }
     }
 
-    /// A1: the caller accepts the callee's round-1 MAC for at least 15 s after it handed its REVEAL to the
-    /// transport (the callee sends that MAC only after the REVEAL round trip).
-    func testTheCallerWaitsFifteenSecondsAfterHandingItsRevealToTheTransport() {
+    /// A1/T3: the caller accepts the callee's round-1 MAC for at least 2 x CONFIRM_TIMEOUT = 30 s after it handed its
+    /// REVEAL to the transport (the REVEAL may need a re-authentication and a re-send to reach the callee, and the
+    /// callee's MAC then needs one more window to come back).
+    func testTheCallerWaitsThirtySecondsAfterHandingItsRevealToTheTransport() {
         func left(_ now: Int, handed: Int?) -> Int {
             KcMacWindow.remainingMs(isRound1: true, isInitiator: true, armedAtMs: 1_000, nowMs: now,
                                     revealHandedAtMs: handed, revealVerifiedAtMs: nil)
         }
-        XCTAssertGreaterThan(left(14_000, handed: 1_000), 0, "a callee MAC 13 s after the REVEAL is still judged")
-        XCTAssertEqual(left(15_999, handed: 1_000), 1)
-        XCTAssertEqual(left(16_000, handed: 1_000), 0, "expiry: kcmac_mismatch")
-        XCTAssertEqual(left(5_999, handed: nil), 1, "no REVEAL handed over yet: the base 5 s from arming")
-        XCTAssertEqual(left(6_000, handed: nil), 0)
-        XCTAssertEqual(KcMacWindow.callerRound1AfterRevealMs, 15_000)
+        XCTAssertGreaterThan(left(1_000 + 29_000, handed: 1_000), 0, "a callee MAC 29 s after the REVEAL is still judged")
+        XCTAssertEqual(left(1_000 + 29_999, handed: 1_000), 1)
+        XCTAssertEqual(left(1_000 + 30_000, handed: 1_000), 0, "expiry: kcmac_mismatch")
+        XCTAssertEqual(left(1_000 + 14_999, handed: nil), 1, "no REVEAL handed over yet: the base 15 s from arming")
+        XCTAssertEqual(left(1_000 + 15_000, handed: nil), 0)
+        XCTAssertEqual(KcMacWindow.callerRound1AfterRevealMs, 30_000)
+        XCTAssertEqual(KcMacWindow.callerRound1AfterRevealMs, 2 * ConfirmTimeout.confirmTimeoutMs)
     }
 
-    /// A5: the callee's round-1 wait for the caller's MAC ends no earlier than 5 s after its OWN REVEAL verified,
-    /// even when the 5 s armed with the round-1 key would end first. The decision's own scenario: REVEAL verified
-    /// 4.9 s after the key, caller MAC at 5.3 s: the call survives; nothing by 5 s after the REVEAL: mismatch.
-    func testTheCalleeWaitsFiveSecondsAfterItsOwnRevealVerified() {
+    /// A5/T3: the callee's round-1 wait for the caller's MAC ends no earlier than CONFIRM_TIMEOUT (15 s) after its OWN
+    /// REVEAL verified, even when the window armed with the round-1 key would end first. REVEAL verified 14.9 s after
+    /// the key, caller MAC at 15.3 s: the call survives; a callee MAC 14 s after its REVEAL is judged; nothing by 15 s
+    /// after the REVEAL: mismatch.
+    func testTheCalleeWaitsFifteenSecondsAfterItsOwnRevealVerified() {
         func left(_ now: Int, verified: Int?) -> Int {
             KcMacWindow.remainingMs(isRound1: true, isInitiator: false, armedAtMs: 0, nowMs: now,
                                     revealHandedAtMs: nil, revealVerifiedAtMs: verified)
         }
-        XCTAssertGreaterThan(left(5_300, verified: 4_900), 0, "REVEAL at 4.9 s, caller MAC at 5.3 s: still judged")
-        XCTAssertEqual(left(9_899, verified: 4_900), 1)
-        XCTAssertEqual(left(9_900, verified: 4_900), 0, "no MAC 5 s after the REVEAL verified: kcmac_mismatch")
-        XCTAssertEqual(left(4_999, verified: -100), 1, "a REVEAL verified before the round was armed keeps the 5 s armed with the key")
-        XCTAssertEqual(left(5_000, verified: -100), 0)
+        XCTAssertGreaterThan(left(15_300, verified: 14_900), 0, "REVEAL at 14.9 s, caller MAC at 15.3 s: still judged")
+        XCTAssertGreaterThan(left(4_900 + 14_000, verified: 4_900), 0, "a caller MAC 14 s after the REVEAL verified is judged")
+        XCTAssertEqual(left(4_900 + 14_999, verified: 4_900), 1)
+        XCTAssertEqual(left(4_900 + 15_000, verified: 4_900), 0, "no MAC 15 s after the REVEAL verified: kcmac_mismatch")
+        XCTAssertEqual(left(14_999, verified: -100), 1, "a REVEAL verified before the round was armed keeps the 15 s armed with the key")
+        XCTAssertEqual(left(15_000, verified: -100), 0)
         // Before the REVEAL verified the wait is held open past the REVEAL timer, so a missing REVEAL ends the call
-        // with sas_reveal_timeout (5 s after the ACCEPT was sent) and never with kcmac_mismatch first.
-        XCTAssertGreaterThan(KcMacWindow.calleeRound1PreRevealBackstopMs, SasCommit.revealTimeoutMs)
-        XCTAssertGreaterThan(left(9_999, verified: nil), 0)
-        XCTAssertEqual(left(10_000, verified: nil), 0)
+        // with sas_reveal_timeout (CONFIRM_TIMEOUT after the ACCEPT was sent) and never with kcmac_mismatch first.
+        XCTAssertGreaterThan(KcMacWindow.calleeRound1PreRevealBackstopMs, ConfirmTimeout.confirmTimeoutMs)
+        XCTAssertGreaterThan(left(29_999, verified: nil), 0)
+        XCTAssertEqual(left(30_000, verified: nil), 0)
     }
 
     /// The book feeds the round-1 extensions from this call's own REVEAL times: the caller's from the latest
@@ -691,19 +713,19 @@ final class SasCommitTests: XCTestCase {
         _ = callerBook.beginCaller(callId: callId, nonce: nonce)
         callerBook.callerRevealHanded(callId: callId, nowMs: 500)
         XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
-                                                    armedAtMs: 0, nowMs: 5_000), 0,
-                       "no REVEAL can be handed over before binding")
+                                                    armedAtMs: 0, nowMs: 5_000), 10_000,
+                       "no REVEAL can be handed over before binding: the base 15 s from arming")
         _ = callerBook.callerOnAccept(callId: callId, acceptHash: ownHash, senderDeviceId: "dev-a")
         callerBook.callerRevealHanded(callId: callId, nowMs: 1_000)
         XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
-                                                    armedAtMs: 1_000, nowMs: 15_000), 1_000)
+                                                    armedAtMs: 1_000, nowMs: 15_000), 16_000)
         callerBook.callerRevealHanded(callId: callId, nowMs: 3_000)
         XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
-                                                    armedAtMs: 1_000, nowMs: 15_000), 3_000,
+                                                    armedAtMs: 1_000, nowMs: 15_000), 18_000,
                        "a re-send may make the wait longer, never shorter")
         callerBook.callerRevealHanded(callId: callId, nowMs: 2_000)
         XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
-                                                    armedAtMs: 1_000, nowMs: 15_000), 3_000)
+                                                    armedAtMs: 1_000, nowMs: 15_000), 18_000)
 
         let calleeBook = SasCommitBook()
         XCTAssertTrue(calleeBook.beginCallee(callId: callId, commit: commit()))
@@ -711,9 +733,9 @@ final class SasCommitTests: XCTestCase {
         XCTAssertTrue(calleeBook.calleeAcceptSent(callId: callId, nowMs: 0))
         XCTAssertEqual(calleeBook.calleeOnReveal(callId: callId, data: reveal(), nowMs: 4_900), .sasReady)
         XCTAssertGreaterThan(calleeBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: false,
-                                                          armedAtMs: 0, nowMs: 5_300), 0)
+                                                          armedAtMs: 0, nowMs: 15_300), 0)
         XCTAssertEqual(calleeBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: false,
-                                                    armedAtMs: 0, nowMs: 9_900), 0)
+                                                    armedAtMs: 0, nowMs: 19_900), 0)
     }
 
     // MARK: - R-COMMIT-KCMAC-DEVICE: the caller's sender-device rule (A1, every round A6)

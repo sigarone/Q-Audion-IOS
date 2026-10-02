@@ -19,10 +19,9 @@ public enum SasCommit {
     public static let commitLabel = Data("qaudion-sas-commit-v6".utf8)
     public static let nonceLength = 32
     public static let commitLength = 32
-    /// The callee waits this long after FIRST sending its ACCEPT for a verified REVEAL.
-    public static let revealTimeoutMs = 5_000
-    /// Re-sends of the byte-identical REVEAL per call (a duplicate of the bound ACCEPT, a WS re-auth).
-    public static let maxRevealResends = 4
+    // The callee waits `ConfirmTimeout.confirmTimeoutMs` (15 s) after FIRST sending its ACCEPT for a verified
+    // REVEAL, and a call has `ConfirmTimeout.maxResendEvents` (4) re-send events (a duplicate of the bound
+    // ACCEPT, a signalling-socket re-authentication): one definition of each, in `ConfirmTimeout`.
 
     public static let reasonMismatch = "sas_commit_mismatch"
     public static let reasonTimeout = "sas_reveal_timeout"
@@ -175,7 +174,7 @@ public struct SasCommitCallee {
     }
 
     /// The ACCEPT is actually SENT now. Only the FIRST send freezes the commitment and starts the
-    /// 5 s timer; later sends (retransmissions, cached replays) never restart it. Returns true on the
+    /// REVEAL timer (`ConfirmTimeout.confirmTimeoutMs`); later sends (retransmissions, cached replays) never restart it. Returns true on the
     /// first send.
     @discardableResult
     public mutating func acceptSent(nowMs: Int) -> Bool {
@@ -217,16 +216,17 @@ public struct SasCommitCallee {
         }
     }
 
-    /// The REVEAL timer: no verified REVEAL 5 s after the first ACCEPT send ends the call.
+    /// The REVEAL timer: no verified REVEAL `ConfirmTimeout.confirmTimeoutMs` (15 s) after the first ACCEPT send
+    /// ends the call.
     public mutating func tick(nowMs: Int) -> Outcome {
         guard !finished, verifiedNonce == nil, let sentAt = acceptSentAtMs else { return .none }
-        if nowMs - sentAt >= SasCommit.revealTimeoutMs {
+        if nowMs - sentAt >= ConfirmTimeout.confirmTimeoutMs {
             return fail(SasCommit.reasonTimeout)
         }
         return .none
     }
 
-    /// The timer task's own 5 s sleep elapsed: if the REVEAL has not verified, the call ends.
+    /// The timer task's own 15 s sleep elapsed: if the REVEAL has not verified, the call ends.
     public mutating func timerFired() -> Outcome {
         guard !finished, verifiedNonce == nil, acceptSentAtMs != nil else { return .none }
         return fail(SasCommit.reasonTimeout)
@@ -266,8 +266,10 @@ public struct SasCommitCaller {
     /// `nil` when the envelope carried none: no KCMAC will ever pass the sender-device rule (fail closed).
     public private(set) var boundSenderDeviceId: String?
     /// Monotonic time (ms) at which the latest REVEAL was handed to the transport: the start of the caller's
-    /// 15 s wait for the callee's round-1 KCMAC (A1, `KcMacWindow`).
+    /// 30 s wait for the callee's round-1 KCMAC (A1/T3, `KcMacWindow`).
     public private(set) var revealHandedAtMs: Int?
+    /// REVEALs produced for the transport (the first send and every re-send). Informational: the re-send
+    /// BUDGET is per call and shared with the KCMAC re-sends, so it lives in `SasCommitBook`.
     public private(set) var revealsSent = 0
     public private(set) var ended = false
 
@@ -290,17 +292,16 @@ public struct SasCommitCaller {
             return .bindAndReveal
         }
         guard SasCommit.constantTimeEquals(bound, acceptHash) else { return .drop }
-        guard revealsSent < 1 + SasCommit.maxRevealResends else { return .drop }
+        // A byte-identical duplicate of the bound ACCEPT: its REVEAL goes again, within the per-call re-send
+        // budget (`SasCommitBook.takeResendEvent`, shared with the re-authentication re-sends).
         revealsSent += 1
         return .resendReveal
     }
 
-    /// A re-send on a WS re-auth (same budget as the duplicate-ACCEPT re-sends).
-    public mutating func onReauth() -> AcceptDecision {
-        guard !ended, boundAcceptHash != nil, nonce != nil,
-              revealsSent < 1 + SasCommit.maxRevealResends else { return .drop }
+    /// A REVEAL was produced again by a re-authentication event (the budget was taken by the book).
+    public mutating func countRevealResend() {
+        guard !ended, boundAcceptHash != nil, nonce != nil else { return }
         revealsSent += 1
-        return .resendReveal
     }
 
     /// The REVEAL string for the bound ACCEPT; `nil` before binding or after the call ended.
@@ -312,8 +313,8 @@ public struct SasCommitCaller {
     /// The nonce, for the caller's own SAS derivation (only after binding).
     public var sasNonce: Data? { boundAcceptHash == nil ? nil : nonce }
 
-    /// The REVEAL was handed to the transport (first send or a re-send): the caller's 15 s wait for the callee's
-    /// round-1 KCMAC runs from the latest one (a longer wait is allowed, never a shorter one).
+    /// The REVEAL was handed to the transport (first send or a re-send): the caller's 30 s (2 x `CONFIRM_TIMEOUT`) wait
+    /// for the callee's round-1 KCMAC runs from the latest one (a longer wait is allowed, never a shorter one).
     public mutating func revealHanded(nowMs: Int) {
         guard !ended, boundAcceptHash != nil else { return }
         revealHandedAtMs = max(revealHandedAtMs ?? nowMs, nowMs)
@@ -337,23 +338,24 @@ public struct SasCommitCaller {
     }
 }
 
-/// The KCMAC wait of one key round (WIRE_SPEC 3.7.1 Window rule, 3.7.4 KCMAC hold). Every key round waits 5 s from
-/// the moment its context is armed. Round 1 has two extensions, both because the callee's round-1 KCMAC follows the
-/// REVEAL round trip:
-/// - the CALLER (round-1 `init`) waits for the callee's MAC no earlier than 15 s after it handed its REVEAL to the
-///   transport (A1);
-/// - the CALLEE (round-1 `resp`) waits for the caller's MAC no earlier than 5 s after its OWN REVEAL verified
-///   (A5), because the REVEAL may arrive near the end of the 5 s REVEAL timer and the caller's MAC follows it on the
-///   same ordered path.
+/// The KCMAC wait of one key round (WIRE_SPEC 3.7.1 Window rule, 3.7.4 KCMAC hold). Every key round waits
+/// `CONFIRM_TIMEOUT` (15 s, `ConfirmTimeout`) from the moment its context is armed. Round 1 has two extensions, both
+/// because the callee's round-1 KCMAC follows the REVEAL round trip:
+/// - the CALLER (round-1 `init`) waits for the callee's MAC no earlier than 2 x `CONFIRM_TIMEOUT` = 30 s after it
+///   handed its REVEAL to the transport (A1, T3): the REVEAL may need a socket re-authentication and a re-send to
+///   reach the callee, and the callee's MAC then needs one more window to come back;
+/// - the CALLEE (round-1 `resp`) waits for the caller's MAC no earlier than `CONFIRM_TIMEOUT` after its OWN REVEAL
+///   verified (A5, T3), because the REVEAL may arrive near the end of the REVEAL timer and the caller's MAC follows it
+///   on the same ordered path.
 /// A wait may be longer, never shorter. Expiry without a verified MAC is `kcmac_mismatch`.
 public enum KcMacWindow {
-    public static let baseMs = 5_000
-    public static let callerRound1AfterRevealMs = 15_000
-    public static let calleeRound1AfterRevealVerifiedMs = 5_000
+    public static let baseMs = ConfirmTimeout.confirmTimeoutMs
+    public static let callerRound1AfterRevealMs = ConfirmTimeout.callerRound1KcMacWaitMs
+    public static let calleeRound1AfterRevealVerifiedMs = ConfirmTimeout.confirmTimeoutMs
     /// Callee, round 1, REVEAL not verified yet: the wait is held open this long from arming. The REVEAL timer
-    /// (5 s after the first ACCEPT send) ends such a call with `sas_reveal_timeout` first; this only keeps the
-    /// KCMAC wait from pre-empting it with a different reason.
-    public static let calleeRound1PreRevealBackstopMs = 10_000
+    /// (`CONFIRM_TIMEOUT` after the first ACCEPT send) ends such a call with `sas_reveal_timeout` first; this only
+    /// keeps the KCMAC wait from pre-empting it with a different reason.
+    public static let calleeRound1PreRevealBackstopMs = 2 * ConfirmTimeout.confirmTimeoutMs
 
     /// Milliseconds left, `0` when expired. Pure: every time is monotonic milliseconds.
     public static func remainingMs(isRound1: Bool, isInitiator: Bool, armedAtMs: Int, nowMs: Int,
@@ -437,24 +439,92 @@ public final class SasCommitBook: @unchecked Sendable {
         return lock.withLock { () -> (SasCommitCaller.AcceptDecision, String?) in
             guard var caller = callers[id] else { return (.drop, nil) }
             let decision = caller.onAccept(acceptHash: acceptHash, senderDeviceId: senderDeviceId)
-            callers[id] = caller
             switch decision {
-            case .bindAndReveal, .resendReveal: return (decision, caller.revealWire())
-            case .drop: return (.drop, nil)
+            case .bindAndReveal:
+                callers[id] = caller
+                return (decision, caller.revealWire())
+            case .resendReveal:
+                // R-KCMAC-RESEND: a duplicate ACCEPT is ONE event of the per-call budget shared with the
+                // re-authentication re-sends. A spent budget drops it: nothing is re-sent.
+                guard takeResendEventLocked(id: id) else { return (.drop, nil) }
+                callers[id] = caller
+                return (decision, caller.revealWire())
+            case .drop:
+                return (.drop, nil)
             }
         }
     }
 
-    /// The identical REVEAL again (a byte-identical duplicate of the bound ACCEPT, or a WS re-auth while
-    /// the handshake window is open), within the per-call budget of re-sends; `nil` once spent.
-    public func callerResendReveal(callId: String) -> String? {
+    /// The byte-identical REVEAL for a re-send, `nil` before binding or after the call ended. It does NOT take a
+    /// budget unit: the event that asks for it (a socket re-authentication) has taken ONE unit for everything it
+    /// re-sends (`takeResendEvent`). A duplicate ACCEPT goes through `callerOnAccept`, which takes its own unit.
+    public func callerRevealForResend(callId: String) -> String? {
         let id = callId.lowercased()
         return lock.withLock { () -> String? in
-            guard var caller = callers[id] else { return nil }
-            let decision = caller.onReauth()
+            guard var caller = callers[id], let wire = caller.revealWire() else { return nil }
+            caller.countRevealResend()
             callers[id] = caller
-            return decision == .resendReveal ? caller.revealWire() : nil
+            return wire
         }
+    }
+
+    /// A byte-identical duplicate of the bound round-1 ACCEPT was seen (the integration's pre-verification
+    /// short-circuit): ONE event of the budget, and the REVEAL to send again. `nil` when the budget is spent or
+    /// nothing is bound (nothing is re-sent).
+    public func callerRevealForDuplicateAccept(callId: String) -> String? {
+        let id = callId.lowercased()
+        return lock.withLock { () -> String? in
+            guard var caller = callers[id], let wire = caller.revealWire() else { return nil }
+            guard takeResendEventLocked(id: id) else { return nil }
+            caller.countRevealResend()
+            callers[id] = caller
+            return wire
+        }
+    }
+
+    // MARK: - Re-send budget (R-KCMAC-RESEND)
+
+    private var resendEvents: [String: Int] = [:]
+    private var reauthLogs: [String: ReauthLog] = [:]
+
+    private func takeResendEventLocked(id: String) -> Bool {
+        let used = resendEvents[id] ?? 0
+        guard used < ConfirmTimeout.maxResendEvents else { return false }
+        resendEvents[id] = used + 1
+        return true
+    }
+
+    /// ONE re-send EVENT of the call: a duplicate ACCEPT received by the caller, or a re-authentication of this
+    /// device's signalling socket. The budget is one counter per call and per device, shared by every re-send of the
+    /// call (the REVEAL and the KCMACs); an event re-sends in that event everything that is due and takes one unit,
+    /// not one per message. Returns false once the `ConfirmTimeout.maxResendEvents` (4) units are spent: a fifth
+    /// event re-sends nothing. First sends are not events.
+    public func takeResendEvent(callId: String) -> Bool {
+        let id = callId.lowercased()
+        return lock.withLock { takeResendEventLocked(id: id) }
+    }
+
+    /// Units of the budget already spent (tests and telemetry).
+    public func resendEventsUsed(callId: String) -> Int {
+        lock.withLock { resendEvents[callId.lowercased()] ?? 0 }
+    }
+
+    // MARK: - Signalling-socket re-authentications (T5 telemetry)
+
+    /// The signalling socket of this device re-authenticated while `callId` is a call of this book.
+    public func noteReauth(callId: String, nowMs: Int) {
+        let id = callId.lowercased()
+        lock.withLock {
+            guard callers[id] != nil || callees[id] != nil else { return }
+            var log = reauthLogs[id] ?? ReauthLog()
+            log.note(nowMs: nowMs)
+            reauthLogs[id] = log
+        }
+    }
+
+    /// Re-authentications of this call at or after `sinceMs` (the start of the wait that expired).
+    public func reauths(callId: String, sinceMs: Int) -> Int {
+        lock.withLock { reauthLogs[callId.lowercased()]?.count(sinceMs: sinceMs) ?? 0 }
     }
 
     /// The REVEAL was handed to the transport (first send or re-send): starts the caller's round-1 KCMAC wait.
@@ -521,7 +591,7 @@ public final class SasCommitBook: @unchecked Sendable {
         }
     }
 
-    /// The ACCEPT is sent now; true only on the FIRST send (the caller then arms the 5 s timer).
+    /// The ACCEPT is sent now; true only on the FIRST send (the caller then arms the REVEAL timer).
     @discardableResult
     public func calleeAcceptSent(callId: String, nowMs: Int) -> Bool {
         let id = callId.lowercased()
@@ -548,7 +618,7 @@ public final class SasCommitBook: @unchecked Sendable {
         }
     }
 
-    /// The 5 s timer task fired (its own sleep IS the elapsed window, so no clock is consulted).
+    /// The REVEAL timer task fired (its own sleep IS the elapsed window, so no clock is consulted).
     public func calleeTimerFired(callId: String) -> SasCommitCallee.Outcome {
         let id = callId.lowercased()
         return lock.withLock { () -> SasCommitCallee.Outcome in
@@ -657,6 +727,8 @@ public final class SasCommitBook: @unchecked Sendable {
             callees.removeValue(forKey: id)
             round1.removeValue(forKey: id)
             wordsByCall.removeValue(forKey: id)
+            resendEvents.removeValue(forKey: id)
+            reauthLogs.removeValue(forKey: id)
         }
     }
 
@@ -667,6 +739,8 @@ public final class SasCommitBook: @unchecked Sendable {
             callees.removeAll()
             round1.removeAll()
             wordsByCall.removeAll()
+            resendEvents.removeAll()
+            reauthLogs.removeAll()
         }
     }
 }

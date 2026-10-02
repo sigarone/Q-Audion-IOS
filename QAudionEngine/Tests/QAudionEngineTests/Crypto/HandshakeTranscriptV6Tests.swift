@@ -18,7 +18,7 @@ import CryptoKit
 final class HandshakeTranscriptV6Tests: XCTestCase {
 
     /// sha256 of the KAT file; the test refuses any other bytes.
-    private static let pinnedSha256 = "0c5d3ad112ec26fb707b896281e6273512b373e465154fe0d272d889822306bc"
+    private static let pinnedSha256 = "6151ad3b1d51afd22674ceefa3376654428c918fae89c8e15f28b300da91fb15"
 
     // MARK: - Loading
 

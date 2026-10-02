@@ -770,6 +770,19 @@ check(red("dtlsfp s=5 ok=0", "call") == "",
       "DTLSB: the old 'dtlsfp' token started shipping (re-check why the line words were changed)")
 
 # ---------------------------------------------------------------------------
+# Confirmation-expiry line of the v6 timer round (AppState.reportConfirmTimeout, RTLog tag "call"):
+#   timeout why=<1-5> ms=<n> round=<n> reauths=<n> id=<8 chars>
+# why: 1 reveal, 2 kcmac_r1_caller, 3 kcmac_r1_callee, 4 kcmac_round, 5 dtlsfp_stats. The first version used
+# the words "confirm_timeout timer=<name>": the gate turned both into blobs and the expiry never reached Loki.
+# This shape ships byte-identical with the existing vocabulary (an id of 8 decimal digits only may be taken
+# for a phone number and masked, which loses the id and nothing else).
+# ---------------------------------------------------------------------------
+for why in range(1, 6):
+    for rnd in (1, 2):
+        line = "timeout why=%d ms=%d round=%d reauths=%d id=1a2b3c4d" % (why, 15000 + why * 211, rnd, why % 3)
+        check(red(line, "call") == line, "CONFTO: %r is dropped or altered by the shipper" % line)
+
+# ---------------------------------------------------------------------------
 # Group-call / bug-report diagnosis lines (2026-10-02, iOS branch
 # fix/group-ios-promotion-diag-reports). Built by QAudionEngine's GroupDiagnostics
 # (tag "group"), BugReporter (tag "bugreport") and MainThreadStallMonitor (tag "call"):

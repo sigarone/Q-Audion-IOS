@@ -271,34 +271,5 @@ final class SasCommitSequenceTests: XCTestCase {
         XCTAssertTrue(winner.calleeAcceptSent(callId: callId, nowMs: 0))
         XCTAssertEqual(winner.calleeOnReveal(callId: callId, data: revealForA, nowMs: 80), .sasReady)
     }
-
-    /// Mode 0 (pre-accept ACCEPT, calls.ring_signaling_only = false) is correct under v6: the ACCEPT is
-    /// sent at ring and the REVEAL may arrive while the phone still rings; it verifies and the words are
-    /// ready at answer. The wait applies to it as well: no REVEAL within 5 s of the ACCEPT ends the call.
-    func testModeZeroVerifiesARevealWhileRingingAndTheTimerStillApplies() throws {
-        let kat = try kat()
-        let tv1 = byId(vectors(kat, "transcripts"), "v6-basic-no-psk")
-        let callId = (tv1["inputs"] as! [String: Any])["callId"] as! String
-        let commit = hex(((tv1["inputs"] as! [String: Any])["offerer"] as! [String: Any])["sasCommitHex"] as! String)
-        let accept = hex((tv1["expected"] as! [String: Any])["acceptV6Sha256Hex"] as! String)
-        let key = hex((byId(vectors(kat, "kdf"), "kdf-no-psk")["expected"] as! [String: Any])["sessionKeyHex"] as! String)
-        let revealOk = byId(vectors(kat, "reveal"), "ok-basic")["data"] as! String
-
-        let ringing = SasCommitBook()
-        _ = ringing.beginCallee(callId: callId, commit: commit)
-        ringing.calleeSetAccept(callId: callId, acceptHash: accept)
-        ringing.recordRound1(callId: callId, sessionKey: key, acceptHash: accept)
-        XCTAssertTrue(ringing.calleeAcceptSent(callId: callId, nowMs: 0), "sent at ring")
-        XCTAssertTrue(ringing.isWaitingForReveal(callId: callId))
-        XCTAssertEqual(ringing.calleeOnReveal(callId: callId, data: revealOk, nowMs: 150), .sasReady)
-        XCTAssertFalse(ringing.isWaitingForReveal(callId: callId))
-        XCTAssertNotNil(ringing.words(callId: callId), "the words are ready before the user answers")
-
-        let silent = SasCommitBook()
-        _ = silent.beginCallee(callId: callId, commit: commit)
-        silent.calleeSetAccept(callId: callId, acceptHash: accept)
-        XCTAssertTrue(silent.calleeAcceptSent(callId: callId, nowMs: 0))
-        XCTAssertEqual(silent.calleeTimerFired(callId: callId), .end(reason: "sas_reveal_timeout"))
-    }
 }
 // swiftlint:enable force_cast

@@ -9,7 +9,7 @@ import Foundation
 /// **Why this had to change under option (b):** the pre-controller window
 /// that FIFO existed for (W-ICEQUEUE, 2026-08-13) used to be a few hundred
 /// ms — the caller's own ICE trickle racing this device's controller
-/// assignment. For a `mode == 1` callee that window is now the WHOLE ring
+/// assignment. For a callee that window is the WHOLE ring
 /// (the media plane, and therefore the controller, does not exist until
 /// accept — spec §2.1 RING/KEYED/ACCEPTED). A single global cap-25 FIFO fed
 /// for an entire ring either starves out a call's own few candidates behind
@@ -65,7 +65,7 @@ public final class PendingIceCandidateQueue: @unchecked Sendable {
     /// Distinct CALLS tracked at once. A little larger than
     /// `RingSignalingRegistry.maxEntries`/`CallKeyStore.maxEntries` since
     /// this queue also covers ordinary outgoing calls that never get a ring
-    /// plan at all, not only `mode == 1` ring-time ones.
+    /// plan at all, not only ring-time ones.
     public static let maxCalls = 6
 
     private init() {}
