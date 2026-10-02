@@ -94,7 +94,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// "<lowercased callId>#<base64 SHA-256(ct.pqc || ct.x25519)>".
     private var processedAcceptFingerprintsByCall: Set<String> = []
 
-    // MARK: - Transcript v5 — per-call handshake state
+    // MARK: - Transcript v6 — per-call handshake state
 
     /// This call's own random 64-bit freshness nonce, generated ONCE by `onAndroidCallSetupStarted`
     /// (round 1) and reused (never regenerated) by every `performPqcReKey` round this integration
@@ -129,13 +129,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Remember which signed round produced `key` (called right after the session is initialised,
     /// before any callback announces the key).
     ///
-    /// `transcriptHash` is `SHA-256(ACCEPT_v5)` of that round: with it, the SAS material of the call's
-    /// candidate round (its first `identity_unresolved` round) is kept for the whole call (R-SAS-WORDS).
+    /// `transcriptHash` is `SHA-256(ACCEPT_v6)` of that round. The SAS of a call is ALWAYS the round-1 SAS
+    /// (R-COMMIT-SAS, held or not, before and after any rekey), so only the round-1 session key and
+    /// accept hash are kept, in `sasCommit`; every later round leaves the words untouched.
     func recordKeyRound(callId: String, key: Data, round: UInt32, transcriptHash: Data? = nil) {
         let digest = Data(SHA256.hash(data: key))
         lock.withLock { keyRoundByCall[callId.lowercased(), default: [:]][digest] = round }
-        if let transcriptHash {
-            sasPins.recordCandidateMaterial(callId: callId, round: round, sessionKey: key, transcriptHash: transcriptHash)
+        if round == 1, let transcriptHash {
+            sasCommit.recordRound1(callId: callId, sessionKey: key, acceptHash: transcriptHash)
         }
     }
 
@@ -154,7 +155,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return Int32(round - 1)
     }
 
-    /// True when this call's session key (and therefore its SAS words) is bound to the signed v5
+    /// True when this call's session key (and therefore its SAS words) is bound to the signed v6
     /// handshake transcript, which contains both signer identity keys and both DTLS fingerprints.
     /// Unconditional for every call that completed the JSON handshake; false only for calls that
     /// never ran it (the earbud-relay counterparty path).
@@ -165,6 +166,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Call-scoped SAS pin book (identity_unresolved rounds and the signer key the user confirmed by SAS).
     /// See `CallScopedSasPinBook`.
     public let sasPins = CallScopedSasPinBook()
+
+    /// SAS commitment state of the call (WIRE_SPEC §3.7.4, round 1 only): the caller's nonce and
+    /// commitment, the callee's stored commitment and REVEAL timer, and the round-1 SAS words.
+    public let sasCommit = SasCommitBook()
+
+    /// The 5 s REVEAL timer of each callee call (lowercased callId), armed at the FIRST send of the
+    /// round-1 ACCEPT.
+    private var sasRevealTimers: [String: Task<Void, Never>] = [:]
+
+    /// The dedup key (`<callId>#<ciphertext fingerprint>`) of the round-1 ACCEPT the caller bound, so a
+    /// byte-identical duplicate is recognised and answered with a REVEAL re-send, and any other round-1
+    /// ACCEPT is dropped.
+    private var boundRound1AcceptKeyByCall: [String: String] = [:]
 
     /// The signer key of the round that derived `sessionKey` when that round's identity could not be
     /// resolved (`identity_unresolved`) and the user has not confirmed a signer for this call yet. The
@@ -178,20 +192,26 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// is in SAS-PIN conflict (a round its unresolved signer key cannot vouch for), `.adopt(key)` when the
     /// live round was `identity_unresolved` (its signer key is pinned), `.notApplicable` otherwise.
     ///
-    /// R-SAS-WORDS: while the call has a candidate round the words the user compared are the candidate
-    /// round's, so the key adopted is the candidate round's signer, whichever later same-key round is live.
+    /// R-COMMIT-SAS: the words the user compared are ALWAYS the round-1 words, so the key adopted is the
+    /// signer of the round whose session key those words derive from (round 1), whichever later same-key
+    /// round is live.
     public func sasSignerAdoption(callId: String, sessionKey: Data) -> SasSignerAdoption {
         if sasPins.isConflicted(callId: callId) { return .refused }
-        let compared = sasPins.candidateSasMaterial(callId: callId)?.sessionKey ?? sessionKey
+        let compared = sasCommit.round1SessionKey(callId: callId) ?? sessionKey
         if let key = signerKeyAwaitingSas(callId: callId, sessionKey: compared) { return .adopt(key) }
         return .notApplicable
     }
 
-    /// R-SAS-WORDS: the material the in-call SAS words derive from while the call has a candidate round
-    /// (a 1:1 call whose peer identity was unresolved): the candidate round's session key and transcript
-    /// hash, never the live round's. `nil` when the live round's words apply.
-    public func candidateSasMaterial(callId: String) -> CallScopedSasPinBook.SasMaterial? {
-        sasPins.candidateSasMaterial(callId: callId)
+    /// The round-1 SAS words of the call (uppercase-agnostic: as in the word list), or `nil` while they
+    /// are not available: the caller before it bound an ACCEPT, the callee before a REVEAL verified.
+    public func sasWords(callId: String) -> [String]? {
+        sasCommit.words(callId: callId)
+    }
+
+    /// True while this device is a callee that sent its ACCEPT and still waits for the verified REVEAL:
+    /// the UI shows "waiting for the security code" and the SAS confirmation stays disabled.
+    public func isSasWaitingForReveal(callId: String) -> Bool {
+        sasCommit.isWaitingForReveal(callId: callId)
     }
 
     /// The user confirmed the SAS words of the round whose signer key is `key`: it is now this call's
@@ -785,11 +805,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         /// second, divergent selection computation. Local-only: never
         /// serialized to the wire, no capability flag.
         public let selectedFp: String?
+        /// The signed `rekeyRound` (>= 1) of the key round this event arms. Round 1 has the longer KCMAC waits of
+        /// `KcMacWindow` (A1 caller, A5 callee); every later round waits 5 s.
+        public let round: UInt32
 
         public init(
             peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
             kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
-            sigOk: Bool, peerAdvertisedRoles: [Int], selectedFp: String? = nil
+            sigOk: Bool, peerAdvertisedRoles: [Int], selectedFp: String? = nil, round: UInt32 = 1
         ) {
             self.peerId = peerId
             self.callId = callId
@@ -802,9 +825,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             self.sigOk = sigOk
             self.peerAdvertisedRoles = peerAdvertisedRoles
             self.selectedFp = selectedFp
+            self.round = round
         }
     }
     public var onKcMacReady: ((KcMacReadyEvent) -> Void)?
+
+    /// A2 — a newer round-1 OFFER replaced the unanswered one (the ACCEPT was never sent): the app drops what it
+    /// queued or installed for the replaced round (deferred ring-time actions, the ring key, the identity gate).
+    public var onUnansweredRound1Superseded: ((String) -> Void)?
 
     /// Set a BCryptoRestClient to enable userId pre-resolution before OFFER.
     /// Without this, OFFERs use the raw recipientId which may cause server routing failures.
@@ -857,10 +885,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// owns the actual download/UI.
     public var qaudionDidReceiveFile: ((_ marker: FileTransfer.FileMarker, _ from: String) -> Void)?
 
-    // MARK: - Handshake signing, transcript v5 (WIRE_SPEC §3.7 / §3.8)
+    // MARK: - Handshake signing, transcript v6 (WIRE_SPEC §3.7 / §3.8)
     //
     // Signing and verification are mandatory and the ONLY path: an integration without a signer
-    // cannot start a call, and an inbound OFFER/ACCEPT without a valid-shaped `sigV5` /
+    // cannot start a call, and an inbound OFFER/ACCEPT without a valid-shaped `sigV6` /
     // `signerIdentityKey` / `dtlsFingerprint` ends the call. The properties below are primitives +
     // closures ONLY — never an AppState / SovereignIdentity engine type as a parameter, so the
     // wiring cannot trip the Swift-6 Sendable-inference silent build break (CLAUDE.md §16).
@@ -1013,8 +1041,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// the capability verifies, mirroring `setPeerV4Pinned`/`setPeerSrtpDirKeyV1Pinned`).
     public var setPeerRatchetV5Pinned: ((String) -> Void)?
 
-    /// Stash of the `OFFER_v5` transcript WE SENT, keyed by lowercased callId, so the offerer can
-    /// recompute `offer_binding = SHA-256(OFFER_v5)` when it later verifies the matching ACCEPT.
+    /// Stash of the `OFFER_v6` transcript WE SENT, keyed by lowercased callId, so the offerer can
+    /// recompute `offer_binding = SHA-256(OFFER_v6)` when it later verifies the matching ACCEPT.
     /// Overwritten by every re-key round (the ACCEPT of round N answers round N's OFFER). Cleared
     /// with the rest of the per-call state in `onCallEnded`.
     var sentOfferTranscriptByCall: [String: Data] = [:]
@@ -1163,7 +1191,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         print(line)
     }
 
-    /// Originator entry point that emits the signed OFFER_v5 JSON HandshakeBundle (literal
+    /// Originator entry point that emits the signed OFFER_v6 JSON HandshakeBundle (literal
     /// `"<callId>|<JSON>"` string), the only 1:1 handshake dialect on every platform.
     /// WIRE_SPEC.md §3.1.
     ///
@@ -1284,13 +1312,22 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             sentOfferPskRolesByCall[callId.lowercased()] = advertisedPskRoles ?? []
         }
 
-        // Transcript v5 (WIRE_SPEC §3.7): build, SIGN and stash the OFFER. The call's own DTLS
+        // R-COMMIT-NONCE: the caller draws the call's SAS nonce ONCE, before the round-1 OFFER is signed,
+        // and commits to it (`sasCommit`, signed inside OFFER_v6). The nonce stays in `sasCommit`'s call
+        // context only (never logged, persisted or reused) and is revealed only after the callee's ACCEPT
+        // was bound. An OFFER retransmission re-sends `lastSentOfferWire`: the same bytes, the same
+        // commitment, never a re-sign with a new nonce. There is no fallback if the CSPRNG fails.
+        guard let sasCommitRound1 = sasCommit.beginCaller(callId: callId) else {
+            throw IntegrationError.handshakeAborted(code: "sas_nonce_unavailable")
+        }
+        // Transcript v6 (WIRE_SPEC §3.7): build, SIGN and stash the OFFER. The call's own DTLS
         // certificate fingerprint is bound into it, so the certificate exists before this point
         // (`provideLocalDtlsFingerprint`); a call without one or without a signer is never started.
         let bundleToSend = try buildSignedOffer(
             callId: callId, pqcRawPub: pqcRawPub, x25519RawPub: x25519RawPub,
             advertisedPskFingerprints: advertisedPskFingerprints, advertisedPskRoles: advertisedPskRoles,
-            rekeyNonce: rekeyNonceRound1, rekeyRound: 1, rekeyNextPeriodMs: nil)
+            rekeyNonce: rekeyNonceRound1, rekeyRound: 1, rekeyNextPeriodMs: nil,
+            sasCommit: sasCommitRound1)
         let jsonWire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: bundleToSend)
 
         // Ship the signed JSON OFFER. A failure here propagates back to the caller.
@@ -1486,12 +1523,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         let bundleToSend: AndroidHandshakeBundle
         do {
-            // Every re-key round re-signs a FRESH v5 OFFER carrying the SAME DTLS fingerprint as
-            // round 1 (the certificate is constant per call; WIRE_SPEC §3.4 step 5).
+            // Every re-key round re-signs a FRESH v6 OFFER carrying the SAME DTLS fingerprint as
+            // round 1 (the certificate is constant per call; WIRE_SPEC §3.4 step 5). A rekey OFFER
+            // carries NO SAS commitment (R-COMMIT-SCOPE: only round 1 has one).
             bundleToSend = try buildSignedOffer(
                 callId: callId, pqcRawPub: pqcRawPub, x25519RawPub: x25519RawPub,
                 advertisedPskFingerprints: advert.fingerprints, advertisedPskRoles: advert.roles,
-                rekeyNonce: thisRoundNonce, rekeyRound: thisRound, rekeyNextPeriodMs: nextPeriodMs)
+                rekeyNonce: thisRoundNonce, rekeyRound: thisRound, rekeyNextPeriodMs: nextPeriodMs,
+                sasCommit: nil)
         } catch {
             print("[QAudionCallIntegration] performPqcReKey OFFER build failed callId=\(callId.prefix(8))…: \(error)")
             return false
@@ -1564,7 +1603,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         case .offer, .accept:
             // The binary QUAD 1:1 OFFER/ACCEPT dialect is RETIRED (WIRE_SPEC §3): it carries no
             // signature and no DTLS certificate fingerprint, so it can never establish a call
-            // under transcript v5. Ignored — a peer that still sends it simply never connects.
+            // under transcript v6. Ignored — a peer that still sends it simply never connects.
             print("[QAudionCallIntegration] retired QUAD OFFER/ACCEPT ignored")
 
         case .keyExchangeOffer(let payload):
@@ -1636,6 +1675,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         callId: String,
         callerId: String = "",
         callerDeviceId: String? = nil,
+        envelopeSenderDeviceId: String? = nil,
         eligiblePsks: [String: Data] = [:],
         sendOpaqueRaw: @escaping (String) async throws -> Void
     ) async throws {
@@ -1717,16 +1757,66 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 throw IntegrationError.invalidState(state)
             }
 
-            // Transcript v5 (WIRE_SPEC §3.7 / §3.8) — the single, MANDATORY verification path,
+            // Transcript v6 (WIRE_SPEC §3.7 / §3.8) — the single, MANDATORY verification path,
             // run BEFORE any crypto work (`pqc.encapsulate`) or ACCEPT emission.
             //   * `.malformed` (a required field is missing or malformed): the call ENDS.
             //   * `.abort` (invalid signature, unknown identity key — W-NOBRICK): the call is NOT
             //     dropped and the observed key is NOT pinned; media is held behind a blocking SAS
             //     reconfirmation (`onHandshakeIdentityUnverified`). The session key still derives
-            //     from the v5 transcript built under the bundle's OWN key, so a legitimate-but-
+            //     from the v6 transcript built under the bundle's OWN key, so a legitimate-but-
             //     unpinned peer still converges and the SAS words exist to compare.
             //   * `.authenticated` / `.authenticatedRepinFromPublished`: commit the per-(peer,
             //     device) pin + capability pins.
+            // R-COMMIT-FIRST-ROUND: the first OFFER a callee sees for a callId must be round 1; any other
+            // first round is malformed and ends the call without an ACCEPT.
+            // A2 (WIRE_SPEC §3.7.4): a callee takes the commitment from the OFFER it actually ANSWERS. While this
+            // device has NOT sent its round-1 ACCEPT (the default signalling-only ring holds it until the human
+            // answers) the newest valid round-1 OFFER replaces the one already processed: the unanswered round is
+            // wiped and this OFFER runs as the first one. After the ACCEPT is out a different round-1 OFFER is
+            // dropped as before (the stale-round refusal below) and the frozen commitment stays.
+            let replacementOfferKey = callId.lowercased() + "#" + Data(SHA256.hash(data: pqcPub + x25519Pub)).base64EncodedString()
+            // A2, invalid OFFER: while the answered OFFER is held (its ACCEPT not sent yet) an OFFER that is not a
+            // valid round-1 OFFER (another round, a missing or malformed commitment, a §3.1 malformed bundle) is
+            // dropped silently: no state, no hangup, no ACCEPT. The held round stays untouched.
+            let (holdsCallContext, isKnownOfferRetransmit) = lock.withLock { () -> (Bool, Bool) in
+                (sessionInitializedByCall.contains(callId.lowercased()),
+                 processedOfferFingerprintsByCall.contains(replacementOfferKey))
+            }
+            let acceptNotYetSent = sasCommit.calleeCanBeSuperseded(callId: callId)
+            let replacementCommitmentCode = HandshakeSigningPolicy.sasCommitMalformedCode(
+                isOffer: true, round: bundle.rekeyRound, sasCommitB64: bundle.sasCommit)
+            if Self.isInvalidOfferWhileUnanswered(
+                round: bundle.rekeyRound, commitmentCode: replacementCommitmentCode,
+                hasCallContext: holdsCallContext, isKnownRetransmit: isKnownOfferRetransmit,
+                acceptNotYetSent: acceptNotYetSent) {
+                print("[QAudionCallIntegration] OFFER dropped — not a valid round-1 OFFER while the answered one is held callId=\(callId.prefix(8))…")
+                return
+            }
+            let replacesUnansweredOffer = Self.isUnansweredRound1Replacement(
+                round: bundle.rekeyRound, commitmentCode: replacementCommitmentCode,
+                hasCallContext: holdsCallContext, isKnownRetransmit: isKnownOfferRetransmit,
+                acceptNotYetSent: acceptNotYetSent)
+            if replacesUnansweredOffer {
+                // Only a VALID OFFER replaces the held one: one the malformed checks refuse is dropped here, before
+                // anything of the held round is touched. The probe leaves no state behind for a malformed bundle;
+                // for a valid one its call-scoped pin notes go with the wiped round and the real check below makes
+                // them again.
+                if case .malformed = evaluateInbound(
+                    bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,
+                    expectedOfferBinding: nil).verdict {
+                    print("[QAudionCallIntegration] OFFER dropped — a malformed OFFER never replaces the held one callId=\(callId.prefix(8))…")
+                    return
+                }
+                print("[QAudionCallIntegration] a newer round-1 OFFER replaces the unanswered one callId=\(callId.prefix(8))…")
+                supersedeUnansweredRound1(callId: callId)
+            }
+            let isFirstOfferOfCall = lock.withLock { !sessionInitializedByCall.contains(callId.lowercased()) }
+            if let code = HandshakeSigningPolicy.firstRoundMalformedCode(
+                isFirstOfferOfCall: isFirstOfferOfCall, round: bundle.rekeyRound) {
+                print("[QAudionCallIntegration] OFFER malformed code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — ending the call")
+                reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                throw IntegrationError.handshakeAborted(code: code)
+            }
             let offerCheck = evaluateInbound(
                 bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,
                 expectedOfferBinding: nil)
@@ -1770,7 +1860,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
                 throw IntegrationError.handshakeAborted(code: "transcript_unbuildable")
             }
-            // `offer_binding = SHA-256(OFFER_v5)`: bound into the ACCEPT, and the KCMAC / v4-bootstrap
+            // `offer_binding = SHA-256(OFFER_v6)`: bound into the ACCEPT, and the KCMAC / v4-bootstrap
             // input. Built under the bundle's own key, so even the hold paths stay convergent.
             let verifiedOfferBinding = HandshakeTranscript.offerBinding(offerT)
             // Pin the offerer's DTLS fingerprint (once per call; a re-key round MUST carry the same
@@ -2005,8 +2095,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 rekeyRound: bundle.rekeyRound
             )
 
-            // Transcript v5: build and SIGN the ACCEPT, binding it to the verified OFFER
-            // (`offerBinding = SHA-256(OFFER_v5)`, mandatory and non-empty) and carrying OUR OWN
+            // Transcript v6: build and SIGN the ACCEPT, binding it to the verified OFFER
+            // (`offerBinding = SHA-256(OFFER_v6)`, mandatory and non-empty) and carrying OUR OWN
             // DTLS certificate fingerprint. Through `offerBinding` this transcript — and so the
             // session key, the SAS and the KCMAC derived below — covers BOTH fingerprints.
             // W527 INVARIANT PRESERVED: `accept` keeps pqcPublicKey:""/x25519PublicKey:"" exactly;
@@ -2019,7 +2109,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 throw IntegrationError.handshakeAborted(code: "sign_unavailable")
             }
             let acceptToSend = try signedBundle(of: accept, transcript: acceptT, fingerprint: fpSelf)
-            // `SHA-256(ACCEPT_v5)`: the KDF / SAS / KCMAC binding (F4 — unconditional).
+            // `SHA-256(ACCEPT_v6)`: the KDF / SAS / KCMAC binding (F4 — unconditional).
             let acceptBinding = HandshakeTranscript.offerBinding(acceptT)
             let combined = Self.deriveTranscriptBoundSessionKey(
                 pqcSharedSecret: pqcResult.sharedSecret,
@@ -2089,24 +2179,45 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // W-MEDIAATACCEPT (option b) — I11: a duplicate-OFFER
                     // replay must obey the SAME hold gate as the first
                     // send — "mentre trattiene, niente replay, solo log".
-                    try await emitJsonAccept(callId: callId, wire: cached, sendOpaqueRaw: sendOpaqueRaw)
+                    try await emitJsonAccept(callId: callId, wire: cached, sendOpaqueRaw: sendOpaqueRaw, isRound1: round == 1)
                 } else {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 }
                 return
             }
             print("[QAudionCallIntegration] OFFER for callId=\(callId.prefix(8))… — processing (fingerprint=\(offerFingerprint.prefix(12))…, reKey=\(isReKeyRound), roundsSeen=\(processedOfferFingerprintsByCall.count))")
-            // SAS: the in-call words derive from the session key AND this transcript hash. Stored
-            // BEFORE any callback announces the new key, and only for a round that is really
-            // accepted (never for a duplicate OFFER, whose re-encapsulation differs).
+            // Marker that this call's session key is bound to the signed transcript (read by
+            // `isSessionKeyTranscriptBound`). Stored BEFORE any callback announces the new key, and only
+            // for a round that is really accepted (never for a duplicate OFFER, whose
+            // re-encapsulation differs).
             HandshakeTranscriptHashStore.shared.set(acceptBinding, forCallId: callId)
+            // R-COMMIT-CHECK: the commitment of the round-1 OFFER this device answers, with the hash of
+            // the ACCEPT it built for it (held until the human accept on the default path). Stored
+            // before the ACCEPT can leave: a REVEAL only ever follows a SENT ACCEPT, and the first one
+            // stored wins (a later different OFFER never replaces the answered commitment).
+            if !isReKeyRound {
+                guard let commitText = bundle.sasCommit,
+                      let commitRaw = SasCommit.decodeCanonicalBase64(commitText, expectedLength: SasCommit.commitLength) else {
+                    reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                    throw IntegrationError.handshakeAborted(code: "commit_missing")
+                }
+                sasCommit.beginCallee(callId: callId, commit: commitRaw)
+                sasCommit.calleeSetAccept(callId: callId, acceptHash: acceptBinding)
+            }
             // W-MEDIAATACCEPT (option b) — I11: the first responder ACCEPT
             // for this call. Held (not sent) when `mode == 1` and the human
             // has not accepted yet; the derivation/session-init below is
             // UNCHANGED either way — only the wire send is gated.
-            try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw)
+            try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: !isReKeyRound)
             if !isReKeyRound {
-                try engine.initialize()
+                if replacesUnansweredOffer {
+                    // The replaced round already initialised the engine, and a second `initialize()` from an active
+                    // session is refused; `initSession` below re-keys it in place. An engine the replaced round
+                    // never got to initialise is initialised here.
+                    try? engine.initialize()
+                } else {
+                    try engine.initialize()
+                }
             }
             // W479 — Android peer: use AdaptivePaddingController-compatible
             // audio scheme (static session key, no AAD, 2-byte len + 120B padding).
@@ -2255,7 +2366,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 peerId: callerId, callId: callId, isInitiator: false, sessionKey: combined,
                 kcKey: kcKeyForEvent, transcript: kcTranscriptForEvent, n: kcN,
                 peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
-                peerAdvertisedRoles: kcPeerAdvertisedRoles, selectedFp: selectedFp
+                peerAdvertisedRoles: kcPeerAdvertisedRoles, selectedFp: selectedFp,
+                round: innerAadEpoch
             ))
 
             // Pre-negotiation: the PQC OFFER is fully deserialised and our ACCEPT is on the
@@ -2350,11 +2462,39 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let acceptDedupKey = normalizedIdForDedup + "#" + acceptFingerprint
             if lock.withLock({ processedAcceptFingerprintsByCall.contains(acceptDedupKey) }) {
                 print("[QAudionCallIntegration] ACCEPT duplicate (pre-verify) for callId=\(callId.prefix(8))… — skipping verify + initSession")
+                // R-COMMIT-REVEAL: a byte-identical duplicate of the BOUND round-1 ACCEPT (a callee-side
+                // retransmit) means its REVEAL may have been lost: re-send the identical REVEAL, within
+                // the per-call budget. A duplicate of any other (rekey) ACCEPT never triggers one.
+                let isBoundAccept = lock.withLock { boundRound1AcceptKeyByCall[normalizedIdForDedup] == acceptDedupKey }
+                if !isReKeyAccept, isBoundAccept, let wire = sasCommit.callerResendReveal(callId: callId) {
+                    await sendSasReveal(wire, callId: callId, resend: true)
+                }
+                return
+            }
+            // R-COMMIT-BIND: once round 1 is bound to an ACCEPT, any OTHER round-1 ACCEPT (a sibling
+            // device, a forgery) is dropped here, before it is verified: it is never used for keys, SAS
+            // or REVEAL, and it cannot taint the call's identity bookkeeping.
+            if !isReKeyAccept, sasCommit.callerHasBound(callId: callId) {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… is a different round-1 ACCEPT after binding — dropped")
+                return
+            }
+            // R-COMMIT-BIND: a re-key attempt in flight only ever answers a round >= 2. An ACCEPT that echoes
+            // round 1 while one is in flight is a sibling's or a forged round-1 ACCEPT arriving late: it must
+            // not be taken for the re-key's answer (verified against the wrong OFFER and decapsulated with
+            // the re-key's keys), so it is dropped like every other non-bound round-1 ACCEPT.
+            if Self.isStrayRound1Accept(isReKeyAccept: isReKeyAccept, echoedRound: bundle.rekeyRound) {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round 1 while a re-key is in flight — dropped")
+                return
+            }
+            // A round-1 ACCEPT echoes the OFFER's round: anything else with no re-key attempt in flight is a
+            // stale or forged round and is never bound.
+            if !isReKeyAccept, bundle.rekeyRound != 1 {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round \(bundle.rekeyRound ?? 0) with no re-key attempt in flight — dropped")
                 return
             }
 
-            // Transcript v5 — VERIFY the incoming ACCEPT (+ offer_binding) BEFORE any crypto work or
-            // session init. The expected binding is recomputed from the `OFFER_v5` WE SENT (stashed
+            // Transcript v6 — VERIFY the incoming ACCEPT (+ offer_binding) BEFORE any crypto work or
+            // session init. The expected binding is recomputed from the `OFFER_v6` WE SENT (stashed
             // at send time), so a real ACCEPT cannot be paired with a forged OFFER (WIRE_SPEC §3.7,
             // threat model). `.malformed` ENDS the call; `.abort` (invalid signature / unknown
             // identity — W-NOBRICK) fires `onHandshakeIdentityUnverified` and STILL falls through to
@@ -2370,6 +2510,28 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let acceptCheck = evaluateInbound(
                 bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,
                 expectedOfferBinding: expectedOfferBinding)
+            // R-COMMIT-BIND: bind round 1 ATOMICALLY (under the book's lock, before any suspension point)
+            // to the first ACCEPT that parsed and passed the malformed checks. An invalid signature or an
+            // unresolved identity still binds: the call then goes held, and the SAS is exactly what it
+            // needs. A malformed ACCEPT (handled by the switch below) never binds and never reveals.
+            var round1RevealWire: String?
+            if !isReKeyAccept, let boundTranscript = acceptCheck.transcript {
+                var isMalformedVerdict = false
+                if case .malformed = acceptCheck.verdict { isMalformedVerdict = true }
+                if !isMalformedVerdict {
+                    let (decision, revealWire) = sasCommit.callerOnAccept(
+                        callId: callId, acceptHash: HandshakeTranscript.offerBinding(boundTranscript),
+                        senderDeviceId: envelopeSenderDeviceId)
+                    switch decision {
+                    case .bindAndReveal:
+                        round1RevealWire = revealWire
+                        lock.withLock { boundRound1AcceptKeyByCall[normalizedIdForDedup] = acceptDedupKey }
+                    case .resendReveal, .drop:
+                        print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… lost the round-1 binding race — dropped")
+                        return
+                    }
+                }
+            }
             // W-KCMAC — `AssuranceState.decide`'s `sigOk` input for this leg.
             var acceptSigOk = false
             switch acceptCheck.verdict {
@@ -2404,7 +2566,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
                 throw IntegrationError.handshakeAborted(code: "transcript_unbuildable")
             }
-            // `SHA-256(ACCEPT_v5)`: the KDF / SAS / KCMAC binding (F4 — unconditional).
+            // `SHA-256(ACCEPT_v6)`: the KDF / SAS / KCMAC binding (F4 — unconditional).
             let acceptBinding = HandshakeTranscript.offerBinding(acceptT)
             // Pin the acceptor's DTLS fingerprint (once per call; a re-key round MUST carry the same
             // one — F9). Until it is pinned the PeerConnection applies no remote SDP (the answer SDP
@@ -2444,7 +2606,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
 
             // 4. Derive the session key from the transcript-bound KDF (F4 — unconditional): the
-            // `SHA-256(ACCEPT_v5)` binds both signers' identity keys, both DTLS fingerprints, the
+            // `SHA-256(ACCEPT_v6)` binds both signers' identity keys, both DTLS fingerprints, the
             // ciphertexts and the selected PSK, so any substitution — even with stripped
             // signatures — gives the two legs different keys, SAS words and KCMACs.
             let combined = Self.deriveTranscriptBoundSessionKey(
@@ -2528,6 +2690,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                                    innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
             recordKeyRound(callId: callId, key: combined, round: innerAadEpochCaller, transcriptHash: acceptBinding)
+            // R-COMMIT-REVEAL: the REVEAL leaves right after the round-1 session is installed and BEFORE
+            // this leg's KCMAC (`onKcMacReady` below), awaited so the two share the socket in this order;
+            // it does not wait for `call_accepted` or any UI step.
+            if let wire = round1RevealWire {
+                await sendSasReveal(wire, callId: callId, resend: false)
+            }
             // W-HSROUNDTIMING — third breadcrumb: decapsulation + session-key
             // derivation actually completed (engine.initSession didn't
             // throw). Paired with hs-offer-sent/hs-accept-received above —
@@ -2777,7 +2945,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // never resolves there, which silently forced the NFC-in-common
                 // branch of AssuranceState.decide() unreachable whenever iOS
                 // placed the call — see establishedPskFp's derivation at :2177.
-                selectedFp: establishedPskFp
+                selectedFp: establishedPskFp,
+                round: innerAadEpochCaller
             ))
 
             // W529: caller's ACCEPT decapsulation succeeded → cancel
@@ -2787,7 +2956,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
-    // MARK: - Transcript v5 helpers (WIRE_SPEC §3.7 / §3.8)
+    // MARK: - Transcript v6 helpers (WIRE_SPEC §3.7 / §3.8)
     //
     // Pure helpers keep the wire insertion points (OFFER sign, OFFER verify, ACCEPT sign, ACCEPT
     // verify) short so the big `onAndroid…`/`onAndroidBundleReceived` bodies don't grow another
@@ -2842,7 +3011,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return raw
     }
 
-    /// Build `OFFER_v5` from an OFFER bundle's RAW (base64-decoded) fields. `signerKeyRaw` is the
+    /// Build `OFFER_v6` from an OFFER bundle's RAW (base64-decoded) fields. `signerKeyRaw` is the
     /// signer's identity key (the LOCAL pub when signing, the bundle's own key when verifying) and
     /// `dtlsFingerprint` the OFFERER's certificate fingerprint. Returns nil if a required field
     /// fails to decode or the round/nonce is absent. R-ROUND: `rekeyRound` MUST be present and >= 1
@@ -2858,6 +3027,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
               let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(UInt32.max),
               let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
             return nil
+        }
+        // R-COMMIT-FIELD: round 1 carries exactly 32 canonical-base64 bytes, every other round none.
+        let commitRaw: Data?
+        if roundInt == 1 {
+            guard let text = bundle.sasCommit,
+                  let decoded = SasCommit.decodeCanonicalBase64(text, expectedLength: SasCommit.commitLength) else {
+                return nil
+            }
+            commitRaw = decoded
+        } else {
+            guard bundle.sasCommit == nil else { return nil }
+            commitRaw = nil
         }
         let strongBox = bundle.strongBoxPublicKey.flatMap { Data(base64Encoded: $0) }
         let dualCurve = bundle.dualCurvePublicKey.flatMap { Data(base64Encoded: $0) }
@@ -2876,12 +3057,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             pskRoles: bundle.pskRoles,
             rekeyNonce: nonceRaw,
             rekeyRound: UInt32(roundInt),
-            dtlsFingerprint: dtlsFingerprint
+            dtlsFingerprint: dtlsFingerprint,
+            sasCommit: commitRaw
         )
     }
 
-    /// Build `ACCEPT_v5` from an ACCEPT bundle's RAW ciphertext fields, the `offerBinding`
-    /// (`SHA-256(OFFER_v5)`, 32 bytes) it must answer and the ACCEPTOR's certificate fingerprint.
+    /// Build `ACCEPT_v6` from an ACCEPT bundle's RAW ciphertext fields, the `offerBinding`
+    /// (`SHA-256(OFFER_v6)`, 32 bytes) it must answer and the ACCEPTOR's certificate fingerprint.
     /// `bundle.pskFingerprints`/`pskRoles` are THIS ACCEPT's own advertised list; the nonce/round
     /// are the echo of the OFFER's. Returns nil if a required field fails to decode or the round
     /// is missing or < 1 (R-ROUND).
@@ -2941,7 +3123,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return fp
     }
 
-    /// Attach `signerIdentityKey`, `sigV5` and `dtlsFingerprint` to a bundle by signing
+    /// Attach `signerIdentityKey`, `sigV6` and `dtlsFingerprint` to a bundle by signing
     /// `transcript`. Signing is mandatory: any failure throws (a call is never started with an
     /// unsigned handshake). Every other field is copied verbatim — this rebuilds the bundle field
     /// by field, so a field omitted here would silently vanish from the wire.
@@ -2964,8 +3146,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             selectedPskFingerprint: bundle.selectedPskFingerprint,
             pskRoles: bundle.pskRoles,
             signerIdentityKey: idKey.base64EncodedString(),
-            sigV5: sig.base64EncodedString(),
+            sigV6: sig.base64EncodedString(),
             dtlsFingerprint: fingerprintText,
+            // R-COMMIT-FIELD: the round-1 OFFER's commitment travels verbatim (it is signed in the
+            // transcript); an ACCEPT or a rekey OFFER carries none.
+            sasCommit: bundle.sasCommit,
             rekeyNonce: bundle.rekeyNonce,
             rekeyRound: bundle.rekeyRound,
             // W-REKEYSYNC — carried through verbatim, or it would silently drop from every OFFER.
@@ -2974,7 +3159,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     /// Build, SIGN and stash an OFFER (round 1 or a re-key round). The stash is what lets the
-    /// offerer recompute `offer_binding = SHA-256(OFFER_v5)` when the matching ACCEPT arrives.
+    /// offerer recompute `offer_binding = SHA-256(OFFER_v6)` when the matching ACCEPT arrives.
     private func buildSignedOffer(
         callId: String,
         pqcRawPub: Data,
@@ -2983,7 +3168,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         advertisedPskRoles: [Int]?,
         rekeyNonce: Data,
         rekeyRound: UInt32,
-        rekeyNextPeriodMs: Int?
+        rekeyNextPeriodMs: Int?,
+        sasCommit: Data?
     ) throws -> AndroidHandshakeBundle {
         let fpSelf = try localDtlsFingerprint(callId: callId)
         guard let idKey = localSignerIdentityKey, idKey.count == 32 else {
@@ -2998,6 +3184,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             pskFingerprints: advertisedPskFingerprints,
             pskRoles: advertisedPskRoles,
             // Resent IDENTICALLY on every round of the call (round 1 and every re-key round).
+            sasCommit: sasCommit?.base64EncodedString(),
             rekeyNonce: rekeyNonce.base64EncodedString(),
             rekeyRound: Int(rekeyRound),
             rekeyNextPeriodMs: rekeyNextPeriodMs
@@ -3014,13 +3201,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// What `evaluateInbound` learned from a received bundle.
     struct InboundCheck {
         let verdict: HandshakeSigningPolicy.Verdict
-        /// The v5 transcript rebuilt from the RECEIVED bundle, under the bundle's own signer key.
+        /// The v6 transcript rebuilt from the RECEIVED bundle, under the bundle's own signer key.
         let transcript: Data?
         /// The peer's DTLS fingerprint parsed from the bundle (33 bytes), when well-formed.
         let peerFingerprint: Data?
     }
 
-    /// Apply the policy to a received bundle. The v5 transcript is rebuilt under the bundle's own
+    /// Apply the policy to a received bundle. The v6 transcript is rebuilt under the bundle's own
     /// `signerIdentityKey` (the signer signed its own key; the policy only ever verifies under a
     /// key equal to it), together with the peer fingerprint parsed from the bundle and — for an
     /// ACCEPT — the `expectedOfferBinding` of the OFFER we sent.
@@ -3031,6 +3218,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         peerDeviceId: String?,
         expectedOfferBinding: Data?
     ) -> InboundCheck {
+        // R-COMMIT-FIELD: the SAS commitment rules are malformed codes, checked before anything else
+        // (no pin, no key and no transcript is touched for a bundle the call ends on anyway).
+        if let code = HandshakeSigningPolicy.sasCommitMalformedCode(
+            isOffer: bundle.kind == .offer, round: bundle.rekeyRound, sasCommitB64: bundle.sasCommit) {
+            return InboundCheck(verdict: .malformed(code: code), transcript: nil, peerFingerprint: nil)
+        }
         // D11: the pin is keyed per-(peer, device); a nil device id resolves to the legacy
         // bare-contactId pin inside the store.
         // The stored pin wins; the call-scoped pin (the signer key the user confirmed by SAS earlier in
@@ -3062,7 +3255,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             && (HandshakeSigningPolicy.suiteId == 0x01)
         let verdict = HandshakeSigningPolicy.evaluate(
             signerIdentityKeyB64: bundle.signerIdentityKey,
-            sigV5B64: bundle.sigV5,
+            sigV6B64: bundle.sigV6,
             dtlsFingerprintText: bundle.dtlsFingerprint,
             transcript: transcript,
             pinnedKey: pinned,
@@ -3404,7 +3597,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     // deriveSessionKeyTranscriptBound — the DESIGNATED CANONICAL construction
     // across all three platforms, see this fix's own commit message)
 
-    /// The session-key KDF of a 1:1 call (transcript v5, F4 — the ONLY derivation):
+    /// The session-key KDF of a 1:1 call (transcript v6, F4 — the ONLY derivation):
     ///
     ///   ikm  = pqcSharedSecret(32) || x25519Shared(32)                  [64B]
     ///   salt = psk                if (psk != nil && !psk.isEmpty)
@@ -3412,7 +3605,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ///   info = HkdfLabels.hybridPqcSessionKey(20) || transcriptHash(32) [52B]
     ///   key  = HKDF-SHA256(ikm, salt, info, 32)
     ///
-    /// `transcriptHash = SHA-256(ACCEPT_v5)`: the transcript already embeds the raw ML-KEM
+    /// `transcriptHash = SHA-256(ACCEPT_v6)`: the transcript already embeds the raw ML-KEM
     /// ciphertext, the selected PSK fingerprint, both signers' identity keys, both DTLS
     /// fingerprints (through the OFFER binding) and the round/nonce, so re-adding them here would
     /// be redundant. A fingerprint substitution — even with stripped signatures — gives the two
@@ -3511,8 +3704,64 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         round: UInt32,
         lastAccepted: UInt32?
     ) -> Bool {
-        guard !isKnownRetransmit, isReKeyRound, let last = lastAccepted else { return false }
+        guard !isKnownRetransmit, isReKeyRound else { return false }
+        // R-ROUND / R-COMMIT-FIRST-ROUND: a call whose first handshake already ran never restarts round 1
+        // (or accepts round 0): a different round-1 OFFER for it is dropped, whether or not any round was
+        // verified yet, so the commitment answered at the first ACCEPT is never replaced.
+        if round <= 1 { return true }
+        guard let last = lastAccepted else { return false }
         return round <= last
+    }
+
+    /// R-COMMIT-BIND: true for an ACCEPT that echoes round 1 while a re-key attempt (rounds >= 2) is in
+    /// flight. Round 1 is bound exactly once, so such an ACCEPT is never the answer to anything.
+    /// `internal` so a unit test can pin the decision.
+    static func isStrayRound1Accept(isReKeyAccept: Bool, echoedRound: Int?) -> Bool {
+        isReKeyAccept && echoedRound == 1
+    }
+
+    /// A2: true for a round-1 OFFER that replaces the unanswered round-1 OFFER this callee already processed:
+    /// round 1 with a valid commitment (`commitmentCode == nil`), for a call that has a context, which is not a
+    /// retransmit of an OFFER already processed (that one re-sends the cached ACCEPT), and only while this device
+    /// has not sent its ACCEPT. After the ACCEPT is sent it is false: the OFFER is dropped as a stale round.
+    /// `internal` so a unit test can pin the decision.
+    static func isUnansweredRound1Replacement(round: Int?, commitmentCode: String?, hasCallContext: Bool,
+                                              isKnownRetransmit: Bool, acceptNotYetSent: Bool) -> Bool {
+        round == 1 && commitmentCode == nil && hasCallContext && !isKnownRetransmit && acceptNotYetSent
+    }
+
+    /// A2: true for an OFFER that must be dropped silently because this callee holds an answered round-1 OFFER
+    /// whose ACCEPT it has not sent yet, and the new one is not a valid round-1 OFFER (any other round, or a
+    /// missing / malformed commitment). No hangup and no state: the held round stays. A retransmit of an OFFER
+    /// already processed is not concerned (it re-sends the cached ACCEPT), and once the ACCEPT is out the
+    /// ordinary rules apply again. `internal` so a unit test can pin the decision.
+    static func isInvalidOfferWhileUnanswered(round: Int?, commitmentCode: String?, hasCallContext: Bool,
+                                              isKnownRetransmit: Bool, acceptNotYetSent: Bool) -> Bool {
+        hasCallContext && !isKnownRetransmit && acceptNotYetSent && (round != 1 || commitmentCode != nil)
+    }
+
+    /// A2: wipe the round-1 handshake state of a call whose ACCEPT was never sent, so the newest round-1 OFFER can
+    /// be processed as the first one (WIRE_SPEC §3.7.4). The dedup and freshness bookkeeping, the pinned DTLS
+    /// fingerprint, the key-round map, the held ACCEPT, the held-media flag, the call-scoped SAS pins and the whole
+    /// SAS commitment context of the replaced round go; `onUnansweredRound1Superseded` lets the app drop what it
+    /// queued for the replaced round (deferred ring-time actions, the ring key, the identity gate).
+    func supersedeUnansweredRound1(callId: String) {
+        let id = callId.lowercased()
+        let prefix = id + "#"
+        cancelSasRevealTimer(callId: callId)
+        lock.withLock {
+            sessionInitializedByCall.remove(id)
+            processedOfferFingerprintsByCall = processedOfferFingerprintsByCall.filter { !$0.hasPrefix(prefix) }
+            acceptWireByOfferFingerprint = acceptWireByOfferFingerprint.filter { !$0.key.hasPrefix(prefix) }
+            lastAcceptedRekeyRoundByCall.removeValue(forKey: id)
+            peerDtlsFingerprintByCall.removeValue(forKey: id)
+            keyRoundByCall.removeValue(forKey: id)
+            heldAcceptByCall.removeValue(forKey: id)
+            heldCalls.remove(id)
+        }
+        sasPins.clear(callId: callId)
+        sasCommit.clear(callId: callId)
+        onUnansweredRound1Superseded?(callId)
     }
 
     static func rekeyFreshnessValue(callId: String, rekeyNonce: Data, round: UInt32) -> Data {
@@ -3831,6 +4080,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // with the fingerprints above; a stale role array would mis-MAC the next call
         // exactly like a stale fingerprint array would.
         sentOfferPskRolesByCall.removeAll()
+        // R-COMMIT-NONCE: the SAS nonce is zeroised and every commitment state dropped with the call,
+        // whatever the outcome; the REVEAL timers die with it.
+        sasCommit.clearAll()
+        boundRound1AcceptKeyByCall.removeAll()
+        let orphanedRevealTimers = Array(sasRevealTimers.values)
+        sasRevealTimers.removeAll()
         // W529 / W531: clear handshake retry state so the next call
         // starts with a fresh stash.
         lastSentOfferWire = nil
@@ -3842,6 +4097,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // whatever call reuses this integration instance next.
         heldAcceptByCall.removeAll()
         lock.unlock()
+        for timer in orphanedRevealTimers { timer.cancel() }
         offerRetryTask?.cancel()
         offerRetryTask = nil
         onStateChanged?(.idle)
@@ -3849,17 +4105,134 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     // MARK: - earbud-relay-v1 (HW firmware) counterparty install
 
-    /// earbud-relay-v1 counterparty install — RETIRED under transcript v5 (fail-closed).
+    /// earbud-relay-v1 counterparty install — RETIRED under transcript v6 (fail-closed).
     ///
     /// The earbud-relay-v1 counterparty handshake (`EarbudHandshakeResponder`) yields a key with no
-    /// signed OFFER_v5/ACCEPT_v5 behind it: there is no transcript to bind the session key, the SAS
+    /// signed OFFER_v6/ACCEPT_v6 behind it: there is no transcript to bind the session key, the SAS
     /// and the key confirmation to, and no signed DTLS certificate fingerprint to pin. Under the v5
     /// hard switch such a session would be weaker than every other 1:1 call, so no session is
     /// installed and the call keeps no key (the app logs the failure). Re-enabling it needs a v5
     /// counterparty handshake on the earbud side (a firmware change).
     public func completeEarbudCounterparty(callId: String, sessionKey: Data) throws {
-        print("[QAudionCallIntegration] earbud counterparty key NOT installed (retired under transcript v5) callId=\(callId.prefix(8))…")
+        print("[QAudionCallIntegration] earbud counterparty key NOT installed (retired under transcript v6) callId=\(callId.prefix(8))…")
         throw IntegrationError.handshakeAborted(code: "earbud_relay_retired")
+    }
+
+    // MARK: - SAS commitment: REVEAL send, REVEAL timer, REVEAL handling (WIRE_SPEC §3.7.4)
+
+    /// Send the caller's REVEAL (or its byte-identical re-send) through the string channel the OFFER
+    /// used. A send failure is logged as a verdict and never throws: the re-send paths (a duplicate of
+    /// the bound ACCEPT, a WS re-auth) recover it, and a callee that never gets it ends the call itself
+    /// (`sas_reveal_timeout`). Verdict-only: no nonce, binding or word ever reaches a log.
+    private func sendSasReveal(_ wire: String, callId: String, resend: Bool) async {
+        guard let sender = lock.withLock({ retrySenderClosure }) else {
+            print("[QAudionCallIntegration] sas_commit reveal not sent (no sender) callId=\(callId.prefix(8))…")
+            return
+        }
+        // A1: "sent" is the hand-over to the transport. The caller's 15 s wait for the callee's round-1 KCMAC
+        // (`KcMacWindow`) runs from here, before the write completes.
+        sasCommit.callerRevealHanded(callId: callId, nowMs: SasCommit.monotonicNowMs())
+        do {
+            try await sender(wire)
+            print("[QAudionCallIntegration] sas_commit \(resend ? "resent" : "revealed") callId=\(callId.prefix(8))…")
+        } catch {
+            print("[QAudionCallIntegration] sas_commit reveal send failed callId=\(callId.prefix(8))…")
+        }
+    }
+
+    /// The round-1 ACCEPT is actually on the wire: the FIRST such send starts the callee's 5 s REVEAL
+    /// timer. Later sends (retransmissions, cached replays) never restart it, and a call that is not a
+    /// callee of a round-1 OFFER (no commitment stored) is a no-op.
+    private func noteResponderAcceptSent(callId: String) {
+        guard sasCommit.calleeAcceptSent(callId: callId, nowMs: SasCommit.monotonicNowMs()) else { return }
+        armSasRevealTimer(callId: callId)
+    }
+
+    private func armSasRevealTimer(callId: String) {
+        let id = callId.lowercased()
+        let task = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(SasCommit.revealTimeoutMs) * 1_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.sasRevealTimerFired(callId: id)
+        }
+        let previous: Task<Void, Never>? = lock.withLock {
+            let old = sasRevealTimers[id]
+            sasRevealTimers[id] = task
+            return old
+        }
+        previous?.cancel()
+    }
+
+    private func sasRevealTimerFired(callId: String) {
+        lock.withLock { _ = sasRevealTimers.removeValue(forKey: callId) }
+        if case .end(let reason) = sasCommit.calleeTimerFired(callId: callId) {
+            print("[QAudionCallIntegration] sas_commit timeout callId=\(callId.prefix(8))…")
+            reportHandshakeFatal(callId: callId, reason: reason)
+        }
+    }
+
+    private func cancelSasRevealTimer(callId: String) {
+        let timer: Task<Void, Never>? = lock.withLock { sasRevealTimers.removeValue(forKey: callId.lowercased()) }
+        timer?.cancel()
+    }
+
+    /// What the app does with a REVEAL this device received from the call peer.
+    public enum SasRevealResult: Equatable {
+        /// Dropped silently (no call, no sent ACCEPT, a verified duplicate, another tag): nothing to do.
+        case dropped
+        /// The nonce opened the commitment: the round-1 words are now available.
+        case sasReady
+        /// The call ends with this security reason and the peer is notified.
+        case ended(reason: String)
+        /// This device's ACCEPT was not the one the caller bound: leave the call locally and do NOT
+        /// notify the peer (no `call_hangup`, no `HANGUP:`), stop KCMAC handling.
+        case leftLocally
+    }
+
+    /// A `SASREVEAL:` opaque message from the call peer (the app checks the sender). `data` is the whole
+    /// literal `opaque_message.data`.
+    public func handleSasReveal(callId: String, data: String) -> SasRevealResult {
+        let outcome = sasCommit.calleeOnReveal(callId: callId, data: data, nowMs: SasCommit.monotonicNowMs())
+        switch outcome {
+        case .none, .dropped:
+            return .dropped
+        case .sasReady:
+            cancelSasRevealTimer(callId: callId)
+            print("[QAudionCallIntegration] sas_commit ok callId=\(callId.prefix(8))…")
+            return .sasReady
+        case .end(let reason):
+            cancelSasRevealTimer(callId: callId)
+            print("[QAudionCallIntegration] sas_commit mismatch callId=\(callId.prefix(8))…")
+            return .ended(reason: reason)
+        case .leaveLocally:
+            cancelSasRevealTimer(callId: callId)
+            print("[QAudionCallIntegration] sas_commit sibling callId=\(callId.prefix(8))…")
+            return .leftLocally
+        }
+    }
+
+    /// Forget everything the SAS commitment knows about `callId` (cancelled, declined or superseded while
+    /// ringing, or ended): the nonce and commitment, the held round-1 material, the REVEAL timer.
+    public func wipeSasCommitState(callId: String) {
+        cancelSasRevealTimer(callId: callId)
+        sasCommit.clear(callId: callId)
+        _ = lock.withLock { boundRound1AcceptKeyByCall.removeValue(forKey: callId.lowercased()) }
+    }
+
+    /// False once this device left the call as a sibling (or ended on a SAS-commit failure): the app
+    /// stops judging key-confirmation MACs for it, so the loser never ends the real call.
+    public func acceptsKeyConfirmation(callId: String) -> Bool {
+        sasCommit.calleeAcceptsKeyConfirmation(callId: callId)
+    }
+
+    /// True when this device is the CALLER of `callId`: it never processes a REVEAL.
+    public func isSasCaller(callId: String) -> Bool {
+        sasCommit.isCaller(callId: callId)
+    }
+
+    /// True when this device is a callee of `callId` that sent its round-1 ACCEPT.
+    public func isSasCallee(callId: String) -> Bool {
+        sasCommit.isCallee(callId: callId)
     }
 
     // MARK: - W529: idempotent OFFER retry timer
@@ -3946,7 +4319,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// otherwise sends immediately — today's behavior when that closure is
     /// nil or returns false. Never touches the surrounding crypto/session
     /// derivation, only the wire send.
-    private func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void) async throws {
+    ///
+    /// `isRound1`: this is the round-1 ACCEPT. Its FIRST actual send freezes the answered commitment and
+    /// starts the callee's 5 s REVEAL timer (`noteResponderAcceptSent`); a held ACCEPT starts it when it
+    /// is released, not before.
+    private func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool) async throws {
         let cid = callId.lowercased()
         if !cid.isEmpty, shouldHoldResponderAccept?(cid) == true {
             lock.withLock { heldAcceptByCall[cid] = .json(wire) }
@@ -3954,6 +4331,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             await releaseIfHoldLifted(cid)
             return
         }
+        // WIRE_SPEC §3.7.4: the ACCEPT counts as SENT from the moment it is handed to the transport,
+        // before the write completes, so a REVEAL processed right after cannot look early.
+        if isRound1 { noteResponderAcceptSent(callId: callId) }
         try await sendOpaqueRaw(wire)
     }
 
@@ -3994,6 +4374,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     print("[QAudionCallIntegration] W-MEDIAATACCEPT release(json) callId=\(cid.prefix(8))… no sender")
                     return false
                 }
+                // The held ACCEPT is the round-1 ACCEPT: this is its first actual send (it counts as
+                // sent from the hand-over to the transport, WIRE_SPEC §3.7.4).
+                noteResponderAcceptSent(callId: cid)
                 try await sender(wire)
             }
             print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT released callId=\(cid.prefix(8))…")
@@ -4029,6 +4412,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
         guard let startedAt = snapshot.started else { return }
         guard Date().timeIntervalSince(startedAt) < handshakeTimeoutSec else { return }
+        // R-COMMIT-REVEAL: a caller that already bound its round-1 ACCEPT re-sends the byte-identical
+        // REVEAL on a WS re-auth inside the handshake window (the callee drops duplicates silently), at
+        // most `SasCommit.maxRevealResends` times per call. This runs whatever the state: the caller is
+        // `.active` as soon as its session key is installed, long before the callee has the REVEAL.
+        if snapshot.isCaller, let callId = lock.withLock({ pendingOutgoingCallId }),
+           let revealWire = sasCommit.callerResendReveal(callId: callId) {
+            await sendSasReveal(revealWire, callId: callId, resend: true)
+        }
         // Skip if the handshake is already done — caller transitions
         // to .active when ACCEPT decapsulates, responder also moves
         // through .active. Also bail on terminal/reset states. Replay
@@ -4066,7 +4457,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 print("[QAudionCallIntegration] W-MEDIAATACCEPT W531 replay(ACCEPT) held — unknown responderCallId, failing closed")
                 return
             }
-            try? await emitJsonAccept(callId: responderCallId, wire: wire, sendOpaqueRaw: sender)
+            try? await emitJsonAccept(callId: responderCallId, wire: wire, sendOpaqueRaw: sender, isRound1: false)
             let logLine: String = "[QAudionCallIntegration] W531: replaying " + role + " on WS reconnect"
             print(logLine)
             return

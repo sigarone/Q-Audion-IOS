@@ -348,10 +348,10 @@ let package = Package(
                 // desktop's frame cryptor (two senders, epochs 1..17, key ring wrap). Synthetic
                 // keys only; see GroupE2eeKatTests.
                 .copy("GroupCall/Resources/group-calls-v2-frame-crypto.json"),
-                // Transcript v5 + DTLS fingerprint binding (WIRE_SPEC 3.7 / 3.8): byte-exact
+                // Transcript v6 (caller SAS commitment + REVEAL) + DTLS fingerprint binding (WIRE_SPEC 3.7 / 3.8): byte-exact
                 // transcripts, signatures, KDF / SAS / KCMAC and frame-key vectors, shared with the
-                // desktop. Synthetic keys and certificates only; see HandshakeTranscriptV5Tests.
-                .copy("Crypto/Resources/handshake-sig-v5-kat.json")
+                // desktop. Synthetic keys and certificates only; see HandshakeTranscriptV6Tests.
+                .copy("Crypto/Resources/handshake-sig-v6-kat.json")
             ]
         )
     ]

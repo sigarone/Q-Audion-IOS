@@ -1,13 +1,14 @@
 import XCTest
 @testable import QAudionEngine
 
-/// The allow-list of v5 call close reasons, and which one an ending call reports.
+/// The allow-list of v5/v6 call close reasons, and which one an ending call reports.
 final class CallCloseReasonTests: XCTestCase {
 
-    func testTheAllowListIsExactlyTheFiveV5Reasons() {
+    func testTheAllowListIsExactlyTheSevenReasons() {
         XCTAssertEqual(Set(CallCloseReason.allTokens), [
             "dtls_fp_mismatch", "kcmac_mismatch", "handshake_malformed",
             "identity_unresolved", "identity_key_mismatch",
+            "sas_commit_mismatch", "sas_reveal_timeout",
         ])
         for reason in CallCloseReason.allCases {
             XCTAssertEqual(CallCloseReason.accepted(reason.rawValue), reason)
@@ -30,6 +31,17 @@ final class CallCloseReasonTests: XCTestCase {
             .kcmacMismatch)
         XCTAssertEqual(CallCloseReason.forEnd(fatalReason: "dtls_fp_mismatch", heldIdentityCode: nil), .dtlsFpMismatch)
         XCTAssertEqual(CallCloseReason.forEnd(fatalReason: "handshake_malformed", heldIdentityCode: nil), .handshakeMalformed)
+    }
+
+    /// R-COMMIT-REASONS: the two SAS-commitment reasons are security reasons that win like any handshake
+    /// fatal; as hold codes they are not identity reasons.
+    func testTheSasCommitReasonsAreFatalReasons() {
+        XCTAssertEqual(
+            CallCloseReason.forEnd(fatalReason: "sas_commit_mismatch", heldIdentityCode: "identity_unresolved"),
+            .sasCommitMismatch)
+        XCTAssertEqual(CallCloseReason.forEnd(fatalReason: "sas_reveal_timeout", heldIdentityCode: nil), .sasRevealTimeout)
+        XCTAssertNil(CallCloseReason.forEnd(fatalReason: nil, heldIdentityCode: "sas_reveal_timeout"))
+        XCTAssertNil(CallCloseReason.accepted("answered_on_other_device"), "the sibling exit is not a security reason")
     }
 
     func testACallClosedWhileHeldReportsTheIdentityReason() {

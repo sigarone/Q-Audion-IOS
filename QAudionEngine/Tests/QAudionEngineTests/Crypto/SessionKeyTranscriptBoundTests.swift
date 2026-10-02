@@ -3,8 +3,9 @@ import CryptoKit
 @testable import QAudionEngine
 
 /// CALL-4/HSID-002 (2026-09-02 protocol audit) — first-principles tests for
-/// `QAudionCallIntegration.deriveTranscriptBoundSessionKey` (the KDF fold) and
-/// `ComputeSasUseCase.invoke(sessionKey:transcriptHash:)` (the SAS fold).
+/// `QAudionCallIntegration.deriveTranscriptBoundSessionKey` (the KDF fold). The SAS fold
+/// (`ComputeSasUseCase.invoke(sessionKey:transcriptHash:sasNonce:)`) is tested in
+/// `ComputeSasUseCaseTests` and the v6 KAT.
 ///
 /// ITEM 2/3 FOLLOW-UP (2026-09-02) — `deriveTranscriptBoundSessionKey` no
 /// longer takes an already-derived `baseKey`; it now operates DIRECTLY on the
@@ -23,9 +24,9 @@ import CryptoKit
 /// HKDF reconstruction of the exact `info`/`salt` layout this fix's own doc
 /// claims.
 ///
-/// Under transcript v5 this KDF/SAS binding is unconditional (no capability gate): the hash is
-/// `SHA-256(ACCEPT_v5)`. The v5 KAT (`HandshakeTranscriptV5Tests`) pins the same construction
-/// against the shared vectors.
+/// Under transcript v6 this KDF binding is unconditional (no capability gate): the hash is
+/// `SHA-256(ACCEPT_v6)`. The v6 KAT (`HandshakeTranscriptV6Tests`) pins the same construction
+/// against the shared vectors. The nonce of the SAS commitment never enters this KDF.
 final class SessionKeyTranscriptBoundTests: XCTestCase {
 
     private func fixedBytes(_ n: Int, seed: UInt8) -> Data {
@@ -149,7 +150,7 @@ final class SessionKeyTranscriptBoundTests: XCTestCase {
     /// proven by live execution on 2 of the 3 platforms. THIS platform's own
     /// contribution is NOT: this session has no macOS/Xcode toolchain, so this
     /// test has never actually compiled or run. `deriveTranscriptBoundSessionKey`
-    /// and `ComputeSasUseCase.invoke` were instead read line-by-line against the
+    /// and the SAS derivation were instead read line-by-line against the
     /// same Python oracle used for Android/Desktop and match exactly (same
     /// `ikm`/`salt`/`info` construction, same HKDF-SHA256 call, same output
     /// size) — that is source-level verification, the most rigorous check
@@ -176,8 +177,6 @@ final class SessionKeyTranscriptBoundTests: XCTestCase {
             "a70fa416996564881a7bf4cefba22ca4dc541d07d822a75f4f2f9955bac33c60"
         )
 
-        let sas = try? ComputeSasUseCase.invoke(sessionKey: sessionKey, transcriptHash: transcriptHash)
-        XCTAssertEqual(sas?.words, ["uproot", "absurd", "shadow", "printer", "southward", "clockwork"])
     }
 
     // MARK: - rekeyFreshnessValue (CALL-3's literal HKDF formula, ready for a future consumer)
@@ -277,5 +276,25 @@ final class SessionKeyTranscriptBoundTests: XCTestCase {
         XCTAssertFalse(QAudionCallIntegration.shouldRefuseStaleRekeyRound(
             isReKeyRound: true, isKnownRetransmit: true, round: 1, lastAccepted: 3
         ), "documents current behaviour: the retransmit flag is trusted as computed by the caller, not re-derived here")
+    }
+
+    /// R-ROUND / R-COMMIT-FIRST-ROUND: a call whose first handshake already ran never restarts round 1.
+    /// A DIFFERENT round-1 OFFER for it (a forged or crossed one) is refused even when no round was
+    /// verified yet (no `lastAccepted`), so the commitment answered at the first ACCEPT is never replaced.
+    /// Fails without the `round <= 1` rule in `shouldRefuseStaleRekeyRound`.
+    func testADifferentRoundOneOfferForAnInitialisedCallIsRefused() {
+        XCTAssertTrue(QAudionCallIntegration.shouldRefuseStaleRekeyRound(
+            isReKeyRound: true, isKnownRetransmit: false, round: 1, lastAccepted: nil))
+        XCTAssertTrue(QAudionCallIntegration.shouldRefuseStaleRekeyRound(
+            isReKeyRound: true, isKnownRetransmit: false, round: 0, lastAccepted: nil))
+        // a byte-identical retransmit of round 1 still replays the cached ACCEPT
+        XCTAssertFalse(QAudionCallIntegration.shouldRefuseStaleRekeyRound(
+            isReKeyRound: true, isKnownRetransmit: true, round: 1, lastAccepted: nil))
+        // the very first OFFER of a call is never refused by this rule
+        XCTAssertFalse(QAudionCallIntegration.shouldRefuseStaleRekeyRound(
+            isReKeyRound: false, isKnownRetransmit: false, round: 1, lastAccepted: nil))
+        // a later round is unaffected when nothing is known yet
+        XCTAssertFalse(QAudionCallIntegration.shouldRefuseStaleRekeyRound(
+            isReKeyRound: true, isKnownRetransmit: false, round: 2, lastAccepted: nil))
     }
 }

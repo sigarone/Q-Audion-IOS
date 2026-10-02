@@ -38,7 +38,7 @@ final class RekeyRolePolicyTests: XCTestCase {
             kind: .offer, callId: callId,
             pqcPublicKey: Data(repeating: 0xA1, count: 1568).base64EncodedString(),
             x25519PublicKey: Data(repeating: 0xA2, count: 32).base64EncodedString(),
-            rekeyNonce: V5TestFixtures.rekeyNonce.base64EncodedString(), rekeyRound: 2)
+            rekeyNonce: V6TestFixtures.rekeyNonce.base64EncodedString(), rekeyRound: 2)
         var threw = false
         do {
             try await integ.onAndroidBundleReceived(

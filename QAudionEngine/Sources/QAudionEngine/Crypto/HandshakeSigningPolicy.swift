@@ -1,19 +1,22 @@
 import Foundation
 
-/// Handshake-signing decision layer (transcript v5) — sits between the byte-exact transcript
+/// Handshake-signing decision layer (transcript v6) — sits between the byte-exact transcript
 /// (`HandshakeTranscript`, WIRE_SPEC §3.7) and the call orchestration (`QAudionCallIntegration`).
 ///
 /// Pure value logic, no engine types in its signatures (CLAUDE.md §16) — it takes `Data` / `Bool`
 /// / `String` and the already-built transcript, and returns a verdict the orchestration acts on.
 ///
 /// **Policy (WIRE_SPEC §3.8, F8).**
-/// - A bundle without `sigV5`, without `signerIdentityKey` or without `dtlsFingerprint` — or with
+/// - A bundle without `sigV6`, without `signerIdentityKey` or without `dtlsFingerprint` — or with
 ///   any of them malformed — is MALFORMED: every client emits all three, so the call ENDS
 ///   (`.malformed`). There is no unsigned/legacy peer any more.
 /// - An INVALID signature or an unknown identity key keeps the W-NOBRICK policy: the verdict is
 ///   `.abort`, the call is not dropped, and media is held pending an in-call SAS comparison. The
-///   SAS now also covers both DTLS fingerprints (the session key is bound to the v5 ACCEPT
+///   SAS now also covers both DTLS fingerprints (the session key is bound to the v6 ACCEPT
 ///   transcript), so stripping a signature and then confirming the SAS no longer helps an attacker.
+/// - The SAS commitment rules (`sasCommitMalformedCode`, `firstRoundMalformedCode`) are malformed codes too:
+///   a round-1 OFFER without a valid commitment, a rekey OFFER or an ACCEPT that carries one, or a first
+///   OFFER of a call whose round is not 1 ends the call (`handshake_malformed`).
 public enum HandshakeSigningPolicy {
 
     /// The 16-byte per-direction `epochId` the transcript binds. The OFFER/ACCEPT wire bundle does
@@ -39,7 +42,8 @@ public enum HandshakeSigningPolicy {
         case authenticatedRepinFromPublished(deviceKey: Data, v4Capable: Bool, srtpDirKeyV1Capable: Bool, ratchetV5Capable: Bool)
         /// F8: a required field is missing or malformed. The call ENDS. `code` is one of
         /// `sig_missing`, `sig_malformed`, `dtlsfp_missing`, `dtlsfp_malformed`,
-        /// `transcript_unbuildable`.
+        /// `transcript_unbuildable`, `commit_missing`, `commit_malformed`, `commit_unexpected`,
+        /// `first_round_not_1`.
         case malformed(code: String)
         /// Invalid signature / unknown identity (`sig_invalid`, `identity_key_mismatch`,
         /// `identity_unresolved` = no pin and no server key to verify against,
@@ -56,11 +60,46 @@ public enum HandshakeSigningPolicy {
         return set.contains(key)
     }
 
+    /// R-COMMIT-FIELD: the malformed code of a bundle's `sasCommit` field, `nil` when it is valid.
+    ///
+    /// - A round-1 OFFER carries exactly 32 bytes of canonical base64: absent is `commit_missing`, a
+    ///   present value that is not canonical base64 of 32 bytes is `commit_malformed`.
+    /// - A rekey OFFER (round >= 2) and every ACCEPT carry NONE: any value, even an empty or null one
+    ///   (the parser maps a JSON null to the empty string), is `commit_unexpected`.
+    /// - A missing or out-of-range round is left to the transcript builder (`transcript_unbuildable`).
+    public static func sasCommitMalformedCode(isOffer: Bool, round: Int?, sasCommitB64: String?) -> String? {
+        if isOffer {
+            guard let round = round, round >= 1 else { return nil }
+            if round == 1 {
+                guard let text = sasCommitB64 else { return "commit_missing" }
+                return SasCommit.decodeCanonicalBase64(text, expectedLength: SasCommit.commitLength) == nil
+                    ? "commit_malformed" : nil
+            }
+            return sasCommitB64 == nil ? nil : "commit_unexpected"
+        }
+        return sasCommitB64 == nil ? nil : "commit_unexpected"
+    }
+
+    /// R-COMMIT-FIRST-ROUND: the first OFFER a callee accepts for a callId must be round 1. `nil` when
+    /// valid, `first_round_not_1` otherwise.
+    public static func firstRoundMalformedCode(isFirstOfferOfCall: Bool, round: Int?) -> String? {
+        guard isFirstOfferOfCall else { return nil }
+        return round == 1 ? nil : "first_round_not_1"
+    }
+
+    /// WIRE_SPEC §3.7.4 pending OFFER: an OFFER that overtook the `call_incoming` (no call context yet) is
+    /// checked as a FIRST OFFER when it arrives: round 1 and a valid `sasCommit`. `nil` when it may be held,
+    /// a code when it must be dropped (no state, no hangup: there is no call to end yet).
+    public static func pendingOfferMalformedCode(round: Int?, sasCommitB64: String?) -> String? {
+        if let code = firstRoundMalformedCode(isFirstOfferOfCall: true, round: round) { return code }
+        return sasCommitMalformedCode(isOffer: true, round: round, sasCommitB64: sasCommitB64)
+    }
+
     /// Evaluate a received bundle's signing material.
     ///
-    /// - `signerIdentityKeyB64` / `sigV5B64` / `dtlsFingerprintText`: the bundle's three fields
+    /// - `signerIdentityKeyB64` / `sigV6B64` / `dtlsFingerprintText`: the bundle's three fields
     ///   (nil when absent).
-    /// - `transcript`: the v5 transcript recomputed from the RECEIVED bundle, built with the
+    /// - `transcript`: the v6 transcript recomputed from the RECEIVED bundle, built with the
     ///   bundle's own `signerIdentityKey` (the signer signed its OWN key; every path that reaches
     ///   signature verification has bundle key == trusted key or a set-proven bundle key);
     ///   `nil` when it could not be built (the peer-supplied inputs have the wrong shape) — which
@@ -71,7 +110,7 @@ public enum HandshakeSigningPolicy {
     /// - `ratchetV5CapablePinned`: the sticky per-peer pin (anti-downgrade).
     public static func evaluate(
         signerIdentityKeyB64: String?,
-        sigV5B64: String?,
+        sigV6B64: String?,
         dtlsFingerprintText: String?,
         transcript: Data?,
         pinnedKey: Data?,
@@ -84,7 +123,7 @@ public enum HandshakeSigningPolicy {
     ) -> Verdict {
 
         // --- F8: every field present and well-formed, else the call ends ------------------
-        guard let sigB64 = sigV5B64, !sigB64.isEmpty else { return .malformed(code: "sig_missing") }
+        guard let sigB64 = sigV6B64, !sigB64.isEmpty else { return .malformed(code: "sig_missing") }
         guard let sikB64 = signerIdentityKeyB64, !sikB64.isEmpty else { return .malformed(code: "sig_missing") }
         guard let fpText = dtlsFingerprintText, !fpText.isEmpty else { return .malformed(code: "dtlsfp_missing") }
         guard DtlsFingerprint.parseCanonical(fpText) != nil else { return .malformed(code: "dtlsfp_malformed") }
@@ -100,7 +139,7 @@ public enum HandshakeSigningPolicy {
         // authoritative identity to verify against: the bundle key is NEVER trusted blindly and
         // never pinned. Like Android, the verdict is `.abort("identity_unresolved")` — the call is
         // not dropped (W-NOBRICK), media is held pending the in-call SAS, which the session key
-        // (bound to the v5 transcript, hence to the signer key and both DTLS fingerprints) covers.
+        // (bound to the v6 transcript, hence to the signer key and both DTLS fingerprints) covers.
         let trustedKey: Data
         if let pin = pinnedKey {
             trustedKey = pin
@@ -132,7 +171,7 @@ public enum HandshakeSigningPolicy {
             return .abort(code: "identity_key_mismatch")
         }
 
-        // Verify the detached Ed25519 signature over the recomputed v5 transcript, under the
+        // Verify the detached Ed25519 signature over the recomputed v6 transcript, under the
         // authoritative key: the trusted key when the bundle key matches it, else the
         // set-proven bundle key.
         let verifyKey = matchesTrusted ? trustedKey : bundleKey

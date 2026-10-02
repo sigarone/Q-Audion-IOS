@@ -2201,7 +2201,7 @@ final class CallService: @unchecked Sendable {
         // The universal outgoing path is `beginAndroidOutgoing` for
         // ALL peer types (iOS / Android / Desktop) — it owns the
         // idle → capabilitySent transition itself and ships the signed
-        // OFFER_v5.
+        // OFFER_v6.
 
         self.callIntegration = integration
         drainRxPreBuffer()  // W481 — replay any frames that arrived before binding

@@ -2,7 +2,7 @@ import XCTest
 @testable import QAudionApp
 import QAudionEngine
 
-/// Post-v5: the five call close reasons (`CallCloseReason`) are an allow-list in the egress redactor and
+/// Post-v5: the call close reasons (`CallCloseReason`) are an allow-list in the egress redactor and
 /// have a label in the call history. `identity_key_mismatch` is 21 characters, above the 20-character
 /// residual sweep of `LogRedactor.redactStructured`, so without the allow-list the telemetry
 /// `end_reason` would ship as `***REDACTED***`.

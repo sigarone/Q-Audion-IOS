@@ -63,36 +63,21 @@ public enum HkdfLabels {
     /// Spec: apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
     public static let hybridCtBindV1: Data = Data("q-audion-ct-bind-v1".utf8)
 
-    /// CALL-4/HSID-002 — SAS `info` REPLACEMENT (not appended) used by
-    /// `ComputeSasUseCase.invoke` in place of `SasConstants.infoWordsBytes`
-    /// when the caller supplies a non-nil `transcriptHash`. A DISTINCT label
-    /// from the session-key KDF's own `info` prefix (`hybridPqcSessionKey`
-    /// above) is required even though both fold in the SAME transcript hash
-    /// — an independent security review confirmed
-    /// reusing one domain-separated hash across two HKDF derivations is safe
-    /// only when each derivation carries its own label; reusing the hash
-    /// WITHOUT distinct prefixes is not. 23 bytes, NOT null-terminated.
-    ///
-    /// ITEM 2/3 FOLLOW-UP (2026-09-02) — reconciled to Android's canonical
-    /// value `"q-audion-sas-transcript"` (`SasConstants
-    /// .INFO_WORDS_TRANSCRIPT_BOUND_PREFIX`, `HybridPqcKeyExchange.kt`
-    /// sibling `PgpSasWords.kt`), NO trailing `-v1` version suffix. This
-    /// label previously carried a `-v1` suffix (27 bytes) that Android never
-    /// had — the two platforms' independent implementations diverged on a
-    /// detail neither this fix's own kdoc above nor the original security
-    /// review actually required (a distinct label is what matters, not its
-    /// exact spelling), so the shorter Android string is the shared cross-platform value.
-    /// Under transcript v5 the SAS is always bound to `SHA-256(ACCEPT_v5)` (WIRE_SPEC §4).
-    public static let sasTranscriptBindV1: Data = Data("q-audion-sas-transcript".utf8)
+    /// SAS v6 `info` prefix (WIRE_SPEC §4). The full info is
+    /// `sasV6 || SHA-256(ACCEPT_v6 of round 1) || sasNonce` (15 + 32 + 32 = 79 bytes). A label of its
+    /// own, distinct from the session-key KDF's `info` prefix (`hybridPqcSessionKey`), is required
+    /// because both derivations fold in the same transcript hash. It replaces the retired
+    /// SAS label of transcript v5. 15 bytes, NOT null-terminated.
+    public static let sasV6: Data = Data("q-audion-sas-v6".utf8)
 
-    /// 1:1 directional frame keys (transcript v5, owner decision O1): HKDF `info` prefix. The full
+    /// 1:1 directional frame keys (transcript v6, owner decision O1): HKDF `info` prefix. The full
     /// info is `frameKeyInfoPrefixV5 || callId || ":o2a"` or `":a2o"` (ASCII, no NUL, `callId`
     /// exactly as in the transcript). See `OneToOneFrameKeys`. 22 bytes, NOT null-terminated.
     public static let frameKeyInfoPrefixV5: Data = Data("q-audion-frame-key-v5:".utf8)
 
     // MARK: - Salts (UTF-8)
 
-    /// 1:1 directional frame keys (transcript v5): HKDF salt. 21 bytes.
+    /// 1:1 directional frame keys (transcript v6): HKDF salt. 21 bytes.
     public static let frameKeySaltV5: Data = Data("qaudion-frame-salt-v5".utf8)
 
     /// Hybrid PQC session key salt (used as the HKDF Extract salt when no
@@ -118,7 +103,7 @@ public enum HkdfLabels {
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
             deviceLinkSalt, frameKeyInfoPrefixV5, frameKeySaltV5,
-            sasTranscriptBindV1
+            sasV6
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

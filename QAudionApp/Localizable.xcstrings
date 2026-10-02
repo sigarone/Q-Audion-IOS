@@ -32268,6 +32268,132 @@
         }
       }
     },
+    "call_history.close.sas_commit_mismatch": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call ended because the security code the other side revealed did not match what it had committed to",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: codice di sicurezza non valido"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ended: invalid security code"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beendet: ungültiger Sicherheitscode"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finalizada: código de seguridad no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminé : code de sécurité invalide"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encerrada: código de segurança inválido"
+          }
+        }
+      }
+    },
+    "call_history.close.sas_reveal_timeout": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call ended because the other side's security code never arrived",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: codice di sicurezza non ricevuto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ended: security code not received"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beendet: Sicherheitscode nicht empfangen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finalizada: código de seguridad no recibido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminé : code de sécurité non reçu"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encerrada: código de segurança não recebido"
+          }
+        }
+      }
+    },
+    "sas.waiting_for_code": {
+      "extractionState": "manual",
+      "comment": "In-call SAS panel placeholder — the other side's security code has not arrived yet, so there are no words to compare",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa del codice di sicurezza…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the security code…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warte auf den Sicherheitscode…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esperando el código de seguridad…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente du code de sécurité…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aguardando o código de segurança…"
+          }
+        }
+      }
+    },
     "group_call.unverified_badge": {
       "extractionState": "manual",
       "comment": "Group call participant tile — badge: this participant's identity has not been verified (no SAS confirmation, no in-person pairing)",

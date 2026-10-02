@@ -28,6 +28,14 @@ enum CallCloseReasonLabel {
             return String(localized: "call_history.close.identity_key_mismatch",
                           defaultValue: "terminata: chiave di identità cambiata",
                           comment: "Call history row subtitle — the call was closed while the other person's identity key differed from the one already trusted")
+        case .sasCommitMismatch:
+            return String(localized: "call_history.close.sas_commit_mismatch",
+                          defaultValue: "terminata: codice di sicurezza non valido",
+                          comment: "Call history row subtitle — the call ended because the security code the other side revealed did not match what it had committed to")
+        case .sasRevealTimeout:
+            return String(localized: "call_history.close.sas_reveal_timeout",
+                          defaultValue: "terminata: codice di sicurezza non ricevuto",
+                          comment: "Call history row subtitle — the call ended because the other side's security code never arrived")
         }
     }
 }

@@ -16,7 +16,7 @@ import WebRTC
 ///
 /// Config (ALL must match Android for cross-platform decrypt):
 ///   algorithm = AES-GCM (32-byte key ⇒ AES-256-GCM), PER-PARTICIPANT key mode
-///   (transcript v5, owner decision O1: directional 1:1 frame keys),
+///   (transcript v6, owner decision O1: directional 1:1 frame keys),
 ///   ratchetSalt EMPTY, ratchetWindowSize 0, no magic bytes,
 ///   failureTolerance -1, keyRingSize 16, discardFrameWhenCryptorNotReady true,
 ///   key-derivation HKDF. The keys are the two DIRECTIONAL 32-byte frame keys of
