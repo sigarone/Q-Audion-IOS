@@ -1280,7 +1280,7 @@ public final class QAudionPeerConnection: NSObject {
     ///
     /// - Parameters:
     ///   - sendKey / recvKey: the two DIRECTIONAL 32-byte frame keys of the key round
-    ///     (`OneToOneFrameKeys`, transcript v5 / owner decision O1): the key this
+    ///     (`OneToOneFrameKeys`, transcript v6 / owner decision O1): the key this
     ///     device's own frames are encrypted with, and the key the peer's frames
     ///     are decrypted with.
     ///   - rxSink: PCM-TAP PARITY — called with each little-endian Int16

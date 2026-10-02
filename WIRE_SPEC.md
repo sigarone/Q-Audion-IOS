@@ -268,13 +268,14 @@ metadata before decrypting a v2 package.
 ## 3. Per-call PQC handshake (`opaque_message` channel)
 
 A 1:1 call runs exactly one handshake dialect: the signed JSON HandshakeBundle
-(§3.1), authenticated by the single signed transcript v5 (§3.7), which also
-binds both DTLS certificate fingerprints (§3.8). There is no dialect
-negotiation, no fallback and no earlier transcript version: the transcripts
-v1-v4, their JSON fields (`signature`, `sigV2`, `sigV3`, `sigV4`) and the QUAD
-binary handshake dialect (§3.2) are removed. Before launch there is no deployed
-fleet to stay compatible with, so every client switches in the same release
-train (§6, hard switches).
+(§3.1), authenticated by the single signed transcript v6 (§3.7), which also
+binds both DTLS certificate fingerprints (§3.8) and the caller's SAS commitment
+(§3.7.4). There is no dialect negotiation, no fallback and no earlier transcript
+version: the transcripts v1-v5, their JSON fields (`signature`, `sigV2`, `sigV3`,
+`sigV4`, `sigV5`) and the QUAD binary handshake dialect (§3.2) are removed. Before
+launch there is no deployed fleet to stay compatible with, so every client
+switches in the same release train (§6, hard switches). A v6 peer ends a v5
+OFFER as malformed and a v5 peer rejects `sigV6`: the two do not interoperate.
 
 ### 3.1 JSON HandshakeBundle (the single 1:1 handshake dialect)
 
@@ -301,8 +302,9 @@ in the `data` field of an `opaque_message`.
   "signerIdentityKey":       "<base64 — Ed25519 pub, 32 B>",
   "rekeyNonce":              "<base64 — 8 B>",
   "rekeyRound":              1,
+  "sasCommit":               "<base64 — 32 B; OFFER with rekeyRound 1 ONLY, §3.7.4>",
   "dtlsFingerprint":         "sha-256 AB:CD:...:EF",
-  "sigV5":                   "<base64 — Ed25519 signature, 64 B>"
+  "sigV6":                   "<base64 — Ed25519 signature, 64 B>"
 }
 ```
 
@@ -310,14 +312,33 @@ in the `data` field of an `opaque_message`.
 
 The following fields are REQUIRED in every OFFER and ACCEPT, including rekey
 rounds: `signerIdentityKey`, `capabilities`, `rekeyNonce`, `rekeyRound`,
-`dtlsFingerprint` (canonical text form, §3.8.1) and `sigV5` (base64, 64 bytes).
+`dtlsFingerprint` (canonical text form, §3.8.1) and `sigV6` (base64, 64 bytes).
 `rekeyRound` MUST be present as a JSON integer in [1, 4294967295] (the initial handshake is 1; the transcript
-encodes it as a u32). A bundle that lacks `sigV5`, `dtlsFingerprint` or `rekeyRound`, or whose
+encodes it as a u32). A bundle that lacks `sigV6`, `dtlsFingerprint` or `rekeyRound`, or whose
 `rekeyRound` is 0, negative, fractional, above 4294967295 or not a number, is malformed and ends
 the call (§3.8.6). There is no default value: a receiver never reads a missing
-`rekeyRound` as 1. `signature`, `sigV2`, `sigV3` and `sigV4` are removed: a sender MUST NOT
-emit them and a receiver MUST NOT consult them. The signature is computed over
+`rekeyRound` as 1. `signature`, `sigV2`, `sigV3`, `sigV4` and `sigV5` are removed: a sender MUST NOT
+emit them and a receiver MUST NOT consult them (a bundle with `sigV5` and no `sigV6` is malformed). The signature is computed over
 the transcript of §3.7, never over the JSON bytes.
+
+`sasCommit` (R-COMMIT-FIELD):
+
+| Message | `sasCommit` |
+|---|---|
+| OFFER, `rekeyRound` = 1 | REQUIRED: canonical base64 of exactly 32 bytes (§3.7.4) |
+| OFFER, `rekeyRound` >= 2 | MUST be absent (any value, even `null`, is malformed) |
+| ACCEPT | MUST be absent (any value, even `null`, is malformed) |
+
+- **Canonical base64** (`sasCommit` and the REVEAL payload of §3.7.4): standard alphabet with padding. A string `s` is
+  valid iff it decodes to the required length AND `base64encode(decode(s)) == s`. This rejects missing padding, the
+  URL-safe alphabet, whitespace and non-zero trailing bits identically on every platform, whatever its base64 decoder
+  tolerates.
+- A round-1 OFFER without a valid `sasCommit`, a rekey OFFER or an ACCEPT that carries the field, and the FIRST OFFER a
+  callee device that has a call context for the `callId` (it rang for it) sees when its `rekeyRound` is not 1
+  (R-COMMIT-FIRST-ROUND) are malformed and end the call with
+  reason `handshake_malformed` (§3.8.6).
+- Every JSON decode failure of a bundle that was routed as a handshake bundle is malformed as well: the call ends with
+  `handshake_malformed` and a hangup on every platform, never with a plain failure that skips the hangup.
 
 ### 3.2 QUAD binary frame — handshake dialect RETIRED
 
@@ -425,7 +446,7 @@ nonce_sender = SHA-256( "qa-psk-advert-nonce-v3"          22 B ASCII
 `sender_ephemeral_x25519_pub` is the **sender's own** ephemeral X25519 public key
 as it appears in the SIGNED bundle: `x25519PublicKey` on the OFFER leg,
 `ciphertext.x25519` on the ACCEPT leg. Both are already bound by the §3.7
-transcript (`OFFER_v5` binds `LP(x25519Pub)`; `ACCEPT_v5` binds
+transcript (`OFFER_v6` binds `LP(x25519Pub)`; `ACCEPT_v6` binds
 `LP(ctX25519)`).
 
 This is normative and it is the reason there is no new wire field. A nonce sent
@@ -772,36 +793,42 @@ type MUST have its per-dialect field-population contract documented HERE
 before shipping — "peer X sends blank, guard against it" is a workaround
 for a bug, not a specification.
 
-### 3.7 Signed transcript v5
+### 3.7 Signed transcript v6
 
 All integers are big-endian, `LP(x) = u16(len) ‖ x`.
 
 ```
-OFFER_v5  = "qaudion-handshake-sig-v5" ‖ 0x01 ‖ LP(callId) ‖ LP(signerIK32) ‖ LP(epochId16) ‖ LP(pqcPub)
+OFFER_v6  = "qaudion-handshake-sig-v6" ‖ 0x01 ‖ LP(callId) ‖ LP(signerIK32) ‖ LP(epochId16) ‖ LP(pqcPub)
             ‖ LP(x25519Pub) ‖ LP(strongBox|∅) ‖ LP(dualCurve|∅) ‖ CAPS9 ‖ ratchetV ‖ suiteId
             ‖ LP(advEnc(offer adverts)) ‖ rekeyNonce[8] ‖ u32(round) ‖ DTLSFP_offerer[33]
-ACCEPT_v5 = "qaudion-handshake-sig-v5" ‖ 0x02 ‖ LP(callId) ‖ LP(signerIK32) ‖ LP(epochId16) ‖ LP(ctPqc)
+            ‖ LP(sasCommit | ∅)
+ACCEPT_v6 = "qaudion-handshake-sig-v6" ‖ 0x02 ‖ LP(callId) ‖ LP(signerIK32) ‖ LP(epochId16) ‖ LP(ctPqc)
             ‖ LP(ctX25519) ‖ LP(ctStrongBox|∅) ‖ LP(ctDualCurve|∅) ‖ CAPS9 ‖ ratchetV ‖ suiteId
-            ‖ LP(selectedPskFp) ‖ LP(SHA-256(OFFER_v5)) ‖ LP(advEnc(responder adverts))
+            ‖ LP(selectedPskFp) ‖ LP(SHA-256(OFFER_v6)) ‖ LP(advEnc(responder adverts))
             ‖ rekeyNonce[8] ‖ u32(round) ‖ DTLSFP_acceptor[33]
-sigV5     = Ed25519(deviceIdentityKey, OFFER_v5 | ACCEPT_v5)     (pure RFC 8032)
+sigV6     = Ed25519(deviceIdentityKey, OFFER_v6 | ACCEPT_v6)     (pure RFC 8032)
 ```
 
-- The domain string `qaudion-handshake-sig-v5` is 24 bytes, ASCII, not length-prefixed.
-- `offerBinding = SHA-256(OFFER_v5)` in the ACCEPT is mandatory and non-empty.
+- The domain string `qaudion-handshake-sig-v6` is 24 bytes, ASCII, not length-prefixed.
+- `LP(sasCommit | ∅)` is `0x0020 ‖ sasCommit[32]` when `round` = 1 and `0x0000` when `round` >= 2. A builder MUST
+  throw on any other combination (32 bytes with round >= 2, empty with round 1, any other length). ACCEPT_v6 has no
+  commitment field of its own: it binds the commitment through `offerBinding`.
+- `offerBinding = SHA-256(OFFER_v6)` in the ACCEPT is mandatory and non-empty.
 - `DTLSFP` is the canonical binary fingerprint of §3.8.1 (`u8(alg) ‖ digest`, 33 bytes). OFFER
   carries the offerer's fingerprint and ACCEPT carries the acceptor's, so through
   `offerBinding` the ACCEPT transcript covers both.
-- Every field except the domain, `offerBinding` and `DTLSFP` keeps the definition below, including
-  `rekeyNonce`, `round` semantics and CAPS9. `round` is mandatory and has no default (R-ROUND, §3.1).
-- A verifier MUST build `OFFER_v5` with these inputs:
-  - as the **offerer**: its own real certificate fingerprint
-  - as the **acceptor**: the fingerprint parsed from the received bundle
-- A verifier MUST build `ACCEPT_v5` with these inputs:
-  - as the **acceptor**: its own real fingerprint, and the hash of the OFFER_v5 it received
-  - as the **offerer**: the fingerprint from the received ACCEPT bundle, and the hash of the OFFER_v5 it sent
+- ACCEPT_v6 differs from the v5 layout only in the domain and in `offerBinding` (the hash of OFFER_v6, which now
+  ends with the commitment). Every other field keeps its definition below, including `rekeyNonce`, `round`
+  semantics and CAPS9. `round` is mandatory and has no default (R-ROUND, §3.1).
+- A verifier MUST build `OFFER_v6` with these inputs:
+  - as the **offerer**: its own real certificate fingerprint and its own `sasCommit`
+  - as the **acceptor**: the fingerprint and the `sasCommit` parsed from the received bundle
+- A verifier MUST build `ACCEPT_v6` with these inputs:
+  - as the **acceptor**: its own real fingerprint, and the hash of the OFFER_v6 it received
+  - as the **offerer**: the fingerprint from the received ACCEPT bundle, and the hash of the OFFER_v6 it sent
 - If any of these inputs differ between the two legs, the transcripts differ, and so do the session keys, SAS and
-  KCMAC.
+  KCMAC. A commitment rewritten on one leg makes the legs build different `OFFER_v6`, hence different `offerBinding`,
+  even with the signatures stripped.
 
 **Field definitions.** Every value is the RAW decoded bytes of the bundle field (base64 decoded first), never the
 JSON text. Optional fields that are absent encode as `LP(empty) = 0x0000`.
@@ -815,31 +842,34 @@ JSON text. Optional fields that are absent encode as `LP(empty) = 0x0000`.
 | `ctPqc`, `ctX25519`, `ctStrongBox`, `ctDualCurve` | ACCEPT `ciphertext.pqc`, `.x25519`, `.strongBox`, `.dualCurve` |
 | `CAPS9` | 9 bytes, each `0x00` or `0x01`, in this fixed order: `ratchetV3`, `sframeV1`, `vkeyV1`, `sessionKdfV3`, `ratchetV4`, `srtpDirKeyV1`, `pskMixV1`, `hsTranscriptBindV1`, `ratchetV5`. Read from the signer's OWN bundle `capabilities`; an absent capability is `0x00` |
 | `ratchetV`, `suiteId` | 1 byte each: `0x04` and `0x01` |
-| `advEnc(list)` | `u8(m) ‖ (u8(role_j) ‖ fp32_j)` for `j = 1..m`, in the advertised order. `fp32_j` is the RAW 32-byte value of the advertised `pskFingerprints[j]` (a blinded tag, §3.3.1). `role_j` is the j-th entry of the bundle's optional `pskRoles` array (one unsigned byte), and `0` when the array is absent, null or shorter than the list. The blinded advertisement of §3.3.1 omits `pskRoles`, so on such a bundle every `role_j` is `0`, but a builder MUST still honour a non-zero entry: the KAT vector `v5-psk-rekey-round-2` pins that encoding with roles `[0, 1]`. A string that is not exactly 64 hex characters encodes as 32 zero bytes (it never throws). `m ≤ 255` |
+| `advEnc(list)` | `u8(m) ‖ (u8(role_j) ‖ fp32_j)` for `j = 1..m`, in the advertised order. `fp32_j` is the RAW 32-byte value of the advertised `pskFingerprints[j]` (a blinded tag, §3.3.1). `role_j` is the j-th entry of the bundle's optional `pskRoles` array (one unsigned byte), and `0` when the array is absent, null or shorter than the list. The blinded advertisement of §3.3.1 omits `pskRoles`, so on such a bundle every `role_j` is `0`, but a builder MUST still honour a non-zero entry: the KAT vector `v6-psk-rekey-round-2` pins that encoding with roles `[0, 1]`. A string that is not exactly 64 hex characters encodes as 32 zero bytes (it never throws). `m ≤ 255` |
 | `selectedPskFp` | UTF-8 bytes of the bundle `selectedPskFingerprint` string verbatim, empty when none |
 | `rekeyNonce[8]` | the 8 raw bytes of `rekeyNonce`. The offerer mints it once per call in memory and reuses it on every OFFER of that call. The ACCEPT echoes the OFFER's value. It is always present and exactly 8 bytes |
 | `round` | `rekeyRound`: `1` for the initial handshake, strictly increasing for each later rekey OFFER under the same `callId`. It MUST be present and in [1, 4294967295]: a missing, 0, out-of-range or non-integer value is malformed and ends the call (§3.1), a verifier never substitutes a default. The ACCEPT echoes the OFFER's value |
+| `sasCommit` | the 32 raw bytes of the OFFER's `sasCommit` when `round` = 1; empty when `round` >= 2 (§3.7.4) |
 
 A receiver that has accepted round N for a `callId` MUST reject any later OFFER whose `round` is not greater than N,
-and any OFFER whose `rekeyNonce` differs from the one recorded for that call.
+and any OFFER whose `rekeyNonce` differs from the one recorded for that call. The first OFFER a callee accepts for a
+`callId` MUST have `round` = 1 (R-COMMIT-FIRST-ROUND, §3.1); an OFFER for a `callId` without a call context on the device
+is dropped without creating state (§3.7.4).
 
 #### 3.7.1 Transcript-bound session key, SAS and key confirmation (unconditional)
 
 There is no capability gate and no non-bound variant: every 1:1 session key, SAS and key-confirmation MAC is
-bound to the v5 transcript.
+bound to the v6 transcript.
 
 ```
 sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
                          salt = the raw bytes of the agreed PSK (§3.3) when one was selected,
                                 otherwise the 22 ASCII bytes "q-audion-hybrid-pqc-v1",
-                         info = "q-audion-session-key" ‖ SHA-256(ACCEPT_v5),      (20 + 32 = 52 B)
+                         info = "q-audion-session-key" ‖ SHA-256(ACCEPT_v6),      (20 + 32 = 52 B)
                          L    = 32)
 ```
 
 - The PSK is the salt itself. The `q-audion-psk-mix` label of §1 belongs to the N ≥ 2 PSK-mixing construction,
   which this derivation does not use. The KAT `kdf` section pins both cases (`kdf-no-psk`, `kdf-with-psk`).
-- SAS: §4, over the same `SHA-256(ACCEPT_v5)`.
-- Key confirmation (KCMAC), with `offerBinding = SHA-256(OFFER_v5)` and `acceptBinding = SHA-256(ACCEPT_v5)`:
+- SAS: §4, over the same `SHA-256(ACCEPT_v6)` and the caller's `sasNonce` (§3.7.4). `sasNonce` enters ONLY the SAS: the session key, KCMAC and frame keys below use no nonce and are not gated by the REVEAL.
+- Key confirmation (KCMAC), with `offerBinding = SHA-256(OFFER_v6)` and `acceptBinding = SHA-256(ACCEPT_v6)`:
 
   ```
   kc_transcript = SHA-256( "qa-kc-transcript-v1"                      19 B ASCII, not length-prefixed
@@ -858,7 +888,7 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
 - **KCMAC runs on EVERY key round (R-KCMAC).** The exchange is not a once-per-call step: the initial handshake
   and each rekey round run it, with that round's own inputs.
   - For a round, `init` (the "offerer" above: `ikInit`, `offerBinding`, `kcMacInit`) is the signer of THAT round's
-    OFFER_v5 and `resp` is the signer of THAT round's ACCEPT_v5. `offerBinding`, `acceptBinding`, the adverts, the
+    OFFER_v6 and `resp` is the signer of THAT round's ACCEPT_v6. `offerBinding`, `acceptBinding`, the adverts, the
     mixed PSKs, `sessionKey` and so `K_kc` are all that round's. A rekey started by the callee therefore has the callee as
     `init` for that round. (This is per round and is unrelated to the fixed call role `o`/`a` of §3.7.2.)
   - Each side sends its own MAC for the round as soon as the round's session key is derived and verifies the peer's
@@ -882,16 +912,16 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
   - A receiver MUST NOT use "the latest MAC seen" as the peer's MAC of the current round.
   - A call in which a KCMAC context is required but missing (no armed context for the live round) ends with
     `kcmac_mismatch` (R-EARBUD, §3.7.3).
-- **KCMAC fails closed.** Under v5 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: the call ends if
+- **KCMAC fails closed.** Under v6 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: the call ends if
   the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (5 s). There is no
   observation-only mode and no hold-pending-SAS path for it.
 - Consequence for the DTLS binding: if anyone substitutes a fingerprint, even with the signatures stripped, the two
-  legs build different `ACCEPT_v5` bytes and so derive different session keys. No media decrypts, the SAS differs and
+  legs build different `ACCEPT_v6` bytes and so derive different session keys. No media decrypts, the SAS differs and
   the KCMAC fails.
 
 #### 3.7.2 Directional 1:1 frame keys
 
-For each 1:1 key round, meaning the session key produced by the initial ACCEPT v5 and by every rekey round, each
+For each 1:1 key round, meaning the session key produced by the initial ACCEPT v6 and by every rekey round, each
 side derives two 32-byte FrameCryptor keys from that round's `sessionKey`:
 
 ```
@@ -901,11 +931,11 @@ frameKey_a2o = HKDF-SHA256(IKM = sessionKey, salt = "qaudion-frame-salt-v5",
                            info = "q-audion-frame-key-v5:" ‖ callId ‖ ":a2o", L = 32)
 ```
 
-- All strings are ASCII with no NUL. `callId` is exactly the string of the transcript.
-- **R-ROLE.** `o` is the **caller**: the signer of the call's INITIAL OFFER_v5 (the round with `rekeyRound` = 1), and `a`
+- All strings are ASCII with no NUL. The `-v5` in these labels names the frame-key scheme, which transcript v6 does not change: do not rename it. `callId` is exactly the string of the transcript.
+- **R-ROLE.** `o` is the **caller**: the signer of the call's INITIAL OFFER_v6 (the round with `rekeyRound` = 1), and `a`
   is the callee. The role is fixed for the whole call and for every key round: whoever starts a rekey, and whoever
-  signs that round's OFFER_v5, `o2a` stays the caller-to-callee direction and `a2o` the callee-to-caller direction.
-  This is the call role, not the signer of the round's own OFFER_v5 (that is `init` of R-KCMAC, which may differ per
+  signs that round's OFFER_v6, `o2a` stays the caller-to-callee direction and `a2o` the callee-to-caller direction.
+  This is the call role, not the signer of the round's own OFFER_v6 (that is `init` of R-KCMAC, which may differ per
   round), and not the user-id ordering used by §1.1.
 - The offerer encrypts its outgoing frames with `frameKey_o2a` and decrypts incoming frames with `frameKey_a2o`. The
   acceptor does the opposite.
@@ -929,7 +959,7 @@ frameKey_a2o = HKDF-SHA256(IKM = sessionKey, salt = "qaudion-frame-salt-v5",
 
 #### 3.7.3 No unauthenticated handshake path (R-EARBUD)
 
-Every 1:1 call on every platform runs the v5 handshake of §3.7: signed OFFER/ACCEPT, DTLS binding (§3.8) and
+Every 1:1 call on every platform runs the v6 handshake of §3.7: signed OFFER/ACCEPT, DTLS binding (§3.8) and
 KCMAC (§3.7.1). There is no other way to set up a 1:1 call.
 
 - The hardware-earbud relay handshake (`earbud-relay-v1` capability, the EARBUDPDU frames, the PSK-less relay
@@ -943,6 +973,154 @@ KCMAC (§3.7.1). There is no other way to set up a 1:1 call.
   `kcmac_mismatch`. A missing context is a failure, never a reason to skip the check.
 - The earbud GATT key-import family of §7 is a local BLE interface of the hardware earbud and is unaffected by this
   rule; it is not a call-handshake path.
+
+#### 3.7.4 SAS commitment and REVEAL (round 1 only)
+
+Why: with a two-message round 1 (OFFER, ACCEPT) the acceptor moves last and can compute the SAS of a candidate
+ACCEPT offline before sending it. Whoever controls signalling (a forged server key, a compromised node) can then grind
+an ACCEPT on the caller's leg until its SAS equals the one on the callee's leg, and the SAS stops being a
+man-in-the-middle check. v6 makes round 1 three moves: the caller commits to a secret nonce in the signed OFFER, the
+callee answers, the caller reveals the nonce, and the SAS depends on the nonce. The callee is bound before the nonce
+is public and the caller is bound before the callee's contribution exists, so on each leg the last free choice of an
+attacker is made without knowing that leg's SAS: `P[SAS_A == SAS_B] = 2^-48` per call attempt.
+
+**Commitment (R-COMMIT-NONCE, R-COMMIT-FIELD).**
+
+```
+sasNonce   = 32 bytes from the platform CSPRNG
+sasCommit  = SHA-256( "qaudion-sas-commit-v6"     21 bytes ASCII, not length-prefixed
+                      ‖ LP(callId)                u16 BE length ‖ UTF-8 callId, exactly the transcript callId
+                      ‖ sasNonce[32] )            raw
+```
+
+- The caller draws `sasNonce` once per call, before it signs the round-1 OFFER, keeps it only in the call context in
+  memory, never logs or persists it, never reuses it for another `callId` (a redial is a new call with a new nonce),
+  sends it only in that call's REVEAL, and zeroises it when the call ends in any way.
+- An OFFER retransmission re-sends the same bytes with the same commitment. It never re-signs with a new nonce.
+- Only round 1 carries a commitment (R-COMMIT-SCOPE). Rekey OFFERs encode `LP(∅)` and have no `sasCommit` field, and
+  there is no rekey REVEAL.
+
+**Flow (round 1).**
+
+```
+Caller (offerer)                                      Callee device (acceptor)
+  draw sasNonce; sasCommit = H(...)
+  ---- <callId>|{OFFER, ..., sasCommit, sigV6} ---->  parse; first OFFER must be round 1 with sasCommit;
+                                                      store sasCommit; build ACCEPT_v6
+                                                      when the ACCEPT is SENT: freeze sasCommit,
+                                                      acceptHash = SHA-256(ACCEPT_v6), start the 5 s REVEAL timer
+  <--- <callId>|{ACCEPT, ..., sigV6} --------------
+  bind round 1 to this ACCEPT (first valid one)
+  derive keys; compute SAS_v6
+  ---- <callId>|SASREVEAL:<B> ----------------------->  check, open the commitment, compute SAS_v6
+  ---- <callId>|KCMAC:<...> ------------------------->  (KCMAC rules of §3.7.1 unchanged)
+```
+
+**REVEAL message (R-COMMIT-REVEAL).** A literal UTF-8 string, the `data` of an `opaque_message` to the peer user, like
+KCMAC:
+
+```
+<callId>|SASREVEAL:<B>      B = base64( acceptBinding[32] ‖ sasNonce[32] ), canonical (§3.1), exactly 88 characters
+acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of the transcript bytes of §3.7, not of the JSON)
+```
+
+- The prefix `SASREVEAL:` is case-sensitive ASCII. The dispatcher routes it before the JSON bundle parser (as it does
+  `KCMAC:`), so a REVEAL never reaches the bundle parser. There is no round field, no signature and no role byte: a
+  call has exactly one REVEAL value. It is not signed: the signed commitment authenticates it, because only the caller
+  knows a preimage.
+- `acceptBinding` travels because the server fans every `opaque_message` out to all devices of the recipient user and
+  has no device addressing. A callee device must tell "this opens the commitment for MY ACCEPT" from "the caller bound
+  a sibling device's ACCEPT".
+- The REVEAL is neither an SRD precondition nor a media gate (§3.8.2). It gates only the callee's SAS (R-COMMIT-UNCHANGED).
+
+**Caller (R-COMMIT-BIND, R-COMMIT-REVEAL).**
+
+- The caller binds round 1 to the first ACCEPT that parses, passes the malformed checks (§3.1) and the `offerBinding`,
+  `rekeyNonce` and `round` echo checks, atomically, before any suspension point. An invalid signature or an
+  unresolved identity does not prevent binding: the call binds, reveals and is held pending SAS (§3.8.6).
+- Right after binding, before its round-1 KCMAC and without waiting for `call_accepted` or any UI step, it sends the
+  REVEAL. It never sends a REVEAL before binding, for an ACCEPT that failed parsing or the malformed checks, or after
+  the call ended.
+- A byte-identical duplicate of the bound ACCEPT is dropped and answered by re-sending the byte-identical REVEAL (and
+  nothing else). A WS re-authentication before the call is active may also re-send it. At most 4 re-sends per call.
+- Any other round-1 ACCEPT after binding (a sibling device, a forgery) is dropped and never used for keys, SAS or
+  REVEAL. A SASREVEAL received by a caller is dropped silently.
+- The caller computes the SAS once it has sent the REVEAL.
+
+**Callee device (R-COMMIT-CHECK).** Processing a received REVEAL, in this order:
+
+1. Route: the text before the FIRST `|` is the `callId` and the remainder starts with `SASREVEAL:`.
+2. No call context for `callId`, or this device is the caller, or this device has not SENT a round-1 ACCEPT for it
+   (none computed, or still held while ringing): drop silently, create no state, hold nothing. An ACCEPT counts as SENT
+   from the moment it is handed to the transport, before the write completes, so a REVEAL that is processed right after
+   cannot be mistaken for an early one.
+3. `sender_id` (stamped by the server) is not the call's peer user: drop silently.
+4. Parse strictly: `B` canonical base64, decodes to exactly 64 bytes, the whole `data` at most 200 characters.
+   Otherwise `sas_commit_mismatch`.
+5. `acceptBinding` differs from the `acceptHash` of this device's sent ACCEPT: sibling rule below.
+6. A REVEAL was already verified for this call: byte-identical, drop silently; different, `sas_commit_mismatch`.
+7. `SHA-256("qaudion-sas-commit-v6" ‖ LP(callId) ‖ sasNonce)` equals the stored `sasCommit` (constant-time compare):
+   record it, cancel the REVEAL timer, compute the SAS. Otherwise `sas_commit_mismatch`.
+
+- The 5 s REVEAL timer starts at the FIRST send of this device's ACCEPT (a later byte-identical retransmission of the
+  ACCEPT does not restart it). No verified REVEAL when it fires: `sas_reveal_timeout`. There is no early-REVEAL
+  hold.
+- A callee takes the commitment from the OFFER it actually answered: if several round-1 OFFERs for one `callId` arrive
+  before the ACCEPT is sent, the newest replaces the stash; after the ACCEPT is sent, a different round-1 OFFER is
+  dropped and the frozen commitment stays. A byte-identical OFFER re-sends the cached ACCEPT or is dropped, never a
+  fresh ACCEPT.
+- Until the REVEAL is verified the callee has no SAS words: its UI shows a waiting state and the SAS confirmation
+  action is disabled. Polling UIs MUST cover the 5 s window or be event-driven.
+
+**Sibling devices (R-COMMIT-SIBLING).** A callee device that has sent its ACCEPT and receives a REVEAL that passes
+steps 1-4 but names a different `acceptBinding` has lost the race to a sibling device of the same user. It drops the
+REVEAL and leaves the call locally: no `call_hangup`, no `HANGUP:` piggyback, no security close reason, local history
+reason `answered_on_other_device`; it also stops its KCMAC and REVEAL timers and never sends a KCMAC for that round.
+The caller sends the REVEAL before its KCMAC on the same ordered path, so the loser leaves before it can judge the
+caller's MAC. Siblings that never sent an ACCEPT drop the REVEAL at step 2 and end through the existing
+`call_cancel` (`answered_on_other_device`). Whoever can inject a REVEAL as the peer user is the server, which can
+already drop or end any call: the sibling exit adds no capability to it.
+
+**SAS scope (R-COMMIT-SAS).** The SAS of a call is the round-1 SAS of §4, held or not, before and after any rekey: no
+platform computes or shows words for a round >= 2, and there is no SAS without `sasNonce`. A SAS confirmation pins
+round 1's `signerIdentityKey` and is refused if any round of the call was signed by another key. R-HELD-REKEY is
+unchanged: a caller defers rekeys while held.
+
+**Close reasons (R-COMMIT-REASONS).** Both are security-class reasons and notify the peer like `kcmac_mismatch`:
+
+| Reason | Cause |
+|---|---|
+| `sas_commit_mismatch` | ill-formed REVEAL naming this device's ACCEPT, a nonce that does not open the commitment, or a second different REVEAL |
+| `sas_reveal_timeout` | no verified REVEAL 5 s after this device first sent its ACCEPT |
+| `handshake_malformed` | (existing) now also: missing, misplaced, non-canonical or wrong-length `sasCommit`, and a first OFFER whose round is not 1 |
+
+The sibling exit is not a security reason. Telemetry carries verdicts only: callee `{event:"sas_commit",
+result:"ok"|"mismatch"|"timeout"|"sibling"}`, caller `{event:"sas_commit", result:"revealed"|"resent"}`.
+
+**Duplicates, reordering, replays.** The server stores opaque messages for a recipient without a fresh socket and
+replays them at authentication, possibly duplicated and up to 24 h old, so receivers MUST NOT rely on arrival order
+across reconnects.
+
+| Message | At | Action |
+|---|---|---|
+| identical OFFER | callee | re-send the cached ACCEPT if already sent, otherwise drop |
+| OFFER, first for the callId, round != 1 | callee that has a call context for the callId and no OFFER yet | `handshake_malformed` |
+| any OFFER for a callId without a call context (never rang, already ended, answered elsewhere) | callee | drop, create no state |
+| rekey OFFER carrying `sasCommit` | callee | `handshake_malformed` |
+| identical ACCEPT | caller | drop; re-send the identical REVEAL |
+| different round-1 ACCEPT after binding | caller | drop |
+| identical REVEAL after verification | callee | drop |
+| different REVEAL naming own ACCEPT after verification | callee | `sas_commit_mismatch` |
+| REVEAL naming another ACCEPT | callee | sibling rule |
+| any message for an ended or unknown callId | both | drop, create no state |
+
+**Logging (R-COMMIT-LOG).** Never log `sasNonce`, `sasCommit`, `acceptBinding`, transcript hashes or SAS words; at most
+a verdict and 8-character call ids.
+
+**What does not change (R-COMMIT-UNCHANGED).** The session key, KCMAC, frame keys (the labels containing `-v5` in
+§3.7.2 name the frame-key scheme and stay), the relay sealer, the DTLS binding (§3.8) and every media gate keep their
+formulas over the v6 transcripts. `sasNonce` enters no key and no MAC; `kc_transcript` covers the commitment only
+through `offerBinding`.
 
 ### 3.8 DTLS certificate binding
 
@@ -994,10 +1172,11 @@ call. A client:
 2. Sign and send your bundle only after `fpSelf` is known.
 3. Never call `setRemoteDescription` before the peer's bundle has been received and passed these steps:
    - It parses.
-   - `sigV5` has gone through the policy (§3.8.6).
+   - `sigV6` has gone through the policy (§3.8.6).
    - `fpPeer` is pinned for the call.
    Remote SDP that arrives earlier is buffered. This affects a client that sets up WebRTC while ringing: it must
    create the PC and certificate at ring time but defer SRD until the OFFER bundle has arrived.
+   The SAS REVEAL (§3.7.4) is not a precondition of SRD or of any media gate: only the callee's SAS waits for it.
 4. The acceptor sends ACCEPT **before** `call_answer`, so the offerer normally has `fpPeer` before the answer
    arrives. The offerer still buffers the answer if it does not.
 5. `fpPeer` is pinned once per call. Later bundles (rekey rounds) MUST carry the same `fpPeer`, and the re-signed
@@ -1052,7 +1231,7 @@ A pass opens the gate. A fail ends the call with `dtls_fp_mismatch` and telemetr
 On the WS relay there is no DTLS, so (b) does not apply. (a) still applies to any SDP the call exchanges. What
 protects relay media:
 
-- The inner `PqcRtpFrameSealer`: directional AES-256-GCM keys derived from the v5 transcript-bound session key, with
+- The inner `PqcRtpFrameSealer`: directional AES-256-GCM keys derived from the v6 transcript-bound session key, with
   an anti-replay window (Android 256, iOS 1024, desktop `ReplayWindow`).
 - The SPKI-pinned client↔server TLS connection.
 
@@ -1066,13 +1245,17 @@ still DTLS end to end, so it is fully covered.
 - A fingerprint mismatch (a, b, a changed fingerprint in a rekey round, or a differing `fpPeer`) never has a benign
   cause. It ends the call with reason `dtls_fp_mismatch`. It is NOT the hold-pending-SAS path and no SAS comparison
   can override it.
-- A bundle without `sigV5`, without `dtlsFingerprint` or without a valid `rekeyRound` ([1, 4294967295]) is malformed (every
-  client emits all three) and ends the call.
+- A bundle without `sigV6`, without `dtlsFingerprint` or without a valid `rekeyRound` ([1, 4294967295]) is malformed (every
+  client emits all three) and ends the call with reason `handshake_malformed`. So does a bundle with a missing,
+  misplaced, non-canonical or wrong-length `sasCommit`, a first OFFER whose `rekeyRound` is not 1, and any JSON
+  decode failure of a bundle routed as a handshake bundle (§3.1, §3.7.4).
 - An *invalid* signature or an unknown identity key aborts the handshake and holds media pending SAS, as before. The
   SAS covers both fingerprints (§3.7.1), so confirming a matching SAS also authenticates them.
 - A KCMAC failure ends the call with reason `kcmac_mismatch` (§3.7.1).
+- A REVEAL that does not open the commitment ends the call with `sas_commit_mismatch`, and a callee that gets no
+  verified REVEAL within 5 s of sending its ACCEPT ends it with `sas_reveal_timeout` (§3.7.4).
 
-The identity pins (Ed25519 trust on first use) are the anchor for `sigV5` and are unchanged. The DTLS certificate is
+The identity pins (Ed25519 trust on first use) are the anchor for `sigV6` and are unchanged. The DTLS certificate is
 not pinned across calls. Group calls are unaffected: §10.2 pins the SFU certificate.
 
 ---
@@ -1080,24 +1263,44 @@ not pinned across calls. Group calls are unaffected: §10.2 pins the SFU certifi
 ## 4. Short Authentication String (SAS)
 
 ```
-SAS-IKM   = sessionKey (32 B, the transcript-bound key of §3.7.1)
-SAS-INFO  = "q-audion-sas-transcript" ‖ SHA-256(ACCEPT_v5)      (23 + 32 = 55 B)
+SAS-IKM   = sessionKey of round 1 (32 B, the transcript-bound key of §3.7.1)
+SAS-INFO  = "q-audion-sas-v6" ‖ SHA-256(ACCEPT_v6 of round 1) ‖ sasNonce      (15 + 32 + 32 = 79 B)
 SAS-KDF   = HKDF-SHA256(IKM=SAS-IKM, salt="qaudion-sas-v1", info=SAS-INFO, L=18)
 indices   = 6 × uint24 read big-endian from SAS-KDF (3-byte stride, consuming
-            all 18 bytes: idx[i] = (out[3i]<<16)|(out[3i+1]<<8)|out[3i+2];
-            see CallSas.ts:79-84 and PgpSasWords.kt:35 for the byte layout)
-words     = PGP wordlist[indices[i] mod wordlist.length] for i in 0..5
-            (wordlist.length == 256 — PgpSasWords.kt:120, PgpSasWordList.ts:74)
+            all 18 bytes: idx[i] = (out[3i]<<16)|(out[3i+1]<<8)|out[3i+2])
+words     = PGP even-word list[indices[i] mod 256] for i in 0..5
+            (the wordlist has exactly 256 entries)
 ```
 
-The SAS is transcript-bound over `ACCEPT_v5` (§3.7): `ACCEPT_v5` commits, through `offerBinding`, to both identity
-keys, both sides' key-exchange material, both capability sets, both PSK adverts and both DTLS fingerprints (§3.8). A
-successful SAS comparison therefore also authenticates both fingerprints. The earlier SAS without a transcript
-(`info = "sas-words-v1"`) is retired.
+- The SAS is the one of ROUND 1, on every platform, whether the call is held or not and before or after any rekey
+  (R-COMMIT-SAS, §3.7.4). The caller computes it once it has sent the REVEAL, the callee once the REVEAL verified.
+  There is no SAS without `sasNonce`: no fallback derivation exists.
+- All label strings above are raw ASCII octets, passed to HKDF verbatim (`salt` = the 14 bytes of `qaudion-sas-v1`).
+- The number of words is a single constant per platform (6 words, 48 bits). It MAY later be reduced for display only
+  without any change to this derivation.
+- The info label `q-audion-sas-v6` is the version separator; the salt `qaudion-sas-v1` is unchanged. The earlier
+  labels `q-audion-sas-transcript` and `sas-words-v1` are retired.
 
-All platforms MUST produce byte-equal SAS for the same session key and the same `ACCEPT_v5` hash. Cross-platform
-KAT vectors: `tools/kat/handshake-sig-v5/` (`kdf` section: session key, the 6 SAS words and both KCMACs for fixed
-inputs).
+The SAS is transcript-bound over `ACCEPT_v6` (§3.7): `ACCEPT_v6` commits, through `offerBinding`, to both identity
+keys, both sides' key-exchange material, both capability sets, both PSK adverts, both DTLS fingerprints (§3.8) and the
+caller's SAS commitment, and `sasNonce` opens that commitment. A successful SAS comparison therefore also
+authenticates both fingerprints. With the commitment, a man in the middle that controls both legs gets the words of
+the two legs to match with probability 2^-48 per call attempt (2^-8w when the users compare only w words), whatever
+its compute budget.
+
+All platforms MUST produce byte-equal SAS for the same session key, the same `ACCEPT_v6` hash and the same `sasNonce`.
+Cross-platform KAT vectors: `tools/kat/handshake-sig-v6/` (`commit`, `sas`, `reveal` and `kdf` sections). The vector
+`design-check` of the `sas` section pins the derivation on synthetic inputs (an independent third implementation):
+
+```
+callId     5a1c0de5-0000-4000-8000-000000000006
+sasNonce   000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+sasCommit  c8a3b16610b678b555f74ec265566ffde23291041c80cd1dc0c3d98951ca3368
+sessionKey 32 bytes of 0x11 (synthetic input)
+acceptHash 78c373629a88841eb5d67829551c86d127f3e62fa7b317ad8144029f399af43d   (= SHA-256("design-check ACCEPT_v6 bytes"))
+SAS-KDF    a67d24be7c14857704ea33918284878fef43
+words      bluebird baboon adrift pheasant Neptune crucial
+```
 
 ---
 
@@ -1113,8 +1316,9 @@ inputs).
 | iOS KMS device-key persistence | iOS app | ✅ done 2026-05-06: DeviceKeyManager.swift generates X25519 + ML-KEM-1024 keypairs ONCE, persists privs+pubs to Keychain via SovereignKeyVault namespacing (`__device.x25519.{priv,pub}`, `__device.mlkem.{priv,pub}`), and registers pubs idempotently via `BCryptoKmsClient.registerPublicKey(publicKey:, mlkemEncapKey:)`. ensureProvisioned() is the canonical app-launch hook; currentKeys() the read-only fast-path for the WS `kms_key_available` handler. |
 | iOS KMS app-level wiring | iOS app | ✅ done 2026-05-06: AppState.runKmsSweep() helper + initial sweep right after WS auth + per-event sweep on every `kms_key_available` push. BCryptoBackendProvider.kmsClient lazy var mirrors accountApi/contactsApi pattern. The full iOS KMS pipeline is now end-to-end functional. |
 | Desktop PSK fingerprint negotiation | Desktop | ✅ done 2026-05-06: vault.list().map(p => p.fingerprint) feeds generateOffer + lex-sort intersection on responder |
-| Cross-platform KAT vectors — SAS | tools/kat/sas | RETIRED 2026-10-01: the transcript-less SAS (`info = "sas-words-v1"`) no longer exists (§4). The SAS vectors are the `kdf` section of `tools/kat/handshake-sig-v5/handshake-sig-v5-kat.json`; `tools/kat/sas/sas-kat.json` is deleted and every client drops its test of it. |
-| Cross-platform KAT vectors — Hybrid PQC combine | tools/kat/hybrid-combine | RETIRED 2026-10-01: those vectors pinned the session key WITHOUT the transcript hash in `info`, a variant that no longer exists (§3.7.1). The session key vectors are the `kdf` section of `tools/kat/handshake-sig-v5/handshake-sig-v5-kat.json`; `tools/kat/hybrid-combine/` and `tools/kat/hybrid-combine-kat.json` are deleted and every client drops its test of them. |
+| Cross-platform KAT vectors — SAS | tools/kat/sas | RETIRED 2026-10-01: the transcript-less SAS (`info = "sas-words-v1"`) no longer exists (§4). The SAS vectors are the `commit`, `reveal` and `sas` sections of `tools/kat/handshake-sig-v6/handshake-sig-v6-kat.json`; `tools/kat/sas/sas-kat.json` is deleted and every client drops its test of it. |
+| Cross-platform KAT vectors — Hybrid PQC combine | tools/kat/hybrid-combine | RETIRED 2026-10-01: those vectors pinned the session key WITHOUT the transcript hash in `info`, a variant that no longer exists (§3.7.1). The session key vectors are the `kdf` section of `tools/kat/handshake-sig-v6/handshake-sig-v6-kat.json`; `tools/kat/hybrid-combine/` and `tools/kat/hybrid-combine-kat.json` are deleted and every client drops its test of them. |
+| Cross-platform KAT vectors — handshake v6 | tools/kat/handshake-sig-v6 | 2026-10-02: `handshake-sig-v6-kat.json`, byte-identical in the four repos, sha256 pinned in each (server: `tools/kat/katpin_test.go`). Sections: `certVectors`, `canonical`, `sdp`, `commit`, `transcripts`, `kdf`, `sas`, `frameKeys`, `reveal`, `bundle`, `sequences`, `negative`. The server recomputes every positive vector independently in Go (`tools/kat/handshake-sig-v6/kat_v6_verify_test.go`). The v5 file is deleted. |
 | Cross-platform KAT vectors — PSK negotiation | tools/kat/psk-negotiation | ✅ done 2026-05-06: tools/kat/psk-negotiation/psk-negotiation-kat.json (6 vectors: no-intersection, single-match, lex-sort-required, reversed-offer, partial-overlap, empty-offer) mirrored byte-equal in all 4 repos. Verifiers on Android (PskNegotiationKatTest.kt), Desktop (PskNegotiation.kat.spec.ts), iOS (PskNegotiationKatTests.swift) load the JSON + assert `selected = sort(offerSet ∩ localSet, lex-asc)[0]` produces the pinned answer regardless of input ordering. Pins WIRE_SPEC §3.3. |
 | Cross-platform KAT vectors — KMS round-trip | tools/kat/kms | ✅ done 2026-05-06: tools/kat/kms/kms-roundtrip-kat.json (4 vectors: 2 classical + 2 binding-hybrid, each 92 bytes) mirrored byte-equal in all 4 repos. Reference Python encryptor uses `cryptography` package (X25519 + AES-GCM) with WIRE_SPEC §2 canonical labels. Verifier tests on Android (KmsRoundTripKatTest.kt, BouncyCastle X25519 + javax AES-GCM), Desktop (KmsRoundTrip.kat.spec.ts, noble x25519 + node crypto), iOS (KmsRoundTripKatTests.swift, exercises production KmsTransport.decryptPackage) decrypt every package back to the pinned PSK. Legacy KEM-hybrid (1628+ B) requires a real ML-KEM keypair to be deterministic — separate KAT planned. |
 | Capabilities negotiation in JSON OFFER | Android+Desktop | Add `wireFormats: [...]` so peer can pick the lowest common denominator |
@@ -1132,8 +1336,8 @@ Wire-format changes follow these rules:
 
 Before launch, a binary-incompatible format change is a HARD SWITCH. All clients change in the same release
 train, the old format is deleted instead of negotiated, and no capability bit, flag or fallback keeps it alive.
-Rules 1-3 above apply from the first public release on. The signed transcript v5 with the DTLS certificate binding
-(§3.7, §3.8) and the frame IV counter change (§11) are hard switches of this kind.
+Rules 1-3 above apply from the first public release on. The signed transcript v6 (with the DTLS certificate binding
+and the SAS commitment, §3.7, §3.7.4, §3.8) and the frame IV counter change (§11) are hard switches of this kind.
 
 ---
 
@@ -1936,6 +2140,9 @@ receiving key handler and its windows MUST therefore survive that teardown (§11
 handler would open a fresh window for an old ssrc and accept a replayed frame of the current epoch once. The periodic
 rekey (`docs/GROUP_CALLS_V2.md` §12.6) bounds the lifetime of any key that is replayable at all.
 
+Latest: 2026-10-02 (SAS commitment: signed transcript v6 §3.7, new §3.7.4 commitment and REVEAL, §4 SAS v6 over a
+caller nonce, close reasons `sas_commit_mismatch` / `sas_reveal_timeout`, round-1-only SAS, KAT
+`tools/kat/handshake-sig-v6/`; v5 transcript, `sigV5` and the v5 KAT removed).
 Previous: 2026-10-01 (v5 review round: R-ROLE and R-SLOT in §3.7.2, R-KCMAC on every round in §3.7.1,
 R-ROUND in §3.1, R-EARBUD §3.7.3, R-CERT in §3.8, reflection handling §11.5/§11.7, random-byte slot retirement).
 Previous: 2026-10-01 (§3 rewritten: single JSON dialect, signed transcript v5 §3.7 with

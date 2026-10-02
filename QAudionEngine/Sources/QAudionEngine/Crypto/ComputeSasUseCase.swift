@@ -1,35 +1,35 @@
 import Foundation
 import CryptoKit
 
-/// Derive a deterministic 6-word Short-Authentication-String (SAS) from an active call's
-/// session key AND the call's v5 handshake transcript hash (WIRE_SPEC §4).
+/// Derive the 6-word Short-Authentication-String (SAS) of a 1:1 call from the ROUND-1 session key, the
+/// round-1 ACCEPT transcript hash and the caller's committed SAS nonce (WIRE_SPEC §4, transcript v6).
 ///
 /// **Protocol** (must match Android and Desktop byte-for-byte):
 /// ```
 ///   hkdfOut = HKDF-SHA256(
-///       ikm  = sessionKey,
+///       ikm  = sessionKey,                                   // round 1
 ///       salt = SasConstants.saltBytes,                       // "qaudion-sas-v1"
-///       info = HkdfLabels.sasTranscriptBindV1 || transcriptHash,   // "q-audion-sas-transcript" || SHA-256(ACCEPT_v5)
-///       L    = 18                                            // 6 x 3-byte indices
+///       info = HkdfLabels.sasV6 || transcriptHash || sasNonce,   // "q-audion-sas-v6" || SHA-256(ACCEPT_v6) || nonce[32]
+///       L    = 3 * wordCount                                 // 18: 6 x 3-byte indices
 ///   )
-///   for i in 0..5:
+///   for i in 0..<wordCount:
 ///       idx[i] = uint24_be(hkdfOut[3i..3i+3]) % PgpSasWordList.words.count
-///   sas = PgpSasWordList.words[idx[0..5]]
+///   sas = PgpSasWordList.words[idx[0..<wordCount]]
 /// ```
 ///
-/// The transcript hash is `SHA-256(ACCEPT_v5)`, which binds both signers' identity keys, both DTLS
-/// certificate fingerprints, the ciphertexts and `SHA-256(OFFER_v5)`: a relay that substitutes any of
-/// them (even with the signatures stripped) changes the words on one side, so the SAS comparison
-/// also authenticates the DTLS certificates. There is no transcript-free SAS any more.
+/// The transcript hash is `SHA-256(ACCEPT_v6)`, which binds both signers' identity keys, both DTLS
+/// certificate fingerprints, the ciphertexts, the caller's SAS commitment (through
+/// `SHA-256(OFFER_v6)`) and the PSK selection. The nonce is the caller's 32-byte secret, committed in
+/// the OFFER and revealed only after the callee's ACCEPT was bound, so neither side can grind the words
+/// (SASCOMMIT design). There is no nonce-free and no transcript-free SAS any more.
 ///
-/// The `initiator` flag is intentionally ignored for the derivation: both peers must derive the
-/// same 6 words.
+/// The words are the words of ROUND 1, held or not, before and after any rekey.
 ///
 /// **Comparison**: always use `matches(_:_:)` rather than `==` to keep
 /// equality checks constant-time.
 public enum ComputeSasUseCase {
 
-    public static let hkdfOutputBytes = 18
+    public static let hkdfOutputBytes = 3 * SasConstants.wordCount
     public static let sasWordCount = SasConstants.wordCount
 
     public struct Sas: Equatable {
@@ -50,20 +50,24 @@ public enum ComputeSasUseCase {
         case emptyKey
         /// The transcript hash is not exactly 32 bytes.
         case badTranscriptHash
+        /// The SAS nonce is not exactly 32 bytes.
+        case badNonce
     }
 
-    /// Derive the 6-word SAS for `sessionKey`.
+    /// Derive the 6-word SAS of a call.
     ///
     /// - Parameters:
-    ///   - sessionKey: shared symmetric session key (typically 32 bytes). Must not be empty.
-    ///   - initiator: reserved; unused.
-    ///   - transcriptHash: `SHA-256(ACCEPT_v5)`, exactly 32 bytes.
-    public static func invoke(sessionKey: Data, initiator: Bool = false, transcriptHash: Data) throws -> Sas {
+    ///   - sessionKey: the ROUND-1 session key of the call (typically 32 bytes). Must not be empty.
+    ///   - transcriptHash: `SHA-256(ACCEPT_v6)` of round 1, exactly 32 bytes.
+    ///   - sasNonce: the caller's committed SAS nonce, exactly 32 bytes.
+    public static func invoke(sessionKey: Data, transcriptHash: Data, sasNonce: Data) throws -> Sas {
         guard !sessionKey.isEmpty else { throw SasError.emptyKey }
         guard transcriptHash.count == 32 else { throw SasError.badTranscriptHash }
-        var info = Data(capacity: HkdfLabels.sasTranscriptBindV1.count + 32)
-        info.append(HkdfLabels.sasTranscriptBindV1)
+        guard sasNonce.count == SasCommit.nonceLength else { throw SasError.badNonce }
+        var info = Data(capacity: HkdfLabels.sasV6.count + 64)
+        info.append(HkdfLabels.sasV6)
         info.append(transcriptHash)
+        info.append(sasNonce)
 
         let derived = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: sessionKey),

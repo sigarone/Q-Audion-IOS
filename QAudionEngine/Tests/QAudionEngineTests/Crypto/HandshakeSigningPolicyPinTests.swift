@@ -8,7 +8,7 @@ import CryptoKit
 /// invalid signature pins nothing; F8: missing/malformed signing material is `.malformed`.
 final class HandshakeSigningPolicyPinTests: XCTestCase {
 
-    private typealias F = V5TestFixtures
+    private typealias F = V6TestFixtures
 
     private struct Case {
         let pubRaw: Data
@@ -34,7 +34,7 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
     ) -> HandshakeSigningPolicy.Verdict {
         HandshakeSigningPolicy.evaluate(
             signerIdentityKeyB64: c.pubRaw.base64EncodedString(),
-            sigV5B64: dropSig ? nil : (sigB64 ?? c.sigB64),
+            sigV6B64: dropSig ? nil : (sigB64 ?? c.sigB64),
             dtlsFingerprintText: dropFp ? nil : (fpText ?? c.fpText),
             transcript: dropTranscript ? nil : (transcript ?? c.transcript),
             pinnedKey: pinned, serverFetchedKey: server,
@@ -82,14 +82,14 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
         let c = try makeCase(seed: 6)
         let other = F.signer(seed: 7).pubRaw
         let member = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV5B64: c.sigB64,
+            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV6B64: c.sigB64,
             dtlsFingerprintText: c.fpText, transcript: c.transcript,
             pinnedKey: nil, serverFetchedKey: nil, publishedKeySet: [c.pubRaw, other], advertisedV4: false)
         XCTAssertEqual(
             member,
             .authenticated(tofuPinKey: c.pubRaw, v4Capable: false, srtpDirKeyV1Capable: false, ratchetV5Capable: false))
         let nonMember = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV5B64: c.sigB64,
+            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV6B64: c.sigB64,
             dtlsFingerprintText: c.fpText, transcript: c.transcript,
             pinnedKey: nil, serverFetchedKey: nil, publishedKeySet: [other], advertisedV4: false)
         XCTAssertEqual(nonMember, .abort(code: "identity_key_mismatch"))
@@ -164,7 +164,7 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
     func testMissingSignerKeyIsMalformed() throws {
         let c = try makeCase(seed: 21)
         let v = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: nil, sigV5B64: c.sigB64, dtlsFingerprintText: c.fpText,
+            signerIdentityKeyB64: nil, sigV6B64: c.sigB64, dtlsFingerprintText: c.fpText,
             transcript: c.transcript, pinnedKey: nil, serverFetchedKey: nil, advertisedV4: false)
         XCTAssertEqual(v, .malformed(code: "sig_missing"))
     }
@@ -175,7 +175,7 @@ final class HandshakeSigningPolicyPinTests: XCTestCase {
         let c = try makeCase(seed: 22)
         let oldKey = F.signer(seed: 23).pubRaw
         let v = HandshakeSigningPolicy.evaluate(
-            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV5B64: c.sigB64,
+            signerIdentityKeyB64: c.pubRaw.base64EncodedString(), sigV6B64: c.sigB64,
             dtlsFingerprintText: c.fpText, transcript: c.transcript,
             pinnedKey: oldKey, serverFetchedKey: nil, publishedKeySet: [c.pubRaw, oldKey],
             advertisedV4: false)

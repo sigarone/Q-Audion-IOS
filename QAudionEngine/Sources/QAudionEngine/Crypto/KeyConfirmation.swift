@@ -179,7 +179,7 @@ public enum KeyConfirmation {
     /// ```
     ///
     /// - Parameters:
-    ///   - offerBinding / acceptBinding: `SHA-256` of the RECONSTRUCTED v5 transcripts
+    ///   - offerBinding / acceptBinding: `SHA-256` of the RECONSTRUCTED v6 transcripts
     ///     the signed handshake already builds
     ///     (`HandshakeTranscript.offerBinding(offerTranscript)` / the ACCEPT
     ///     equivalent) — NEVER raw JSON bytes.

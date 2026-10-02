@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Handshake-signing canonical transcript, version 5 — the ONLY version.
+/// Handshake-signing canonical transcript, version 6 -- the ONLY version.
 ///
 /// The OFFER / ACCEPT bundle of a 1:1 call travels as JSON, but a JSON byte string is NOT
 /// reproducible across kotlinx-serialization (Android), Swift `Codable` (iOS) and
@@ -9,25 +9,23 @@ import CryptoKit
 /// Ed25519 signature is computed over an **explicit length-prefixed concatenation of the RAW
 /// decoded bytes**, defined here and identical on every platform (WIRE_SPEC §3.7).
 ///
-/// Transcript v5 replaces v1-v4 (no backward compatibility, WIRE_SPEC §6): same byte layout as
-/// the former v4, plus three changes:
-///   1. the domain is `qaudion-handshake-sig-v5`;
-///   2. the ACCEPT `offerBinding` is `SHA-256(OFFER_v5)`, mandatory and non-empty;
-///   3. one new LAST field `DTLSFP` (33 bytes: `u8(alg=1) || SHA-256 digest of the signer's
-///      DTLS certificate`) in both the OFFER (offerer's certificate) and the ACCEPT
-///      (acceptor's certificate). Through `offerBinding` the ACCEPT transcript — and so the
-///      transcript-bound session key, the SAS and the key-confirmation MAC — covers BOTH.
+/// Transcript v6 replaces v5 (no backward compatibility, WIRE_SPEC §6): same byte layout as
+/// v5, plus two changes:
+///   1. the domain is `qaudion-handshake-sig-v6`;
+///   2. one new LAST OFFER field `LP(sasCommit)`: the caller's SAS hash commitment (32 bytes in
+///      round 1, empty in every rekey round). The ACCEPT has no new field: it binds the
+///      commitment through `offerBinding = SHA-256(OFFER_v6)`.
 ///
 /// ```
-/// OFFER_v5  = "qaudion-handshake-sig-v5" || 0x01 || LP(callId) || LP(signerIK32) || LP(epochId16)
+/// OFFER_v6  = "qaudion-handshake-sig-v6" || 0x01 || LP(callId) || LP(signerIK32) || LP(epochId16)
 ///             || LP(pqcPub) || LP(x25519Pub) || LP(strongBox|empty) || LP(dualCurve|empty)
 ///             || CAPS9 || ratchetV || suiteId || LP(advEnc(offer adverts))
-///             || rekeyNonce[8] || u32(round) || DTLSFP_offerer[33]
-/// ACCEPT_v5 = "qaudion-handshake-sig-v5" || 0x02 || LP(callId) || LP(signerIK32) || LP(epochId16)
+///             || rekeyNonce[8] || u32(round) || DTLSFP_offerer[33] || LP(sasCommit|empty)
+/// ACCEPT_v6 = "qaudion-handshake-sig-v6" || 0x02 || LP(callId) || LP(signerIK32) || LP(epochId16)
 ///             || LP(ctPqc) || LP(ctX25519) || LP(ctStrongBox|empty) || LP(ctDualCurve|empty)
-///             || CAPS9 || ratchetV || suiteId || LP(selectedPskFp) || LP(SHA-256(OFFER_v5))
+///             || CAPS9 || ratchetV || suiteId || LP(selectedPskFp) || LP(SHA-256(OFFER_v6))
 ///             || LP(advEnc(responder adverts)) || rekeyNonce[8] || u32(round) || DTLSFP_acceptor[33]
-/// sigV5     = Ed25519(deviceIdentityKey, OFFER_v5 | ACCEPT_v5)        (pure RFC 8032)
+/// sigV6     = Ed25519(deviceIdentityKey, OFFER_v6 | ACCEPT_v6)        (pure RFC 8032)
 /// ```
 ///
 /// **Crypto.** `SHA256` (CryptoKit) for `offer_binding`. Verify with
@@ -40,8 +38,8 @@ import CryptoKit
 /// whose shape is wrong, because the inputs are peer-controlled.
 public enum HandshakeTranscript {
 
-    /// UTF-8 "qaudion-handshake-sig-v5" — 24 bytes, fixed prefix (NOT length-prefixed).
-    static let domain: Data = Data("qaudion-handshake-sig-v5".utf8)
+    /// UTF-8 "qaudion-handshake-sig-v6" — 24 bytes, fixed prefix (NOT length-prefixed).
+    static let domain: Data = Data("qaudion-handshake-sig-v6".utf8)
     private static let roleOffer: UInt8 = 0x01
     private static let roleAccept: UInt8 = 0x02
 
@@ -81,6 +79,9 @@ public enum HandshakeTranscript {
             return flags.map { $0 ? 0x01 : 0x00 }
         }
     }
+
+    /// Length of `sasCommit` (a SHA-256 digest).
+    public static let sasCommitLength = 32
 
     // MARK: - Low-level encoders
 
@@ -152,7 +153,7 @@ public enum HandshakeTranscript {
 
     // MARK: - Transcript builders
 
-    /// Build `OFFER_v5` over RAW (already base64-decoded) bytes.
+    /// Build `OFFER_v6` over RAW (already base64-decoded) bytes.
     ///
     /// - Parameters:
     ///   - signerIdentityKey: 32-byte Ed25519 public key of the signer (the offerer).
@@ -162,6 +163,8 @@ public enum HandshakeTranscript {
     ///   - rekeyRound: 1-based round ordinal (1 = the call's first handshake, 2.. = re-key rounds).
     ///   - dtlsFingerprint: the OFFERER's own DTLS certificate fingerprint, 33 bytes
     ///     (`DtlsFingerprint.binaryLength`).
+    ///   - sasCommit: the caller's SAS commitment: exactly 32 bytes when `rekeyRound == 1`, `nil`
+    ///     (or empty) when `rekeyRound >= 2`. Any other combination returns `nil`.
     /// - Returns: `nil` when an input has the wrong shape (never traps).
     public static func offer(
         callId: String,
@@ -178,9 +181,17 @@ public enum HandshakeTranscript {
         pskRoles: [Int]?,
         rekeyNonce: Data,
         rekeyRound: UInt32,
-        dtlsFingerprint: Data
+        dtlsFingerprint: Data,
+        sasCommit: Data?
     ) -> Data? {
         guard rekeyNonce.count == 8, DtlsFingerprint.isWellFormedBinary(dtlsFingerprint) else { return nil }
+        // R-COMMIT-FIELD: round 1 carries exactly 32 bytes, every other round carries none.
+        let commit = sasCommit ?? Data()
+        if rekeyRound == 1 {
+            guard commit.count == sasCommitLength else { return nil }
+        } else {
+            guard commit.isEmpty else { return nil }
+        }
         guard let adv = advEnc(pskFingerprints, pskRoles) else { return nil }
         var out = Data()
         out.append(domain)
@@ -200,21 +211,22 @@ public enum HandshakeTranscript {
         out.append(rekeyNonce)
         appendU32BE(&out, rekeyRound)
         out.append(dtlsFingerprint)
+        ok = appendLP(&out, commit) && ok
         return ok ? out : nil
     }
 
-    /// `offer_binding = SHA-256(OFFER_v5)` — bound into the ACCEPT transcript.
+    /// `offer_binding = SHA-256(OFFER_v6)` — bound into the ACCEPT transcript.
     public static func offerBinding(_ offerTranscript: Data) -> Data {
         return Data(SHA256.hash(data: offerTranscript))
     }
 
-    /// Build `ACCEPT_v5` over RAW (already base64-decoded) bytes.
+    /// Build `ACCEPT_v6` over RAW (already base64-decoded) bytes.
     ///
     /// - Parameters:
     ///   - ctPqc: raw ML-KEM ciphertext (1568 B).
     ///   - ctX25519: raw X25519 ciphertext / ephemeral pub (32 B).
     ///   - selectedPskFingerprint: `nil` encodes as `LP(utf8(""))`.
-    ///   - offerBinding: MUST be `SHA-256(OFFER_v5)` of the OFFER this ACCEPT answers (exactly 32
+    ///   - offerBinding: MUST be `SHA-256(OFFER_v6)` of the OFFER this ACCEPT answers (exactly 32
     ///     bytes, never empty): the acceptor computes it from the OFFER it received, the offerer
     ///     from the OFFER it sent.
     ///   - responderPskFingerprints / responderPskRoles: the ACCEPT's own advertised PSK list.

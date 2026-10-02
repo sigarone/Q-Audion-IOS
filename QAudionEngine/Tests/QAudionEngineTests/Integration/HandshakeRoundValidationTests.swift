@@ -6,7 +6,7 @@ import XCTest
 /// ends the call; it is never defaulted.
 final class HandshakeRoundValidationTests: XCTestCase {
 
-    private typealias F = V5TestFixtures
+    private typealias F = V6TestFixtures
 
     private let signerKey = F.signer(seed: 41).pubRaw
 
@@ -15,6 +15,8 @@ final class HandshakeRoundValidationTests: XCTestCase {
             kind: .offer, callId: F.callId,
             pqcPublicKey: Data(repeating: 0xA1, count: 1568).base64EncodedString(),
             x25519PublicKey: Data(repeating: 0xA2, count: 32).base64EncodedString(),
+            // R-COMMIT-FIELD: round 1 carries the commitment, every later round none.
+            sasCommit: round == 1 ? F.sasCommit.base64EncodedString() : nil,
             rekeyNonce: nonce, rekeyRound: round)
     }
 

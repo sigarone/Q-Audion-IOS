@@ -2,13 +2,13 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
-/// SAS hold alignment round (post-v5), the iOS side of R-SAS-WORDS, R-HELD-REKEY (caller-side deferral)
-/// and R-VERIFIED-MARK. "Held" = a 1:1 call whose peer identity key is unresolved (no pin, no server
-/// key) with media held pending the SAS; the "candidate round" is the first round of the call whose
-/// signature verified against the bundle key while unresolved.
+/// SAS hold alignment round (post-v5), the iOS side of R-SAS-WORDS (now R-COMMIT-SAS: the words of a
+/// call are ALWAYS the round-1 words), R-HELD-REKEY (caller-side deferral) and R-VERIFIED-MARK. "Held" =
+/// a 1:1 call whose peer identity key is unresolved (no pin, no server key) with media held pending the
+/// SAS.
 final class SasHoldAlignTests: XCTestCase {
 
-    private typealias F = V5TestFixtures
+    private typealias F = V6TestFixtures
 
     private let peer = "peer-0001"
     private let keyA = F.signer(seed: 71)
@@ -18,6 +18,17 @@ final class SasHoldAlignTests: XCTestCase {
     private let k2 = Data(repeating: 0x22, count: 32)
     private let h1 = Data(repeating: 0xA1, count: 32)
     private let h2 = Data(repeating: 0xA2, count: 32)
+    /// The caller's committed SAS nonce of the calls below (the words depend on it).
+    private let sasNonce = Data((0..<32).map { UInt8($0 &+ 7) })
+
+    /// A caller integration that drew `sasNonce` and bound the ACCEPT whose hash is `h1`, so its round-1
+    /// words are available once the round-1 session key is recorded.
+    private func boundCaller() -> QAudionCallIntegration {
+        let integ = QAudionCallIntegration()
+        _ = integ.sasCommit.beginCaller(callId: F.callId, nonce: sasNonce)
+        _ = integ.sasCommit.callerOnAccept(callId: F.callId, acceptHash: h1)
+        return integ
+    }
 
     private func signedOffer(
         signer: (priv: Curve25519.Signing.PrivateKey, pubRaw: Data), round: Int
@@ -26,6 +37,7 @@ final class SasHoldAlignTests: XCTestCase {
             kind: .offer, callId: F.callId,
             pqcPublicKey: Data(repeating: 0xA1, count: 1568).base64EncodedString(),
             x25519PublicKey: Data(repeating: 0xA2, count: 32).base64EncodedString(),
+            sasCommit: round == 1 ? F.sasCommit.base64EncodedString() : nil,
             rekeyNonce: F.rekeyNonce.base64EncodedString(), rekeyRound: round)
         let t = try XCTUnwrap(QAudionCallIntegration.offerTranscript(
             from: unsigned, callId: F.callId, signerKeyRaw: signer.pubRaw,
@@ -35,8 +47,9 @@ final class SasHoldAlignTests: XCTestCase {
             kind: .offer, callId: F.callId,
             pqcPublicKey: unsigned.pqcPublicKey, x25519PublicKey: unsigned.x25519PublicKey,
             signerIdentityKey: signer.pubRaw.base64EncodedString(),
-            sigV5: sig.base64EncodedString(),
+            sigV6: sig.base64EncodedString(),
             dtlsFingerprint: F.fingerprintText("offerer"),
+            sasCommit: unsigned.sasCommit,
             rekeyNonce: unsigned.rekeyNonce, rekeyRound: round)
     }
 
@@ -46,71 +59,75 @@ final class SasHoldAlignTests: XCTestCase {
     }
 
     private func words(_ key: Data, _ hash: Data) throws -> [String] {
-        try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash).words
+        try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: hash, sasNonce: sasNonce).words
     }
 
-    // MARK: - R-SAS-WORDS
+    // MARK: - R-COMMIT-SAS (the words of a call are the round-1 words)
 
-    /// An honest same-key rekey before the confirmation installs a later session key, but the words of
-    /// the held call stay the candidate round's: the other platforms show the first round's words, so
-    /// the two users can still compare them.
-    func testHeldCallKeepsTheCandidateRoundsWordsAcrossASameKeyRekey() throws {
-        let integ = QAudionCallIntegration()
+    /// An honest same-key rekey before the confirmation installs a later session key, but the words stay
+    /// the round-1 words: the other platforms show round 1's words too, so the two users can still
+    /// compare them.
+    func testTheWordsStayTheRoundOneWordsAcrossASameKeyRekey() throws {
+        let integ = boundCaller()
         XCTAssertEqual(verdict(integ, try signedOffer(signer: keyA, round: 1)), .abort(code: "identity_unresolved"))
         integ.recordKeyRound(callId: F.callId, key: k1, round: 1, transcriptHash: h1)
         XCTAssertEqual(verdict(integ, try signedOffer(signer: keyA, round: 2)), .abort(code: "identity_unresolved"))
         integ.recordKeyRound(callId: F.callId, key: k2, round: 2, transcriptHash: h2)
 
-        let material = try XCTUnwrap(integ.candidateSasMaterial(callId: F.callId.uppercased()))
-        XCTAssertEqual(material.round, 1)
-        XCTAssertEqual(material.sessionKey, k1)
-        XCTAssertEqual(material.transcriptHash, h1)
-        XCTAssertEqual(try words(material.sessionKey, material.transcriptHash), try words(k1, h1))
-        XCTAssertNotEqual(
-            try words(material.sessionKey, material.transcriptHash), try words(k2, h2),
-            "the live round's words differ: showing them would be the iOS/desktop mismatch")
+        let shown = try XCTUnwrap(integ.sasWords(callId: F.callId.uppercased()))
+        XCTAssertEqual(shown, try words(k1, h1))
+        XCTAssertNotEqual(shown, try words(k2, h2), "the live round's words differ: showing them would be the old iOS/desktop mismatch")
     }
 
-    /// The candidate's material is written once, for the candidate round only.
-    func testCandidateMaterialIsWrittenOnceAndOnlyForTheCandidateRound() throws {
-        let integ = QAudionCallIntegration()
+    /// The round-1 material is written once, for round 1 only: a later round never produces words.
+    func testRoundOneMaterialIsWrittenOnceAndOnlyForRoundOne() throws {
+        let integ = boundCaller()
         _ = verdict(integ, try signedOffer(signer: keyA, round: 1))
-        // a later round (not the candidate) arriving first, then the candidate, then a replay of it
         integ.recordKeyRound(callId: F.callId, key: k2, round: 2, transcriptHash: h2)
-        XCTAssertNil(integ.candidateSasMaterial(callId: F.callId), "round 2 is not the candidate")
+        XCTAssertNil(integ.sasWords(callId: F.callId), "round 2 never produces words")
         integ.recordKeyRound(callId: F.callId, key: k1, round: 1, transcriptHash: h1)
         integ.recordKeyRound(callId: F.callId, key: k2, round: 1, transcriptHash: h2)
-        XCTAssertEqual(integ.candidateSasMaterial(callId: F.callId)?.sessionKey, k1)
-        XCTAssertEqual(integ.candidateSasMaterial(callId: F.callId)?.transcriptHash, h1)
+        XCTAssertEqual(integ.sasWords(callId: F.callId), try words(k1, h1))
+        XCTAssertEqual(integ.sasCommit.round1SessionKey(callId: F.callId), k1)
     }
 
-    /// A call whose identity resolved (pin or server key) has no candidate: its live words apply.
-    func testAuthenticatedCallHasNoCandidateMaterial() throws {
-        let integ = QAudionCallIntegration()
+    /// A call whose identity resolved (pin or server key) shows the same round-1 words as a held one: the
+    /// SAS is not a held-call special case any more.
+    func testAnAuthenticatedCallHasTheRoundOneWordsToo() throws {
+        let integ = boundCaller()
         let server = keyA.pubRaw
         integ.resolveServerPeerKey = { _ in server }
         _ = verdict(integ, try signedOffer(signer: keyA, round: 1))
         integ.recordKeyRound(callId: F.callId, key: k1, round: 1, transcriptHash: h1)
-        XCTAssertNil(integ.candidateSasMaterial(callId: F.callId))
+        integ.recordKeyRound(callId: F.callId, key: k2, round: 2, transcriptHash: h2)
+        XCTAssertEqual(integ.sasWords(callId: F.callId), try words(k1, h1))
     }
 
-    /// A round the candidate's key cannot vouch for puts the call in conflict: the candidate's words then
-    /// vouch for nothing (the live words are shown and the confirmation is refused).
-    func testConflictedCallFallsBackToTheLiveWords() throws {
+    /// No words without the committed nonce: a caller that has not bound an ACCEPT has none, whatever
+    /// session key is installed.
+    func testNoWordsBeforeTheCallerBoundAnAccept() {
         let integ = QAudionCallIntegration()
+        _ = integ.sasCommit.beginCaller(callId: F.callId, nonce: sasNonce)
+        integ.recordKeyRound(callId: F.callId, key: k1, round: 1, transcriptHash: h1)
+        XCTAssertNil(integ.sasWords(callId: F.callId), "no bound ACCEPT yet: no nonce is released for the words")
+    }
+
+    /// A round the candidate's key cannot vouch for puts the call in conflict: the confirmation is refused;
+    /// the words are still the round-1 words (never the live ones).
+    func testConflictedCallStillShowsRoundOneWordsAndRefusesTheConfirmation() throws {
+        let integ = boundCaller()
         _ = verdict(integ, try signedOffer(signer: keyA, round: 1))
         integ.recordKeyRound(callId: F.callId, key: k1, round: 1, transcriptHash: h1)
-        XCTAssertNotNil(integ.candidateSasMaterial(callId: F.callId))
         _ = verdict(integ, try signedOffer(signer: keyB, round: 2))
         integ.recordKeyRound(callId: F.callId, key: k2, round: 2, transcriptHash: h2)
-        XCTAssertNil(integ.candidateSasMaterial(callId: F.callId))
+        XCTAssertEqual(integ.sasWords(callId: F.callId), try words(k1, h1))
         XCTAssertEqual(integ.sasSignerAdoption(callId: F.callId, sessionKey: k2), .refused)
     }
 
-    /// The confirmation is checked against the candidate round's words: whatever later same-key session
-    /// key is live, the key adopted is the candidate round's signer.
-    func testConfirmationFollowsTheCandidateRoundNotTheLiveOne() throws {
-        let integ = QAudionCallIntegration()
+    /// The confirmation is checked against the round-1 words: whatever later same-key session key is
+    /// live, the key adopted is round 1's signer.
+    func testConfirmationFollowsRoundOneNotTheLiveRound() throws {
+        let integ = boundCaller()
         _ = verdict(integ, try signedOffer(signer: keyA, round: 1))
         integ.recordKeyRound(callId: F.callId, key: k1, round: 1, transcriptHash: h1)
         // a live round 3 whose verdict was never noted (it would have nothing to adopt on its own)
@@ -120,26 +137,28 @@ final class SasHoldAlignTests: XCTestCase {
         XCTAssertEqual(integ.sasSignerAdoption(callId: F.callId, sessionKey: k3), .adopt(keyA.pubRaw))
     }
 
-    /// After the confirmation the words stay the same ones the user compared (the verified mark of the
-    /// call keeps matching), and everything is forgotten when the call's state is cleared.
+    /// After the confirmation the words stay the ones the user compared (the verified mark of the call
+    /// keeps matching), and everything is forgotten when the call's state is cleared.
     func testWordsStayAfterTheConfirmationAndAreForgottenWithTheCall() throws {
-        let integ = QAudionCallIntegration()
+        let integ = boundCaller()
         _ = verdict(integ, try signedOffer(signer: keyA, round: 1))
         integ.recordKeyRound(callId: F.callId, key: k1, round: 1, transcriptHash: h1)
         integ.confirmSasSigner(callId: F.callId, key: keyA.pubRaw)
-        XCTAssertEqual(integ.candidateSasMaterial(callId: F.callId)?.sessionKey, k1)
-        XCTAssertNil(integ.candidateSasMaterial(callId: "another-call"))
-        integ.sasPins.clear(callId: F.callId)
-        XCTAssertNil(integ.candidateSasMaterial(callId: F.callId))
+        XCTAssertEqual(integ.sasWords(callId: F.callId), try words(k1, h1))
+        XCTAssertNil(integ.sasWords(callId: "another-call"))
+        integ.sasCommit.clear(callId: F.callId)
+        XCTAssertNil(integ.sasWords(callId: F.callId))
     }
 
     func testMalformedMaterialIsIgnored() {
-        let book = CallScopedSasPinBook()
-        book.noteUnresolved(callId: "c1", round: 1, signerKey: keyA.pubRaw)
-        book.recordCandidateMaterial(callId: "c1", round: 1, sessionKey: Data(repeating: 1, count: 31), transcriptHash: h1)
-        book.recordCandidateMaterial(callId: "c1", round: 1, sessionKey: k1, transcriptHash: Data(repeating: 1, count: 31))
-        book.recordCandidateMaterial(callId: "", round: 1, sessionKey: k1, transcriptHash: h1)
-        XCTAssertNil(book.candidateSasMaterial(callId: "c1"))
+        let book = SasCommitBook()
+        _ = book.beginCaller(callId: "c1", nonce: sasNonce)
+        _ = book.callerOnAccept(callId: "c1", acceptHash: h1)
+        book.recordRound1(callId: "c1", sessionKey: Data(), acceptHash: h1)
+        book.recordRound1(callId: "c1", sessionKey: k1, acceptHash: Data(repeating: 1, count: 31))
+        book.recordRound1(callId: "", sessionKey: k1, acceptHash: h1)
+        XCTAssertNil(book.words(callId: "c1"))
+        XCTAssertNil(book.round1SessionKey(callId: "c1"))
     }
 
     // MARK: - R-HELD-REKEY (caller side)
@@ -323,7 +342,7 @@ final class SasHoldAlignTests: XCTestCase {
                        "no other site raises the hold without registering it")
     }
 
-    func testTheAppMarksOnlyOnACommittedPinShowsCandidateWordsAndReleasesTheHold() throws {
+    func testTheAppMarksOnlyOnACommittedPinShowsRoundOneWordsAndReleasesTheHold() throws {
         let app = try appStateText()
         // the mark is behind the committed-pin rule, after the refused / conflict early returns
         let markCall = "markContactVerifiedBySas(peerUserId: peer, confirmedKey: hit.key)"
@@ -342,9 +361,10 @@ final class SasHoldAlignTests: XCTestCase {
         let conflictAt = try XCTUnwrap(body.range(of: "RTLog.warn(\"call\", \"saspin adopt=0 conflict=1\")"))
         XCTAssertLessThan(refusedAt.lowerBound, markAt.lowerBound, "a refused confirmation returns before it can mark")
         XCTAssertLessThan(conflictAt.lowerBound, markAt.lowerBound, "a conflicting pin returns before it can mark")
-        // R-SAS-WORDS
-        XCTAssertTrue(app.contains("let candidate = candidateSasMaterial(forCallId: owner)"))
-        XCTAssertTrue(app.contains("let key = candidate?.sessionKey ?? liveKey"))
+        // R-COMMIT-SAS: the words come from the integration's round-1 book, never from a live round
+        XCTAssertTrue(app.contains("sasIntegration(forCallId: owner)?.sasWords(callId: owner)"))
+        XCTAssertFalse(app.contains("candidateSasMaterial"), "no candidate/live-round words survive")
+        XCTAssertFalse(app.contains("HandshakeTranscriptHashStore.shared.hash(forCallId: owner)"))
         // R-HELD-REKEY: the confirmation releases the hold and runs a skipped rekey
         XCTAssertTrue(app.contains("integration.releaseHold(callId: activeCallId)"))
         XCTAssertTrue(app.contains("reKeyScheduler.forceReKey(reason: \"hold-released\")"))

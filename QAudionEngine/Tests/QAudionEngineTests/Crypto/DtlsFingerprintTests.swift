@@ -6,7 +6,7 @@ import CryptoKit
 /// All values are synthetic: fingerprints are SHA-256 of fixed ASCII labels.
 final class DtlsFingerprintTests: XCTestCase {
 
-    private typealias F = V5TestFixtures
+    private typealias F = V6TestFixtures
 
     private let fpSelf = F.fingerprint("self-cert")
     private let fpPeer = F.fingerprint("peer-cert")

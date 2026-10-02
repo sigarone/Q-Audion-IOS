@@ -15,7 +15,7 @@ import CryptoKit
 /// contract surface enumerable in one place.
 final class CrossPlatformKatTests: XCTestCase {
 
-    // MARK: - SAS — transcript-bound (v5): see ComputeSasUseCaseTests / HandshakeTranscriptV5Tests.
+    // MARK: - SAS — transcript-bound (v6): see ComputeSasUseCaseTests / HandshakeTranscriptV6Tests.
 
     // MARK: - PgpSasWordList — fixed 256-entry list
 

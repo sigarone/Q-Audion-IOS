@@ -2,7 +2,7 @@ import Foundation
 
 /// The key-confirmation context of ONE key round of a 1:1 call (WIRE_SPEC §3.7.1): the round's
 /// `K_kc`, its `kc_transcript`, and whether this side was that round's "init" (the signer of that
-/// round's OFFER_v5; the other side, the signer of its ACCEPT_v5, is "resp").
+/// round's OFFER_v6; the other side, the signer of its ACCEPT_v6, is "resp").
 public struct KcMacRound: Equatable {
     public let kcKey: Data
     public let transcript: Data

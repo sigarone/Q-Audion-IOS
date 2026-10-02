@@ -39,7 +39,9 @@ import Foundation
 ///   ACCEPT side is what the OFFER-side's mutual-NFC-in-common signal reads), full
 ///   SHA-256 hex (64 chars)
 /// - `selectedPskFingerprint`: String?  — ACCEPT only
-/// - `sigV5`: String  — b64 Ed25519 signature over transcript v5 (WIRE_SPEC §3.7), REQUIRED
+/// - `sigV6`: String  — b64 Ed25519 signature over transcript v6 (WIRE_SPEC §3.7), REQUIRED
+/// - `sasCommit`: String  — b64 (canonical, 32 bytes) SAS commitment of the caller (WIRE_SPEC §3.7.4):
+///   REQUIRED in the round-1 OFFER, MUST be absent from every rekey OFFER and from every ACCEPT
 /// - `dtlsFingerprint`: String  — `"sha-256 AB:CD:..."`, the signer's DTLS certificate (§3.8), REQUIRED
 /// - `strongBoxPublicKey`: B64?  — OFFER only, Android StrongBox-bound P-256
 /// - `x25519PublicKey`: B64 X25519 pub (32 bytes raw) — OFFER only
@@ -141,7 +143,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // to `nil` on Android (`ignoreUnknownKeys = true` swallows it
         // silently). Net effect: this bit could never actually negotiate
         // `true` on a real Android↔iOS call. Renamed to match Android's wire
-        // spelling exactly. Under transcript v5 the KDF/SAS binding is
+        // spelling exactly. Under transcript v6 the KDF/SAS binding is
         // unconditional; this bit is only one of the nine signed CAPS bytes.
         public let hsTranscriptBindV1: Bool?
 
@@ -248,8 +250,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     // legacy peer's bundle stays byte-wire-identical.
     public let pskRoles: [Int]?
 
-    // Handshake signing, transcript v5 (WIRE_SPEC §3.1 / §3.7 / §3.8) — the ONLY signing dialect;
-    // `signature` and `sigV2`..`sigV4` no longer exist. Both signing fields and `dtlsFingerprint`
+    // Handshake signing, transcript v6 (WIRE_SPEC §3.1 / §3.7 / §3.8) — the ONLY signing dialect;
+    // `signature` and `sigV2`..`sigV5` no longer exist (a bundle that carries only `sigV5` has no
+    // `sigV6` and is malformed). Both signing fields and `dtlsFingerprint`
     // are REQUIRED in every OFFER and ACCEPT (every client emits them); a bundle missing any of
     // them is malformed and the call ends. Decoded as optional only so a malformed peer bundle
     // parses far enough to be rejected with a precise reason instead of vanishing in the decoder.
@@ -257,11 +260,18 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     // The signature is computed over the explicit length-prefixed `HandshakeTranscript` (NOT this
     // JSON), so JSON canonicalization is irrelevant to cross-platform parity.
     public let signerIdentityKey: String?   // base64 (no-wrap, padded) of the 32-byte Ed25519 long-term identity pubkey
-    public let sigV5: String?               // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over OFFER_v5 / ACCEPT_v5
+    public let sigV6: String?               // base64 (no-wrap, padded) of the 64-byte Ed25519 detached signature over OFFER_v6 / ACCEPT_v6
     /// The signer's own DTLS certificate fingerprint, canonical text form `"sha-256 AB:CD:..."`
     /// (`DtlsFingerprint.canonicalText`). The OFFER carries the offerer's, the ACCEPT the
     /// acceptor's; both are bound into the signed transcript (`DTLSFP`).
     public let dtlsFingerprint: String?
+
+    /// The caller's SAS commitment, `base64(SHA-256("qaudion-sas-commit-v6" || LP(callId) || sasNonce))`
+    /// (32 bytes, canonical base64): present ONLY in the round-1 OFFER, absent from every rekey OFFER
+    /// and every ACCEPT. Signed as the last OFFER_v6 field. A JSON `null` on a bundle that must not
+    /// carry it is mapped by `AndroidHandshakeEnvelope.parse` to the empty string, so the policy sees
+    /// "present" (R-COMMIT-FIELD: any value, even null, is unexpected there).
+    public let sasCommit: String?
 
     /// CALL-3 — the call's own random 64-bit freshness nonce (raw 8 bytes,
     /// base64 no-wrap/padded), generated once at call start.
@@ -321,8 +331,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         selectedPskFingerprint: String? = nil,
         pskRoles: [Int]? = nil,
         signerIdentityKey: String? = nil,
-        sigV5: String? = nil,
+        sigV6: String? = nil,
         dtlsFingerprint: String? = nil,
+        sasCommit: String? = nil,
         rekeyNonce: String? = nil,
         rekeyRound: Int? = nil,
         rekeyNextPeriodMs: Int? = nil
@@ -339,11 +350,24 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.selectedPskFingerprint = selectedPskFingerprint
         self.pskRoles = pskRoles
         self.signerIdentityKey = signerIdentityKey
-        self.sigV5 = sigV5
+        self.sigV6 = sigV6
         self.dtlsFingerprint = dtlsFingerprint
+        self.sasCommit = sasCommit
         self.rekeyNonce = rekeyNonce
         self.rekeyRound = rekeyRound
         self.rekeyNextPeriodMs = rekeyNextPeriodMs
+    }
+
+    /// The same bundle with `sasCommit` replaced (used by the parser to represent a JSON null).
+    func withSasCommit(_ value: String?) -> AndroidHandshakeBundle {
+        AndroidHandshakeBundle(
+            kind: kind, callId: callId, pqcPublicKey: pqcPublicKey, x25519PublicKey: x25519PublicKey,
+            strongBoxPublicKey: strongBoxPublicKey, dualCurvePublicKey: dualCurvePublicKey,
+            ciphertext: ciphertext, capabilities: capabilities, pskFingerprints: pskFingerprints,
+            selectedPskFingerprint: selectedPskFingerprint, pskRoles: pskRoles,
+            signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
+            sasCommit: value, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
+            rekeyNextPeriodMs: rekeyNextPeriodMs)
     }
 }
 
@@ -366,8 +390,17 @@ public enum AndroidHandshakeEnvelope {
         guard !callId.isEmpty, payload.hasPrefix("{") else { return nil }
         guard let bundleData = payload.data(using: .utf8) else { return nil }
         let decoder = JSONDecoder()
-        guard let bundle = try? decoder.decode(AndroidHandshakeBundle.self, from: bundleData) else {
+        guard var bundle = try? decoder.decode(AndroidHandshakeBundle.self, from: bundleData) else {
             return nil
+        }
+        // R-COMMIT-FIELD: `"sasCommit": null` is PRESENT. Codable reads it as absent, which is wrong for
+        // a rekey OFFER or an ACCEPT (they MUST NOT carry the key at all), so a present-but-null value is
+        // mapped to the empty string: not canonical base64 of 32 bytes in round 1 (`commit_malformed`),
+        // and "present" everywhere else (`commit_unexpected`).
+        if bundle.sasCommit == nil,
+           let object = (try? JSONSerialization.jsonObject(with: bundleData)) as? [String: Any],
+           object["sasCommit"] is NSNull {
+            bundle = bundle.withSasCommit("")
         }
         // Sanity: kind-specific field shape.
         switch bundle.kind {
@@ -378,6 +411,26 @@ public enum AndroidHandshakeEnvelope {
             guard bundle.ciphertext != nil else { return nil }
         }
         return Parsed(callId: callId, bundle: bundle)
+    }
+
+    /// R-COMMIT-FIELD: the callId of a `"<callId>|{...}"` string that is a handshake bundle (its JSON
+    /// object names `kind` `OFFER` or `ACCEPT`) but did not decode as one, `nil` for anything else.
+    /// Every such string is a malformed bundle and ends the call, instead of being dropped silently.
+    /// Other JSON on the same channel (the group-call control envelopes) never names that `kind`.
+    public static func malformedBundleCallId(_ raw: String) -> String? {
+        guard let pipeIdx = raw.firstIndex(of: "|") else { return nil }
+        let callId = String(raw[raw.startIndex ..< pipeIdx])
+        let payload = String(raw[raw.index(after: pipeIdx)...])
+        guard !callId.isEmpty, payload.hasPrefix("{") else { return nil }
+        if payload.contains("qa_grpcall_ctrl") || payload.contains("\"qa_kms\"") { return nil }
+        if let data = payload.data(using: .utf8),
+           let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            guard let kind = object["kind"] as? String, kind == "OFFER" || kind == "ACCEPT" else { return nil }
+            return callId
+        }
+        // Not valid JSON at all: still a handshake bundle if it names the kind.
+        guard payload.contains("\"kind\"") else { return nil }
+        return payload.contains("\"OFFER\"") || payload.contains("\"ACCEPT\"") ? callId : nil
     }
 
     /// Build the wire string `"<callId>|<JSON>"`.
@@ -546,6 +599,12 @@ public enum CallPiggyBack: Equatable {
     /// If no earbud: fp_adv = 32 zero bytes (keyClass falls back to 0).
     case fpSet(callId: String, fpAdv: Data)
 
+    /// `<callId>|SASREVEAL:<base64(acceptBinding[32] || sasNonce[32])>` — the caller's REVEAL of its SAS
+    /// nonce, opening the commitment of the round-1 OFFER (WIRE_SPEC §3.7.4). Recognised here so it is
+    /// consumed BEFORE the JSON bundle parser; `raw` is the undecoded payload after the tag, validated by
+    /// `SasReveal.parse` / `SasCommitCallee` (the consumer owns strictness, exactly like KCMAC).
+    case sasReveal(callId: String, raw: String)
+
     /// `<callId>|KCMAC:<payload>` — PSK-mix ship-step-2 reserved tag.
     /// Recognised so it is consumed HERE (never reaching the JSON
     /// HandshakeBundle decoder) but carries no logic yet beyond a log-
@@ -659,6 +718,11 @@ public enum CallPiggyBack: Equatable {
         if let v = stripPrefix(payload, "FPSET:") {
             guard let bytes = Data(base64Encoded: v), bytes.count == 32 else { return nil }
             return .fpSet(callId: callId, fpAdv: bytes)
+        }
+        // SASREVEAL:<b64> — the caller's SAS-nonce reveal. Case-sensitive tag; consumed here so it
+        // never reaches the JSON bundle parser. Payload strictness is the consumer's job.
+        if let v = stripPrefix(payload, SasReveal.tag) {
+            return .sasReveal(callId: callId, raw: v)
         }
         // KCMAC:<payload> — PSK-mix ship-step-2, recognised-and-ignored.
         // Consuming it here (instead of falling through) is the whole point:

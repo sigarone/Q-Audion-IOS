@@ -1349,6 +1349,9 @@ final class AppState: ObservableObject {
     /// `SasConstants.infoWords = "sas-words-v1"`. Drift here would
     /// silently diverge the two-peer ceremony.
     @Published var callPqcSessionKey: Data?
+    /// Bumped when the callee's SAS becomes available (a REVEAL verified), so the views that read
+    /// `callSasWords` / `callSasWaiting` re-render at once.
+    @Published var callSasRevision: Int = 0
     /// W-MEDIAATACCEPT (option b) — G7 (partial §6): `callPqcSessionKey` has
     /// no call id of its own — every direct-write site tags this alongside
     /// it (lowercased, same convention as everywhere else in this feature)
@@ -1965,7 +1968,7 @@ final class AppState: ObservableObject {
     /// `handleInboundKcMac` (the peer's `KCMAC:` piggy-back) and the 5000ms
     /// deadline task. A class (not a struct) so both consumers mutate the SAME
     /// instance in place rather than needing a dictionary re-write on every
-    /// field update. FAIL-CLOSED under transcript v5 (WIRE_SPEC §3.7.1, O5): a `.wrong`
+    /// field update. FAIL-CLOSED under transcript v6 (WIRE_SPEC §3.7.1, O5): a `.wrong`
     /// verdict, or no peer MAC inside the 5 s window, ENDS the call (`kcmac_mismatch`).
     private final class KeyConfirmationCallState {
         let peerId: String
@@ -2013,6 +2016,11 @@ final class AppState: ObservableObject {
         }
     }
     private var kcCallStates: [String: KeyConfirmationCallState] = [:]
+    /// The callee's own round-1 `kc_mac`, held (lowercased callId) until the caller's REVEAL verified: a
+    /// callee device that turns out not to be the one the caller bound (a sibling) must never send a
+    /// KCMAC for the call (R-COMMIT-SIBLING, D1). Sent by `handleInboundSasReveal` on `.sasReady`,
+    /// dropped when the device leaves or the call ends.
+    private var kcPendingOwnMac: [String: (wire: String, peerId: String)] = [:]
     /// A peer `KCMAC:` that arrived before this side's own `handleKcMacReady` ran (the responder
     /// leg's key-confirmation start is deferred until its ACCEPT is released): kept (one per
     /// call) and verified as soon as the state exists, instead of being dropped and then failing
@@ -6830,8 +6838,8 @@ final class AppState: ObservableObject {
                 calling.bindIncomingCallId(callIdStr)
             }
             // R-EARBUD: the earbud-relay-v1 counterparty handshake is retired (it yields a key with
-            // no signed OFFER_v5/ACCEPT_v5 behind it). The capability, an unsigned field the server
-            // relays, never starts anything here: every 1:1 call runs the signed v5 handshake.
+            // no signed OFFER_v6/ACCEPT_v6 behind it). The capability, an unsigned field the server
+            // relays, never starts anything here: every 1:1 call runs the signed v6 handshake.
             // CallKit must run from MainActor — its CXProvider state
             // machine refuses cross-thread mutations.
             DispatchQueue.main.async {
@@ -7686,7 +7694,7 @@ final class AppState: ObservableObject {
         RTLog.warn("call", "video rollback ev=rb media_mode=ws-relay state=active")
     }
 
-    /// Transcript v5 (WIRE_SPEC §3.8) — bind a 1:1 controller to its call's DTLS context: the
+    /// Transcript v6 (WIRE_SPEC §3.8) — bind a 1:1 controller to its call's DTLS context: the
     /// call's own certificate (presented by every PeerConnection of the call), the pinned peer
     /// fingerprint (SDP + stats checks) and the handshake role that picks the directional frame
     /// keys. `wireCallId` is the id the signed handshake carries. A missing id or certificate
@@ -7728,7 +7736,7 @@ final class AppState: ObservableObject {
             callingApi: provider.callingApi,
             relayProvider: ensureRelayProvider())
         controller.accessToken = currentAccessToken
-        // Transcript v5: this device may be either end of the call; the role is the call role.
+        // Transcript v6: this device may be either end of the call; the role is the call role.
         bindDtlsContext(
             controller, wireCallId: canonicalActiveCallId(),
             isOfferer: self.callService.callIntegration?.currentIsCaller ?? false)
@@ -8986,13 +8994,15 @@ final class AppState: ObservableObject {
     }
 
     /// Transcript-v5 end path (WIRE_SPEC §3.7 / §3.8): the call cannot be trusted and ends with a
-    /// fixed reason, one of `dtls_fp_mismatch`, `kcmac_mismatch`, `handshake_malformed`. Fired by
+    /// fixed reason, one of `dtls_fp_mismatch`, `kcmac_mismatch`, `handshake_malformed`,
+    /// `sas_commit_mismatch`, `sas_reveal_timeout`. Fired by
     /// the signed handshake (`QAudionCallIntegration.onHandshakeFatal`), the PeerConnection's DTLS
     /// fingerprint checks (`QAudionWebRtcCallController.onDtlsFingerprintFailure`) and the
     /// key-confirmation window. Same teardown shape as `handleIceRecoveryExhausted`: in-band
     /// control hangup, then the reason-bearing envelope by explicit id after a synchronous unbind,
     /// then local teardown. Telemetry is a numeric verdict only (1 dtls_fp_mismatch, 2
-    /// kcmac_mismatch, 3 handshake_malformed). A fatal for a call that is no longer the active one
+    /// kcmac_mismatch, 3 handshake_malformed, 4 sas_commit_mismatch, 5 sas_reveal_timeout). A fatal for a
+    /// call that is no longer the active one
     /// is ignored.
     ///
     /// `dtlsStage` is set only by the PeerConnection's DTLS fingerprint checks
@@ -9014,6 +9024,8 @@ final class AppState: ObservableObject {
         switch reason {
         case "dtls_fp_mismatch": code = 1
         case "kcmac_mismatch": code = 2
+        case SasCommit.reasonMismatch: code = 4
+        case SasCommit.reasonTimeout: code = 5
         default: code = 3
         }
         let stageSuffix = dtlsStage.map { " dstage=\($0)" } ?? ""
@@ -9563,7 +9575,7 @@ final class AppState: ObservableObject {
                 }
             }
             // R-EARBUD: no earbud counterparty handshake on the answer either (retired, see the
-            // call_incoming handler): the signed ACCEPT_v5 is the only way a 1:1 key is agreed.
+            // call_incoming handler): the signed ACCEPT_v6 is the only way a 1:1 key is agreed.
             if let sdp = data["sdp"] as? String, !sdp.isEmpty {
                 // ROOT-CAUSE FIX (2026-07-12): off the WS delegate BACKGROUND
                 // thread, this reads webRtcController (@MainActor stored state)
@@ -13297,6 +13309,14 @@ final class AppState: ObservableObject {
             }
             return
         }
+        // R-COMMIT-FIELD: a bundle routed as a handshake bundle (`kind` OFFER/ACCEPT) that does not even
+        // decode is malformed too: it ends the call like every other malformed bundle, not a silent drop.
+        if let malformedCallId = AndroidHandshakeEnvelope.malformedBundleCallId(blobStr) {
+            Task { @MainActor [weak self] in
+                self?.handleUndecodableHandshakeBundle(callId: malformedCallId, senderId: senderId)
+            }
+            return
+        }
 
         // Path D — W-GRPKMSPB / gap A2: `qa_kms_prebootstrap:1` envelope
         // wrapper. Wire shape `{"qa_kms":1,"env_b64":"<base64 CBOR
@@ -13626,7 +13646,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Caller-side dispatch for the signed JSON ACCEPT_v5 (the only 1:1 handshake dialect).
+    /// Caller-side dispatch for the signed JSON ACCEPT_v6 (the only 1:1 handshake dialect).
     @MainActor
     private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
         // Sender-identity check (2026-07-11 — same reasoning/fix as
@@ -13835,8 +13855,8 @@ final class AppState: ObservableObject {
             }
             earbudCounterparty.handleInbound(callId: callId, pdu: pdu)
         case .fpSet(let callId, _):
-            // The FPSET exchange belonged to the retired schema:4 KDF (transcript v5 binds the
-            // session key to SHA-256(ACCEPT_v5) instead). Ignored.
+            // The FPSET exchange belonged to the retired schema:4 KDF (transcript v6 binds the
+            // session key to SHA-256(ACCEPT_v6) instead). Ignored.
             print("[AppState] retired FPSET ignored callId=\(callId.prefix(8))…")
         case .earbudMkd(let callId, let pkg):
             // Phase 6: sealed PQ media key package from earbud-side phone.
@@ -13850,6 +13870,9 @@ final class AppState: ObservableObject {
             // W-KCMAC — verify the peer's key-confirmation MAC of the live round:
             // a MAC that does not verify ends the call (`kcmac_mismatch`).
             handleInboundKcMac(callId: callId, raw: raw, senderId: senderId)
+        case .sasReveal(let callId, let raw):
+            // R-COMMIT-CHECK — the caller's REVEAL of its SAS nonce (WIRE_SPEC §3.7.4).
+            handleInboundSasReveal(callId: callId, raw: raw, senderId: senderId)
         case .voiceKey(let callId, let enrolled):
             // "Voce come chiave" cross-device attestation — the peer's own
             // self-declared local enrollment state. Sender guard mirrors
@@ -13933,11 +13956,81 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// R-COMMIT-CHECK — a `SASREVEAL:` from the call peer. Only a callee device that has SENT its round-1
+    /// ACCEPT processes it; every other device (the caller, a sibling that never sent an ACCEPT, an unknown
+    /// call) drops it silently and creates no state. The sender must be the call's peer user.
+    @MainActor
+    private func handleInboundSasReveal(callId: String, raw: String, senderId: String) {
+        guard callContactId == senderId else {
+            print("[AppState] SASREVEAL dropped — sender \(senderId.prefix(8))… is not the call peer")
+            return
+        }
+        guard let integration = responderCallIntegration, integration.isSasCallee(callId: callId) else { return }
+        let data = callId + "|" + SasReveal.tag + raw
+        let key = callId.lowercased()
+        switch integration.handleSasReveal(callId: callId, data: data) {
+        case .dropped:
+            return
+        case .sasReady:
+            RTLog.info("call", "sascommit r=1")
+            callSasRevision &+= 1
+            // The callee's own round-1 `kc_mac` was held until now (a sibling never sends it).
+            if let pending = kcPendingOwnMac.removeValue(forKey: key), let provider = liveProvider {
+                OpaqueSelfEchoFilter.shared.markSent(pending.wire)
+                Task {
+                    try? await provider.callingApi.sendOpaqueMessageString(recipientId: pending.peerId, payload: pending.wire)
+                }
+            }
+        case .ended(let reason):
+            RTLog.error("call", "sascommit r=\(reason == SasCommit.reasonTimeout ? 3 : 2)")
+            kcPendingOwnMac.removeValue(forKey: key)
+            handleHandshakeFatal(callId: callId, reason: reason)
+        case .leftLocally:
+            RTLog.info("call", "sascommit r=4")
+            kcPendingOwnMac.removeValue(forKey: key)
+            leaveCallAsSiblingDevice(callId: callId)
+        }
+    }
+
+    /// R-COMMIT-SIBLING — this device answered, but the caller bound ANOTHER device's ACCEPT. It leaves the
+    /// call locally: no `call_hangup`, no `HANGUP:` piggy-back, no in-band control hangup and no security
+    /// reason (the real call must not end), and its KCMAC handling stops. The active call id is unbound
+    /// first, synchronously, so `endCall()`'s generic hangup paths find no binding and send nothing.
+    @MainActor
+    private func leaveCallAsSiblingDevice(callId: String) {
+        if let active = canonicalActiveCallId(), !active.isEmpty,
+           active.lowercased() != callId.lowercased() {
+            RTLog.warn("call", "sibling stale=1")
+            return
+        }
+        CallDtlsContextStore.shared.release(callId: callId)
+        if let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl, let cid = impl.getActiveCallId() {
+            impl.unbindActiveCallId(matching: cid)
+        }
+        endCall(notifyPeerInBand: false)
+    }
+
+    /// R-COMMIT-FIELD — a handshake bundle of the call peer that could not even be decoded: the call ends
+    /// with `handshake_malformed` and a hangup, on every platform alike.
+    @MainActor
+    private func handleUndecodableHandshakeBundle(callId: String, senderId: String) {
+        guard callContactId == senderId else {
+            print("[AppState] undecodable handshake bundle dropped — sender \(senderId.prefix(8))… is not the call peer")
+            return
+        }
+        guard let active = canonicalActiveCallId(), active == callId.lowercased() else {
+            print("[AppState] undecodable handshake bundle dropped — not the active call callId=\(callId.prefix(8))…")
+            return
+        }
+        RTLog.error("call", "hsmalformed undecodable=1")
+        handleHandshakeFatal(callId: callId, reason: "handshake_malformed")
+    }
+
     /// W-KCMAC — fired from `QAudionCallIntegration.onKcMacReady` on BOTH the caller and responder
     /// legs, immediately after session-key derivation (the responder's is deferred until its
     /// ACCEPT is released). Sends our own `kc_mac` and arms the 5000 ms window.
     ///
-    /// **Fail-closed (WIRE_SPEC §3.7.1, O5).** The exchange is unconditional under transcript v5
+    /// **Fail-closed (WIRE_SPEC §3.7.1, O5).** The exchange is unconditional under transcript v6
     /// (no `pskMixV1` gate): a key-confirmation transcript that cannot be built, a peer MAC that
     /// does not verify, or none inside the window ENDS the call with reason `kcmac_mismatch`.
     /// The verdict is recorded for telemetry first.
@@ -13964,13 +14057,27 @@ final class AppState: ObservableObject {
         let roleByte: UInt8 = event.isInitiator ? 0x01 : 0x02
         let wire = CallPiggyBack.serializeKcMac(callId: event.callId, role: roleByte, mac: ownMac)
         let peerId = event.peerId
-        // Item 4 — self-echo guard (see OpaqueSelfEchoFilter doc). KCMAC is
-        // one-shot per handshake, not periodic/symmetric, but marking it is
-        // free and keeps every piggy-back send on this channel consistent.
-        OpaqueSelfEchoFilter.shared.markSent(wire)
-        if let provider = liveProvider {
-            Task {
-                try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+        // R-COMMIT-SIBLING (D1): a callee device sends its round-1 `kc_mac` only once the caller's REVEAL
+        // verified, i.e. once it knows its ACCEPT is the bound one. A sibling that lost the race never
+        // gets there, so it never sends a KCMAC that could end the real call. Later rounds (the words
+        // exist) and the caller's own MAC go out at once.
+        let holdOwnMac: Bool = {
+            guard !event.isInitiator,
+                  let integration = self.responderCallIntegration,
+                  integration.isSasCallee(callId: event.callId) else { return false }
+            return integration.sasWords(callId: event.callId) == nil
+        }()
+        if holdOwnMac {
+            kcPendingOwnMac[key] = (wire: wire, peerId: peerId)
+        } else {
+            // Item 4 — self-echo guard (see OpaqueSelfEchoFilter doc). KCMAC is
+            // one-shot per handshake, not periodic/symmetric, but marking it is
+            // free and keeps every piggy-back send on this channel consistent.
+            OpaqueSelfEchoFilter.shared.markSent(wire)
+            if let provider = liveProvider {
+                Task {
+                    try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+                }
             }
         }
 
@@ -14010,6 +14117,13 @@ final class AppState: ObservableObject {
     @MainActor
     private func handleInboundKcMac(callId: String, raw: String, senderId: String) {
         let key = callId.lowercased()
+        // R-COMMIT-SIBLING: a device that left the call as a sibling (or ended it on a SAS-commit failure)
+        // stops judging key-confirmation MACs: the loser must never end the real call.
+        if let integration = responderCallIntegration, integration.isSasCallee(callId: callId),
+           !integration.acceptsKeyConfirmation(callId: callId) {
+            print("[AppState] KCMAC ignored — this device left the call callId=\(callId.prefix(8))…")
+            return
+        }
         guard let state = kcCallStates[key] else {
             // Not started yet (the responder leg starts after its ACCEPT is released): keep one
             // for this call and verify it when the state appears. Only the active call's peer.
@@ -14266,6 +14380,7 @@ final class AppState: ObservableObject {
         applyPresenceAuthOutcomeIfAny(callId: key)
         kcCallStates[key]?.deadlineTask?.cancel()
         kcCallStates.removeValue(forKey: key)
+        kcPendingOwnMac.removeValue(forKey: key)
         kcEarlyInbound.removeValue(forKey: key)
         kcDecidedPeerMacs.removeValue(forKey: key)
         keyConfirmationTelemetryByCall.removeValue(forKey: key)
@@ -15032,7 +15147,7 @@ final class AppState: ObservableObject {
     /// parameter is introduced, so the new wiring cannot trip the Swift-6
     /// Sendable-inference silent build break.
     ///
-    /// Transcript v5: signing is mandatory. If the local sovereign identity is absent there is
+    /// Transcript v6: signing is mandatory. If the local sovereign identity is absent there is
     /// no signature, so no OFFER/ACCEPT is built and the call is not set up; a received bundle
     /// without a valid signing triple is malformed and ends the call.
     private func wireHandshakeSigning(on integration: QAudionCallIntegration) {
@@ -15274,7 +15389,7 @@ final class AppState: ObservableObject {
                 UserDefaults.standard.set(set, forKey: ratchetV5Key)
             }
         }
-        // Transcript v5 — DTLS certificate binding (WIRE_SPEC §3.8). The signed handshake needs this
+        // Transcript v6 — DTLS certificate binding (WIRE_SPEC §3.8). The signed handshake needs this
         // call's own certificate fingerprint BEFORE it signs; the PeerConnection later presents that
         // very certificate and applies no remote SDP until the peer's signed fingerprint is pinned.
         // Both closures only touch the process-wide `CallDtlsContextStore` (internally locked), so
@@ -15293,7 +15408,7 @@ final class AppState: ObservableObject {
             }
         }
         // There is no "require signed" switch any more: a bundle without a valid signing triple
-        // (`sigV5`, `signerIdentityKey`, `dtlsFingerprint`) is malformed and the call ends. A
+        // (`sigV6`, `signerIdentityKey`, `dtlsFingerprint`) is malformed and the call ends. A
         // present-but-INVALID signature, or an unknown identity, keeps W-NOBRICK (below).
         //
         // D11 / W-NOBRICK — what actually happens to a KEY SWAP (corrects the
@@ -17379,7 +17494,7 @@ final class AppState: ObservableObject {
                 // WSS-TURN bridge JWT auth — forwarded to the WS handshake
                 // on /api/v1/turn-ws (server requires Bearer token since W559).
                 controller.accessToken = currentAccessToken
-                // Transcript v5: the caller is the offerer; its certificate was generated before the
+                // Transcript v6: the caller is the offerer; its certificate was generated before the
                 // OFFER was signed (same wire call id).
                 bindDtlsContext(controller, wireCallId: nativeSrtpOutgoingCallId, isOfferer: true)
                 // W419/W-ICEVIS — bridge print()-only ICE/DTLS diagnostics to RTLog.
@@ -17438,7 +17553,7 @@ final class AppState: ObservableObject {
                 // G7 — feeds a cryptor: assert against THIS outgoing call's
                 // own id (the same one the W369 transitional seed above was
                 // tagged with).
-                // Transcript v5: the slot still holds the W369 TRANSITIONAL key (derived from the
+                // Transcript v6: the slot still holds the W369 TRANSITIONAL key (derived from the
                 // per-pair PSK or a deterministic fallback of the two user ids) until the real
                 // handshake key is counted (`callPqcRekeyEpoch >= 0`). The 1:1 frame keys derive
                 // from the session key and are the only thing between the media and a DTLS
@@ -20180,52 +20295,39 @@ extension AppState {
         return Data(digest)
     }
 
-    /// W339: derive the 6-PGP-word in-call SAS from the active call's
-    /// PQC session key. Returns an empty array when `callPqcSessionKey`
-    /// is nil — the InCallScreen hides the SAS panel in that case.
-    /// Both peers compute the SAS from the same shared secret using the
-    /// same canonical salt/info, so two same-version peers always agree
-    /// on the 6-word string.
+    /// The ROUND-1 SAS words of the active 1:1 call, uppercase (WIRE_SPEC §4, transcript v6).
     ///
-    /// W554 — gate render on `callSasKeySource == .mlKem`.
-    /// The previous version exposed words derived from the transitional
-    /// PSK (`deriveTransitionalSasKey`, see line 2946), which iOS seeds
-    /// for ~3-5 s before the ML-KEM handshake delivers the real key.
-    /// Android has NO equivalent transitional path — it waits for the
-    /// CallSessionKeyBroker. The mismatch produced two completely
-    /// different 6-word strings on the two ends for that window, the
-    /// user reads them, sees "no match", thinks the call is compromised.
-    /// Holding the panel hidden until the broker fires is the right UX
-    /// AND security stance: a SAS that doesn't reflect the actual call
-    /// key is worse than no SAS.
+    /// The words come from the call integration's SAS commitment book: the caller's once it bound the
+    /// callee's ACCEPT and sent its REVEAL, the callee's once a REVEAL opened the caller's commitment
+    /// (until then `callSasWaiting` is true and the panel shows "waiting for the security code").
+    /// They are ALWAYS the round-1 words, held or not, before and after any rekey: no live-round words
+    /// exist any more, so two users can always compare them.
+    ///
+    /// W554 — still gated on `callSasKeySource == .mlKem`: a SAS that does not reflect the real call key
+    /// is worse than no SAS, so nothing is shown while only the transitional key exists.
     var callSasWords: [String] {
         guard callSasKeySource == .mlKem else { return [] }
         guard let liveKey = callPqcSessionKey, !liveKey.isEmpty else { return [] }
-        // The words are bound to this call's SHA-256(ACCEPT_v5) (WIRE_SPEC §4): no stored hash,
-        // no words (the SAS panel stays hidden rather than showing a transcript-free value).
         guard let owner = callPqcSessionKeyCallId ?? canonicalActiveCallId(),
-              let liveTranscriptHash = HandshakeTranscriptHashStore.shared.hash(forCallId: owner) else { return [] }
-        // R-SAS-WORDS: a call whose peer identity was unresolved (held pending the SAS) shows, and checks
-        // the confirmation against, the words of its CANDIDATE round (its first round) for the whole
-        // call: an honest same-key rekey before the confirmation installs a later session key, but the
-        // words never change, so the two users can still compare them (Android and desktop show the
-        // first round's words the same way).
-        let candidate = candidateSasMaterial(forCallId: owner)
-        let key = candidate?.sessionKey ?? liveKey
-        let transcriptHash = candidate?.transcriptHash ?? liveTranscriptHash
-        do {
-            return try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: transcriptHash).words
-                .map { $0.uppercased() }
-        } catch {
-            return []
-        }
+              let words = sasIntegration(forCallId: owner)?.sasWords(callId: owner) else { return [] }
+        return words.map { $0.uppercased() }
     }
 
-    /// R-SAS-WORDS — the SAS material of the candidate round of `callId`, from whichever integration
-    /// (caller or responder leg) carried the call; `nil` when the live round's words apply.
-    func candidateSasMaterial(forCallId callId: String) -> CallScopedSasPinBook.SasMaterial? {
+    /// True while this device is the callee of the active 1:1 call, its ACCEPT is out and the caller's
+    /// REVEAL has not verified yet: no words exist, the SAS panel shows "waiting for the security code"
+    /// and no confirmation is possible (R-COMMIT-SAS).
+    var callSasWaiting: Bool {
+        guard callSasKeySource == .mlKem else { return false }
+        guard let owner = callPqcSessionKeyCallId ?? canonicalActiveCallId() else { return false }
+        return sasIntegration(forCallId: owner)?.isSasWaitingForReveal(callId: owner) ?? false
+    }
+
+    /// The integration (caller or responder leg) that carries the SAS commitment state of `callId`.
+    func sasIntegration(forCallId callId: String) -> QAudionCallIntegration? {
         for integration in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
-            if let material = integration.candidateSasMaterial(callId: callId) { return material }
+            if integration.isSasCaller(callId: callId) || integration.isSasCallee(callId: callId) {
+                return integration
+            }
         }
         return nil
     }
@@ -26005,7 +26107,7 @@ extension AppState {
         )
         // WSS-TURN bridge JWT auth (responder side mirrors caller).
         controller.accessToken = currentAccessToken
-        // Transcript v5: the callee is the acceptor. The PeerConnection (and its certificate) can
+        // Transcript v6: the callee is the acceptor. The PeerConnection (and its certificate) can
         // exist from ring time; no remote SDP is applied before the signed OFFER pinned the
         // caller's fingerprint.
         bindDtlsContext(controller, wireCallId: offerCallId, isOfferer: false)
@@ -26624,6 +26726,9 @@ extension AppState {
         RingSignalingRegistry.shared.wipe(callId, why: why)
         CallKeyStore.shared.wipe(callId, why: why)
         responderCallIntegration?.dropHeldAccept(callId: callId)
+        // R-COMMIT-CHECK: the held ACCEPT's SAS commitment, REVEAL timer and any held KCMAC go with it.
+        responderCallIntegration?.wipeSasCommitState(callId: callId)
+        kcPendingOwnMac[callId] = nil
         pendingAcceptGatedActions[callId] = nil
         // G1 (§4.7) — this call's queued remote ICE candidates/removals.
         PendingIceCandidateQueue.shared.wipe(callId)

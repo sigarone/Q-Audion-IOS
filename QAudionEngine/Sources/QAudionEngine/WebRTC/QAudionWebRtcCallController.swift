@@ -4404,7 +4404,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     ///   the current round exist → installs the native RTCFrameCryptor and stores `.native`.
     /// - Otherwise → fail-closed `.legacy` (the F-02 gate below).
     ///
-    /// The frame keys are the two DIRECTIONAL keys of `OneToOneFrameKeys` (transcript v5, owner
+    /// The frame keys are the two DIRECTIONAL keys of `OneToOneFrameKeys` (transcript v6, owner
     /// decision O1) — the same pair audio uses (video has no key of its own).
     @discardableResult
     public func ensureVideoSealer() -> VideoCallSealer? {

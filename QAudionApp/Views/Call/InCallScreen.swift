@@ -205,6 +205,10 @@ struct InCallScreen: View {
     let bufMs: Int?
     let pqcActive: Bool
     let sasWords: [String]
+    /// The callee's SAS words do not exist yet: its ACCEPT is out and the caller's REVEAL has not
+    /// verified (WIRE_SPEC §3.7.4). The panel shows "waiting for the security code" and no confirmation
+    /// is possible until the words appear.
+    let sasWaiting: Bool
     let sasVerified: Bool
     let keyInfo: KeyInfo?
     let transportMode: TransportMode
@@ -437,6 +441,7 @@ struct InCallScreen: View {
          bufMs: Int? = nil,
          pqcActive: Bool = true,
          sasWords: [String] = [],
+         sasWaiting: Bool = false,
          sasVerified: Bool = false,
          keyInfo: KeyInfo? = nil,
          transportMode: TransportMode = .p2pSrtp,
@@ -496,6 +501,7 @@ struct InCallScreen: View {
         self.bufMs = bufMs
         self.pqcActive = pqcActive
         self.sasWords = sasWords
+        self.sasWaiting = sasWaiting
         self.sasVerified = sasVerified
         self.keyInfo = keyInfo
         self.transportMode = transportMode
@@ -911,6 +917,9 @@ struct InCallScreen: View {
                 if sasWords.count == 6 {
                     Spacer().frame(height: 12)
                     sasPanel.padding(.horizontal, 20)
+                } else if sasWaiting {
+                    Spacer().frame(height: 12)
+                    sasWaitingRow.padding(.horizontal, 20)
                 }
 
                 if let keyInfo {
@@ -1180,6 +1189,20 @@ struct InCallScreen: View {
     /// hint), never the availability.
     private var sasCeremonyRedundant: Bool {
         assurancePresentation?.isPhysicalPresenceProof == true
+    }
+
+    /// Shown instead of the SAS panel while the callee waits for the caller's REVEAL (normally well under
+    /// a second): there are no words to compare or confirm yet.
+    private var sasWaitingRow: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(String(localized: "sas.waiting_for_code",
+                        defaultValue: "In attesa del codice di sicurezza…",
+                        comment: "In-call SAS panel placeholder — the other side's security code has not arrived yet, so there are no words to compare"))
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
