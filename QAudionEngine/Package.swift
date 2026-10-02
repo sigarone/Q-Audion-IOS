@@ -183,27 +183,46 @@ let package = Package(
         // previous release webrtc-ios-aes256-m144-native-pli (sha256 dbaefe2aff6eabff...
         // 95701b9) is untouched.
         //
-        // M150 hardened WebRTC, release webrtc-ios-m150-a256-dplc-9
-        // (sigarone/webrtc-aes256-build, build run 36849361774, build repo main
-        // 0a91a575; gates G1-G8 and G10 passed, build-provenance attestation
-        // present for the zip). Same base as dplc-4 (webrtc-sdk/webrtc@ba469aa2093b,
+        // M150 hardened WebRTC, release webrtc-ios-m150-a256-dplc-10
+        // (sigarone/webrtc-aes256-build, build run 36930666945, build repo main
+        // e40bd3f9365a316d6b61ad5a2708d25d39fc5dae; the run and its "Gate G1-G9"
+        // step concluded success, BUILDINFO.json lists every patch of the series
+        // as present, build-provenance attestation verified for the zip). Same
+        // base as dplc-9 and dplc-4 (webrtc-sdk/webrtc@ba469aa2093b,
         // BoringSSL@f91f1447, Opus@55513e81): strict transport (DTLS 1.3 +
         // TLS_AES_256_GCM_SHA384 only, SRTP AEAD_AES_256_GCM only,
         // X25519MLKEM768 first), FrameCryptor AES-256 only, deep PLC + OSCE,
-        // FEC floor, P8 runtime tuning API. New in dplc-9: P12 receiver-side
-        // frame anti-replay window (per-sender counter in the FrameCryptor IV,
-        // replayed or too-old frames are dropped, verified by the replay marker
-        // in every Mach-O slice). The -lk variant is no longer built. Device
-        // arm64 + simulator arm64 only.
-        // Checksum = SwiftPM checksum of the zip (SHA256 of WebRTC.xcframework.zip),
-        // recomputed locally from the downloaded asset and equal to the value
-        // published in the release record.
-        // Rollback: the previous releases (webrtc-ios-m150-a256-dplc-4, and the M144
-        // nokeylog build webrtc-ios-aes256-m144-native-pli-nokeylog) stay untouched.
+        // FEC floor, P8 runtime tuning API, P12 receiver-side frame anti-replay
+        // window (new in dplc-9: per-sender counter in the FrameCryptor IV,
+        // replayed or too-old frames are dropped). New in dplc-10: P9
+        // (stats-remote-cert-cache). libwebrtc's RTCStatsCollector cached the
+        // certificate stats on the first getStats() and cleared that cache only on
+        // SDP / ICE-candidate / data-channel changes, never when DTLS completed, so
+        // a getStats() taken before the handshake had delivered the peer
+        // certificate pinned remoteCertificateId = nil for the whole call. The
+        // transcript-v5 DTLS fingerprint check (b) polls getStats() for that id and
+        // fails closed after 5 s (local stage stats_timeout, wire reason
+        // dtls_fp_mismatch), so every call that polled early could be ended without
+        // any certificate mismatch. P9 (P9-stats-remote-cert-cache.patch) fixes that
+        // cache natively. The -lk variant is no longer built. Device arm64 +
+        // simulator arm64 only.
+        // Checksum = SwiftPM checksum of the zip (SHA256 of WebRTC.xcframework.zip).
+        // Provenance, all checked on 2026-10-02: `gh release download` of
+        // WebRTC.xcframework.zip + SHA256SUMS + BUILDINFO.json, `sha256sum -c
+        // SHA256SUMS` OK (40954758 bytes), the digest equal to the asset digest in
+        // the release record and to the subject digest of the attestation, and
+        // `gh attestation verify WebRTC.xcframework.zip --repo
+        // sigarone/webrtc-aes256-build` succeeded (1 attestation: workflow
+        // build-m150-ios.yml on main at e40bd3f9, run 36930666945, SLSA provenance
+        // v1).
+        // Rollback: the previous releases (webrtc-ios-m150-a256-dplc-9, whose
+        // check (b) can time out because it lacks P9; webrtc-ios-m150-a256-dplc-4; and
+        // the M144 nokeylog build webrtc-ios-aes256-m144-native-pli-nokeylog) stay
+        // untouched.
         .binaryTarget(
             name: "WebRTC",
-            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-m150-a256-dplc-9/WebRTC.xcframework.zip",
-            checksum: "68d4c630d09576b432bc7cae94f476e57c3c5e3b66b636d748c377e25acc2e9a"
+            url: "https://github.com/sigarone/webrtc-aes256-build/releases/download/webrtc-ios-m150-a256-dplc-10/WebRTC.xcframework.zip",
+            checksum: "83cfd351d6c4aced28a148b5f971f991db116c00690478b60f6840647b3d0fd5"
         ),
         .target(
             name: "QAudionEngine",

@@ -191,6 +191,42 @@ final class DtlsFingerprintTests: XCTestCase {
             DtlsFingerprint.checkStats(stats(omitRemoteCert: true), fpSelf: fpSelf, fpPeer: fpPeer), .pending)
     }
 
+    /// The causes `DtlsFingerprint.failureCode` lists for `stats_timeout` stay `.pending` (retry
+    /// until the deadline, then the unverified `stats_timeout` stage): none of them may ever be
+    /// reported as a `.mismatch`, and none as a `.pass`.
+    func testIncompleteCertificateStatsStayPendingNeverMismatchOrPass() {
+        let selfCert = DtlsFingerprint.StatsRecord(
+            id: "CL", type: "certificate",
+            values: ["fingerprintAlgorithm": "sha-256", "fingerprint": DtlsFingerprint.hexColon(fpSelf)!])
+        func transport(_ values: [String: String]) -> DtlsFingerprint.StatsRecord {
+            return DtlsFingerprint.StatsRecord(id: "T01", type: "transport", values: values)
+        }
+        let connected = ["dtlsState": "connected", "localCertificateId": "CL"]
+        // A stale certificate-stats cache (taken before the DTLS handshake delivered the peer
+        // certificate): the connected transport has no remoteCertificateId at all, or an empty one.
+        XCTAssertEqual(
+            DtlsFingerprint.checkStats([transport(connected), selfCert], fpSelf: fpSelf, fpPeer: fpPeer), .pending)
+        XCTAssertEqual(
+            DtlsFingerprint.checkStats(
+                [transport(connected.merging(["remoteCertificateId": ""]) { $1 }), selfCert],
+                fpSelf: fpSelf, fpPeer: fpPeer),
+            .pending)
+        // A certificate entry that lacks its fingerprint, or its algorithm.
+        let withRemote = connected.merging(["remoteCertificateId": "CR"]) { $1 }
+        let noFingerprint = DtlsFingerprint.StatsRecord(
+            id: "CR", type: "certificate", values: ["fingerprintAlgorithm": "sha-256"])
+        let noAlgorithm = DtlsFingerprint.StatsRecord(
+            id: "CR", type: "certificate", values: ["fingerprint": DtlsFingerprint.hexColon(fpPeer)!])
+        XCTAssertEqual(
+            DtlsFingerprint.checkStats(
+                [transport(withRemote), selfCert, noFingerprint], fpSelf: fpSelf, fpPeer: fpPeer),
+            .pending)
+        XCTAssertEqual(
+            DtlsFingerprint.checkStats(
+                [transport(withRemote), selfCert, noAlgorithm], fpSelf: fpSelf, fpPeer: fpPeer),
+            .pending)
+    }
+
     /// One connected transport that is wrong fails the whole check even when another passes.
     func testStatsMismatchWhenAnyConnectedTransportDiffers() {
         let good = stats()
@@ -207,5 +243,117 @@ final class DtlsFingerprintTests: XCTestCase {
 
     func testStatsMalformedPinnedFingerprintIsMismatch() {
         XCTAssertEqual(DtlsFingerprint.checkStats(stats(), fpSelf: Data(count: 3), fpPeer: fpPeer), .mismatch)
+    }
+
+    // MARK: - Failure stage -> numeric verdict (local logs only)
+
+    /// Every stage the PeerConnection can report has its own number, so a server log line tells a
+    /// real certificate mismatch (3) from a check (b) timeout (5).
+    func testEveryFailureStageHasItsOwnCode() {
+        let expected: [(String, Int)] = [
+            ("sdp_remote", 1), ("sdp_local", 2), ("stats", 3), ("pin_timeout", 4), ("stats_timeout", 5),
+        ]
+        for (stage, code) in expected {
+            XCTAssertEqual(DtlsFingerprint.failureCode(stage: stage), code, stage)
+        }
+        let distinct = Set(expected.map { DtlsFingerprint.failureCode(stage: $0.0) })
+        XCTAssertEqual(distinct.count, expected.count)
+    }
+
+    func testAnUnknownFailureStageKeepsTheHistoricalDefault() {
+        XCTAssertEqual(DtlsFingerprint.failureCode(stage: "something_new"), 3)
+        XCTAssertEqual(DtlsFingerprint.failureCode(stage: ""), 3)
+    }
+
+    private func repoSource(_ relativePath: String) throws -> String {
+        var dir = URL(fileURLWithPath: #filePath)
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent(relativePath)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+        }
+        throw XCTSkip("\(relativePath) not found")
+    }
+
+    /// Code of a Swift source for the wiring pins below: whole-line `//` comments dropped and every
+    /// run of whitespace (indentation, line breaks) collapsed to one space. A pin written against
+    /// this text survives re-wrapping and comment edits, but not a change of the code itself, and
+    /// it pins a statement WITH the code around it (a branch, a `case`), not just its presence
+    /// somewhere in the file.
+    private func normalisedCode(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n").filter {
+            !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//")
+        }
+        return lines.joined(separator: " ")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func occurrences(_ needle: String, in text: String) -> Int {
+        return text.components(separatedBy: needle).count - 1
+    }
+
+    /// The PeerConnection, the controller and AppState cannot be driven here (a live libwebrtc
+    /// PeerConnection, CallKit, a WebSocket), so the stats-timeout wiring is pinned on the source
+    /// text, like the other wiring invariants (RekeyRolePolicyTests). Pinned: a real mismatch (the
+    /// `case .mismatch:` branch) reports `stats` and ONLY the deadline branch reports
+    /// `stats_timeout` (swapping them must fail here), every end of the check goes through that
+    /// deadline branch, the log lines use words the log shipper keeps, and the app keeps ending the
+    /// call with the on-the-wire reason `dtls_fp_mismatch` whatever the stage.
+    func testStatsTimeoutIsALocalStageAndTheWireReasonIsUnchanged() throws {
+        let pc = normalisedCode(try repoSource(
+            "QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionPeerConnection.swift"))
+        let controller = normalisedCode(try repoSource(
+            "QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift"))
+        let app = normalisedCode(try repoSource("QAudionApp/AppState.swift"))
+
+        // PeerConnection: each stage is reported from exactly one place, in the right branch.
+        XCTAssertEqual(occurrences(#"reportDtlsFailure(stage: "stats_timeout")"#, in: pc), 1, "one deadline site")
+        XCTAssertEqual(occurrences(#"reportDtlsFailure(stage: "stats")"#, in: pc), 1, "one mismatch site")
+        XCTAssertTrue(
+            pc.contains(#"case .mismatch: self.reportDtlsFailure(stage: "stats") case .pending:"#),
+            "a real certificate mismatch reports `stats`, nothing else")
+        XCTAssertTrue(
+            pc.contains(#"if deadlineReached { reportDtlsFailure(stage: "stats_timeout") return }"#),
+            "the deadline branch of retryOrFailDtlsStats reports `stats_timeout`, nothing else")
+        // The missing peer pin and the `.pending` verdict both end in that deadline branch.
+        XCTAssertTrue(
+            pc.contains("guard let fpPeer = context.peerFingerprint else { "
+                + "retryOrFailDtlsStats(generation: generation, startedAt: startedAt, "
+                + "deadlineReached: deadlineReached) return }"),
+            "no peer pin: retry until the deadline, then stats_timeout")
+        XCTAssertTrue(pc.contains("case .pending: self.retryOrFailDtlsStats("), "pending: retry, then stats_timeout")
+
+        // Controller: numeric verdict only, words the shipper keeps, the original stage still goes up.
+        XCTAssertTrue(
+            controller.contains(
+                #"let code = DtlsFingerprint.failureCode(stage: stage) self?.log?("dtls fail s=\(code) ok=0") "#
+                + "self?.onDtlsFingerprintFailure?(stage)"),
+            "the fail line carries the numeric stage; the callback gets the unchanged stage")
+        XCTAssertTrue(
+            controller.contains(#"pc.onDtlsMediaGateOpened = { [weak self] in self?.log?("dtls ok=1") }"#),
+            "the pass line has no stage")
+        XCTAssertFalse(controller.contains("dtlsfp"), "the shipper drops the old vowel-less token")
+        XCTAssertFalse(controller.contains(#""dtls ok=1 s="#), "a pass has no stage number")
+        XCTAssertFalse(controller.contains(#""dtls pass"#), "no `pass` word: the shipper must not need it")
+
+        // AppState: the wire reason is fixed; the stage only goes to the local log, as `dstage`.
+        XCTAssertTrue(
+            app.contains(#"self?.handleHandshakeFatal(callId: cid, reason: "dtls_fp_mismatch", dtlsStage: dtlsStage)"#),
+            "every DTLS stage ends the call with dtls_fp_mismatch")
+        XCTAssertTrue(app.contains("let dtlsStage = DtlsFingerprint.failureCode(stage: stage)"))
+        XCTAssertFalse(app.contains(#""stats_timeout""#), "the stage is local: it never selects a reason")
+        XCTAssertEqual(occurrences(#"RTLog.error("call", "hsfatal r="#, in: app), 1, "one hsfatal log call")
+        XCTAssertTrue(
+            app.contains(
+                #"let stageSuffix = dtlsStage.map { " dstage=\($0)" } ?? "" "#
+                + #"RTLog.error("call", "hsfatal r=\(code)\(stageSuffix)")"#),
+            "the stage is appended as ` dstage=<n>` to the single hsfatal line")
+        XCTAssertFalse(
+            app.contains(#"dtls=\(dtlsStage"#),
+            "`dtls=` is the 1:1 heartbeat's state string key (CallService): the stage key is `dstage`")
     }
 }

@@ -319,7 +319,7 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// (`api/crypto/frame_crypto_transformer.cc`'s `RTC_LOG(LS_INFO)` key
     /// prints) are gone from the bundled `WebRTC.xcframework` at the SOURCE —
     /// `Package.swift`'s binaryTarget comment pins it to the
-    /// `webrtc-ios-m150-a256-dplc-9` release (patch P3 no-key-log, gate G1), built from a tree with
+    /// `webrtc-ios-m150-a256-dplc-10` release (patch P3 no-key-log, gate G1), built from a tree with
     /// commit that removed both prints, and `scripts/ci/assert-no-key-logging.sh`
     /// gates every build of that release on `RTC_LOG(LS_INFO)` no longer
     /// appearing in `frame_crypto_transformer.cc`. `KeyMaterialScrubber`

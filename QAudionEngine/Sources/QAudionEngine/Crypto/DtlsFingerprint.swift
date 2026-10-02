@@ -198,4 +198,39 @@ public enum DtlsFingerprint {
         if connectedTransports == 0 || pending { return .pending }
         return .pass
     }
+
+    // MARK: - Failure stage -> numeric verdict (local logs only)
+
+    /// Numeric verdict of the stage a failed DTLS check reports
+    /// (`QAudionPeerConnection.onDtlsFingerprintFailure`). The redacted remote logs carry numbers
+    /// only, never a fingerprint:
+    /// - 1 `sdp_remote`, 2 `sdp_local`, 4 `pin_timeout`;
+    /// - 3 `stats`: check (b) saw a REAL certificate mismatch in the transport stats;
+    /// - 5 `stats_timeout`: check (b) reached its 5 s deadline with NO VERDICT: the peer
+    ///   certificate was neither confirmed nor shown to differ, so the call is unverified, NOT
+    ///   proven benign (and not proven hostile either), and it still ends fail-closed. The
+    ///   pending causes, every one of them an incomplete report and not a mismatch:
+    ///   1. the peer pin (`CallDtlsContext.peerFingerprint`) was still missing, so no stats were
+    ///      requested at all;
+    ///   2. no `transport` stats entry with `dtlsState == connected` in any report;
+    ///   3. a connected transport without a `localCertificateId` or a `remoteCertificateId` (or
+    ///      an empty one). A certificate-stats cache taken before the DTLS handshake delivered the
+    ///      peer certificate and never refreshed looks exactly like this: the WebRTC builds
+    ///      without patch P9 (up to `webrtc-ios-m150-a256-dplc-9`) did that;
+    ///   4. a certificate id that no `certificate` entry of the report carries;
+    ///   5. a `certificate` entry without `fingerprint` or `fingerprintAlgorithm`.
+    ///
+    /// LOCAL ONLY: every stage ends the call with the same on-the-wire hangup reason
+    /// `dtls_fp_mismatch` (WIRE_SPEC §3.8.4), which this function must never influence. An unknown
+    /// stage maps to 3, the value every unlisted stage had before `stats_timeout` existed.
+    public static func failureCode(stage: String) -> Int {
+        switch stage {
+        case "sdp_remote": return 1
+        case "sdp_local": return 2
+        case "stats": return 3
+        case "pin_timeout": return 4
+        case "stats_timeout": return 5
+        default: return 3
+        }
+    }
 }
