@@ -128,9 +128,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// Remember which signed round produced `key` (called right after the session is initialised,
     /// before any callback announces the key).
-    func recordKeyRound(callId: String, key: Data, round: UInt32) {
+    ///
+    /// `transcriptHash` is `SHA-256(ACCEPT_v5)` of that round: with it, the SAS material of the call's
+    /// candidate round (its first `identity_unresolved` round) is kept for the whole call (R-SAS-WORDS).
+    func recordKeyRound(callId: String, key: Data, round: UInt32, transcriptHash: Data? = nil) {
         let digest = Data(SHA256.hash(data: key))
         lock.withLock { keyRoundByCall[callId.lowercased(), default: [:]][digest] = round }
+        if let transcriptHash {
+            sasPins.recordCandidateMaterial(callId: callId, round: round, sessionKey: key, transcriptHash: transcriptHash)
+        }
     }
 
     /// The signed `rekeyRound` (>= 1) of the handshake round that derived `key`, `nil` when this
@@ -171,16 +177,66 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// What the user's SAS confirmation of the live round (`sessionKey`) does: `.refused` when the call
     /// is in SAS-PIN conflict (a round its unresolved signer key cannot vouch for), `.adopt(key)` when the
     /// live round was `identity_unresolved` (its signer key is pinned), `.notApplicable` otherwise.
+    ///
+    /// R-SAS-WORDS: while the call has a candidate round the words the user compared are the candidate
+    /// round's, so the key adopted is the candidate round's signer, whichever later same-key round is live.
     public func sasSignerAdoption(callId: String, sessionKey: Data) -> SasSignerAdoption {
         if sasPins.isConflicted(callId: callId) { return .refused }
-        if let key = signerKeyAwaitingSas(callId: callId, sessionKey: sessionKey) { return .adopt(key) }
+        let compared = sasPins.candidateSasMaterial(callId: callId)?.sessionKey ?? sessionKey
+        if let key = signerKeyAwaitingSas(callId: callId, sessionKey: compared) { return .adopt(key) }
         return .notApplicable
+    }
+
+    /// R-SAS-WORDS: the material the in-call SAS words derive from while the call has a candidate round
+    /// (a 1:1 call whose peer identity was unresolved): the candidate round's session key and transcript
+    /// hash, never the live round's. `nil` when the live round's words apply.
+    public func candidateSasMaterial(callId: String) -> CallScopedSasPinBook.SasMaterial? {
+        sasPins.candidateSasMaterial(callId: callId)
     }
 
     /// The user confirmed the SAS words of the round whose signer key is `key`: it is now this call's
     /// pin, so later key rounds of the call verify under it.
     public func confirmSasSigner(callId: String, key: Data) {
         sasPins.confirm(callId: callId, key: key)
+    }
+
+    /// R-HELD-REKEY: lowercased callIds whose media is held pending the user's SAS confirmation (any
+    /// handshake `.abort` verdict: `identity_unresolved`, `identity_key_mismatch`, ...). While a call is
+    /// in this set the caller does not START rekeys; a rekey the peer starts is still answered and
+    /// installed (the hold stays). Cleared by `releaseHold` (the confirmation) and when the call ends.
+    private var heldCalls: Set<String> = []
+    /// R-HELD-REKEY: calls whose caller-side rekey was skipped because the call was held, so the app can
+    /// run it as soon as the hold is released.
+    private var rekeyDeferredWhileHeld: Set<String> = []
+
+    /// The handshake verdict of a round held this call's media behind the SAS confirmation.
+    func markHeld(callId: String) {
+        let id = callId.lowercased()
+        guard !id.isEmpty else { return }
+        lock.withLock { _ = heldCalls.insert(id) }
+    }
+
+    /// Test seam (R-HELD-REKEY): make this integration the ACTIVE caller of its call, the state a
+    /// scheduled rekey tick finds it in.
+    func configureAsActiveCallerForTesting() {
+        lock.withLock { isCaller = true; state = .active }
+    }
+
+    /// True while the call's media is held pending the SAS confirmation.
+    public func isMediaHeld(callId: String) -> Bool {
+        lock.withLock { heldCalls.contains(callId.lowercased()) }
+    }
+
+    /// The SAS confirmation released the call's media: caller-side rekeys are no longer deferred.
+    /// Returns true when a scheduled rekey was skipped while the call was held, i.e. the app should run
+    /// one now (the periodic scheduler would otherwise only retry a whole period later).
+    @discardableResult
+    public func releaseHold(callId: String) -> Bool {
+        let id = callId.lowercased()
+        return lock.withLock { () -> Bool in
+            heldCalls.remove(id)
+            return rekeyDeferredWhileHeld.remove(id) != nil
+        }
     }
 
     /// I3 §5 — one in-flight caller-initiated mid-call re-key attempt at a
@@ -1335,9 +1391,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func performPqcReKey(callId: String, peerId: String, timeoutSec: Double = 8.0, armedPeriodMs: Int64? = nil) async -> Bool {
         let (canProceed, sendOpaqueRaw) = lock.withLock { () -> (Bool, ((String) async throws -> Void)?) in
             // R-REKEY-INIT: only the caller ever initiates a rekey; the callee only responds.
+            let held = heldCalls.contains(callId.lowercased())
             guard RekeyRolePolicy.mayInitiateRekey(
-                isCaller: isCaller, isActive: state == .active, hasPendingAttempt: pendingReKeyAttempt != nil)
-            else { return (false, nil) }
+                isCaller: isCaller, isActive: state == .active, hasPendingAttempt: pendingReKeyAttempt != nil,
+                isHeld: held)
+            else {
+                // R-HELD-REKEY: a rekey the caller would have started is deferred, not dropped.
+                if held && isCaller && state == .active && pendingReKeyAttempt == nil {
+                    rekeyDeferredWhileHeld.insert(callId.lowercased())
+                }
+                return (false, nil)
+            }
             return (true, retrySenderClosure)
         }
         guard canProceed, let sendOpaqueRaw else {
@@ -1688,6 +1752,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     onInvalidHandshakeSignature?(callerId)
                 }
                 // P0-3 — hold MEDIA (not the handshake) behind a blocking SAS reconfirmation.
+                markHeld(callId: callId)
                 onHandshakeIdentityUnverified?(callId, code)
             case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, ratchetV5Capable: ratchetV5Capable)
@@ -2069,7 +2134,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                    innerAudioAadV1: innerAadNegotiated, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch)
-            recordKeyRound(callId: callId, key: combined, round: innerAadEpoch)
+            recordKeyRound(callId: callId, key: combined, round: innerAadEpoch, transcriptHash: acceptBinding)
             // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
             fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyRound, generation: entryGeneration)
             lock.withLock { state = .active }
@@ -2323,6 +2388,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     onInvalidHandshakeSignature?(callerId)
                 }
                 // P0-3 — same media-hold signal as the OFFER side.
+                markHeld(callId: callId)
                 onHandshakeIdentityUnverified?(callId, code)
             case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, ratchetV5Capable: ratchetV5Capable)
@@ -2461,7 +2527,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                    innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
-            recordKeyRound(callId: callId, key: combined, round: innerAadEpochCaller)
+            recordKeyRound(callId: callId, key: combined, round: innerAadEpochCaller, transcriptHash: acceptBinding)
             // W-HSROUNDTIMING — third breadcrumb: decapsulation + session-key
             // derivation actually completed (engine.initSession didn't
             // throw). Paired with hs-offer-sent/hs-accept-received above —
@@ -3757,6 +3823,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         peerDtlsFingerprintByCall.removeAll()
         keyRoundByCall.removeAll()
         sasPins.clearAll()
+        heldCalls.removeAll()
+        rekeyDeferredWhileHeld.removeAll()
         // W-KCMAC — same reasoning, the stashed sent-OFFER PSK advert list.
         sentOfferPskFingerprintsByCall.removeAll()
         // W-KCMACROLES — the parallel role list is stashed and cleared in lockstep

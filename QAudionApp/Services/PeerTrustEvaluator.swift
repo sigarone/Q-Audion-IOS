@@ -58,10 +58,32 @@ public enum PeerTrustEvaluator {
             return unverified
         }
 
-        guard let provider,
-              let peerIkEdPub = await provider.kmsClient.fetchUserIdentityKey(userId: peerUserId),
-              peerIkEdPub.count == 32
-        else {
+        let serverKey: Data?
+        if let provider, let fetched = await provider.kmsClient.fetchUserIdentityKey(userId: peerUserId),
+           fetched.count == 32 {
+            serverKey = fetched
+        } else {
+            serverKey = nil
+        }
+        guard let peerIkEdPub = serverKey else {
+            // R-VERIFIED-MARK: no server key (the situation a SAS-confirmed pin exists for:
+            // `identity_unresolved`). A contact the user verified by SAS against the signer key this
+            // device pinned is still shown as verified by SAS, not "unverified for lack of a server key":
+            // the pinned key whose safety number is exactly the recorded one is the evaluation basis.
+            let storedContact = ContactsStore().load().first(where: { $0.userId == peerUserId })
+            if let hit = SasPinVerification.verifiedPinnedKey(
+                contact: storedContact, selfUserId: selfUserId, selfIdentityKey: selfIkEdPub,
+                peerUserId: peerUserId,
+                pinnedKeys: PeerIdentityPinStore().allPinnedKeys(contactId: peerUserId)),
+               let computed = try? SafetyNumber.compute(
+                localUuidRaw: selfUuidRaw, localIkEdPub: selfIkEdPub,
+                peerUuidRaw: peerUuidRaw, peerIkEdPub: hit.key) {
+                let verifiedAt = storedContact?.verifiedAtMs.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+                return Evaluation(
+                    state: .userVerified,
+                    safetyNumber: TrustSafetyNumber(groups: computed.groups, fingerprintHex: computed.fingerprintHex),
+                    verifiedAt: verifiedAt, verificationMethod: .antiReplay, peerIkEdPub: hit.key)
+            }
             return unverified
         }
 

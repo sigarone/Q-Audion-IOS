@@ -1070,16 +1070,20 @@ final class AppState: ObservableObject {
         }
         let store = PeerIdentityPinStore()
         let deviceId = peerDeviceId(for: peer)
-        switch SasSignerPinPolicy.decide(
-            storedPin: store.pinnedKey(contactId: peer, deviceId: deviceId), confirmedKey: hit.key) {
+        let decision = SasSignerPinPolicy.decide(
+            storedPin: store.pinnedKey(contactId: peer, deviceId: deviceId), confirmedKey: hit.key)
+        var durableWriteCommitted = false
+        switch decision {
         case .conflict:
             RTLog.warn("call", "saspin adopt=0 conflict=1")
             return .notApplicable
         case .alreadyPinned:
+            durableWriteCommitted = true
             RTLog.info("call", "saspin adopt=1 durable=2")
         case .pin:
             switch store.pinOrMatch(contactId: peer, ed25519Pub: hit.key, deviceId: deviceId) {
             case .pinnedNew, .match:
+                durableWriteCommitted = true
                 RTLog.info("call", "saspin adopt=1 durable=1")
             case .mismatch:
                 // Keychain write failed (e.g. device locked) or a pin appeared meanwhile: the explicit
@@ -1087,8 +1091,30 @@ final class AppState: ObservableObject {
                 RTLog.warn("call", "saspin adopt=1 durable=0")
             }
         }
+        // R-VERIFIED-MARK: only a COMMITTED pin marks the contact verified (never a refused or
+        // conflicting confirmation, never a failed durable write).
+        if SasPinVerification.shouldMark(decision: decision, durableWriteCommitted: durableWriteCommitted) {
+            markContactVerifiedBySas(peerUserId: peer, confirmedKey: hit.key)
+        }
         hit.integration.confirmSasSigner(callId: activeCallId, key: hit.key)
         return .adopt(hit.key)
+    }
+
+    /// R-VERIFIED-MARK — write the SAS verification of the contact whose signer key was just pinned
+    /// (`StoredContact.isVerified`, through `withVerification`, the same path as the safety-number card),
+    /// so the contact list, the group-call "Non verificato" badge and the contact-detail trust card read
+    /// it. A peer that is not a stored contact has no row to mark. Numeric-only log (no ids, no keys).
+    private func markContactVerifiedBySas(peerUserId: String, confirmedKey: Data) {
+        guard let selfUserId = AppState.currentUserIdSnapshot, !selfUserId.isEmpty,
+              let selfIdentityKey = SovereignIdentityManager().loadIdentity()?.signingPublic else {
+            RTLog.warn("call", "saspin mark=0 reason=1")  // 1 = no own identity
+            return
+        }
+        let written = SasPinVerification.markVerified(
+            store: ContactsStore(), peerUserId: peerUserId, selfUserId: selfUserId,
+            selfIdentityKey: selfIdentityKey, confirmedKey: confirmedKey,
+            nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        RTLog.info("call", "saspin mark=\(written ? 1 : 0)")
     }
 
     /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both
@@ -1119,6 +1145,16 @@ final class AppState: ObservableObject {
         awaitingIdentityConfirmation = false
         let actions = pendingIdentityGatedMedia.removeValue(forKey: cid) ?? []
         for action in actions { action() }
+        // R-HELD-REKEY: the hold is released, so the caller may start rekeys again; one that was
+        // skipped while held runs now instead of a whole period later.
+        var rekeyWasDeferred = false
+        for integration in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
+            if integration.releaseHold(callId: activeCallId) { rekeyWasDeferred = true }
+        }
+        if rekeyWasDeferred {
+            RTLog.info("rekey", "hold released: running the deferred rekey")
+            reKeyScheduler.forceReKey(reason: "hold-released")
+        }
     }
     /// W-ASSURANCE (ship step 6) — THIS call's LIVE `AssuranceState` verdict.
     /// `nil` until `emitKeyConfirmationTelemetry` resolves one (peer doesn't
@@ -20164,17 +20200,34 @@ extension AppState {
     /// key is worse than no SAS.
     var callSasWords: [String] {
         guard callSasKeySource == .mlKem else { return [] }
-        guard let key = callPqcSessionKey, !key.isEmpty else { return [] }
+        guard let liveKey = callPqcSessionKey, !liveKey.isEmpty else { return [] }
         // The words are bound to this call's SHA-256(ACCEPT_v5) (WIRE_SPEC §4): no stored hash,
         // no words (the SAS panel stays hidden rather than showing a transcript-free value).
         guard let owner = callPqcSessionKeyCallId ?? canonicalActiveCallId(),
-              let transcriptHash = HandshakeTranscriptHashStore.shared.hash(forCallId: owner) else { return [] }
+              let liveTranscriptHash = HandshakeTranscriptHashStore.shared.hash(forCallId: owner) else { return [] }
+        // R-SAS-WORDS: a call whose peer identity was unresolved (held pending the SAS) shows, and checks
+        // the confirmation against, the words of its CANDIDATE round (its first round) for the whole
+        // call: an honest same-key rekey before the confirmation installs a later session key, but the
+        // words never change, so the two users can still compare them (Android and desktop show the
+        // first round's words the same way).
+        let candidate = candidateSasMaterial(forCallId: owner)
+        let key = candidate?.sessionKey ?? liveKey
+        let transcriptHash = candidate?.transcriptHash ?? liveTranscriptHash
         do {
             return try ComputeSasUseCase.invoke(sessionKey: key, transcriptHash: transcriptHash).words
                 .map { $0.uppercased() }
         } catch {
             return []
         }
+    }
+
+    /// R-SAS-WORDS — the SAS material of the candidate round of `callId`, from whichever integration
+    /// (caller or responder leg) carried the call; `nil` when the live round's words apply.
+    func candidateSasMaterial(forCallId callId: String) -> CallScopedSasPinBook.SasMaterial? {
+        for integration in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
+            if let material = integration.candidateSasMaterial(callId: callId) { return material }
+        }
+        return nil
     }
 
     /// W-CTRLCLOSE (2026-09-26) — `startOutgoingCall` threw: the controller
