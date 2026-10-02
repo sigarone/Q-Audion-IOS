@@ -16,9 +16,10 @@ What is checked (all offline, no credentials, no prod host contacted):
     rejects an unknown host; env QAUDION_VPS_KNOWN_HOSTS adds/overrides keys,
     a set-but-missing path is a hard error; the pin wins over a stale
     ~/.ssh/known_hosts entry (HOME is redirected to a temp dir);
-  * a missing / changed host key ends in ONE clear error naming the host and
-    exit 1, and ssh_connect() makes exactly one connect attempt (no password or
-    key fallback after a host-key failure); auth/network errors pass through.
+  * an unknown host is refused before any connection is opened, a changed key
+    right after the key exchange: ONE clear error naming the host, exit 1, and
+    ssh_connect() makes at most one connect attempt (no password or key
+    fallback after a host-key failure); auth/network errors pass through.
 
 Optional live check (needs an sshd on 127.0.0.1:22, e.g. on the VPS):
     QAUDION_HOSTKEY_LIVE=1 python3 scripts/test_vps_host_key_pin.py
@@ -207,10 +208,16 @@ write(os.path.join(TMP, ".ssh", "known_hosts"), STALE + "\n" + synth_line("192.0
 
 
 class FakeClient(object):
-    def __init__(self, exc):
+    """Stands in for paramiko.SSHClient: knows `hostkeys`, never touches the network."""
+
+    def __init__(self, exc, hostkeys=None):
         self.exc = exc
+        self.hostkeys = hostkeys if hostkeys is not None else paramiko.HostKeys()
         self.calls = []
         self.closed = False
+
+    def get_host_keys(self):
+        return self.hostkeys
 
     def connect(self, host, **kw):
         self.calls.append((host, kw))
@@ -220,29 +227,46 @@ class FakeClient(object):
         self.closed = True
 
 
+def knows(host, key):
+    hk = paramiko.HostKeys()
+    hk.add(host, key.get_name(), key)
+    return hk
+
+
 prod_key = paramiko.HostKeys(PIN).lookup(PROD_HOST)["ssh-ed25519"] if lines else None
 
 for name in SCRIPTS:
     tag = "[%s]" % name
     mod = load(name)
 
-    # 3a. fresh client: RejectPolicy, pinned key known (and winning over the
-    #     stale ~/.ssh entry for the same host + type), unknown host rejected.
+    # 3a. fresh client: RejectPolicy, ONE store, pinned key known (and winning
+    #     over a stale ~/.ssh entry for the same host + type), unknown host rejected.
     cl = mod._new_ssh_client()
     check(isinstance(cl._policy, paramiko.RejectPolicy),
           "%s client policy is %r, not a RejectPolicy" % (tag, cl._policy))
-    sub = cl._system_host_keys.lookup(PROD_HOST)
+    sub = cl.get_host_keys().lookup(PROD_HOST)
     check(sub is not None and sub.get("ssh-ed25519") is not None
           and mod._key_fingerprint(sub["ssh-ed25519"]) == PROD_FP,
           "%s the pinned key does not win over a stale ~/.ssh/known_hosts entry" % tag)
-    check(cl._system_host_keys.lookup("192.0.2.5") is not None,
+    check(sub is not None and len(sub.keys()) == 2,
+          "%s ~/.ssh/known_hosts (stale entry) was not loaded behind the pin" % tag)
+    check(cl.get_host_keys().lookup("192.0.2.5") is not None,
           "%s ~/.ssh/known_hosts is not loaded" % tag)
+    check(cl._system_host_keys.lookup(PROD_HOST) is None,
+          "%s keys leaked into the separate system store (it would shadow the pin)" % tag)
+
+    class _T(object):  # RejectPolicy logs through client._transport, absent before connect()
+        def _log(self, *a, **k):
+            pass
+
+    cl._transport = _T()
     try:
         cl._policy.missing_host_key(cl, "203.0.113.9", prod_key)
-        check(False, "%s an unknown host was NOT rejected" % tag)
-    except mod._UnknownHostKey as e:
-        check(e.hostname == "203.0.113.9" and e.key is prod_key,
-              "%s _UnknownHostKey lost the host/key" % tag)
+        check(False, "%s an unknown host was NOT rejected by the policy" % tag)
+    except paramiko.SSHException:
+        pass
+    finally:
+        cl._transport = None
 
     # 3b. env: set-but-missing = hard error; a file adds hosts and overrides.
     with env(QAUDION_VPS_KNOWN_HOSTS=os.path.join(TMP, "nope")):
@@ -252,58 +276,79 @@ for name in SCRIPTS:
     extra = write(os.path.join(TMP, "extra_known_hosts"), OTHER + "\n")
     with env(QAUDION_VPS_KNOWN_HOSTS=extra):
         c2 = mod._new_ssh_client()
-        check(c2._system_host_keys.lookup("198.51.100.7") is not None
-              and mod._key_fingerprint(c2._system_host_keys.lookup(PROD_HOST)["ssh-ed25519"]) == PROD_FP,
+        check(c2.get_host_keys().lookup("198.51.100.7") is not None
+              and mod._key_fingerprint(c2.get_host_keys().lookup(PROD_HOST)["ssh-ed25519"]) == PROD_FP,
               "%s env file must ADD hosts and keep the pin" % tag)
     override = write(os.path.join(TMP, "override_known_hosts"), STALE + "\n")
     with env(QAUDION_VPS_KNOWN_HOSTS=override):
         c3 = mod._new_ssh_client()
-        check(mod._key_fingerprint(c3._system_host_keys.lookup(PROD_HOST)["ssh-ed25519"])
+        check(mod._key_fingerprint(c3.get_host_keys().lookup(PROD_HOST)["ssh-ed25519"])
               == fp_of_line(STALE),
               "%s env file must take precedence over the pinned file" % tag)
 
     # 3c. _connect_verified error handling.
     other_key = paramiko.HostKeys(extra).lookup("198.51.100.7")["ssh-ed25519"]
-    fc = FakeClient(mod._UnknownHostKey("example.invalid", other_key))
+    fc = FakeClient(AssertionError("connect() must not be reached"))
     code, err, exc = run_expect_exit(mod._connect_verified, fc, "example.invalid", timeout=1)
-    check(code == 1 and exc is None and "example.invalid" in err
-          and mod._key_fingerprint(other_key) in err and "vps_known_hosts" in err
-          and "no known key" in err and fc.closed and len(fc.calls) == 1,
-          "%s unknown host: want exit 1 + message naming host/fingerprint/how to add (got %r %r)"
-          % (tag, code, err[:120]))
-    fc = FakeClient(paramiko.BadHostKeyException("example.invalid", other_key, prod_key))
+    check(code == 1 and exc is None and "example.invalid" in err and "nothing was sent" in err
+          and "no known key" in err and "vps_known_hosts" in err
+          and fc.closed and len(fc.calls) == 0,
+          "%s unknown host: want exit 1 BEFORE any connect + message naming host and how to add "
+          "(got %r %r calls=%d)" % (tag, code, err[:100], len(fc.calls)))
+    fc = FakeClient(AssertionError("connect() must not be reached"), knows("example.invalid", prod_key))
+    code, err, exc = run_expect_exit(mod._connect_verified, fc, "example.invalid", port=2222)
+    check(code == 1 and len(fc.calls) == 0,
+          "%s a key known for port 22 must not satisfy port 2222 (got %r)" % (tag, code))
+    hk = paramiko.HostKeys()
+    hk.add("[example.invalid]:2222", "ssh-ed25519", prod_key)
+    fc = FakeClient(OSError("net down"), hk)
+    code, err, exc = run_expect_exit(mod._connect_verified, fc, "example.invalid", port=2222)
+    check(code is None and isinstance(exc, OSError) and len(fc.calls) == 1,
+          "%s a [host]:port entry must allow connecting to that port (got %r %r)" % (tag, code, exc))
+    fc = FakeClient(paramiko.BadHostKeyException("example.invalid", other_key, prod_key),
+                    knows("example.invalid", prod_key))
     code, err, exc = run_expect_exit(mod._connect_verified, fc, "example.invalid")
     check(code == 1 and exc is None and "example.invalid" in err
           and "does NOT match" in err and mod._key_fingerprint(other_key) in err
-          and mod._key_fingerprint(prod_key) in err and fc.closed,
+          and mod._key_fingerprint(prod_key) in err and fc.closed and len(fc.calls) == 1,
           "%s changed key: want exit 1 + both fingerprints (got %r)" % (tag, code))
     check(all(ord(ch) < 128 for ch in err), "%s host-key error is not pure ASCII" % tag)
     for boom in (paramiko.AuthenticationException("auth failed"), OSError("net down"),
                  paramiko.SSHException("other ssh problem")):
-        fc = FakeClient(boom)
+        fc = FakeClient(boom, knows("example.invalid", prod_key))
         code, err, exc = run_expect_exit(mod._connect_verified, fc, "example.invalid")
         check(code is None and exc is boom,
               "%s %s must propagate unchanged (got code=%r exc=%r)"
               % (tag, type(boom).__name__, code, exc))
 
-    # 3d. ssh_connect(): ONE attempt, no key->password / key->other fallback.
+    # 3d. ssh_connect(): an unknown host never reaches connect(); a changed key
+    #     gets exactly ONE attempt (no key -> password / other-key fallback).
     for keypath in (None, "/nonexistent/key"):
-        fc = FakeClient(mod._UnknownHostKey("203.0.113.1", prod_key))
-        saved = (mod._new_ssh_client, getattr(mod, "_vps_key_path", None))
-        mod._new_ssh_client = lambda fc=fc: fc
-        if saved[1] is not None:  # correlate-call.py has no key-auth path
-            mod._vps_key_path = lambda kp=keypath: kp
-        try:
-            if hasattr(mod, "_ensure_creds"):
-                mod.VPS_HOST, mod.VPS_USER, mod.VPS_PASS = None, None, None
-            code, err, exc = run_expect_exit(mod.ssh_connect)
-        finally:
-            mod._new_ssh_client = saved[0]
-            if saved[1] is not None:
-                mod._vps_key_path = saved[1]
-        check(code == 1 and exc is None and len(fc.calls) == 1,
-              "%s ssh_connect(key=%r): want exit 1 after exactly 1 connect, got code=%r calls=%d exc=%r"
-              % (tag, keypath, code, len(fc.calls), exc))
+        for scenario in ("unknown", "changed"):
+            if scenario == "unknown":
+                fc = mod._new_ssh_client()          # real client: knows nothing of 203.0.113.1
+                calls = []
+                fc.connect = lambda *a, calls=calls, **k: calls.append(1)
+            else:
+                fc = FakeClient(paramiko.BadHostKeyException("203.0.113.1", other_key, prod_key),
+                                knows("203.0.113.1", prod_key))
+                calls = fc.calls
+            saved = (mod._new_ssh_client, getattr(mod, "_vps_key_path", None))
+            mod._new_ssh_client = lambda fc=fc: fc
+            if saved[1] is not None:  # correlate-call.py has no key-auth path
+                mod._vps_key_path = lambda kp=keypath: kp
+            try:
+                if hasattr(mod, "_ensure_creds"):
+                    mod.VPS_HOST, mod.VPS_USER, mod.VPS_PASS = None, None, None
+                code, err, exc = run_expect_exit(mod.ssh_connect)
+            finally:
+                mod._new_ssh_client = saved[0]
+                if saved[1] is not None:
+                    mod._vps_key_path = saved[1]
+            want_calls = 0 if scenario == "unknown" else 1
+            check(code == 1 and exc is None and len(calls) == want_calls,
+                  "%s ssh_connect(key=%r, %s host): want exit 1 after %d connect(s), got code=%r "
+                  "calls=%d exc=%r" % (tag, keypath, scenario, want_calls, code, len(calls), exc))
 
 # ---------------------------------------------------------------------------
 # 4. Optional live loopback check against the local sshd.
@@ -354,6 +399,20 @@ if SAVED_ENV.get("QAUDION_HOSTKEY_LIVE") == "1":
         code, err, exc, kt = attempt("no pin", [OTHER])
         check(code == 1 and exc is None and "127.0.0.1" in err and "no known key" in err,
               "live: unknown host must be rejected with exit 1 (got %r %r)" % (code, exc))
+        # a2) defense in depth: a RAW client.connect() (no _connect_verified) on an
+        #     unknown host is still refused by paramiko's own RejectPolicy.
+        kh = write(os.path.join(TMP, "live_known_hosts"), OTHER + "\n")
+        with env(QAUDION_VPS_KNOWN_HOSTS=kh):
+            raw_client = mod._new_ssh_client()
+        code, err, exc = run_expect_exit(
+            raw_client.connect, "127.0.0.1", username="hostkey-test-nobody",
+            allow_agent=False, look_for_keys=False, timeout=10)
+        live.append("raw connect, no pin -> exit=%r exc=%s: %s" % (
+            code, type(exc).__name__ if exc else None, str(exc)[:60]))
+        check(code is None and isinstance(exc, paramiko.SSHException)
+              and "not found in known_hosts" in str(exc),
+              "live: a raw connect() to an unknown host must be rejected by RejectPolicy "
+              "(got %r %r)" % (code, exc))
         # b) wrong key pinned: rejected as a mismatch.
         code, err, exc, kt = attempt("wrong pin", [synth_line("127.0.0.1", 5)])
         check(code == 1 and exc is None and "does NOT match" in err,
