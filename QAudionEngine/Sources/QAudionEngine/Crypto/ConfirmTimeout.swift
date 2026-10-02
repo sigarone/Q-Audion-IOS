@@ -150,7 +150,7 @@ public enum ConfirmResend {
     public static func due(isCaller: Bool, revealBound: Bool, isRound1: Bool,
                            ownKcMacSent: Bool, peerKcMacVerified: Bool, ownKcMacRecent: Bool = false) -> Due {
         let reveal = !peerKcMacVerified && isCaller && revealBound && isRound1
-        let own = ownKcMacSent && !peerKcMacVerified // MUTANT (four-way failing-first run): the recent clause removed
+        let own = ownKcMacSent && (!peerKcMacVerified || ownKcMacRecent)
         return Due(reveal: reveal, ownKcMac: own)
     }
 
