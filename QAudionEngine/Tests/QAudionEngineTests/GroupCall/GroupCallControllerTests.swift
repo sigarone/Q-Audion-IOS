@@ -920,6 +920,47 @@ final class GroupCallControllerTests: XCTestCase {
         h.controller.leave()
     }
 
+    // MARK: diagnosis lines (2026-10-02)
+
+    func testCameraStepsAndTheRefusalGoToTheDiagnosisLog() async {
+        let h = ControllerHarness()
+        let lines = LineCollector()
+        h.controller.diagLog = { lines.append($0) }
+        let link = await h.joinAndConnect()
+        link?.cameraResult = .permissionDenied
+        let on = await h.controller.setVideoEnabled(true)
+        XCTAssertFalse(on)
+        XCTAssertTrue(lines.all.contains("grp video camera=1 phase=1 ok=1 code=0 ms=0"), "\(lines.all)")
+        XCTAssertTrue(lines.all.contains { $0.hasPrefix("grp video camera=1 phase=2 ok=0 code=2 ms=") }, "\(lines.all)")
+        XCTAssertEqual(h.controller.diagSnapshot()["last_error_code"] as? Int, 1)
+        XCTAssertEqual(h.errors, [.cameraPermissionDenied], "the error still reaches the app")
+        h.controller.leave()
+    }
+
+    func testASwitchWithoutAMediaLinkIsLogged() async {
+        let h = ControllerHarness()
+        let lines = LineCollector()
+        h.controller.diagLog = { lines.append($0) }
+        let on = await h.controller.setVideoEnabled(true)
+        XCTAssertFalse(on)
+        XCTAssertEqual(lines.all, ["grp video camera=1 phase=1 ok=1 code=0 ms=0",
+                                   "grp video camera=1 phase=6 ok=0 code=0 ms=0"])
+    }
+
+    func testSessionDiagnosisLinesGoToTheLogAndTheSnapshotNeverToTelemetry() async {
+        let h = ControllerHarness()
+        let lines = LineCollector()
+        h.controller.diagLog = { lines.append($0) }
+        let link = await h.joinAndConnect()
+        let line = "grp hb audio mid=0 bytes=0 lost=0 rxlvl=0"
+        link?.emit(.telemetry(GroupTelemetry.diagLine(line, slot: "rx", values: ["mid": 0, "bytes_total": 4096, "lost_total": 0])))
+        XCTAssertTrue(lines.all.contains(line))
+        XCTAssertFalse(h.telemetry.contains(GroupTelemetry.Kind.diagLine), "a diagnosis line is never telemetry")
+        let last = h.controller.diagSnapshot()["last"] as? [String: [String: Int]]
+        XCTAssertEqual(last?["rx:0"]?["bytes_total"], 4096)
+        h.controller.leave()
+    }
+
     func testUplinkCongestionStepsTheCameraDownThenStopsIt() async {
         let h = ControllerHarness()
         let link = await h.joinAndConnect()
@@ -1172,4 +1213,12 @@ final class LockedBox<T>: @unchecked Sendable {
     init(_ value: T) { _value = value }
     var value: T { lock.lock(); defer { lock.unlock() }; return _value }
     func mutate(_ change: (inout T) -> Void) { lock.lock(); change(&_value); lock.unlock() }
+}
+
+/// Thread-safe collector of the controller's diagnosis lines (`diagLog` is called from any thread).
+final class LineCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func append(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return lines }
 }

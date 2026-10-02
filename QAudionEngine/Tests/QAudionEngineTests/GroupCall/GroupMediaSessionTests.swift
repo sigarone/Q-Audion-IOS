@@ -150,6 +150,14 @@ final class SessionHarness: @unchecked Sendable {
         events.compactMap { if case .telemetry(let item) = $0 { return item.kind } else { return nil } }
     }
 
+    /// The `GroupDiagnostics` lines the session handed to the controller.
+    func diagLines() -> [String] {
+        events.compactMap { event -> String? in
+            guard case .telemetry(let item) = event, item.kind == GroupTelemetry.Kind.diagLine else { return nil }
+            return item.attrs["line"] as? String
+        }
+    }
+
     func rejoinReasons() -> [String] {
         events.compactMap { if case .needsRejoin(let reason) = $0 { return reason } else { return nil } }
     }
@@ -1000,6 +1008,42 @@ final class GroupMediaSessionTests: XCTestCase {
         XCTAssertEqual(body["video"] as? Bool, true)
         XCTAssertNil(h.server.jsep(for: "configure").first, "no SDP for a camera toggle")
         XCTAssertEqual(h.publisher.calls.filter { $0.hasPrefix("offer") }.count, 1)
+        h.session.close()
+    }
+
+    /// 2026-10-02: the outcome of the camera `configure` used to be dropped by a `try?`.
+    func testCameraToggleWritesTheConfigureOutcomeToTheDiagnosisLog() async throws {
+        let h = SessionHarness()
+        try await h.session.start(publishVideo: false)
+        await h.session.setPublishVideo(true)
+        let lines = h.diagLines()
+        XCTAssertTrue(lines.contains("grp video camera=1 phase=3 ok=1 code=0 ms=0"), "\(lines)")
+        XCTAssertTrue(lines.contains { $0.hasPrefix("grp video camera=1 phase=4 ok=1 code=0 ms=") }, "\(lines)")
+        h.session.close()
+    }
+
+    /// 2026-10-02: per remote audio stream, what this phone received since the previous
+    /// heartbeat (nothing logged the iPhone's group audio reception before).
+    func testTheHeartbeatReportsTheAudioReceivedPerRemoteStream() async throws {
+        var config = GroupMediaSession.Config()
+        config.reconnectBackoffSeconds = [0.05, 0.05]
+        config.restartWatchdogSeconds = 0.3
+        config.statsIntervalSeconds = 0.05
+        config.heartbeatSeconds = 0.1
+        config.transportCheckAttempts = 3
+        config.transportCheckIntervalMs = 10
+        config.debounceMs = 10
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], config: config)
+        h.server.subscriberStreams = bobStreams()
+        h.subscriber.stats = GroupSubscriberStats(videos: [], availableIncomingBps: nil, audioLevels: ["0": 0.3],
+                                                  audios: [GroupInboundAudioStat(mid: "0", bytesReceived: 4000, packetsLost: 0)])
+        try await h.session.start(publishVideo: true)
+        let rx = await h.waitUntil { h.diagLines().contains("grp hb audio mid=0 bytes=4000 lost=0 rxlvl=30") }
+        XCTAssertTrue(rx, "\(h.diagLines())")
+        XCTAssertTrue(h.diagLines().contains { $0.hasPrefix("grp hb ice send=") })
+        // Unchanged counters on the next heartbeat: nothing received in between.
+        let silent = await h.waitUntil { h.diagLines().contains("grp hb audio mid=0 bytes=0 lost=0 rxlvl=30") }
+        XCTAssertTrue(silent, "\(h.diagLines())")
         h.session.close()
     }
 

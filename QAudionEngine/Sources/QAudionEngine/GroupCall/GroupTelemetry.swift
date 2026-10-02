@@ -29,6 +29,19 @@ public enum GroupTelemetry {
         public static let layerUnconfirmed = "group.layer_unconfirmed"
         public static let rejoin = "group.rejoin"
         public static let iceRestart = "group.ice_restart"
+        /// A `GroupDiagnostics` line for the phone log, carried from the media session to
+        /// the controller. Never sent as telemetry: the controller hands it to `diagLog`.
+        public static let diagLine = "group.diag_line"
+    }
+
+    /// Wraps a `GroupDiagnostics` line (numbers only) for the controller's `diagLog`.
+    /// `slot` + `values`: the same counters as plain numbers, kept by the controller under
+    /// that slot for the bug-report snapshot ("ice", "tx", "rx", "video").
+    public static func diagLine(_ line: String, slot: String? = nil, values: [String: Int] = [:]) -> GroupTelemetryEvent {
+        var attrs: [String: Any] = ["line": line]
+        if let slot = slot { attrs["slot"] = slot }
+        if !values.isEmpty { attrs["values"] = values }
+        return GroupTelemetryEvent(kind: Kind.diagLine, attrs: attrs)
     }
 
     /// Ids are logged with at most 8 characters, never in full.

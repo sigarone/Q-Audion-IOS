@@ -15,7 +15,7 @@ struct BugReportOverlay: View {
                 set: { if !$0 { reporter.dismiss() } }
             )) {
                 BugReportCard(reporter: reporter, note: $note)
-                    .presentationDetents([.height(340)])
+                    .presentationDetents([.height(380)])
                     .presentationDragIndicator(.visible)
             }
     }
@@ -48,25 +48,55 @@ private struct BugReportCard: View {
     // MARK: Header
 
     private var headerBar: some View {
-        HStack {
-            Image(systemName: "ladybug.fill")
-                .foregroundColor(.red)
-                .font(.system(size: 18, weight: .semibold))
-            Text("Segnala un problema")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.primary)
-            Spacer()
-            Button {
-                reporter.dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(Color(.systemGray3))
-                    .font(.system(size: 22))
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "ladybug.fill")
+                    .foregroundColor(.red)
+                    .font(.system(size: 18, weight: .semibold))
+                Text("Segnala un problema")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                Spacer()
+                Button {
+                    reporter.dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(Color(.systemGray3))
+                        .font(.system(size: 22))
+                }
+                .accessibilityLabel("Chiudi")
             }
-            .accessibilityLabel("Chiudi")
+            .padding(.horizontal, 16)
+            .padding(.bottom, openedByText == nil ? 12 : 4)
+            if let openedBy = openedByText {
+                Text(openedBy)
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+    }
+
+    /// W-BUGREPPHANTOM (2026-10-02): the sheet says what opened it. It used to open by
+    /// itself at a 1:1 -> group hand-over (the audio route change moved the volume) and,
+    /// with a red bug and a red button, read like an error of the call; now it also tells
+    /// the user how to leave if they did not mean to report anything.
+    private var openedByText: String? {
+        switch reporter.pendingReport?.source ?? 0 {
+        case BugReporter.TriggerSource.volumeGesture.rawValue:
+            return String(localized: "bug_report.opened_by_volume",
+                          defaultValue: "Si è aperto con i tasti del volume. Se non volevi segnalare nulla, tocca Salta.",
+                          comment: "Bug report sheet — subtitle when the sheet was opened by the volume-button gesture; 'Salta' is the dismiss button of the same sheet")
+        case BugReporter.TriggerSource.shake.rawValue:
+            return String(localized: "bug_report.opened_by_shake",
+                          defaultValue: "Si è aperto scuotendo il telefono. Se non volevi segnalare nulla, tocca Salta.",
+                          comment: "Bug report sheet — subtitle when the sheet was opened by shaking the phone; 'Salta' is the dismiss button of the same sheet")
+        default:
+            return nil
+        }
     }
 
     // MARK: Thumbnail + note

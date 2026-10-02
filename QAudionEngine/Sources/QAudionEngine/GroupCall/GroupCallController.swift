@@ -116,6 +116,12 @@ public final class GroupCallController: @unchecked Sendable {
     private var lastAudioActivation: AudioSessionActivationSource?
     private var thermalObserver: NSObjectProtocol?
     private var powerObserver: NSObjectProtocol?
+    /// Bug-report snapshot of this call (`diagSnapshot()`): the last media error shown,
+    /// each PeerConnection's state code, and the last diagnosis values per slot
+    /// ("ice", "tx", "video", "rx:<mid>"). Numbers only.
+    private var diagLastErrorCode = 0
+    private var diagPcStates: [String: Int] = [:]
+    private var diagSlots: [String: [String: Int]] = [:]
 
     // Tier-1: transient reactions + raised-hand state (in memory only).
     private var _reactionEvents: [ReactionEvent] = []
@@ -162,6 +168,11 @@ public final class GroupCallController: @unchecked Sendable {
     /// `call.media.connected` / `call.media.ended` pair the shared per-call
     /// tracker consumes.
     public var groupTelemetry: ((_ kind: String, _ callId: String?, _ attrs: [String: Any]) -> Void)?
+
+    /// Diagnosis lines for the phone log (`GroupDiagnostics`: enum codes and counters
+    /// only, shapes the log shipper keeps verbatim). The app writes them with RTLog tag
+    /// "group". Called from any thread.
+    public var diagLog: ((_ line: String) -> Void)?
 
     /// Sends one sealed control envelope to `peer` over the pairwise control
     /// channel (AppState owns the ratchet / KMS pre-bootstrap). true = handed off.
@@ -377,17 +388,24 @@ public final class GroupCallController: @unchecked Sendable {
 
     /// Camera on / off: capture, then `configure video:true|false` on the
     /// publisher (no renegotiation). false = it did not change.
+    ///
+    /// Every step goes to the phone log (`GroupDiagnostics.videoLine`): the request,
+    /// the capturer's outcome here, the `configure` and the first encoded frame in
+    /// `GroupMediaSession`. Before, a camera that never published left no trace.
     @discardableResult
     public func setVideoEnabled(_ enabled: Bool) async -> Bool {
+        diagVideo(camera: enabled, phase: .requested, ok: true)
         lock.lock()
         let current = link
         lock.unlock()
         guard let current = current else {
             print("[GroupCallController] setVideoEnabled(\(enabled)) — no media link")
+            diagVideo(camera: enabled, phase: .noLink, ok: false)
             return false
         }
         if !enabled {
-            _ = await current.setCameraEnabled(false)
+            let stopped = await current.setCameraEnabled(false)
+            diagVideo(camera: false, phase: .camera, ok: stopped == .stopped, code: GroupDiagnostics.cameraCode(stopped))
             await current.setPublishVideo(false)
             lock.lock()
             cameraOn = false
@@ -395,7 +413,10 @@ public final class GroupCallController: @unchecked Sendable {
             lock.unlock()
             return true
         }
+        let startedAtMs = nowMs()
         let result = await current.setCameraEnabled(true)
+        diagVideo(camera: true, phase: .camera, ok: result == .started,
+                  code: GroupDiagnostics.cameraCode(result), ms: Int(nowMs() - startedAtMs))
         switch result {
         case .started:
             lock.lock()
@@ -408,12 +429,69 @@ public final class GroupCallController: @unchecked Sendable {
         case .stopped:
             return false
         case .permissionDenied:
-            onMediaError?(.cameraPermissionDenied)
+            reportMediaError(.cameraPermissionDenied)
             return false
         case .noCamera, .notReady:
-            onMediaError?(.cameraUnavailable)
+            reportMediaError(.cameraUnavailable)
             return false
         }
+    }
+
+    // MARK: - Diagnosis
+
+    /// A camera step for the phone log, also kept as the "video" slot of `diagSnapshot()`.
+    private func diagVideo(camera: Bool, phase: GroupDiagnostics.VideoPhase, ok: Bool, code: Int = 0, ms: Int = 0) {
+        lock.lock()
+        diagSlots["video"] = ["camera": camera ? 1 : 0, "phase": phase.rawValue, "ok": ok ? 1 : 0, "code": code, "ms": ms]
+        lock.unlock()
+        diagLog?(GroupDiagnostics.videoLine(camera: camera, phase: phase, ok: ok, code: code, ms: ms))
+    }
+
+    /// A media error the user is about to be shown: remembered for the bug report, then
+    /// reported (the app logs `grp error code=<n>` and shows the toast).
+    private func reportMediaError(_ error: GroupCallMediaError) {
+        lock.lock()
+        diagLastErrorCode = GroupDiagnostics.errorCode(error)
+        lock.unlock()
+        onMediaError?(error)
+    }
+
+    /// A diagnosis line from the media session (`GroupTelemetry.Kind.diagLine`): kept
+    /// under its slot for the bug report, then handed to `diagLog`. Never telemetry.
+    private func noteDiagLine(_ event: GroupTelemetryEvent) {
+        guard let line = event.attrs["line"] as? String else { return }
+        if let slot = event.attrs["slot"] as? String, let values = event.attrs["values"] as? [String: Int] {
+            var key = slot
+            if slot == "rx", let mid = values["mid"] { key = "rx:\(mid)" }
+            lock.lock()
+            diagSlots[key] = values
+            lock.unlock()
+        }
+        diagLog?(line)
+    }
+
+    /// The group media state for the bug report (`AppState.buildDiagSnapshotJSON`):
+    /// booleans and numbers only, never an id, a key or a pseudonym.
+    public func diagSnapshot() -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        var snapshot: [String: Any] = [
+            "in_call": activeCallId != nil,
+            "has_link": link != nil,
+            "link_generation": linkGeneration,
+            "media_connected": mediaConnected,
+            "media_join_requested": mediaJoinRequested,
+            "camera_on": cameraOn,
+            "wants_video": wantsVideo,
+            "video_stopped_by_policy": videoStoppedByPolicy,
+            "muted": muted,
+            "created_locally": createdLocally,
+            "backgrounded": backgrounded,
+            "last_error_code": diagLastErrorCode,
+        ]
+        if !diagPcStates.isEmpty { snapshot["pc_states"] = diagPcStates }
+        if !diagSlots.isEmpty { snapshot["last"] = diagSlots }
+        return snapshot
     }
 
     // MARK: - Tiles
@@ -602,6 +680,9 @@ public final class GroupCallController: @unchecked Sendable {
         tokenRefreshTimer = nil
         rejoinReasonInFlight = nil
         desiredTiles.removeAll()
+        diagLastErrorCode = 0
+        diagPcStates.removeAll()
+        diagSlots.removeAll()
         let newCoordinator = GroupE2eeCoordinator(
             callId: callId, selfUserId: manager.selfUserId, environment: GroupCallE2eeEnvironment(controller: self, queue: e2eeQueue))
         coordinator = newCoordinator
@@ -1236,11 +1317,18 @@ public final class GroupCallController: @unchecked Sendable {
         case .audioLevels(let byPseudonym):
             handleAudioLevels(byPseudonym)
         case .telemetry(let telemetry):
-            emitTelemetry(telemetry)
+            if telemetry.kind == GroupTelemetry.Kind.diagLine {
+                noteDiagLine(telemetry)
+            } else {
+                emitTelemetry(telemetry)
+            }
         }
     }
 
     private func handlePcState(_ role: GroupTelemetry.PcRole, _ pcState: GroupPcState, callId: String) {
+        lock.lock()
+        diagPcStates[role.rawValue] = GroupDiagnostics.pcStateCode(pcState)
+        lock.unlock()
         switch pcState {
         case .connected:
             lock.lock()
@@ -1378,7 +1466,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// problem never gets here).
     private func failMedia(_ error: GroupCallMediaError) {
         print("[GroupCallController] media failed: \(error)")
-        onMediaError?(error)
+        reportMediaError(error)
         guard error.isFatal else { return }
         var reason = "media_error"
         if case .other(let code) = error { reason = "media_error_\(code.prefix(16))" }
