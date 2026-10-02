@@ -172,17 +172,24 @@ def _new_ssh_client():
     pinned = _pinned_known_hosts()
     if pinned.is_file():
         files.append(pinned)
+    # paramiko.hostkeys.InvalidHostKey (a line whose key does not decode) derives
+    # from Exception only, so it is named explicitly; looked up lazily because the
+    # unit tests may stub paramiko without a hostkeys submodule.
+    bad_line = getattr(getattr(paramiko, "hostkeys", None), "InvalidHostKey", ValueError)
     for p in files:
         try:
             known.load(str(p))
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, bad_line) as e:
             print("ERROR: cannot read known_hosts file %s: %s" % (p, e),
                   file=sys.stderr)
             sys.exit(1)
     try:
         known.load(os.path.expanduser("~/.ssh/known_hosts"))
-    except (OSError, ValueError):
-        pass  # the user's own file is optional; fewer known keys is still fail-closed
+    except (OSError, ValueError, bad_line):
+        # The user's own file is optional, and one bad line in it must not stop
+        # the tools: paramiko stops reading at that line, so fewer keys are known,
+        # which is still fail-closed (the pin above is already loaded).
+        pass
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
     return client
 

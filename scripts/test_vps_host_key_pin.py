@@ -286,6 +286,31 @@ for name in SCRIPTS:
               == fp_of_line(STALE),
               "%s env file must take precedence over the pinned file" % tag)
 
+    # 3b'. a line whose key does not decode (paramiko InvalidHostKey, NOT a
+    #      ValueError): in the optional ~/.ssh/known_hosts it is skipped and the pin
+    #      still wins; in the env file it is a hard error, never a traceback.
+    BAD_LINE = "198.51.100.1 ssh-ed25519 !!!notbase64!!!"
+    user_kh = os.path.join(TMP, ".ssh", "known_hosts")
+    saved = open(user_kh).read()
+    try:
+        write(user_kh, BAD_LINE + "\n" + saved)
+        code, err, exc = run_expect_exit(mod._new_ssh_client)
+        check(code is None and exc is None,
+              "%s a malformed ~/.ssh/known_hosts line must not stop the tool (got %r %r)"
+              % (tag, code, exc))
+        c4 = mod._new_ssh_client()
+        check(mod._key_fingerprint(c4.get_host_keys().lookup(PROD_HOST)["ssh-ed25519"]) == PROD_FP
+              and isinstance(c4._policy, paramiko.RejectPolicy),
+              "%s with a malformed ~/.ssh/known_hosts the pin must still be loaded" % tag)
+    finally:
+        write(user_kh, saved)
+    badenv = write(os.path.join(TMP, "bad_known_hosts"), BAD_LINE + "\n")
+    with env(QAUDION_VPS_KNOWN_HOSTS=badenv):
+        code, err, exc = run_expect_exit(mod._new_ssh_client)
+        check(code == 1 and exc is None and "cannot read known_hosts file" in err,
+              "%s a malformed QAUDION_VPS_KNOWN_HOSTS file must exit 1 cleanly (got %r %r)"
+              % (tag, code, exc))
+
     # 3c. _connect_verified error handling.
     other_key = paramiko.HostKeys(extra).lookup("198.51.100.7")["ssh-ed25519"]
     fc = FakeClient(AssertionError("connect() must not be reached"))
