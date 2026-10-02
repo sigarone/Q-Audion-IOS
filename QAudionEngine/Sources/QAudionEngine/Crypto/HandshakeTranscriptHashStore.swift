@@ -1,14 +1,14 @@
 import Foundation
 
-/// `SHA-256(ACCEPT_v5)` of each call's latest completed handshake round, keyed by the lowercased
+/// `SHA-256(ACCEPT_v6)` of each call's latest completed handshake round, keyed by the lowercased
 /// call id (WIRE_SPEC §3.7 / §4).
 ///
-/// The handshake derives the session key from this hash (the transcript-bound KDF is
-/// unconditional) and the in-call SAS is derived from the session key AND this hash
-/// (`ComputeSasUseCase.invoke(sessionKey:transcriptHash:)`), so a matching SAS also authenticates
-/// both signers' identity keys and both DTLS fingerprints: a relay that rewrote any of them makes
-/// the two legs derive different words. The integration writes the hash BEFORE it announces the
-/// new session key; the app reads it when it renders the SAS words.
+/// The handshake derives the session key from this hash (the transcript-bound KDF is unconditional), so
+/// a stored hash is the marker that a call's session key is bound to the signed transcript
+/// (`QAudionCallIntegration.isSessionKeyTranscriptBound`: both signers' identity keys, both DTLS
+/// fingerprints and the SAS commitment). The in-call SAS no longer reads it: the words are derived from
+/// the ROUND-1 session key, the round-1 accept hash AND the caller's committed nonce, kept by
+/// `SasCommitBook`. The integration writes the hash BEFORE it announces the new session key.
 ///
 /// Only the last few calls are retained: the store has no notion of call end, so older entries are
 /// evicted by insertion order.

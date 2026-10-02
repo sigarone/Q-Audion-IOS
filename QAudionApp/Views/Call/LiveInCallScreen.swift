@@ -296,6 +296,7 @@ struct LiveInCallScreen: View {
                 // path. While the key is nil (current state in most
                 // builds) the array is empty and the panel hides.
                 sasWords: appState.callSasWords,
+                sasWaiting: appState.callSasWaiting,
                 // W368: surface SAS verification persistence — if the
                 // user already confirmed coincidence with this peer
                 // for the current SAS-words fingerprint, render the

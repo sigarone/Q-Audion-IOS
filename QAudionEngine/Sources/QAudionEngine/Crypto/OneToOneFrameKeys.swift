@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Directional 1:1 frame keys (transcript v5, owner decision O1; WIRE_SPEC §11).
+/// Directional 1:1 frame keys (transcript v6, owner decision O1; WIRE_SPEC §11).
 ///
 /// For each 1:1 key round (the initial ACCEPT and every re-key round) the call derives TWO
 /// FrameCryptor keys from that round's transcript-bound session key, one per direction:
@@ -12,7 +12,7 @@ import CryptoKit
 /// frameKey_a2o = same with ":a2o"
 /// ```
 ///
-/// `o` is the OFFERER (the signer of `OFFER_v5`, i.e. the caller), `a` the ACCEPTOR. ASCII
+/// `o` is the OFFERER (the signer of `OFFER_v6`, i.e. the caller), `a` the ACCEPTOR. ASCII
 /// strings, no NUL, `callId` exactly as in the transcript. These keys REPLACE the single key both
 /// directions used to share (the raw session key, audio and video alike): with one key per
 /// direction a peer's own frames reflected back at it can no longer authenticate. The native

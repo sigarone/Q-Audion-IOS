@@ -8,13 +8,13 @@ import CryptoKit
 /// verifies; one signed by another key is held again; an existing pin that differs is never replaced.
 final class SasSignerPinTests: XCTestCase {
 
-    private typealias F = V5TestFixtures
+    private typealias F = V6TestFixtures
 
     private let peer = "peer-0001"
     private let keyA = F.signer(seed: 61)
     private let keyB = F.signer(seed: 62)
 
-    /// A signed OFFER_v5 bundle of `round` under `signer` (every value synthetic). `signedBy` signs the
+    /// A signed OFFER_v6 bundle of `round` under `signer` (every value synthetic). `signedBy` signs the
     /// transcript with ANOTHER private key while the bundle still claims `signer`'s public key (a relay
     /// replaying the peer's public key over its own key material).
     private func signedOffer(
@@ -25,6 +25,7 @@ final class SasSignerPinTests: XCTestCase {
             kind: .offer, callId: F.callId,
             pqcPublicKey: Data(repeating: 0xA1, count: 1568).base64EncodedString(),
             x25519PublicKey: Data(repeating: 0xA2, count: 32).base64EncodedString(),
+            sasCommit: round == 1 ? F.sasCommit.base64EncodedString() : nil,
             rekeyNonce: F.rekeyNonce.base64EncodedString(), rekeyRound: round)
         let t = try XCTUnwrap(QAudionCallIntegration.offerTranscript(
             from: unsigned, callId: F.callId, signerKeyRaw: signer.pubRaw,
@@ -34,8 +35,9 @@ final class SasSignerPinTests: XCTestCase {
             kind: .offer, callId: F.callId,
             pqcPublicKey: unsigned.pqcPublicKey, x25519PublicKey: unsigned.x25519PublicKey,
             signerIdentityKey: signer.pubRaw.base64EncodedString(),
-            sigV5: sig.base64EncodedString(),
+            sigV6: sig.base64EncodedString(),
             dtlsFingerprint: F.fingerprintText("offerer"),
+            sasCommit: unsigned.sasCommit,
             rekeyNonce: unsigned.rekeyNonce, rekeyRound: round)
     }
 

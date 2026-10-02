@@ -6,7 +6,7 @@ import XCTest
 /// WebRTC binary and is covered by the on-device checks; this suite uses fingerprint-only contexts.
 final class CallDtlsContextTests: XCTestCase {
 
-    private typealias F = V5TestFixtures
+    private typealias F = V6TestFixtures
 
     private func makeContext(_ callId: String = F.callId) -> CallDtlsContext {
         #if canImport(WebRTC)

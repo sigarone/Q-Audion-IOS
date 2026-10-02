@@ -6,7 +6,7 @@ import CryptoKit
 final class OneToOneFrameKeysTests: XCTestCase {
 
     private let sessionKey = Data((0..<32).map { UInt8($0) })
-    private let callId = V5TestFixtures.callId
+    private let callId = V6TestFixtures.callId
 
     private func hkdf(_ info: String) -> Data {
         HKDF<SHA256>.deriveKey(

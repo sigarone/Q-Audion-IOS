@@ -28,5 +28,8 @@ public enum SasConstants {
     public static let infoWordsBytes = Data("sas-words-v1".utf8)
 
     public static let digitCount = 6
+    /// Number of words of the in-call SAS (D5: 6 words = 48 bits). The ONLY place the count is set:
+    /// the HKDF output length (`ComputeSasUseCase.hkdfOutputBytes = 3 * wordCount`) and every
+    /// consumer derive from it, so a later display-only change to 4 words is this one line.
     public static let wordCount = 6
 }

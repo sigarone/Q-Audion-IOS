@@ -7,7 +7,7 @@ import CryptoKit
 /// honestly claiming `ratchetV5=false` is flagged (`.abort("ratchet_v5_downgrade")`).
 final class HandshakeSigningPolicyRatchetV5Tests: XCTestCase {
 
-    private typealias F = V5TestFixtures
+    private typealias F = V6TestFixtures
 
     private func evaluate(
         seed: UInt8, signWith: UInt8? = nil, advertisedRatchetV5: Bool, pinnedCapable: Bool
@@ -18,7 +18,7 @@ final class HandshakeSigningPolicyRatchetV5Tests: XCTestCase {
         let sig = try signer.signature(for: t)
         let v = HandshakeSigningPolicy.evaluate(
             signerIdentityKeyB64: pubRaw.base64EncodedString(),
-            sigV5B64: sig.base64EncodedString(),
+            sigV6B64: sig.base64EncodedString(),
             dtlsFingerprintText: F.fingerprintText("offerer"),
             transcript: t,
             pinnedKey: nil, serverFetchedKey: pubRaw,

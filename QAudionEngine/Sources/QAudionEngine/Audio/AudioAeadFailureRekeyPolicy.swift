@@ -60,7 +60,7 @@ public enum AudioAeadFailureRekeyPolicy {
     /// scattered/just-outside-window calibration cases added alongside this
     /// flip) and safe to always run.
     ///
-    /// **OFF under transcript v5 (WIRE_SPEC §11.7).** In a 1:1 call a tag failure is an
+    /// **OFF under transcript v6 (WIRE_SPEC §11.7).** In a 1:1 call a tag failure is an
     /// attacker-or-relay artefact (a reflected or replayed frame, a replay-window drop), not a key
     /// problem, and a receiver MUST NOT start or request a rekey because of it: the key only changes
     /// through a signed rekey round of the call's own schedule (§3.7). Honouring a burst of failures

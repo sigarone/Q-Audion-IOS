@@ -2,12 +2,15 @@ import Foundation
 import CryptoKit
 @testable import QAudionEngine
 
-/// Shared builders for the transcript-v5 tests. Every value is synthetic (no real ids, hosts or
+/// Shared builders for the transcript-v6 tests. Every value is synthetic (no real ids, hosts or
 /// keys): fingerprints are SHA-256 of fixed ASCII labels, keys come from fixed seeds.
-enum V5TestFixtures {
+enum V6TestFixtures {
 
     static let callId = "11111111-2222-3333-4444-555555555555"
     static let rekeyNonce = Data((0..<8).map { UInt8($0 &+ 1) })
+
+    /// A synthetic 32-byte SAS commitment (round-1 OFFER field).
+    static let sasCommit = Data(repeating: 0xC1, count: 32)
 
     static let allCaps = HandshakeTranscript.Caps9(
         ratchetV3: true, sframeV1: true, vkeyV1: true, sessionKdfV3: true, ratchetV4: true,
@@ -27,8 +30,9 @@ enum V5TestFixtures {
         return (priv, priv.publicKey.rawRepresentation)
     }
 
-    /// A valid OFFER_v5 for `signerKey` (offerer fingerprint label "offerer").
-    static func offerTranscript(signerKey: Data, dtls: Data = fingerprint("offerer")) -> Data {
+    /// A valid OFFER_v6 for `signerKey` (offerer fingerprint label "offerer"). Round 1 carries the
+    /// synthetic commitment, any other round none.
+    static func offerTranscript(signerKey: Data, dtls: Data = fingerprint("offerer"), round: UInt32 = 1) -> Data {
         HandshakeTranscript.offer(
             callId: callId, signerIdentityKey: signerKey,
             epochId: HandshakeSigningPolicy.placeholderEpochId,
@@ -37,10 +41,11 @@ enum V5TestFixtures {
             strongBoxPublicKey: nil, dualCurvePublicKey: nil,
             caps: allCaps, ratchetV: HandshakeSigningPolicy.ratchetV, suiteId: HandshakeSigningPolicy.suiteId,
             pskFingerprints: nil, pskRoles: nil,
-            rekeyNonce: rekeyNonce, rekeyRound: 1, dtlsFingerprint: dtls)!
+            rekeyNonce: rekeyNonce, rekeyRound: round, dtlsFingerprint: dtls,
+            sasCommit: round == 1 ? sasCommit : nil)!
     }
 
-    /// A valid ACCEPT_v5 binding `SHA-256(offer)` (acceptor fingerprint label "acceptor").
+    /// A valid ACCEPT_v6 binding `SHA-256(offer)` (acceptor fingerprint label "acceptor").
     static func acceptTranscript(
         signerKey: Data, offer: Data, dtls: Data = fingerprint("acceptor"), round: UInt32 = 1
     ) -> Data {
