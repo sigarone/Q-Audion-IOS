@@ -14289,29 +14289,43 @@ final class AppState: ObservableObject {
         for integration in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
             integration.noteSocketReauth(callId: cid)
         }
-        guard let state = kcCallStates[cid] else { return }
         // The integration that carries the SAS context (and so the budget) of this call: the caller's or the responder's.
         guard let integration = sasIntegration(forCallId: cid) else { return }
-        let due = ConfirmResend.due(
-            isCaller: integration.isSasCaller(callId: cid),
-            revealBound: integration.hasBoundSasAccept(callId: cid),
-            isRound1: state.isRound1,
-            ownKcMacSent: state.ownMacWire != nil && state.ownMacSent,
-            peerKcMacVerified: state.kcStatus == .verified)
+        let due: ConfirmResend.Due
+        var ownWire: String?
+        var peerId = ""
+        if let state = kcCallStates[cid] {
+            due = ConfirmResend.due(
+                isCaller: integration.isSasCaller(callId: cid),
+                revealBound: integration.hasBoundSasAccept(callId: cid),
+                isRound1: state.isRound1,
+                ownKcMacSent: state.ownMacWire != nil && state.ownMacSent,
+                peerKcMacVerified: state.kcStatus == .verified)
+            if due.ownKcMac { ownWire = state.ownMacWire }
+            peerId = state.peerId
+        } else {
+            // No KCMAC context yet: the caller's REVEAL may still be in flight on a socket that just died (the
+            // context is armed right after the awaited REVEAL send). A caller that bound its ACCEPT has no callee MAC
+            // either, so its REVEAL is due; there is no MAC of its own to re-send.
+            due = ConfirmResend.due(
+                isCaller: integration.isSasCaller(callId: cid),
+                revealBound: integration.hasBoundSasAccept(callId: cid),
+                isRound1: true, ownKcMacSent: false, peerKcMacVerified: false)
+        }
         guard due.any else { return }
         guard integration.takeResendEvent(callId: cid) else {
             print("[AppState] re-send budget spent — nothing re-sent after the re-authentication callId=\(cid.prefix(8))…")
             return
         }
-        let peerId = state.peerId
-        let ownWire: String? = due.ownKcMac ? state.ownMacWire : nil
         let provider = liveProvider
-        if let ownWire { OpaqueSelfEchoFilter.shared.markSent(ownWire) }
+        let wireToSend: String? = ownWire
+        let peerToSend: String = peerId
+        if let wireToSend { OpaqueSelfEchoFilter.shared.markSent(wireToSend) }
         // The REVEAL leaves before the KCMAC, on the same ordered path, exactly as the first sends did.
         Task {
             if due.reveal { await integration.resendRevealAfterReauth(callId: cid) }
-            if let ownWire, let provider {
-                try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: ownWire)
+            if let wireToSend, let provider, !peerToSend.isEmpty {
+                try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerToSend, payload: wireToSend)
             }
         }
         print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) callId=\(cid.prefix(8))…")

@@ -229,7 +229,7 @@ final class ConfirmTimersTests: XCTestCase {
         let takeAt = try XCTUnwrap(handler.range(of: "integration.takeResendEvent(callId: cid)"))
         XCTAssertLessThan(dueAt.lowerBound, takeAt.lowerBound, "nothing due: no budget is consumed")
         let revealAt = try XCTUnwrap(handler.range(of: "await integration.resendRevealAfterReauth(callId: cid)"))
-        let macAt = try XCTUnwrap(handler.range(of: "sendOpaqueMessageString(recipientId: peerId, payload: ownWire)"))
+        let macAt = try XCTUnwrap(handler.range(of: "sendOpaqueMessageString(recipientId: peerToSend, payload: wireToSend)"))
         XCTAssertLessThan(revealAt.lowerBound, macAt.lowerBound, "the REVEAL leaves before the KCMAC")
         XCTAssertTrue(handler.contains("ownKcMacSent: state.ownMacWire != nil && state.ownMacSent"),
                       "a MAC that was never sent is never re-sent")
@@ -246,6 +246,8 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertTrue(handler.contains("guard let integration = sasIntegration(forCallId: cid) else { return }"),
                       "the budget lives in the integration that carries the call's SAS context, whatever the round's role")
         XCTAssertTrue(handler.contains("isCaller: integration.isSasCaller(callId: cid),"))
+        XCTAssertTrue(handler.contains("revealBound: integration.hasBoundSasAccept(callId: cid), isRound1: true, ownKcMacSent: false, peerKcMacVerified: false)"),
+                      "no KCMAC context yet (the REVEAL is still in flight): a bound caller's REVEAL is due, nothing else")
     }
 
     // MARK: - T5: one event per confirmation expiry
