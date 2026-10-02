@@ -2526,7 +2526,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     case .bindAndReveal:
                         round1RevealWire = revealWire
                         lock.withLock { boundRound1AcceptKeyByCall[normalizedIdForDedup] = acceptDedupKey }
-                    case .resendReveal, .drop:
+                    case .resendReveal:
+                        // A byte-identical duplicate of the bound ACCEPT that reached this point (the pre-verify
+                        // short-circuit above normally catches it): `callerOnAccept` took ONE event of the re-send
+                        // budget for it, so its REVEAL goes again; nothing else of the ACCEPT is processed.
+                        if let wire = revealWire { await sendSasReveal(wire, callId: callId, resend: true) }
+                        return
+                    case .drop:
                         print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… lost the round-1 binding race — dropped")
                         return
                     }

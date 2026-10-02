@@ -7754,7 +7754,7 @@ final class AppState: ObservableObject {
             let statsWaitMs: Int? = DtlsFingerprint.isStatsTimeout(stage: stage) ? controller?.dtlsStatsElapsedMs : nil
             Task { @MainActor [weak self] in
                 if let statsWaitMs, let self {
-                    let integration = self.callService.callIntegration ?? self.responderCallIntegration
+                    let integration = self.sasIntegration(forCallId: cid)
                     self.reportConfirmTimeout(ConfirmTimeoutEvent(
                         timer: .dtlsfpStats, elapsedMs: statsWaitMs, round: 1,
                         reauths: integration?.sasCommit.reauths(
@@ -14068,6 +14068,22 @@ final class AppState: ObservableObject {
         endCall(notifyPeerInBand: false)
     }
 
+    /// R-COMMIT-FIELD — a handshake bundle of the call peer that could not even be decoded: the call ends
+    /// with `handshake_malformed` and a hangup, on every platform alike.
+    @MainActor
+    private func handleUndecodableHandshakeBundle(callId: String, senderId: String) {
+        guard callContactId == senderId else {
+            print("[AppState] undecodable handshake bundle dropped — sender \(senderId.prefix(8))… is not the call peer")
+            return
+        }
+        guard let active = canonicalActiveCallId(), active == callId.lowercased() else {
+            print("[AppState] undecodable handshake bundle dropped — not the active call callId=\(callId.prefix(8))…")
+            return
+        }
+        RTLog.error("call", "hsmalformed undecodable=1")
+        handleHandshakeFatal(callId: callId, reason: "handshake_malformed")
+    }
+
     /// T2 / R-ANSWER-FIRST — a `call_incoming` without a `call_id` cannot run the v6 handshake (the SAS
     /// commitment binds the callId). It never rings, never gets a ring plan, an ACCEPT or any media: it ends
     /// as `handshake_malformed`. There is no call id to name in a hangup, so the end is local (a hangup
@@ -14088,22 +14104,6 @@ final class AppState: ObservableObject {
                 }
             }
         }
-    }
-
-    /// R-COMMIT-FIELD — a handshake bundle of the call peer that could not even be decoded: the call ends
-    /// with `handshake_malformed` and a hangup, on every platform alike.
-    @MainActor
-    private func handleUndecodableHandshakeBundle(callId: String, senderId: String) {
-        guard callContactId == senderId else {
-            print("[AppState] undecodable handshake bundle dropped — sender \(senderId.prefix(8))… is not the call peer")
-            return
-        }
-        guard let active = canonicalActiveCallId(), active == callId.lowercased() else {
-            print("[AppState] undecodable handshake bundle dropped — not the active call callId=\(callId.prefix(8))…")
-            return
-        }
-        RTLog.error("call", "hsmalformed undecodable=1")
-        handleHandshakeFatal(callId: callId, reason: "handshake_malformed")
     }
 
     /// W-KCMAC — fired from `QAudionCallIntegration.onKcMacReady` on BOTH the caller and responder
@@ -14245,7 +14245,9 @@ final class AppState: ObservableObject {
         state.deadlineTask?.cancel()
         emitKeyConfirmationTelemetry(callId: callId, state: state)
         if expired {
-            let integration = state.isInitiator ? callService.callIntegration : responderCallIntegration
+            // The integration that carries this call's SAS context (a rekey round started by the callee has the callee
+            // as `init`, so the role of the round does not pick the integration).
+            let integration = sasIntegration(forCallId: callId)
             let nowMs = SasCommit.monotonicNowMs()
             reportConfirmTimeout(ConfirmTimeoutEvent(
                 timer: ConfirmTimerName.kcMac(isRound1: state.isRound1, isInitiator: state.isInitiator),
@@ -14288,9 +14290,10 @@ final class AppState: ObservableObject {
             integration.noteSocketReauth(callId: cid)
         }
         guard let state = kcCallStates[cid] else { return }
-        guard let integration = state.isInitiator ? callService.callIntegration : responderCallIntegration else { return }
+        // The integration that carries the SAS context (and so the budget) of this call: the caller's or the responder's.
+        guard let integration = sasIntegration(forCallId: cid) else { return }
         let due = ConfirmResend.due(
-            isCaller: state.isInitiator && state.isRound1,
+            isCaller: integration.isSasCaller(callId: cid),
             revealBound: integration.hasBoundSasAccept(callId: cid),
             isRound1: state.isRound1,
             ownKcMacSent: state.ownMacWire != nil && state.ownMacSent,

@@ -54,6 +54,18 @@ public enum ConfirmTimerName: String, Equatable, Sendable {
     /// The DTLS statistics check (§3.8.4).
     case dtlsfpStats = "dtlsfp_stats"
 
+    /// A one-digit code of the timer for the log line (the shipped log gate keeps this shape; the telemetry event
+    /// carries the name): 1 reveal, 2 kcmac_r1_caller, 3 kcmac_r1_callee, 4 kcmac_round, 5 dtlsfp_stats.
+    public var code: Int {
+        switch self {
+        case .reveal: return 1
+        case .kcmacR1Caller: return 2
+        case .kcmacR1Callee: return 3
+        case .kcmacRound: return 4
+        case .dtlsfpStats: return 5
+        }
+    }
+
     /// The timer of one KCMAC wait: round 1 has the two long exceptions, every other round the ordinary window.
     public static func kcMac(isRound1: Bool, isInitiator: Bool) -> ConfirmTimerName {
         guard isRound1 else { return .kcmacRound }
@@ -80,9 +92,11 @@ public struct ConfirmTimeoutEvent: Equatable, Sendable {
         self.callId8 = String(callId.prefix(8))
     }
 
-    /// The one local log line (hsfatal style: `key=value` tokens only, numbers and the timer name).
+    /// The one local log line (hsfatal style: `key=value` tokens, numbers only). `why` is the timer code
+    /// (`ConfirmTimerName.code`). The words are the ones the remote log gate keeps verbatim
+    /// (`scripts/test_ship_ios_redactor_hardening.py`, group CONFTO); the telemetry event carries the timer name.
     public var logLine: String {
-        "confirm_timeout timer=\(timer.rawValue) ms=\(elapsedMs) round=\(round) reauths=\(reauths) id=\(callId8)"
+        "timeout why=\(timer.code) ms=\(elapsedMs) round=\(round) reauths=\(reauths) id=\(callId8)"
     }
 }
 

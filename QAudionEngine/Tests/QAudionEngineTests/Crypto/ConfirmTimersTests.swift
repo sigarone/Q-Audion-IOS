@@ -241,6 +241,11 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertFalse(integration.contains("callerResendReveal("), "no REVEAL re-send outside the shared budget")
         XCTAssertTrue(integration.contains("sasCommit.callerRevealForDuplicateAccept(callId: callId)"),
                       "a duplicate ACCEPT is one event of the same budget")
+        XCTAssertTrue(integration.contains("case .resendReveal: if let wire = revealWire { await sendSasReveal(wire, callId: callId, resend: true) } return"),
+                      "an event the book counted is never a silent drop")
+        XCTAssertTrue(handler.contains("guard let integration = sasIntegration(forCallId: cid) else { return }"),
+                      "the budget lives in the integration that carries the call's SAS context, whatever the round's role")
+        XCTAssertTrue(handler.contains("isCaller: integration.isSasCaller(callId: cid),"))
     }
 
     // MARK: - T5: one event per confirmation expiry
@@ -249,7 +254,7 @@ final class ConfirmTimersTests: XCTestCase {
         let full = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         let event = ConfirmTimeoutEvent(timer: .kcmacR1Callee, elapsedMs: 15_007, round: 1, reauths: 2, callId: full)
         XCTAssertEqual(event.callId8, "aaaaaaaa")
-        XCTAssertEqual(event.logLine, "confirm_timeout timer=kcmac_r1_callee ms=15007 round=1 reauths=2 id=aaaaaaaa")
+        XCTAssertEqual(event.logLine, "timeout why=3 ms=15007 round=1 reauths=2 id=aaaaaaaa")
         XCTAssertFalse(event.logLine.contains(full))
         XCTAssertFalse(event.logLine.contains("bbbb"), "the call id is cut to 8 characters")
         // negative inputs are clamped, never printed as such
@@ -269,6 +274,8 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertEqual(ConfirmTimerName.kcMac(isRound1: true, isInitiator: false), .kcmacR1Callee)
         XCTAssertEqual(ConfirmTimerName.kcMac(isRound1: false, isInitiator: true), .kcmacRound)
         XCTAssertEqual(ConfirmTimerName.kcMac(isRound1: false, isInitiator: false), .kcmacRound)
+        XCTAssertEqual([ConfirmTimerName.reveal, .kcmacR1Caller, .kcmacR1Callee, .kcmacRound, .dtlsfpStats].map { $0.code },
+                       [1, 2, 3, 4, 5], "the code of the shipped log line")
     }
 
     func testReauthsAreCountedPerCallInsideTheWaitThatExpired() {
@@ -411,7 +418,7 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertLessThan(guardAt.lowerBound, ageAt.lowerBound, "before the age gate, the ring and every provisioning step")
         XCTAssertTrue(appCode.contains("sendHangup(recipientId: senderId, reason: \"handshake_malformed\")"))
         let reject = code(try slice(app, from: "private func rejectIncomingCallWithoutCallId(senderId: String) {",
-                                    to: "/// R-COMMIT-FIELD — a handshake bundle of the call peer that could not even be decoded"))
+                                    to: "/// W-KCMAC — fired from `QAudionCallIntegration.onKcMacReady` on BOTH"))
         XCTAssertFalse(reject.contains("latchIncomingNativeSrtpSnapshot"), "no ring plan")
         XCTAssertFalse(reject.contains("reportIncomingCall"), "no ring")
 
