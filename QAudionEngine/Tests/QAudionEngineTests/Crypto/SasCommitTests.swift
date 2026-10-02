@@ -460,7 +460,7 @@ final class SasCommitTests: XCTestCase {
         let kcmacAt = try XCTUnwrap(tail.range(of: "onKcMacReady?(KcMacReadyEvent("))
         XCTAssertLessThan(revealAt.lowerBound, kcmacAt.lowerBound)
         // and the bind happens before the REVEAL, before any session work
-        let bindAt = try XCTUnwrap(tail.range(of: "sasCommit.callerOnAccept(callId: callId"))
+        let bindAt = try XCTUnwrap(tail.range(of: "sasCommit.callerOnAccept("))
         XCTAssertLessThan(bindAt.lowerBound, revealAt.lowerBound)
         let decapAt = try XCTUnwrap(tail.range(of: "try pqc.decapsulate("))
         XCTAssertLessThan(bindAt.lowerBound, decapAt.lowerBound, "the bind precedes the crypto work and every suspension")

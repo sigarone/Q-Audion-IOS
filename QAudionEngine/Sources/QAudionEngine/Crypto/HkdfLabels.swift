@@ -67,7 +67,7 @@ public enum HkdfLabels {
     /// `sasV6 || SHA-256(ACCEPT_v6 of round 1) || sasNonce` (15 + 32 + 32 = 79 bytes). A label of its
     /// own, distinct from the session-key KDF's `info` prefix (`hybridPqcSessionKey`), is required
     /// because both derivations fold in the same transcript hash. It replaces the retired
-    /// `q-audion-sas-transcript` label of transcript v6. 15 bytes, NOT null-terminated.
+    /// SAS label of transcript v5. 15 bytes, NOT null-terminated.
     public static let sasV6: Data = Data("q-audion-sas-v6".utf8)
 
     /// 1:1 directional frame keys (transcript v6, owner decision O1): HKDF `info` prefix. The full
