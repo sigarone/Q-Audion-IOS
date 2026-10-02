@@ -35,9 +35,10 @@ final class VolumeGestureDetectorTests: XCTestCase {
 
     func testARouteSwitchJumpIsNotAPress() {
         var detector = VolumeGestureDetector()
-        // Report 93005f73: earpiece 1.0 <-> loudspeaker 0.5 around the hand-over.
-        XCTAssertEqual(detector.observe(old: 0.5, new: 1.0, at: 50.29), .ignored(.notAStep))
-        XCTAssertEqual(detector.observe(old: 1.0, new: 0.5, at: 50.30), .ignored(.notAStep))
+        // Report 93005f73: loudspeaker 0.5 -> earpiece 1.0 at 07:13:50.291, back to 0.5 at
+        // 07:13:50.377 (86 ms apart: the old detector fired on this pair).
+        XCTAssertEqual(detector.observe(old: 0.5, new: 1.0, at: 50.291), .ignored(.notAStep))
+        XCTAssertEqual(detector.observe(old: 1.0, new: 0.5, at: 50.377), .ignored(.notAStep))
     }
 
     func testTheHandOverTransitionSilencesEveryChangeForItsQuietPeriod() {

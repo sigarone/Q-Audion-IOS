@@ -1544,11 +1544,26 @@ final class AppState: ObservableObject {
         groupDiag(GroupDiagnostics.promotionLine(phase, ms: ms))
     }
 
-    /// The audio output and volume right now (`grp route out=<n> vol=<n>`).
+    /// The audio output and volume right now (`grp route out=<n> vol=<n>`): a sample, which
+    /// cannot show a flip that happens between two samples (see `groupRouteChangeDiag`).
     func groupRouteDiag() {
         let session = AVAudioSession.sharedInstance()
         groupDiag(GroupDiagnostics.routeLine(portType: session.currentRoute.outputs.first?.portType.rawValue,
                                              volume: session.outputVolume))
+    }
+
+    /// One audio route change while a group call is live (connecting / active, which covers
+    /// the 1:1 -> group hand-over): `grp route why=<n> old=<n> out=<n> vol=<n>`, with the
+    /// `AVAudioSession.RouteChangeReason` code, the output the route left and the output it
+    /// reached. The loudspeaker -> earpiece -> loudspeaker blip at the hand-over (report
+    /// 93005f73) happens between the `grp route out= vol=` samples and is two of these lines.
+    func groupRouteChangeDiag(reason: Int, previousPortType: String?, portType: String?, volume: Float) {
+        switch groupCallControllerState {
+        case .connecting, .active: break
+        case .idle, .failed: return
+        }
+        groupDiag(GroupDiagnostics.routeChangeLine(reason: reason, previousPortType: previousPortType,
+                                                   portType: portType, volume: volume))
     }
 
     /// Minutes of log a bug report carries before its trigger: 4 for a group call (live
@@ -3443,9 +3458,22 @@ final class AppState: ObservableObject {
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] note in
+            // 2026-10-02 — what this route change says, read here (the closure runs on the
+            // main queue as the notification is delivered): the reason, the output it left,
+            // the output it reached, the volume. Only plain values cross into the task
+            // (`groupRouteChangeDiag`: logged while a group call is live).
+            let info = note.userInfo
+            let reason = (info?[AVAudioSessionRouteChangeReasonKey] as? UInt).map { Int(clamping: $0) } ?? 0
+            let previousPortType = (info?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription)?
+                .outputs.first?.portType.rawValue
+            let session = AVAudioSession.sharedInstance()
+            let portType = session.currentRoute.outputs.first?.portType.rawValue
+            let volume = session.outputVolume
             Task { @MainActor [weak self] in
                 self?.updateProximityMonitoring()
+                self?.groupRouteChangeDiag(reason: reason, previousPortType: previousPortType,
+                                           portType: portType, volume: volume)
             }
         }
         // W-CARPLAYVIDEOFIX — see the property's own doc above: this is the
@@ -20101,29 +20129,26 @@ extension AppState {
         // comes out of the external speaker at low perceived volume when
         // the user holds the phone to their ear expecting the earpiece.
         //
-        // W-HANDOVERROUTE (2026-10-02) — but NOT while a group call holds the shared
-        // session (the 1:1 leg ending under a live group call: the hand-over itself, or
-        // the peer hanging up first). The reset used to throw the group call — hands-free,
-        // on the loudspeaker since it connected — onto the earpiece until a later hook put
-        // the loudspeaker back (report 93005f73: hand-over 07:13:49.2, "speaker route
-        // applied via gate (was receiver)" at 07:13:50.28). That speaker -> earpiece ->
-        // speaker flip is audible, and each half moves `outputVolume` (each route keeps its
-        // own level), which is what opened the bug-report sheet by itself at every
-        // hand-over (`VolumeGestureDetector`). Mirrors the group side's own rule (the
-        // group -> idle reset skips a live 1:1 call). The group keeps its route; the
-        // re-assert is a no-op unless the output is the earpiece.
-        let groupCallHoldsAudio: Bool = {
-            switch groupCallControllerState {
-            case .connecting, .active: return true
-            case .idle, .failed: return false
-            }
-        }()
+        // W-HANDOVERROUTE (2026-10-02) — the 1:1 -> group hand-over runs this reset while the
+        // group call, hands-free and on the loudspeaker, holds the shared session. It is NOT
+        // what moves the group call off the loudspeaker (report 93005f73): the output was
+        // Speaker from 07:13:45.9 (the group's own route, `defaultToSpeaker` in the category
+        // options) until 07:13:49.8, so `.none` here left it there; the Speaker -> Receiver
+        // `CategoryChange` came at 07:13:50.29, after CallKit's `answer audio session ACTIVE`
+        // (07:13:49.485, `CallKitProvider.activateAudioSession`) re-installed plain
+        // `.voiceChat` with `[.allowBluetoothHFP]` only (the session dump after it reads
+        // `categoryOptions: 4`, it was 12), and the group's own hook put the loudspeaker back
+        // at 07:13:50.345. In 2e309206 the route changes after `endCall` were `CategoryChange`
+        // too (Receiver -> Speaker 1.1 s, Speaker -> Receiver 2.5 s later); in 313539e3 the last
+        // route change is 4.5 s after `endCall`. That CallKit re-activation is the likely source of the short
+        // loudspeaker -> earpiece -> loudspeaker blip at the hand-over; it is not fixed here (no
+        // proof yet, see CLAUDE.md "Audio / call-path changes"): the `grp route why= old= out=`
+        // lines (`AppState.groupRouteChangeDiag`) record the flip with its reason. This reset is
+        // left exactly as it was. The sheet that used to open at the hand-over is fixed by
+        // `VolumeGestureDetector` (route changes and call transitions are not button presses),
+        // which is why the transition is declared here.
         BugReporter.shared.noteAudioTransition()
-        if groupCallHoldsAudio {
-            routeGroupCallAudioToSpeaker()
-        } else {
-            try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
-        }
+        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
         // W-CALLSPKR — drop the latched speaker preference alongside the
         // route reset above so it can't leak into the next call.
         callSpeakerOn = false
@@ -25340,10 +25365,17 @@ extension AppState {
     /// 2e309206 / 313539e3 (the iPhone "error at once" when it creates the group): the
     /// group cover is already up (`groupCallControllerState != .idle`), and `endCall()`
     /// puts up no call-ended screen, toast or alert of its own. What did appear was the
-    /// bug-report sheet, opened by the audio route flip of this very step (see
-    /// W-HANDOVERROUTE in `endCall()` and `VolumeGestureDetector`). The 1:1 teardown is
-    /// now a declared audio transition, the group keeps its route, and every step is in
-    /// the phone log (`grp swap phase=<n>`, `grp route out=<n> vol=<n>`).
+    /// bug-report sheet: the audio route moves around this step (CallKit re-activates the
+    /// session for the group call with plain `.voiceChat`, the group's own hook puts the
+    /// loudspeaker back, see W-HANDOVERROUTE in `endCall()`), each route keeps its own
+    /// `outputVolume`, and the old volume-gesture detector counted those changes as button
+    /// presses (`VolumeGestureDetector`, the fix). The 1:1 teardown is now a declared audio
+    /// transition. The route itself is NOT touched here: the short loudspeaker -> earpiece ->
+    /// loudspeaker blip stays until its cause is proven. The phone log carries every step
+    /// (`grp swap phase=<n>`), the output now and 1.5 s later (`grp route out=<n> vol=<n>`:
+    /// two samples, which cannot show a flip in between) and every route change while the
+    /// group is live, with its reason (`grp route why=<n> old=<n> out=<n> vol=<n>`, see
+    /// `groupRouteChangeDiag`).
     @MainActor
     private func completeGroupPromotion() {
         guard groupPromotion != nil else { return }
@@ -25355,17 +25387,15 @@ extension AppState {
         // `endCall()` itself tells the group audio unit to take over (below).
         endCall()
         groupPromotionDiag(.handedOver)
-        // The 1:1 leg's CallKit / audio-unit teardown finishes asynchronously and may
-        // still move the route: the group (hands-free) keeps the loudspeaker. Both calls
-        // are no-ops unless the output is the earpiece.
-        routeGroupCallAudioToSpeaker()
         groupRouteDiag()
+        // The 1:1 leg's CallKit / audio-unit teardown finishes asynchronously: where did
+        // the route end up 1.5 s later? A sample only, nothing is re-asserted here (the
+        // group's own hooks do that, see `routeGroupCallAudioToSpeaker`).
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self = self else { return }
             switch self.groupCallControllerState {
             case .connecting, .active:
-                self.routeGroupCallAudioToSpeaker()
-                self.groupPromotionDiag(.routeKept)
+                self.groupPromotionDiag(.routeSampled)
                 self.groupRouteDiag()
             case .idle, .failed:
                 break

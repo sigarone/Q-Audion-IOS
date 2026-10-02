@@ -26,7 +26,7 @@ final class GroupDiagnosticsTests: XCTestCase {
     func testPromotionLines() {
         XCTAssertEqual(GroupDiagnostics.promotionLine(.begun, ms: 0), "grp swap phase=1 ms=0")
         XCTAssertEqual(GroupDiagnostics.promotionLine(.handedOver, ms: 3460), "grp swap phase=4 ms=3460")
-        XCTAssertEqual(GroupDiagnostics.promotionLine(.routeKept, ms: -5), "grp swap phase=5 ms=0")
+        XCTAssertEqual(GroupDiagnostics.promotionLine(.routeSampled, ms: -5), "grp swap phase=5 ms=0")
     }
 
     func testVideoLines() {
@@ -61,6 +61,27 @@ final class GroupDiagnosticsTests: XCTestCase {
         XCTAssertEqual(GroupDiagnostics.routeLine(portType: nil, volume: 0), "grp route out=0 vol=0")
         // A port type never seen before is "other", never its name.
         XCTAssertEqual(GroupDiagnostics.routeLine(portType: "SomethingNew", volume: 0.5), "grp route out=9 vol=50")
+        // A volume the system cannot produce never traps the line.
+        XCTAssertEqual(GroupDiagnostics.routeLine(portType: "Speaker", volume: .nan), "grp route out=2 vol=0")
+    }
+
+    /// One line per route change while a group call is live: the reason, the output the
+    /// route left, the output it reached and the volume. The speaker -> earpiece ->
+    /// speaker blip of the 1:1 -> group hand-over (report 93005f73, 07:13:50.29 and
+    /// 07:13:50.345) is two lines.
+    func testRouteChangeLines() {
+        XCTAssertEqual(GroupDiagnostics.routeChangeLine(reason: 3, previousPortType: "Speaker", portType: "Receiver", volume: 1.0),
+                       "grp route why=3 old=2 out=1 vol=100")
+        XCTAssertEqual(GroupDiagnostics.routeChangeLine(reason: 3, previousPortType: "Receiver", portType: "Speaker", volume: 0.5),
+                       "grp route why=3 old=1 out=2 vol=50")
+        // The override that re-reports the same output (Speaker -> Speaker at 07:13:49.801).
+        XCTAssertEqual(GroupDiagnostics.routeChangeLine(reason: 4, previousPortType: "Speaker", portType: "Speaker", volume: 0.5),
+                       "grp route why=4 old=2 out=2 vol=50")
+        // No route description / an unknown port: codes, never names; a reason is clamped.
+        XCTAssertEqual(GroupDiagnostics.routeChangeLine(reason: 0, previousPortType: nil, portType: "SomethingNew", volume: 0.25),
+                       "grp route why=0 old=0 out=9 vol=25")
+        XCTAssertEqual(GroupDiagnostics.routeChangeLine(reason: 20_000_000, previousPortType: "BluetoothHFP", portType: "Receiver", volume: 2),
+                       "grp route why=9999999 old=3 out=1 vol=100")
     }
 
     func testPcStateCodes() {

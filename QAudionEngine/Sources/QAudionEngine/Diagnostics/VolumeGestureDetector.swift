@@ -8,12 +8,15 @@ import Foundation
 /// override on / off, a category change, a call ending) reports a new `outputVolume`
 /// through the same KVO a button press does. The old detector counted every KVO as a
 /// press, read equal old/new values as a "down" press and timestamped each one when its
-/// main-actor hop finally ran. A 1:1 -> group hand-over flips the route twice within about
-/// a second (the 1:1 teardown resets the override to the earpiece, the group call puts the
-/// loudspeaker back), so the "Segnala un problema" sheet opened on its own at the
-/// hand-over: the three iPhone reports of 2026-09-29 / 2026-10-02 (93005f73, 2e309206,
-/// 313539e3) were all opened 0.5-4.5 s after the hand-over, each right after an audio
-/// route change in the log tail, and sent with an empty note.
+/// main-actor hop finally ran. A 1:1 -> group hand-over moves the route twice within about
+/// a second (CallKit's re-activation for the group call installs plain `.voiceChat`, the
+/// output goes loudspeaker -> earpiece, the group call's own hook puts the loudspeaker
+/// back; report 93005f73, 07:13:50.29 and 07:13:50.345, volume 0.5 -> 1.0 -> 0.5), so the
+/// "Segnala un problema" sheet opened on its own at the hand-over: the three iPhone
+/// reports of 2026-09-29 / 2026-10-02 (93005f73, 2e309206, 313539e3) were all opened
+/// 0.5-4.5 s after the hand-over, each right after an audio route change in the log tail,
+/// and sent with an empty note. This detector is the fix for the sheet; it does not stop
+/// the route moving (the cause of that short blip is still open, see `AppState.endCall`).
 ///
 /// A change only counts as a press when
 ///  * it actually changes the volume, by at most two button steps (one step is 1/16),

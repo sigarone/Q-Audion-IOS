@@ -780,7 +780,9 @@ check(red("dtlsfp s=5 ok=0", "call") == "",
 #   grp state=<0-3> old=<0-3> count=<n>          group screen state machine
 #   grp error code=<1-10>                        an error the user was shown
 #   grp swap phase=<1-9> ms=<n>                  1:1 -> group hand-over steps
-#   grp route out=<0-9> vol=<0-100>              audio output and volume
+#   grp route out=<0-9> vol=<0-100>              audio output and volume (a sample)
+#   grp route why=<0-8> old=<0-9> out=<0-9> vol=<0-100>   one route change (reason code,
+#                                                output left, output reached)
 #   grp check verified=<n> count=<n>             the "not verified" banner's input
 #   grp video camera=<0|1> phase=<1-6> ok=<0|1> code=<n> ms=<n>   camera publish steps
 #   grp hb ice send=<pc> recv=<pc>               10 s heartbeat: PeerConnection states
@@ -801,6 +803,10 @@ DIAG_LINES = (
     ("group", "grp swap phase=4 ms=3460"),
     ("group", "grp route out=2 vol=56"),
     ("group", "grp route out=1 vol=100"),
+    ("group", "grp route why=3 old=2 out=1 vol=100"),
+    ("group", "grp route why=3 old=1 out=2 vol=50"),
+    ("group", "grp route why=4 old=2 out=2 vol=50"),
+    ("group", "grp route why=0 old=0 out=9 vol=25"),
     ("group", "grp check verified=2 count=3"),
     ("group", "grp video camera=1 phase=1 ok=1 code=0 ms=0"),
     ("group", "grp video camera=1 phase=2 ok=0 code=3 ms=120"),

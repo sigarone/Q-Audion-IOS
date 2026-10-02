@@ -76,8 +76,9 @@ public enum GroupDiagnostics {
         case peerJoined = 3
         /// The 1:1 leg was ended (make-before-break done).
         case handedOver = 4
-        /// The group's loudspeaker route was re-asserted after the 1:1 teardown.
-        case routeKept = 5
+        /// 1.5 s after the hand-over: the route is sampled again (`grp route out= vol=`
+        /// follows). Nothing is re-asserted here.
+        case routeSampled = 5
         /// The group media never came up: the 1:1 call goes on.
         case abandoned = 8
         /// The peer never showed up: hand-over forced by the timeout.
@@ -181,9 +182,26 @@ public enum GroupDiagnostics {
         }
     }
 
-    /// `grp route out=<output code> vol=<0-100>`
+    /// The output volume as 0-100 (a value the system cannot produce maps to 0).
+    static func volumePercent(_ volume: Float) -> Int {
+        guard volume.isFinite else { return 0 }
+        return Int((min(max(volume, 0), 1) * 100).rounded())
+    }
+
+    /// `grp route out=<output code> vol=<0-100>`: a SAMPLE of the output now.
     public static func routeLine(portType: String?, volume: Float) -> String {
-        let percent = Int((min(max(volume, 0), 1) * 100).rounded())
-        return "grp route out=\(outputCode(portType: portType)) vol=\(percent)"
+        "grp route out=\(outputCode(portType: portType)) vol=\(volumePercent(volume))"
+    }
+
+    /// `grp route why=<reason> old=<output code> out=<output code> vol=<0-100>`: ONE audio
+    /// route change while a group call is live, from `AVAudioSession.routeChangeNotification`.
+    /// `reason` is the raw value of `AVAudioSession.RouteChangeReason` (0 unknown, 1 new
+    /// device, 2 old device gone, 3 category change, 4 override, 6 wake from sleep, 7 no
+    /// suitable route, 8 route configuration change), `old` the output the route left,
+    /// `out` the output it reached, `vol` the output volume then. The samples above cannot
+    /// show a flip that happens between two of them: a loudspeaker -> earpiece ->
+    /// loudspeaker blip is two of these lines (`old=2 out=1`, then `old=1 out=2`).
+    public static func routeChangeLine(reason: Int, previousPortType: String?, portType: String?, volume: Float) -> String {
+        "grp route why=\(clamp(reason)) old=\(outputCode(portType: previousPortType)) out=\(outputCode(portType: portType)) vol=\(volumePercent(volume))"
     }
 }
