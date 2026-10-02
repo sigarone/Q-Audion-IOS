@@ -484,7 +484,7 @@ TELEMETRY_VOCAB = frozenset([
     "ended", "half_open", "connecting", "idle", "open", "opening", "start",
     "started", "stop", "stopped", "ok", "error", "warn", "info", "debug",
     "fatal", "retry", "retrying", "timeout", "abort", "aborted", "done",
-    "init", "ready", "pending", "success", "fail", "drop", "dropped",
+    "init", "ready", "pending", "success", "fail", "pass", "drop", "dropped",
     # roles / modes
     "caller", "callee", "offerer", "answerer", "datachannel", "relay",
     "ws_relay", "ws-relay", "direct_p2p", "p2p", "host", "srflx", "prflx",
@@ -710,6 +710,8 @@ CALL_FORMAT_VOCAB = frozenset("""
     ignore missed nocall over refuse rxago since stale wedge wedgesw wsec
 
     ringsig put take wipe release ring pc op
+
+    dstage
 """.split())
 
 # Real RTLog "call"-tagged line shapes CALL_FORMAT_VOCAB's words belong to,
@@ -787,6 +789,17 @@ _RE_DCMUX_WEDGE_FULL = re.compile(
 )
 
 
+# DTLS check (b) stage of a fatal handshake end (AppState.handleHandshakeFatal):
+# "hsfatal r=<1-3> dstage=<1-9>", the numeric verdict of
+# DtlsFingerprint.failureCode(stage:) (1 sdp_remote, 2 sdp_local, 3 stats
+# mismatch, 4 pin_timeout, 5 stats_timeout) next to the handshake verdict.
+# "dstage" is NOT "dtls": the 1:1 heartbeat already prints "dtls=<state>". The
+# key must be vocabulary or the line spends 3 unknown words ("hsfatal", "r",
+# "dstage") and is dropped, so it is scoped to exactly this full line (one digit
+# each, nothing else): "hsfatal r=1" without a stage already ships unchanged.
+_RE_HSFATAL_DSTAGE_FULL = re.compile(r"^hsfatal r=[1-3] dstage=[1-9]$")
+
+
 def _is_call_format_body(tag, norm_body):
     """True if `tag` is the (or a "call"-prefixed) RTLog scope AND `norm_body`
     matches one of the known call-diagnosis line shapes CALL_FORMAT_VOCAB's
@@ -800,6 +813,8 @@ def _is_call_format_body(tag, norm_body):
         return False
     if norm_body.startswith("dcmux wedge="):
         return bool(_RE_DCMUX_WEDGE_FULL.match(norm_body))
+    if norm_body.startswith("hsfatal "):
+        return bool(_RE_HSFATAL_DSTAGE_FULL.match(norm_body))
     for prefix, first_tokens in _CALL_FORMAT_FIRST_TOKENS:
         if norm_body.startswith(prefix):
             return norm_body[len(prefix):].startswith(first_tokens)

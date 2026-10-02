@@ -206,8 +206,19 @@ public enum DtlsFingerprint {
     /// only, never a fingerprint:
     /// - 1 `sdp_remote`, 2 `sdp_local`, 4 `pin_timeout`;
     /// - 3 `stats`: check (b) saw a REAL certificate mismatch in the transport stats;
-    /// - 5 `stats_timeout`: check (b) reached its 5 s deadline with no verdict at all (the
-    ///   certificate stats never reported both certificates, or the peer pin was still missing).
+    /// - 5 `stats_timeout`: check (b) reached its 5 s deadline with NO VERDICT: the peer
+    ///   certificate was neither confirmed nor shown to differ, so the call is unverified, NOT
+    ///   proven benign (and not proven hostile either), and it still ends fail-closed. The
+    ///   pending causes, every one of them an incomplete report and not a mismatch:
+    ///   1. the peer pin (`CallDtlsContext.peerFingerprint`) was still missing, so no stats were
+    ///      requested at all;
+    ///   2. no `transport` stats entry with `dtlsState == connected` in any report;
+    ///   3. a connected transport without a `localCertificateId` or a `remoteCertificateId` (or
+    ///      an empty one). A certificate-stats cache taken before the DTLS handshake delivered the
+    ///      peer certificate and never refreshed looks exactly like this: the WebRTC builds
+    ///      without patch P9 (up to `webrtc-ios-m150-a256-dplc-9`) did that;
+    ///   4. a certificate id that no `certificate` entry of the report carries;
+    ///   5. a `certificate` entry without `fingerprint` or `fingerprintAlgorithm`.
     ///
     /// LOCAL ONLY: every stage ends the call with the same on-the-wire hangup reason
     /// `dtls_fp_mismatch` (WIRE_SPEC §3.8.4), which this function must never influence. An unknown

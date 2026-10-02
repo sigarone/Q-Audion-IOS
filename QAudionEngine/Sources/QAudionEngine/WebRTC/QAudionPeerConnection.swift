@@ -264,9 +264,10 @@ public final class QAudionPeerConnection: NSObject {
 
     /// Fired ONCE when a DTLS fingerprint check fails; the argument is the verdict-only stage:
     /// `sdp_remote`, `sdp_local`, `stats` (a real certificate mismatch), `stats_timeout` (check (b)
-    /// reached its 5 s deadline with no verdict) or `pin_timeout`. The app ends the call with reason
-    /// `dtls_fp_mismatch` for ALL of them: the stage is for local logs only (`stats_timeout` is
-    /// never sent on the wire). Carries no value of any fingerprint.
+    /// reached its 5 s deadline with no verdict: unverified, not proven benign; the pending causes
+    /// are listed on `DtlsFingerprint.failureCode`) or `pin_timeout`. The app ends the call with
+    /// reason `dtls_fp_mismatch` for ALL of them: the stage is for local logs only
+    /// (`stats_timeout` is never sent on the wire). Carries no value of any fingerprint.
     public var onDtlsFingerprintFailure: ((String) -> Void)?
     /// Fired when check (b) passed and the media gate opened (verdict only).
     public var onDtlsMediaGateOpened: (() -> Void)?
@@ -2360,7 +2361,8 @@ public final class QAudionPeerConnection: NSObject {
     /// Check (b) (§3.6): every time the PC reaches `connected`, compare the negotiated DTLS
     /// certificates (`RTCCertificateStats` of the transport's local/remote certificate ids) with
     /// the pinned fingerprints. Retries every 250 ms for up to 5 s; a mismatch (stage `stats`), or
-    /// no verdict in that time (stage `stats_timeout`), ends the call. A pass opens the media gate.
+    /// no verdict in that time (stage `stats_timeout`: unverified, not proven benign), ends the
+    /// call. A pass opens the media gate.
     fileprivate func startDtlsStatsCheck() {
         guard dtlsContext != nil else { return }
         // A new transition to `connected` (a DTLS restart, a reconnect) is verified from scratch:
@@ -2417,9 +2419,12 @@ public final class QAudionPeerConnection: NSObject {
 
     private func retryOrFailDtlsStats(generation: Int, startedAt: Date, deadlineReached: Bool) {
         if deadlineReached {
-            // No verdict within the deadline (stats still `pending`, or the peer pin still missing):
-            // NOT a certificate mismatch, so it gets its own local stage. The call still ends the
-            // same way (`dtls_fp_mismatch` on the wire); only the local log can tell them apart.
+            // No verdict within the deadline: the peer pin is still missing, or the stats are still
+            // `pending` (no connected transport, a certificate id absent or not in the report, a
+            // certificate entry without fingerprint/algorithm; `DtlsFingerprint.failureCode` lists
+            // them). The peer is unverified, NOT proven benign, so the call ends fail-closed; it
+            // is also NOT a certificate mismatch, so it gets its own local stage. The wire reason is
+            // the same (`dtls_fp_mismatch`); only the local log can tell the two apart.
             reportDtlsFailure(stage: "stats_timeout")
             return
         }
@@ -2483,7 +2488,7 @@ public final class QAudionPeerConnection: NSObject {
         case notInitialized
         case sdpFailed(String)
         /// A DTLS fingerprint check failed (stage: `sdp_remote`, `sdp_local`, `stats`,
-        /// `stats_timeout`, `pin_timeout`). Verdict only.
+        /// `stats_timeout` = no verdict within the deadline, `pin_timeout`). Verdict only.
         case dtlsFingerprint(String)
     }
 }

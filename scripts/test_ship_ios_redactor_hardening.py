@@ -722,6 +722,53 @@ check("BCryptoGroupCallManager" not in red("state=active BCryptoGroupCallManager
       "path is meant to carve out an exception for this shape")
 
 # ---------------------------------------------------------------------------
+# DTLS check (b) local-log lines (QAudionWebRtcCallController.wireDtlsFailureHook,
+# AppState.handleHandshakeFatal), all RTLog tag "call":
+#   dtls fail s=<1-5> ok=0     failing stage, DtlsFingerprint.failureCode(stage:)
+#   dtls pass ok=1             check (b) passed (always the stats stage: no s=)
+#   hsfatal r=<1-3>            the handshake-fatal verdict
+#   hsfatal r=<1-3> dstage=<1-9>   the same plus the DTLS stage
+# The first version of these lines used the single token "dtlsfp" (no vowel, not
+# a plausible word): the gate dropped it, so no DTLS verdict ever reached Loki.
+# "pass" is TELEMETRY_VOCAB (next to "fail") because "dtls pass ok=1" has 2 free
+# words and 1 structural token, which condition (B) rejects; "dstage" is
+# CALL_FORMAT_VOCAB, scoped to the exact "hsfatal r=<n> dstage=<n>" line (the
+# key must not be "dtls": the 1:1 heartbeat already prints dtls=<state>).
+# ---------------------------------------------------------------------------
+for s in range(1, 6):
+    check(red("dtls fail s=%d ok=0" % s, "call") == "dtls fail s=%d ok=0" % s,
+          "DTLSB: 'dtls fail s=%d ok=0' is dropped or altered by the shipper" % s)
+check(red("dtls pass ok=1", "call") == "dtls pass ok=1",
+      "DTLSB: 'dtls pass ok=1' is dropped or altered by the shipper")
+for r in (1, 2, 3):
+    check(red("hsfatal r=%d" % r, "call") == "hsfatal r=%d" % r,
+          "DTLSB: 'hsfatal r=%d' is dropped or altered by the shipper" % r)
+    for d in range(1, 10):
+        check(red("hsfatal r=%d dstage=%d" % (r, d), "call") == "hsfatal r=%d dstage=%d" % (r, d),
+              "DTLSB: 'hsfatal r=%d dstage=%d' is dropped or altered by the shipper" % (r, d))
+check(red("hsfatal stale=1", "call") == "hsfatal stale=1",
+      "DTLSB: the unscoped 'hsfatal stale=1' line regressed")
+# "dstage" is scoped to that exact line: any other body (another tag, a
+# non-numeric value, a trailing token, an out-of-range verdict) does not get
+# the widened vocabulary, and "dstage" is not global vocabulary either.
+check(red("hsfatal r=1 dstage=5", "stdout") == "",
+      "DTLSB: 'hsfatal ... dstage=' shipped under a non-call tag (the scope must be the call tag)")
+for bad in ("hsfatal r=1 dstage=abc", "hsfatal r=1 dstage=55", "hsfatal r=9 dstage=1",
+            "hsfatal r=1 dstage=5 zork=1", "hsfatal r=1 zork=1 dstage=5"):
+    check(red(bad, "call") == "",
+          "DTLSB: %r shipped although it is not the exact hsfatal/dstage shape" % bad)
+check("zork=1" not in red("ice=connected dstage=1 zork=1 blarg=2", "call"),
+      "DTLSB: 'dstage' became global vocabulary (it widened the unknown-word budget of another line)")
+# "pass" is one more vocabulary word like "fail": it must not let prose ship.
+for prose in ("he said pass the keys tomorrow noon", "pass the code to meet me tomorrow",
+              "please pass along the message now"):
+    check(red(prose, "call") == "" and red(prose, "stdout") == "",
+          "DTLSB: prose containing 'pass' shipped: %r" % prose)
+# the old vowel-less token stays unshippable (that is why the words changed).
+check(red("dtlsfp s=5 ok=0", "call") == "",
+      "DTLSB: the old 'dtlsfp' token started shipping (re-check why the line words were changed)")
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)

@@ -7668,9 +7668,10 @@ final class AppState: ObservableObject {
         controller.dtlsContext = cid.isEmpty ? nil : CallDtlsContextStore.shared.context(forCallId: cid, hold: true)
         controller.isHandshakeOfferer = isOfferer
         controller.onDtlsFingerprintFailure = { [weak self] stage in
-            // The stage only reaches the LOCAL log (`hsfatal r=1 dtls=<n>`): it tells a real
-            // certificate mismatch (3) from a check (b) timeout (5). The reason that ends the call
-            // and goes on the wire stays `dtls_fp_mismatch` for every stage.
+            // The stage only reaches the LOCAL log (`hsfatal r=1 dstage=<n>`): it tells a real
+            // certificate mismatch (3) from a check (b) timeout (5: no verdict within the deadline,
+            // unverified and not proven benign). The reason that ends the call and goes on the wire
+            // stays `dtls_fp_mismatch` for every stage.
             let dtlsStage = DtlsFingerprint.failureCode(stage: stage)
             Task { @MainActor [weak self] in
                 self?.handleHandshakeFatal(callId: cid, reason: "dtls_fp_mismatch", dtlsStage: dtlsStage)
@@ -8960,9 +8961,12 @@ final class AppState: ObservableObject {
     ///
     /// `dtlsStage` is set only by the PeerConnection's DTLS fingerprint checks
     /// (`DtlsFingerprint.failureCode`: 1 sdp_remote, 2 sdp_local, 3 stats mismatch, 4 pin_timeout,
-    /// 5 stats_timeout). It is appended to the local log line (`hsfatal r=1 dtls=5`) so a timeout
-    /// is told apart from a real mismatch; it never changes `reason`, the teardown or the wire
-    /// hangup reason.
+    /// 5 stats_timeout = no verdict within the deadline, unverified and not proven benign). It is
+    /// appended to the local log line as `dstage=<n>` (`hsfatal r=1 dstage=5`) so a timeout is told
+    /// apart from a real mismatch; it never changes `reason`, the teardown or the wire hangup
+    /// reason. The key is `dstage` and not `dtls` because the 1:1 heartbeat already prints
+    /// `dtls=<state string>` (`CallService`), and a `dstage` line is shipped by the log shipper's
+    /// scoped `hsfatal r=<n> dstage=<n>` shape (`scripts/ship-ios-logs.py`).
     @MainActor
     private func handleHandshakeFatal(callId: String, reason: String, dtlsStage: Int? = nil) {
         if let active = self.canonicalActiveCallId(), !active.isEmpty,
@@ -8976,11 +8980,8 @@ final class AppState: ObservableObject {
         case "kcmac_mismatch": code = 2
         default: code = 3
         }
-        if let dtlsStage = dtlsStage {
-            RTLog.error("call", "hsfatal r=\(code) dtls=\(dtlsStage)")
-        } else {
-            RTLog.error("call", "hsfatal r=\(code)")
-        }
+        let stageSuffix = dtlsStage.map { " dstage=\($0)" } ?? ""
+        RTLog.error("call", "hsfatal r=\(code)\(stageSuffix)")
         // The reason is the fixed allow-listed token (an unknown one is the malformed class, like the
         // numeric verdict above): telemetry and the call history carry it by name.
         if !isEndingCall {
