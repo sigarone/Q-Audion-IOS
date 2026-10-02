@@ -91,6 +91,10 @@ Requires:
   - paramiko (`pip install paramiko`)
   - VPS credentials (env vars or bcrypto-server/VPS_ACCESS.md), same as
     fetch-ios-live.py / correlate-call.py.
+  - the VPS host key must be KNOWN (no trust-on-first-use, fail-closed): the pinned
+    prod ED25519 key in scripts/vps_known_hosts (deploy it NEXT TO the script), or a
+    file named by env QAUDION_VPS_KNOWN_HOSTS, or ~/.ssh/known_hosts. An unknown or
+    changed key aborts with exit 1 and an error that says how to verify/add it.
 """
 
 import os
@@ -200,14 +204,129 @@ def _ios_ro_key_path():
     return str(q)
 
 
+# --- BEGIN vps-host-key-verification (identical in the four SSH scripts) ---
+# W-HOSTKEY (2026-10-02): the prod VPS host key is VERIFIED, never trusted on
+# first use. This block is the SAME in ship-ios-logs.py, ship-server-logs.py,
+# fetch-ios-live.py and correlate-call.py (the tools stay self-contained and
+# importlib-free); test_vps_host_key_pin.py fails when the copies drift.
+#
+# FAIL-CLOSED: a host with NO known key is refused, and so is a host whose key
+# differs from the known one (BadHostKeyException). Either way: one clear error
+# naming the host, exit 1, never a fallback to another policy, key or password.
+#
+# Known keys, highest precedence first (the first entry per host + key type wins):
+#   1. the file named by env QAUDION_VPS_KNOWN_HOSTS (set but missing = exit 1)
+#   2. vps_known_hosts next to this script (the pinned ED25519 key of the prod VPS)
+#   3. the user's ~/.ssh/known_hosts
+# All three go through load_system_host_keys() so ONE store answers every lookup:
+# paramiko reads its "system" store first and ignores the other store for any
+# host the system store knows, so a stale ~/.ssh/known_hosts entry would
+# otherwise silently shadow the pin. save_host_keys is never called.
+#
+# paramiko's connect() moves the key type of a known host to the front of its
+# host-key algorithm list, so an ED25519-only pin still verifies a server that
+# also offers RSA/ECDSA. A server that cannot present the pinned type fails as a
+# key mismatch, never as an accepted unknown key. The policy is a RejectPolicy
+# subclass that only adds the offered key to the error. No paramiko attribute is
+# touched at import time (the unit tests stub the module when it is missing).
+
+class _UnknownHostKey(Exception):
+    """No loaded known_hosts file has a key for this host."""
+
+    def __init__(self, hostname, key):
+        Exception.__init__(self, "no known host key for %s" % hostname)
+        self.hostname = hostname
+        self.key = key
+
+
+def _pinned_known_hosts():
+    return Path(__file__).resolve().parent / "vps_known_hosts"
+
+
+def _key_fingerprint(key):
+    """'ssh-ed25519 SHA256:<b64>' exactly as `ssh-keygen -lf` prints it."""
+    import base64
+    import hashlib
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return "%s SHA256:%s" % (key.get_name(),
+                             base64.b64encode(digest).decode("ascii").rstrip("="))
+
+
+def _new_ssh_client():
+    """SSHClient that only talks to hosts whose key is already known."""
+    client = paramiko.SSHClient()
+    files = []
+    env = os.environ.get("QAUDION_VPS_KNOWN_HOSTS", "").strip()
+    if env:
+        envp = Path(os.path.expanduser(env))
+        if not envp.is_file():
+            print("ERROR: QAUDION_VPS_KNOWN_HOSTS names a missing file: %s" % env,
+                  file=sys.stderr)
+            sys.exit(1)
+        files.append(envp)
+    pinned = _pinned_known_hosts()
+    if pinned.is_file():
+        files.append(pinned)
+    for p in files:
+        try:
+            client.load_system_host_keys(str(p))
+        except OSError as e:
+            print("ERROR: cannot read known_hosts file %s: %s" % (p, e),
+                  file=sys.stderr)
+            sys.exit(1)
+    client.load_system_host_keys()  # ~/.ssh/known_hosts; a missing file is fine
+
+    class _Reject(paramiko.RejectPolicy):
+        def missing_host_key(self, client, hostname, key):
+            raise _UnknownHostKey(hostname, key)
+
+    client.set_missing_host_key_policy(_Reject())
+    return client
+
+
+def _hostkey_exit(client, host, why, offered, expected):
+    """Print one actionable ASCII error and exit 1 (no traceback, no fallback)."""
+    try:
+        client.close()
+    except Exception:  # noqa: BLE001
+        pass
+    msg = ["ERROR: SSH host key verification FAILED for %s: %s." % (host, why),
+           "  presented: %s" % _key_fingerprint(offered)]
+    if expected is not None:
+        msg.append("  known    : %s" % _key_fingerprint(expected))
+    msg += [
+        "  Refusing to connect: an unknown or changed host key is never trusted and",
+        "  there is no fallback. If the server was legitimately reinstalled, compare the",
+        "  presented fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`",
+        "  run ON the server, then put the line `%s ssh-ed25519 <key>` into" % host,
+        "  %s" % _pinned_known_hosts(),
+        "  (or into the file named by QAUDION_VPS_KNOWN_HOSTS, or ~/.ssh/known_hosts).",
+        "  Delete the stale line first: the first entry per host and key type wins.",
+        "  Never copy the key from the connection under test.",
+    ]
+    print(("\n".join(msg)).encode("ascii", "replace").decode("ascii"), file=sys.stderr)
+    sys.exit(1)
+
+
+def _connect_verified(client, host, **kw):
+    """client.connect(host, **kw); host-key failures end the run with one clear
+    error, every other failure (network, auth) propagates unchanged."""
+    try:
+        client.connect(host, **kw)
+    except _UnknownHostKey as e:
+        _hostkey_exit(client, host, "no known key for this host", e.key, None)
+    except paramiko.BadHostKeyException as e:
+        _hostkey_exit(client, host, "the presented key does NOT match the known key",
+                      e.key, e.expected_key)
+# --- END vps-host-key-verification ---
+
 def ssh_connect():
     _ensure_creds()
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client = _new_ssh_client()
     ro_key = _ios_ro_key_path()
     if ro_key:
-        client.connect(VPS_HOST, username=VPS_USER, key_filename=ro_key,
-                       look_for_keys=False, allow_agent=False, timeout=15)
+        _connect_verified(client, VPS_HOST, username=VPS_USER, key_filename=ro_key,
+                          look_for_keys=False, allow_agent=False, timeout=15)
         return client
     # W-VPSKEYAUTH (2026-09-02): key first (the prod VPS is publickey-only
     # after the migration hardening — password auth returned
@@ -215,10 +334,11 @@ def ssh_connect():
     # as a fallback when no key is present.
     key = _vps_key_path()
     if key:
-        client.connect(VPS_HOST, username=VPS_USER, key_filename=key,
-                       look_for_keys=False, allow_agent=False, timeout=15)
+        _connect_verified(client, VPS_HOST, username=VPS_USER, key_filename=key,
+                          look_for_keys=False, allow_agent=False, timeout=15)
     else:
-        client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15)
+        _connect_verified(client, VPS_HOST, username=VPS_USER, password=VPS_PASS,
+                          timeout=15)
     return client
 
 
@@ -2404,6 +2524,72 @@ def print_dry_run(request_dict, blob_path):
     print(_ascii(rendered))
 
 
+# W-HOSTKEY: the prod VPS host key is pinned and verified (fail-closed).
+_PROD_VPS_HOST = "195.231.87.110"
+_PROD_VPS_ED25519 = "ssh-ed25519 SHA256:XDDSqerYgzHIFwo2amn4XQWza0DeU0TDJSZjyZBI/ZY"
+
+
+def _selftest_hostkey_pin(failures):
+    """Transport-free checks (no network): the pinned file parses and holds
+    exactly the verified prod ED25519 key, a fresh client is a RejectPolicy that
+    already knows that key and rejects an unknown host, and no script in this
+    directory falls back to trust-on-first-use."""
+    import base64
+    pin = _pinned_known_hosts()
+    entries = []
+    try:
+        for ln in pin.read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if ln and not ln.startswith("#"):
+                entries.append(ln.split())
+    except OSError as e:
+        failures.append("HOSTKEY[pin]: %s unreadable: %s" % (pin, e))
+        return
+    if (len(entries) != 1 or len(entries[0]) < 3 or entries[0][0] != _PROD_VPS_HOST
+            or entries[0][1] != "ssh-ed25519"):
+        failures.append("HOSTKEY[pin]: %s must hold exactly one ssh-ed25519 entry "
+                        "for %s (found %r)" % (pin, _PROD_VPS_HOST,
+                                               [e[:2] for e in entries]))
+        return
+    sha = base64.b64encode(hashlib.sha256(base64.b64decode(entries[0][2])).digest())
+    got_fp = "ssh-ed25519 SHA256:" + sha.decode("ascii").rstrip("=")
+    if got_fp != _PROD_VPS_ED25519:
+        failures.append("HOSTKEY[pin]: pinned key is %s, expected %s"
+                        % (got_fp, _PROD_VPS_ED25519))
+    try:
+        client = _new_ssh_client()
+    except SystemExit:
+        failures.append("HOSTKEY[client]: _new_ssh_client() exited (env "
+                        "QAUDION_VPS_KNOWN_HOSTS names a missing file?)")
+        return
+    pol = getattr(client, "_policy", None)
+    if not isinstance(pol, paramiko.RejectPolicy):
+        failures.append("HOSTKEY[policy]: client policy is %r, not a RejectPolicy"
+                        % (pol,))
+    # paramiko has no getter for the system store the helper loads into.
+    known = client._system_host_keys.lookup(_PROD_VPS_HOST)
+    key = known.get("ssh-ed25519") if known else None
+    if key is None or _key_fingerprint(key) != _PROD_VPS_ED25519:
+        failures.append("HOSTKEY[client]: fresh client does not know the pinned "
+                        "prod key for %s" % _PROD_VPS_HOST)
+    elif pol is not None:
+        try:  # 203.0.113.9 = TEST-NET-3, never a real host
+            pol.missing_host_key(client, "203.0.113.9", key)
+            failures.append("HOSTKEY[policy]: an unknown host was NOT rejected")
+        except _UnknownHostKey:
+            pass
+    bad = ("AutoAdd" + "Policy", "Warning" + "Policy")
+    for sp in sorted(Path(__file__).resolve().parent.glob("*.py")):
+        try:
+            txt = sp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for b in bad:
+            if b in txt:
+                failures.append("HOSTKEY[policy]: %s uses %s (trust-on-first-use)"
+                                % (sp.name, b))
+
+
 # ---------------------------------------------------------------------------
 # Self-test (privacy regression cases). Run with --selftest.
 # ---------------------------------------------------------------------------
@@ -2942,6 +3128,9 @@ def run_selftest():
         if _kv_is_benign(_k, _v) != _want:
             failures.append("KV-IDENTITY: _kv_is_benign(%r, %r) != %r" % (_k, _v, _want))
 
+    # 27. W-HOSTKEY: prod VPS host key pinned, RejectPolicy, no trust-on-first-use.
+    _selftest_hostkey_pin(failures)
+
     out("=" * 72)
     out("SELF-TEST: privacy redaction regression")
     out("=" * 72)
@@ -2951,7 +3140,7 @@ def run_selftest():
         out("")
         out("  RESULT: NO-GO (%d leak/regression)" % len(failures))
         return 1
-    out("  26/26 cases pass: no forbidden value survived; structured telemetry")
+    out("  27/27 cases pass: no forbidden value survived; structured telemetry")
     out("  still ships (benign key=value tokens kept, adversarial key=value")
     out("  secrets masked, sentinels unforgeable); call_id hashed;")
     out("  SSID/serial/SDP/SAS/plaintext blocked;")
@@ -2964,6 +3153,9 @@ def run_selftest():
     out("  free-word blocks (base26/base52), kv side channels, identity+measure keys")
     out("  (peerSessionIdMs) masked; unknown words capped per body;")
     out("  restricted-exec ios-list parser / ios-cat reader accept only uuid paths.")
+    out("  VPS host key pinned (vps_known_hosts = the verified prod ED25519 key),")
+    out("  client is a RejectPolicy that rejects unknown hosts, no script uses")
+    out("  trust-on-first-use.")
     out("  RESULT: GO")
     return 0
 

@@ -26,6 +26,10 @@ Requires:
   - paramiko (`pip install paramiko`)
   - VPS credentials in VPS_ACCESS.md (bcrypto-server repo) or env vars:
       QAUDION_VPS_HOST, QAUDION_VPS_USER, QAUDION_VPS_PASS
+  - the VPS host key must be KNOWN (no trust-on-first-use, fail-closed): the pinned
+    prod ED25519 key in scripts/vps_known_hosts (deploy it NEXT TO the script), or a
+    file named by env QAUDION_VPS_KNOWN_HOSTS, or ~/.ssh/known_hosts. An unknown or
+    changed key aborts with exit 1 and an error that says how to verify/add it.
 """
 
 import os
@@ -102,9 +106,124 @@ DATA_DIR = "/opt/bcrypto/data/files"
 SERVICE_LOG_LINES = 50  # also fetch last N journalctl lines for context
 
 
-def ssh_connect():
+# --- BEGIN vps-host-key-verification (identical in the four SSH scripts) ---
+# W-HOSTKEY (2026-10-02): the prod VPS host key is VERIFIED, never trusted on
+# first use. This block is the SAME in ship-ios-logs.py, ship-server-logs.py,
+# fetch-ios-live.py and correlate-call.py (the tools stay self-contained and
+# importlib-free); test_vps_host_key_pin.py fails when the copies drift.
+#
+# FAIL-CLOSED: a host with NO known key is refused, and so is a host whose key
+# differs from the known one (BadHostKeyException). Either way: one clear error
+# naming the host, exit 1, never a fallback to another policy, key or password.
+#
+# Known keys, highest precedence first (the first entry per host + key type wins):
+#   1. the file named by env QAUDION_VPS_KNOWN_HOSTS (set but missing = exit 1)
+#   2. vps_known_hosts next to this script (the pinned ED25519 key of the prod VPS)
+#   3. the user's ~/.ssh/known_hosts
+# All three go through load_system_host_keys() so ONE store answers every lookup:
+# paramiko reads its "system" store first and ignores the other store for any
+# host the system store knows, so a stale ~/.ssh/known_hosts entry would
+# otherwise silently shadow the pin. save_host_keys is never called.
+#
+# paramiko's connect() moves the key type of a known host to the front of its
+# host-key algorithm list, so an ED25519-only pin still verifies a server that
+# also offers RSA/ECDSA. A server that cannot present the pinned type fails as a
+# key mismatch, never as an accepted unknown key. The policy is a RejectPolicy
+# subclass that only adds the offered key to the error. No paramiko attribute is
+# touched at import time (the unit tests stub the module when it is missing).
+
+class _UnknownHostKey(Exception):
+    """No loaded known_hosts file has a key for this host."""
+
+    def __init__(self, hostname, key):
+        Exception.__init__(self, "no known host key for %s" % hostname)
+        self.hostname = hostname
+        self.key = key
+
+
+def _pinned_known_hosts():
+    return Path(__file__).resolve().parent / "vps_known_hosts"
+
+
+def _key_fingerprint(key):
+    """'ssh-ed25519 SHA256:<b64>' exactly as `ssh-keygen -lf` prints it."""
+    import base64
+    import hashlib
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return "%s SHA256:%s" % (key.get_name(),
+                             base64.b64encode(digest).decode("ascii").rstrip("="))
+
+
+def _new_ssh_client():
+    """SSHClient that only talks to hosts whose key is already known."""
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    files = []
+    env = os.environ.get("QAUDION_VPS_KNOWN_HOSTS", "").strip()
+    if env:
+        envp = Path(os.path.expanduser(env))
+        if not envp.is_file():
+            print("ERROR: QAUDION_VPS_KNOWN_HOSTS names a missing file: %s" % env,
+                  file=sys.stderr)
+            sys.exit(1)
+        files.append(envp)
+    pinned = _pinned_known_hosts()
+    if pinned.is_file():
+        files.append(pinned)
+    for p in files:
+        try:
+            client.load_system_host_keys(str(p))
+        except OSError as e:
+            print("ERROR: cannot read known_hosts file %s: %s" % (p, e),
+                  file=sys.stderr)
+            sys.exit(1)
+    client.load_system_host_keys()  # ~/.ssh/known_hosts; a missing file is fine
+
+    class _Reject(paramiko.RejectPolicy):
+        def missing_host_key(self, client, hostname, key):
+            raise _UnknownHostKey(hostname, key)
+
+    client.set_missing_host_key_policy(_Reject())
+    return client
+
+
+def _hostkey_exit(client, host, why, offered, expected):
+    """Print one actionable ASCII error and exit 1 (no traceback, no fallback)."""
+    try:
+        client.close()
+    except Exception:  # noqa: BLE001
+        pass
+    msg = ["ERROR: SSH host key verification FAILED for %s: %s." % (host, why),
+           "  presented: %s" % _key_fingerprint(offered)]
+    if expected is not None:
+        msg.append("  known    : %s" % _key_fingerprint(expected))
+    msg += [
+        "  Refusing to connect: an unknown or changed host key is never trusted and",
+        "  there is no fallback. If the server was legitimately reinstalled, compare the",
+        "  presented fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`",
+        "  run ON the server, then put the line `%s ssh-ed25519 <key>` into" % host,
+        "  %s" % _pinned_known_hosts(),
+        "  (or into the file named by QAUDION_VPS_KNOWN_HOSTS, or ~/.ssh/known_hosts).",
+        "  Delete the stale line first: the first entry per host and key type wins.",
+        "  Never copy the key from the connection under test.",
+    ]
+    print(("\n".join(msg)).encode("ascii", "replace").decode("ascii"), file=sys.stderr)
+    sys.exit(1)
+
+
+def _connect_verified(client, host, **kw):
+    """client.connect(host, **kw); host-key failures end the run with one clear
+    error, every other failure (network, auth) propagates unchanged."""
+    try:
+        client.connect(host, **kw)
+    except _UnknownHostKey as e:
+        _hostkey_exit(client, host, "no known key for this host", e.key, None)
+    except paramiko.BadHostKeyException as e:
+        _hostkey_exit(client, host, "the presented key does NOT match the known key",
+                      e.key, e.expected_key)
+# --- END vps-host-key-verification ---
+
+def ssh_connect():
+    client = _new_ssh_client()
     # Prefer SSH KEY auth (bcrypto_vps_ed25519). A successful key auth sends NO
     # password, so it can NEVER trip fail2ban's sshd jail — which is exactly what
     # locked the operator IP out (a failed password attempt got us banned, and
@@ -113,16 +232,16 @@ def ssh_connect():
     key_path = _vps_key_path()
     if key_path:
         try:
-            client.connect(VPS_HOST, username=VPS_USER, key_filename=key_path,
-                           timeout=15, look_for_keys=False, allow_agent=False)
+            _connect_verified(client, VPS_HOST, username=VPS_USER,
+                              key_filename=key_path, timeout=15,
+                              look_for_keys=False, allow_agent=False)
             return client
         except Exception as e:  # noqa: BLE001 — fall back to password on any key error
             print(f"[ssh] key auth failed ({e}); falling back to password",
                   file=sys.stderr)
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(VPS_HOST, username=VPS_USER, password=VPS_PASS, timeout=15,
-                   look_for_keys=False, allow_agent=False)
+            client = _new_ssh_client()
+    _connect_verified(client, VPS_HOST, username=VPS_USER, password=VPS_PASS,
+                      timeout=15, look_for_keys=False, allow_agent=False)
     return client
 
 

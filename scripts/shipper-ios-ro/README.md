@@ -15,3 +15,18 @@ Tests (Linux; nothing touches a server): `bash test_wrapper.sh` (83 cases agains
 `python3 ro_integration.py ../ship-ios-logs.py qaudion-shipper-ios-ro.sh` (drives the real shipper through the real wrapper).
 
 Rollback: remove the authorized_keys line by its comment marker and delete the wrapper (see BCrypto-Ops/OPS.md, "Log shipper").
+
+## Helsinki side: the shipper verifies the Aruba host key
+
+The shippers (`ship-ios-logs.py`, `ship-server-logs.py`) and the dev tools (`fetch-ios-live.py`, `correlate-call.py`) no
+longer trust the first host key they see. They load the pinned prod key from `scripts/vps_known_hosts` (ED25519 of
+195.231.87.110, `SHA256:XDDSqerYgzHIFwo2amn4XQWza0DeU0TDJSZjyZBI/ZY`), then env `QAUDION_VPS_KNOWN_HOSTS` (optional extra file,
+a set-but-missing path is an error), then `~/.ssh/known_hosts`; an unknown or changed key aborts with exit 1.
+
+Deploy layout on Helsinki (`/opt/bcrypto/shipper/` is a plain copy of the scripts, not a git checkout): copy
+`vps_known_hosts` next to `ship-ios-logs.py` / `ship-server-logs.py` whenever the scripts are copied. root's
+`/root/.ssh/known_hosts` already has the same key, so the system file would also satisfy the check, but the pinned file is
+the one that is reviewed in git. After copying: keep `.bak` copies of the old scripts, run `python3 ship-ios-logs.py
+--selftest` and `python3 ship-server-logs.py --selftest` (they check the pin) before the `*/5` cron picks the new files up.
+Tests: `python3 scripts/test_vps_host_key_pin.py` (offline) and `QAUDION_HOSTKEY_LIVE=1 python3 scripts/test_vps_host_key_pin.py`
+on a box with a local sshd (live loopback handshake, no credentials sent).
