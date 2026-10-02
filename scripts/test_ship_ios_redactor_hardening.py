@@ -725,21 +725,21 @@ check("BCryptoGroupCallManager" not in red("state=active BCryptoGroupCallManager
 # DTLS check (b) local-log lines (QAudionWebRtcCallController.wireDtlsFailureHook,
 # AppState.handleHandshakeFatal), all RTLog tag "call":
 #   dtls fail s=<1-5> ok=0     failing stage, DtlsFingerprint.failureCode(stage:)
-#   dtls pass ok=1             check (b) passed (always the stats stage: no s=)
+#   dtls ok=1                  check (b) passed (always the stats stage: no s=)
 #   hsfatal r=<1-3>            the handshake-fatal verdict
 #   hsfatal r=<1-3> dstage=<1-9>   the same plus the DTLS stage
 # The first version of these lines used the single token "dtlsfp" (no vowel, not
 # a plausible word): the gate dropped it, so no DTLS verdict ever reached Loki.
-# "pass" is TELEMETRY_VOCAB (next to "fail") because "dtls pass ok=1" has 2 free
-# words and 1 structural token, which condition (B) rejects; "dstage" is
+# The pass line is "dtls ok=1": it ships with the existing vocabulary, so no new
+# global word ("pass" was tried and let credential-shaped prose through); "dstage" is
 # CALL_FORMAT_VOCAB, scoped to the exact "hsfatal r=<n> dstage=<n>" line (the
 # key must not be "dtls": the 1:1 heartbeat already prints dtls=<state>).
 # ---------------------------------------------------------------------------
 for s in range(1, 6):
     check(red("dtls fail s=%d ok=0" % s, "call") == "dtls fail s=%d ok=0" % s,
           "DTLSB: 'dtls fail s=%d ok=0' is dropped or altered by the shipper" % s)
-check(red("dtls pass ok=1", "call") == "dtls pass ok=1",
-      "DTLSB: 'dtls pass ok=1' is dropped or altered by the shipper")
+check(red("dtls ok=1", "call") == "dtls ok=1",
+      "DTLSB: 'dtls ok=1' is dropped or altered by the shipper")
 for r in (1, 2, 3):
     check(red("hsfatal r=%d" % r, "call") == "hsfatal r=%d" % r,
           "DTLSB: 'hsfatal r=%d' is dropped or altered by the shipper" % r)
@@ -759,9 +759,10 @@ for bad in ("hsfatal r=1 dstage=abc", "hsfatal r=1 dstage=55", "hsfatal r=9 dsta
           "DTLSB: %r shipped although it is not the exact hsfatal/dstage shape" % bad)
 check("zork=1" not in red("ice=connected dstage=1 zork=1 blarg=2", "call"),
       "DTLSB: 'dstage' became global vocabulary (it widened the unknown-word budget of another line)")
-# "pass" is one more vocabulary word like "fail": it must not let prose ship.
+# "pass" must stay out of the vocabulary: credential-shaped prose must not ship.
 for prose in ("he said pass the keys tomorrow noon", "pass the code to meet me tomorrow",
-              "please pass along the message now"):
+              "please pass along the message now", "pass is swordfish", "pass otp 123456",
+              "pass phrase is swordfish", "pass hunter2"):
     check(red(prose, "call") == "" and red(prose, "stdout") == "",
           "DTLSB: prose containing 'pass' shipped: %r" % prose)
 # the old vowel-less token stays unshippable (that is why the words changed).

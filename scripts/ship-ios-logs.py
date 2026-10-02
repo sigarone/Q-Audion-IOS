@@ -484,7 +484,7 @@ TELEMETRY_VOCAB = frozenset([
     "ended", "half_open", "connecting", "idle", "open", "opening", "start",
     "started", "stop", "stopped", "ok", "error", "warn", "info", "debug",
     "fatal", "retry", "retrying", "timeout", "abort", "aborted", "done",
-    "init", "ready", "pending", "success", "fail", "pass", "drop", "dropped",
+    "init", "ready", "pending", "success", "fail", "drop", "dropped",
     # roles / modes
     "caller", "callee", "offerer", "answerer", "datachannel", "relay",
     "ws_relay", "ws-relay", "direct_p2p", "p2p", "host", "srflx", "prflx",

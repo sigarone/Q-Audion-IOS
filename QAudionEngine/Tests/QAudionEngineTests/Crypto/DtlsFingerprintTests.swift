@@ -334,10 +334,11 @@ final class DtlsFingerprintTests: XCTestCase {
                 + "self?.onDtlsFingerprintFailure?(stage)"),
             "the fail line carries the numeric stage; the callback gets the unchanged stage")
         XCTAssertTrue(
-            controller.contains(#"pc.onDtlsMediaGateOpened = { [weak self] in self?.log?("dtls pass ok=1") }"#),
+            controller.contains(#"pc.onDtlsMediaGateOpened = { [weak self] in self?.log?("dtls ok=1") }"#),
             "the pass line has no stage")
         XCTAssertFalse(controller.contains("dtlsfp"), "the shipper drops the old vowel-less token")
-        XCTAssertFalse(controller.contains(#""dtls pass s="#), "a pass has no stage number")
+        XCTAssertFalse(controller.contains(#""dtls ok=1 s="#), "a pass has no stage number")
+        XCTAssertFalse(controller.contains(#""dtls pass"#), "no `pass` word: the shipper must not need it")
 
         // AppState: the wire reason is fixed; the stage only goes to the local log, as `dstage`.
         XCTAssertTrue(

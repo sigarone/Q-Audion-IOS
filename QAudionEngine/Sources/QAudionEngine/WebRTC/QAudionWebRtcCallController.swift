@@ -1242,13 +1242,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// failure; the remote log carries numeric verdicts only, never a fingerprint:
     /// `dtls fail s=<n> ok=0` with `s` 1 sdp_remote, 2 sdp_local, 3 stats = a real certificate
     /// mismatch, 4 pin_timeout, 5 stats_timeout = no verdict within the 5 s deadline (unverified,
-    /// not proven benign; see `DtlsFingerprint.failureCode`), and `dtls pass ok=1` when check (b)
+    /// not proven benign; see `DtlsFingerprint.failureCode`), and `dtls ok=1` when check (b)
     /// passed (the pass is always the stats stage, so it carries no `s`).
     ///
-    /// The line words are `dtls fail` / `dtls pass` on purpose: the log shipper's positive gate
+    /// The line words are `dtls fail` / `dtls ok` on purpose: the log shipper's positive gate
     /// (`scripts/ship-ios-logs.py`) drops a body with words it does not know, and the old single
     /// token `dtlsfp` (no vowel, not a plausible word) was dropped, so neither verdict ever reached
-    /// the server logs. `pass` was added to the shipper's `TELEMETRY_VOCAB` for the pass line: a
+    /// the server logs. The pass line is `dtls ok=1`, which ships with the existing vocabulary (no
+    /// new global word such as `pass`, which would let credential-shaped prose through): a
     /// change of these line words needs the same check against the real shipper (the cases are in
     /// `scripts/test_ship_ios_redactor_hardening.py`, group DTLSB).
     private func wireDtlsFailureHook(on pc: QAudionPeerConnection) {
@@ -1258,7 +1259,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             self?.onDtlsFingerprintFailure?(stage)
         }
         pc.onDtlsMediaGateOpened = { [weak self] in
-            self?.log?("dtls pass ok=1")
+            self?.log?("dtls ok=1")
         }
     }
 
