@@ -5,7 +5,7 @@ import CryptoKit
 ///
 /// Pure value logic, no WebRTC types: the canonical forms, the SDP checker (check (a)) and the
 /// stats checker (check (b)) live here so they are unit-testable on any host and pinned by the
-/// shared KAT (`handshake-sig-v5-kat.json`). The PeerConnection wiring is in
+/// shared KAT (`handshake-sig-v6-kat.json`). The PeerConnection wiring is in
 /// `QAudionPeerConnection` (funnel + stats gate) and `CallDtlsCertificate` (per-call certificate).
 ///
 /// **Canonical forms**

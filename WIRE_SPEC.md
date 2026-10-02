@@ -336,7 +336,8 @@ the transcript of §3.7, never over the JSON bytes.
 - A round-1 OFFER without a valid `sasCommit`, a rekey OFFER or an ACCEPT that carries the field, and the FIRST OFFER a
   callee device that has a call context for the `callId` (it rang for it) sees when its `rekeyRound` is not 1
   (R-COMMIT-FIRST-ROUND) are malformed and end the call with
-  reason `handshake_malformed` (§3.8.6).
+  reason `handshake_malformed` (§3.8.6). An OFFER that arrives before the device has a call context (it overtook the
+  `call_incoming`) follows the pending-OFFER rule of §3.7.4.
 - Every JSON decode failure of a bundle that was routed as a handshake bundle is malformed as well: the call ends with
   `handshake_malformed` and a hangup on every platform, never with a plain failure that skips the hangup.
 
@@ -850,8 +851,8 @@ JSON text. Optional fields that are absent encode as `LP(empty) = 0x0000`.
 
 A receiver that has accepted round N for a `callId` MUST reject any later OFFER whose `round` is not greater than N,
 and any OFFER whose `rekeyNonce` differs from the one recorded for that call. The first OFFER a callee accepts for a
-`callId` MUST have `round` = 1 (R-COMMIT-FIRST-ROUND, §3.1); an OFFER for a `callId` without a call context on the device
-is dropped without creating state (§3.7.4).
+`callId` MUST have `round` = 1 (R-COMMIT-FIRST-ROUND, §3.1); an OFFER that arrives before the device has a call context for
+its `callId` follows the pending-OFFER rule of §3.7.4.
 
 #### 3.7.1 Transcript-bound session key, SAS and key confirmation (unconditional)
 
@@ -1057,7 +1058,8 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
 3. `sender_id` (stamped by the server) is not the call's peer user: drop silently.
 4. Parse strictly: `B` canonical base64, decodes to exactly 64 bytes, the whole `data` at most 200 characters.
    Otherwise `sas_commit_mismatch`.
-5. `acceptBinding` differs from the `acceptHash` of this device's sent ACCEPT: sibling rule below.
+5. `acceptBinding` differs from the `acceptHash` (= SHA-256 of the ACCEPT_v6 transcript bytes of the ACCEPT this
+   device sent): sibling rule below.
 6. A REVEAL was already verified for this call: byte-identical, drop silently; different, `sas_commit_mismatch`.
 7. `SHA-256("qaudion-sas-commit-v6" ‖ LP(callId) ‖ sasNonce)` equals the stored `sasCommit` (constant-time compare):
    record it, cancel the REVEAL timer, compute the SAS. Otherwise `sas_commit_mismatch`.
@@ -1069,6 +1071,14 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
   before the ACCEPT is sent, the newest replaces the stash; after the ACCEPT is sent, a different round-1 OFFER is
   dropped and the frozen commitment stays. A byte-identical OFFER re-sends the cached ACCEPT or is dropped, never a
   fresh ACCEPT.
+- **Pending OFFER (no call context yet).** The opaque OFFER can overtake the `call_incoming` that creates the call
+  context. A client that already keeps such an OFFER in a pre-ring slot keeps doing so: at most one per peer user (a
+  newer one replaces the held one), no handshake processing, no ACCEPT, no timer, no hangup. The first-OFFER checks
+  (round 1, valid `sasCommit`, §3.1) apply when the OFFER arrives: a pending OFFER that fails them is dropped without
+  creating any state and without a hangup (there is no call to end yet), and a valid one is processed as the first
+  OFFER once the call context exists, but only for the call whose `callId` it carries; a held OFFER with another
+  `callId` is discarded, never applied to that call. An OFFER for a `callId` that already ended or was answered
+  elsewhere is dropped without creating state.
 - Until the REVEAL is verified the callee has no SAS words: its UI shows a waiting state and the SAS confirmation
   action is disabled. Polling UIs MUST cover the 5 s window or be event-driven.
 
@@ -1105,14 +1115,15 @@ across reconnects.
 |---|---|---|
 | identical OFFER | callee | re-send the cached ACCEPT if already sent, otherwise drop |
 | OFFER, first for the callId, round != 1 | callee that has a call context for the callId and no OFFER yet | `handshake_malformed` |
-| any OFFER for a callId without a call context (never rang, already ended, answered elsewhere) | callee | drop, create no state |
+| OFFER for a callId without a call context yet (it overtook `call_incoming`) | callee | not a valid first OFFER (round != 1, no valid `sasCommit`): drop, create no state, no hangup. Valid: pending-OFFER rule above |
+| OFFER for a callId that ended or was answered elsewhere | callee | drop, create no state |
 | rekey OFFER carrying `sasCommit` | callee | `handshake_malformed` |
 | identical ACCEPT | caller | drop; re-send the identical REVEAL |
 | different round-1 ACCEPT after binding | caller | drop |
 | identical REVEAL after verification | callee | drop |
 | different REVEAL naming own ACCEPT after verification | callee | `sas_commit_mismatch` |
 | REVEAL naming another ACCEPT | callee | sibling rule |
-| any message for an ended or unknown callId | both | drop, create no state |
+| any message other than an OFFER (see the pending-OFFER rule above) for an ended or unknown callId | both | drop, create no state |
 
 **Logging (R-COMMIT-LOG).** Never log `sasNonce`, `sasCommit`, `acceptBinding`, transcript hashes or SAS words; at most
 a verdict and 8-character call ids.

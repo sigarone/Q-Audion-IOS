@@ -651,6 +651,9 @@ final class AppState: ObservableObject {
     /// it self-cleans even if a future call-end path misses clearing it.
     private struct PendingOfferReplay {
         let senderId: String
+        /// Lowercased wire call id of the buffered JSON OFFER (WIRE_SPEC §3.7.4 pending OFFER: it is
+        /// applied only to the call whose id it carries); `nil` for the retired binary dialect.
+        let callId: String?
         let enqueuedAt: Date
         let replay: () -> Void
     }
@@ -664,13 +667,15 @@ final class AppState: ObservableObject {
     /// can't grow this unbounded, and a stale entry can't outlive the
     /// handshake window it exists for.
     @MainActor
-    private func bufferOfferReplay(senderId: String, replay: @escaping () -> Void) {
+    private func bufferOfferReplay(senderId: String, callId: String? = nil, replay: @escaping () -> Void) {
         let now = Date()
         pendingOfferReplays.removeAll { now.timeIntervalSince($0.enqueuedAt) > Self.pendingOfferReplayTTL }
+        // WIRE_SPEC §3.7.4 pending OFFER: at most one per peer user, a newer one replaces the held one.
+        pendingOfferReplays.removeAll { $0.senderId == senderId }
         if pendingOfferReplays.count >= Self.pendingOfferReplayCap {
             pendingOfferReplays.removeFirst()
         }
-        pendingOfferReplays.append(PendingOfferReplay(senderId: senderId, enqueuedAt: now, replay: replay))
+        pendingOfferReplays.append(PendingOfferReplay(senderId: senderId, callId: callId?.lowercased(), enqueuedAt: now, replay: replay))
     }
 
     /// Call right after every `callContactId = <non-nil>` assignment
@@ -680,11 +685,16 @@ final class AppState: ObservableObject {
     /// to; everything else — expired or from a different sender — is
     /// discarded, never processed.
     @MainActor
-    private func drainPendingOfferReplays(for senderId: String) {
+    private func drainPendingOfferReplays(for senderId: String, callId: String? = nil) {
         guard !pendingOfferReplays.isEmpty else { return }
         let now = Date()
+        // WIRE_SPEC §3.7.4: a held OFFER is applied only to the call whose `callId` it carries; one that
+        // carries another id is discarded (removed below with the rest of this sender's entries), never
+        // applied. `callId == nil` (the caller-side defensive drain) keeps the sender-only match.
+        let wanted = callId?.lowercased()
         let matches = pendingOfferReplays.filter {
             $0.senderId == senderId && now.timeIntervalSince($0.enqueuedAt) <= Self.pendingOfferReplayTTL
+                && (wanted == nil || $0.callId == nil || $0.callId == wanted)
         }
         pendingOfferReplays.removeAll { $0.senderId == senderId }
         for m in matches { m.replay() }
@@ -7037,7 +7047,7 @@ final class AppState: ObservableObject {
                     await MainActor.run {
                         if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                         self.callContactId = senderId
-                        self.drainPendingOfferReplays(for: senderId)  // W-OFFERBUFFER
+                        self.drainPendingOfferReplays(for: senderId, callId: callIdStr.isEmpty ? nil : callIdStr)  // W-OFFERBUFFER
                         // WIRE_SPEC §8.3 — we answered → polite on any later glare.
                         self.originalCallRole = .callee
                         self.incomingCallerName = resolvedCallerName
@@ -13547,8 +13557,16 @@ final class AppState: ObservableObject {
             // W-OFFERBUFFER — callContactId not set yet (this OFFER arrived
             // before call_incoming). Buffer; replayed only if callContactId
             // is later set to this exact senderId, never otherwise.
+            // WIRE_SPEC §3.7.4 pending OFFER: the first-OFFER checks (round 1, a valid `sasCommit`) apply
+            // when the OFFER ARRIVES. One that fails them is dropped with no state and no hangup (there is
+            // no call to end yet); it is never held to be rejected later.
+            if let code = HandshakeSigningPolicy.pendingOfferMalformedCode(
+                round: parsed.bundle.rekeyRound, sasCommitB64: parsed.bundle.sasCommit) {
+                print("[AppState] Android OFFER dropped — not a valid first OFFER code=\(code) callId=\(parsed.callId.prefix(8))… from \(senderId.prefix(8))…")
+                return
+            }
             print("[AppState] Android OFFER buffered — callContactId not yet set, waiting for call_incoming from \(senderId.prefix(8))…")
-            bufferOfferReplay(senderId: senderId) { [weak self] in
+            bufferOfferReplay(senderId: senderId, callId: parsed.callId) { [weak self] in
                 self?.routeInboundAndroidOffer(parsed: parsed, senderId: senderId)
             }
             return
@@ -15711,7 +15729,7 @@ final class AppState: ObservableObject {
     private func prepareIncomingPushCall(callId: UUID, callerId: String, hasVideo: Bool, fallbackName: String) -> String {
         activeCallKitId = callId
         callContactId = callerId
-        drainPendingOfferReplays(for: callerId)  // W-OFFERBUFFER
+        drainPendingOfferReplays(for: callerId, callId: callId.uuidString)  // W-OFFERBUFFER
         // WIRE_SPEC §8.3 — PushKit-woken incoming call: we answered → polite.
         originalCallRole = .callee
         isVideoCall = hasVideo

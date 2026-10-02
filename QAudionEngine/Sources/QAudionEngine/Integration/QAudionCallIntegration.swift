@@ -2420,6 +2420,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… is a different round-1 ACCEPT after binding — dropped")
                 return
             }
+            // R-COMMIT-BIND: a re-key attempt in flight only ever answers a round >= 2. An ACCEPT that echoes
+            // round 1 while one is in flight is a sibling's or a forged round-1 ACCEPT arriving late: it must
+            // not be taken for the re-key's answer (verified against the wrong OFFER and decapsulated with
+            // the re-key's keys), so it is dropped like every other non-bound round-1 ACCEPT.
+            if Self.isStrayRound1Accept(isReKeyAccept: isReKeyAccept, echoedRound: bundle.rekeyRound) {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round 1 while a re-key is in flight — dropped")
+                return
+            }
             // A round-1 ACCEPT echoes the OFFER's round: anything else with no re-key attempt in flight is a
             // stale or forged round and is never bound.
             if !isReKeyAccept, bundle.rekeyRound != 1 {
@@ -3643,6 +3651,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         if round <= 1 { return true }
         guard let last = lastAccepted else { return false }
         return round <= last
+    }
+
+    /// R-COMMIT-BIND: true for an ACCEPT that echoes round 1 while a re-key attempt (rounds >= 2) is in
+    /// flight. Round 1 is bound exactly once, so such an ACCEPT is never the answer to anything.
+    /// `internal` so a unit test can pin the decision.
+    static func isStrayRound1Accept(isReKeyAccept: Bool, echoedRound: Int?) -> Bool {
+        isReKeyAccept && echoedRound == 1
     }
 
     static func rekeyFreshnessValue(callId: String, rekeyNonce: Data, round: UInt32) -> Data {

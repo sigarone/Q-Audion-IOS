@@ -87,6 +87,14 @@ public enum HandshakeSigningPolicy {
         return round == 1 ? nil : "first_round_not_1"
     }
 
+    /// WIRE_SPEC §3.7.4 pending OFFER: an OFFER that overtook the `call_incoming` (no call context yet) is
+    /// checked as a FIRST OFFER when it arrives: round 1 and a valid `sasCommit`. `nil` when it may be held,
+    /// a code when it must be dropped (no state, no hangup: there is no call to end yet).
+    public static func pendingOfferMalformedCode(round: Int?, sasCommitB64: String?) -> String? {
+        if let code = firstRoundMalformedCode(isFirstOfferOfCall: true, round: round) { return code }
+        return sasCommitMalformedCode(isOffer: true, round: round, sasCommitB64: sasCommitB64)
+    }
+
     /// Evaluate a received bundle's signing material.
     ///
     /// - `signerIdentityKeyB64` / `sigV6B64` / `dtlsFingerprintText`: the bundle's three fields

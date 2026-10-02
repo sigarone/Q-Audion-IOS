@@ -112,6 +112,50 @@ final class SasCommitTests: XCTestCase {
         XCTAssertNil(HandshakeSigningPolicy.firstRoundMalformedCode(isFirstOfferOfCall: false, round: 5), "later OFFERs are rekeys")
     }
 
+    /// WIRE_SPEC §3.7.4 pending OFFER: an OFFER that overtook `call_incoming` is judged as a first OFFER on
+    /// arrival (round 1 and a valid commitment), else dropped.
+    func testAPendingOfferIsCheckedAsAFirstOfferWhenItArrives() {
+        let good = commit().base64EncodedString()
+        XCTAssertNil(HandshakeSigningPolicy.pendingOfferMalformedCode(round: 1, sasCommitB64: good))
+        XCTAssertEqual(HandshakeSigningPolicy.pendingOfferMalformedCode(round: 2, sasCommitB64: nil), "first_round_not_1")
+        XCTAssertEqual(HandshakeSigningPolicy.pendingOfferMalformedCode(round: 2, sasCommitB64: good), "first_round_not_1")
+        XCTAssertEqual(HandshakeSigningPolicy.pendingOfferMalformedCode(round: nil, sasCommitB64: good), "first_round_not_1")
+        XCTAssertEqual(HandshakeSigningPolicy.pendingOfferMalformedCode(round: 1, sasCommitB64: nil), "commit_missing")
+        XCTAssertEqual(HandshakeSigningPolicy.pendingOfferMalformedCode(round: 1, sasCommitB64: ""), "commit_malformed")
+        XCTAssertEqual(HandshakeSigningPolicy.pendingOfferMalformedCode(
+            round: 1, sasCommitB64: Data(repeating: 1, count: 31).base64EncodedString()), "commit_malformed")
+    }
+
+    /// The pre-ring slot in AppState: the arrival check runs BEFORE the OFFER is held, the slot keeps one
+    /// OFFER per peer (the newest) and a held OFFER is replayed only for the call whose id it carries.
+    func testThePendingOfferSlotChecksOnArrivalKeepsOnePerPeerAndMatchesTheCallId() throws {
+        let app = try sourceText("QAudionApp/AppState.swift")
+        let route = try XCTUnwrap(app.range(of: "private func routeInboundAndroidOffer(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {"))
+        let body = String(app[route.upperBound...].prefix(6_000))
+        let checkAt = try XCTUnwrap(body.range(of: "HandshakeSigningPolicy.pendingOfferMalformedCode("))
+        let holdAt = try XCTUnwrap(body.range(of: "bufferOfferReplay(senderId: senderId, callId: parsed.callId)"))
+        XCTAssertLessThan(checkAt.lowerBound, holdAt.lowerBound, "an invalid pending OFFER is never held")
+        XCTAssertTrue(app.contains("pendingOfferReplays.removeAll { $0.senderId == senderId }"), "one pending OFFER per peer")
+        XCTAssertTrue(app.contains("&& (wanted == nil || $0.callId == nil || $0.callId == wanted)"), "applied only to its own call")
+        XCTAssertTrue(app.contains("self.drainPendingOfferReplays(for: senderId, callId: callIdStr.isEmpty ? nil : callIdStr)"))
+        XCTAssertTrue(app.contains("drainPendingOfferReplays(for: callerId, callId: callId.uuidString)"))
+    }
+
+    /// R-COMMIT-BIND: with a rekey attempt in flight, an ACCEPT that echoes round 1 is never the rekey's
+    /// answer; any other combination is unchanged.
+    func testARound1AcceptWhileARekeyIsInFlightIsStray() throws {
+        XCTAssertTrue(QAudionCallIntegration.isStrayRound1Accept(isReKeyAccept: true, echoedRound: 1))
+        XCTAssertFalse(QAudionCallIntegration.isStrayRound1Accept(isReKeyAccept: true, echoedRound: 2))
+        XCTAssertFalse(QAudionCallIntegration.isStrayRound1Accept(isReKeyAccept: true, echoedRound: nil))
+        XCTAssertFalse(QAudionCallIntegration.isStrayRound1Accept(isReKeyAccept: false, echoedRound: 1), "the ordinary round-1 path")
+        let src = try integrationText()
+        let acceptCase = try XCTUnwrap(src.range(of: "case .accept:\n            // Originator side"))
+        let tail = String(src[acceptCase.upperBound...])
+        let strayAt = try XCTUnwrap(tail.range(of: "Self.isStrayRound1Accept(isReKeyAccept: isReKeyAccept, echoedRound: bundle.rekeyRound)"))
+        let verifyAt = try XCTUnwrap(tail.range(of: "let acceptCheck = evaluateInbound("))
+        XCTAssertLessThan(strayAt.lowerBound, verifyAt.lowerBound, "dropped before it is verified")
+    }
+
     // MARK: - integration: the callee ends malformed OFFERs without an ACCEPT
 
     private func offerBundle(round: Int, commit: String?) -> AndroidHandshakeBundle {
