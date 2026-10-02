@@ -297,16 +297,30 @@ final class SasHoldAlignTests: XCTestCase {
 
     // MARK: - app wiring (AppState cannot be driven here: CallKit, live provider, WebSocket)
 
-    private func appStateText() throws -> String {
+    private func sourceText(_ relativePath: String) throws -> String {
         var dir = URL(fileURLWithPath: #filePath)
         for _ in 0..<10 {
             dir = dir.deletingLastPathComponent()
-            let candidate = dir.appendingPathComponent("QAudionApp/AppState.swift")
+            let candidate = dir.appendingPathComponent(relativePath)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 return try String(contentsOf: candidate, encoding: .utf8)
             }
         }
-        throw XCTSkip("QAudionApp/AppState.swift not found")
+        throw XCTSkip("\(relativePath) not found")
+    }
+
+    private func appStateText() throws -> String { try sourceText("QAudionApp/AppState.swift") }
+
+    /// The verdict sites that hold a call's media (the OFFER-verify leg and the ACCEPT-verify leg) must
+    /// register the hold with the integration BEFORE telling the app, or the caller keeps rekeying while
+    /// held (R-HELD-REKEY). The behavioural tests above drive `markHeld` directly, so this pins the wiring.
+    func testBothVerdictSitesRegisterTheHoldBeforeNotifyingTheApp() throws {
+        let src = try sourceText("QAudionEngine/Sources/QAudionEngine/Integration/QAudionCallIntegration.swift")
+        let wiring = "markHeld(callId: callId)\n                onHandshakeIdentityUnverified?(callId, code)"
+        XCTAssertEqual(src.components(separatedBy: wiring).count - 1, 2,
+                       "both the OFFER and the ACCEPT verdict site register the hold, then notify the app")
+        XCTAssertEqual(src.components(separatedBy: "onHandshakeIdentityUnverified?(callId, code)").count - 1, 2,
+                       "no other site raises the hold without registering it")
     }
 
     func testTheAppMarksOnlyOnACommittedPinShowsCandidateWordsAndReleasesTheHold() throws {
@@ -318,9 +332,16 @@ final class SasHoldAlignTests: XCTestCase {
         let guardRange = try XCTUnwrap(app.range(of: guardText))
         let markRange = try XCTUnwrap(app.range(of: markCall))
         XCTAssertLessThan(guardRange.lowerBound, markRange.lowerBound, "the mark sits behind the committed-pin guard")
-        let refused = try XCTUnwrap(app.range(of: "return .refused"))
-        let mark = try XCTUnwrap(app.range(of: markCall))
-        XCTAssertLessThan(refused.lowerBound, mark.lowerBound, "a refused confirmation returns before it can mark")
+        // inside the adoption function itself: the `.refused` return (a conflict between rounds) and the
+        // return of a differing stored pin both come before the mark
+        let fnStart = try XCTUnwrap(app.range(of: "func adoptSasConfirmedSignerKeyIfUnresolved() -> SasSignerAdoption {"))
+        let fnEnd = try XCTUnwrap(app.range(of: "private func markContactVerifiedBySas("))
+        let body = String(app[fnStart.upperBound..<fnEnd.lowerBound])
+        let markAt = try XCTUnwrap(body.range(of: markCall))
+        let refusedAt = try XCTUnwrap(body.range(of: "return .refused"))
+        let conflictAt = try XCTUnwrap(body.range(of: "RTLog.warn(\"call\", \"saspin adopt=0 conflict=1\")"))
+        XCTAssertLessThan(refusedAt.lowerBound, markAt.lowerBound, "a refused confirmation returns before it can mark")
+        XCTAssertLessThan(conflictAt.lowerBound, markAt.lowerBound, "a conflicting pin returns before it can mark")
         // R-SAS-WORDS
         XCTAssertTrue(app.contains("let candidate = candidateSasMaterial(forCallId: owner)"))
         XCTAssertTrue(app.contains("let key = candidate?.sessionKey ?? liveKey"))
