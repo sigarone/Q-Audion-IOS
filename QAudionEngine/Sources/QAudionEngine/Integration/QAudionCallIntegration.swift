@@ -171,7 +171,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// commitment, the callee's stored commitment and REVEAL timer, and the round-1 SAS words.
     public let sasCommit = SasCommitBook()
 
-    /// The 5 s REVEAL timer of each callee call (lowercased callId), armed at the FIRST send of the
+    /// The REVEAL timer (`CONFIRM_TIMEOUT`, 15 s) of each callee call (lowercased callId), armed at the FIRST send of the
     /// round-1 ACCEPT.
     private var sasRevealTimers: [String: Task<Void, Never>] = [:]
 
@@ -806,7 +806,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         /// serialized to the wire, no capability flag.
         public let selectedFp: String?
         /// The signed `rekeyRound` (>= 1) of the key round this event arms. Round 1 has the longer KCMAC waits of
-        /// `KcMacWindow` (A1 caller, A5 callee); every later round waits 5 s.
+        /// `KcMacWindow` (A1 caller 30 s, A5 callee 15 s after its REVEAL verified); every later round waits
+        /// `CONFIRM_TIMEOUT` (15 s).
         public let round: UInt32
 
         public init(
@@ -4363,7 +4364,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// derivation, only the wire send.
     ///
     /// `isRound1`: this is the round-1 ACCEPT. Its FIRST actual send freezes the answered commitment and
-    /// starts the callee's 5 s REVEAL timer (`noteResponderAcceptSent`); a held ACCEPT starts it when it
+    /// starts the callee's REVEAL timer, `CONFIRM_TIMEOUT` = 15 s (`noteResponderAcceptSent`); a held ACCEPT starts it when it
     /// is released, not before.
     private func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool) async throws {
         let cid = callId.lowercased()

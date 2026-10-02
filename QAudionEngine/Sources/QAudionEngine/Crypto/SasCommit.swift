@@ -313,8 +313,8 @@ public struct SasCommitCaller {
     /// The nonce, for the caller's own SAS derivation (only after binding).
     public var sasNonce: Data? { boundAcceptHash == nil ? nil : nonce }
 
-    /// The REVEAL was handed to the transport (first send or a re-send): the caller's 15 s wait for the callee's
-    /// round-1 KCMAC runs from the latest one (a longer wait is allowed, never a shorter one).
+    /// The REVEAL was handed to the transport (first send or a re-send): the caller's 30 s (2 x `CONFIRM_TIMEOUT`) wait
+    /// for the callee's round-1 KCMAC runs from the latest one (a longer wait is allowed, never a shorter one).
     public mutating func revealHanded(nowMs: Int) {
         guard !ended, boundAcceptHash != nil else { return }
         revealHandedAtMs = max(revealHandedAtMs ?? nowMs, nowMs)

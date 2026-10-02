@@ -55,7 +55,7 @@ public enum KeyConfirmation {
     public enum Status: Equatable {
         /// Peer's `kc_mac` arrived and verified against our own recomputation.
         case verified
-        /// No `kc_mac` arrived from the peer before the 5000ms deadline (or the peer
+        /// No `kc_mac` arrived from the peer before the key-confirmation window ended (or the peer
         /// never advertised `pskMixV1`, so emission was never expected).
         case absent
         /// A `kc_mac` arrived but did NOT verify — active-attack signature (permuted

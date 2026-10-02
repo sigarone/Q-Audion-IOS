@@ -54,7 +54,7 @@ public enum AssuranceState: Equatable {
     /// transcript signature did not verify.
     case identityUnverified
     /// S6 — NFC genuinely mixed this call but the peer's `kc_mac` never arrived
-    /// (5000ms deadline elapsed, or the peer doesn't support key confirmation).
+    /// (the key-confirmation window elapsed, or the peer doesn't support key confirmation).
     case nfcPresentUnconfirmed
     /// S7 — this contact's NFC secret was expected (a PAST call previously reached
     /// `S2`) but this call fell back to plain PSK (or no PSK at all) without it — a
