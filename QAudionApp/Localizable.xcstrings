@@ -32519,6 +32519,90 @@
           }
         }
       }
+    },
+    "bug_report.opened_by_volume": {
+      "extractionState": "manual",
+      "comment": "Bug report sheet — subtitle when the sheet was opened by the volume-button gesture; 'Salta' is the dismiss button of the same sheet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si è aperto con i tasti del volume. Se non volevi segnalare nulla, tocca Salta."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opened with the volume buttons. If you did not mean to report anything, tap Skip."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit den Lautstärketasten geöffnet. Wenn du nichts melden wolltest, tippe auf Überspringen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se abrió con los botones de volumen. Si no querías informar de nada, toca Omitir."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvert avec les boutons de volume. si vous ne vouliez rien signaler, touchez Passer."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aberto pelos botões de volume. Se você não queria relatar nada, toque em Pular."
+          }
+        }
+      }
+    },
+    "bug_report.opened_by_shake": {
+      "extractionState": "manual",
+      "comment": "Bug report sheet — subtitle when the sheet was opened by shaking the phone; 'Salta' is the dismiss button of the same sheet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si è aperto scuotendo il telefono. Se non volevi segnalare nulla, tocca Salta."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opened by shaking the phone. If you did not mean to report anything, tap Skip."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durch Schütteln des Telefons geöffnet. Wenn du nichts melden wolltest, tippe auf Überspringen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se abrió al agitar el teléfono. Si no querías informar de nada, toca Omitir."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvert en secouant le téléphone. si vous ne vouliez rien signaler, touchez Passer."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aberto ao sacudir o telefone. Se você não queria relatar nada, toque em Pular."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

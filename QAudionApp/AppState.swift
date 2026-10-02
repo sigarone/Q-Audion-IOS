@@ -1499,7 +1499,70 @@ final class AppState: ObservableObject {
             // signal, see the busy-check), so the auto-lock hold has to be
             // re-evaluated from here too.
             updateIdleTimer()
+            // 2026-10-02 — the group screen's state machine in the phone log
+            // (`grp state=<n> old=<n> count=<n>`, numbers only): the iPhone's group
+            // traces recorded nothing of what the screen was doing.
+            groupDiag(GroupDiagnostics.stateLine(groupCallControllerState, old: oldValue))
+            let codeNow = GroupDiagnostics.stateCode(groupCallControllerState)
+            let codeBefore = GroupDiagnostics.stateCode(oldValue)
+            if codeNow != codeBefore {
+                // Joining or leaving a group call moves the audio route (and with it the
+                // output volume): not a volume-button gesture.
+                BugReporter.shared.noteAudioTransition()
+            }
+            if codeNow == 1 || codeNow == 2 || codeBefore == 1 || codeBefore == 2 {
+                groupCallLastLiveAt = Date()
+            }
         }
+    }
+
+    /// The last time a group call was live (connecting / active) here: a bug report sent
+    /// during it or shortly after carries the longer log window
+    /// (`bugReportLogWindowMinutes`).
+    var groupCallLastLiveAt: Date?
+
+    /// The last group-call diagnosis lines (`groupDiag`), newest last, for the bug-report
+    /// snapshot. The 10 s heartbeat lines are logged but not kept here.
+    var groupDiagRing: [String] = []
+
+    /// When the pending 1:1 -> group hand-over began (`grp swap ... ms=` is relative to it).
+    var groupPromotionStartedAt: Date?
+
+    /// One group-call diagnosis line: RTLog tag "group" (a shape the phone-log shipper
+    /// keeps verbatim, see `GroupDiagnostics`) and, unless it is a heartbeat line, the
+    /// bug-report ring.
+    func groupDiag(_ line: String) {
+        RTLog.info("group", line)
+        guard !line.hasPrefix("grp hb ") else { return }
+        groupDiagRing.append(AppState.isoFormatter.string(from: Date()) + " " + line)
+        if groupDiagRing.count > 48 { groupDiagRing.removeFirst(groupDiagRing.count - 48) }
+    }
+
+    /// A step of the 1:1 -> group hand-over, timed from its start.
+    func groupPromotionDiag(_ phase: GroupDiagnostics.PromotionPhase) {
+        let ms = groupPromotionStartedAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
+        groupDiag(GroupDiagnostics.promotionLine(phase, ms: ms))
+    }
+
+    /// The audio output and volume right now (`grp route out=<n> vol=<n>`).
+    func groupRouteDiag() {
+        let session = AVAudioSession.sharedInstance()
+        groupDiag(GroupDiagnostics.routeLine(portType: session.currentRoute.outputs.first?.portType.rawValue,
+                                             volume: session.outputVolume))
+    }
+
+    /// Minutes of log a bug report carries before its trigger: 4 for a group call (live
+    /// now or within the last 5 minutes), the historical 2 otherwise.
+    func bugReportLogWindowMinutes() -> Double {
+        let groupLive: Bool = {
+            switch groupCallControllerState {
+            case .connecting, .active: return true
+            case .idle, .failed: return false
+            }
+        }()
+        if groupLive { return 4 }
+        if let last = groupCallLastLiveAt, Date().timeIntervalSince(last) < 300 { return 4 }
+        return BugReporter.defaultLogWindowMinutes
     }
 
     /// W561 — the callId of whatever call is active right now (group takes
@@ -1550,14 +1613,39 @@ final class AppState: ObservableObject {
         if let oneToOneCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() {
             call["one_to_one_call_id"] = oneToOneCallId
         }
+        // 2026-10-02 — the group media state, not just the roster: PeerConnection states,
+        // what each remote audio stream delivered at the last heartbeat, the last camera
+        // step, the last error shown (numbers only, see `GroupCallController.diagSnapshot`),
+        // the recent group / hand-over diagnosis lines and the audio route. The reports of
+        // the hand-over "error" carried none of it.
+        if let media = groupCallController?.diagSnapshot() {
+            call["group_media"] = media
+        }
+        call["group_promotion_pending"] = groupPromotion != nil
+        if !groupDiagRing.isEmpty {
+            call["group_diag"] = groupDiagRing
+        }
+        let session = AVAudioSession.sharedInstance()
+        let audio: [String: Any] = [
+            // Port TYPES only ("Speaker", "Receiver", ...): a port NAME can carry the
+            // owner's name ("AirPods di ...").
+            "outputs": session.currentRoute.outputs.map { $0.portType.rawValue },
+            "output_volume_pct": Int((session.outputVolume * 100).rounded()),
+            "category": session.category.rawValue,
+            "mode": session.mode.rawValue,
+        ]
 
         let snapshot: [String: Any] = [
             "schema": 1,
             "captured_at": AppState.isoFormatter.string(from: Date()),
             "ws_state": wsConnectionState.rawValue,
             "call": call,
+            "audio": audio,
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+        // `JSONSerialization` raises an Objective-C exception (not a Swift error) on a
+        // value it cannot encode: check first, a report is never worth a crash.
+        guard JSONSerialization.isValidJSONObject(snapshot),
+              let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else {
             return "{}"
         }
@@ -3629,6 +3717,9 @@ final class AppState: ObservableObject {
             getActiveCallId: { [weak self] in self?.activeCallIdForReport() },
             getDiagSnapshot: { [weak self] in self?.buildDiagSnapshotJSON() ?? "{}" }
         )
+        BugReporter.shared.setLogWindowProvider { [weak self] in
+            self?.bugReportLogWindowMinutes() ?? BugReporter.defaultLogWindowMinutes
+        }
         BugReporter.shared.startVolumeObserver()
 
         // W94: wire chat-message notification taps to pendingDeepLinkConversationId
@@ -6028,6 +6119,10 @@ final class AppState: ObservableObject {
             let viewModelErrorHook = groupController.onMediaError
             groupController.onMediaError = { [weak self] error in
                 viewModelErrorHook?(error)
+                // Every error the group screen shows (a camera toast, or the fatal toast
+                // below), as a numeric code: `grp error code=<n>`.
+                let errorLine = GroupDiagnostics.errorLine(error)
+                DispatchQueue.main.async { self?.groupDiag(errorLine) }
                 guard error.isFatal else { return }
                 let text = GroupCallViewModel.toastText(for: error)
                 DispatchQueue.main.async { self?.groupCallFatalErrorToastText = text }
@@ -20005,7 +20100,30 @@ extension AppState {
         // the next call would start with .speaker override still active → audio
         // comes out of the external speaker at low perceived volume when
         // the user holds the phone to their ear expecting the earpiece.
-        try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+        //
+        // W-HANDOVERROUTE (2026-10-02) — but NOT while a group call holds the shared
+        // session (the 1:1 leg ending under a live group call: the hand-over itself, or
+        // the peer hanging up first). The reset used to throw the group call — hands-free,
+        // on the loudspeaker since it connected — onto the earpiece until a later hook put
+        // the loudspeaker back (report 93005f73: hand-over 07:13:49.2, "speaker route
+        // applied via gate (was receiver)" at 07:13:50.28). That speaker -> earpiece ->
+        // speaker flip is audible, and each half moves `outputVolume` (each route keeps its
+        // own level), which is what opened the bug-report sheet by itself at every
+        // hand-over (`VolumeGestureDetector`). Mirrors the group side's own rule (the
+        // group -> idle reset skips a live 1:1 call). The group keeps its route; the
+        // re-assert is a no-op unless the output is the earpiece.
+        let groupCallHoldsAudio: Bool = {
+            switch groupCallControllerState {
+            case .connecting, .active: return true
+            case .idle, .failed: return false
+            }
+        }()
+        BugReporter.shared.noteAudioTransition()
+        if groupCallHoldsAudio {
+            routeGroupCallAudioToSpeaker()
+        } else {
+            try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+        }
         // W-CALLSPKR — drop the latched speaker preference alongside the
         // route reset above so it can't leak into the next call.
         callSpeakerOn = false
@@ -20626,6 +20744,9 @@ extension AppState {
             }
         }()
         let wanted = isInCall || groupLive
+        // W-STALLMARK — main-thread stalls are marked in the phone log for as long as a
+        // call is live (same "a call is live" signal as the auto-lock hold).
+        MainThreadStallMonitor.shared.setActive(wanted)
         if UIApplication.shared.isIdleTimerDisabled != wanted {
             UIApplication.shared.isIdleTimerDisabled = wanted
             RTLog.info("call", "W-CALLAWAKE isIdleTimerDisabled=\(wanted) (isInCall=\(isInCall), groupLive=\(groupLive))")
@@ -25027,6 +25148,13 @@ extension AppState {
                 TelemetryService.shared.emit(kind: kind, callId: cid, attrs: attrs)
             }
         }
+        // 2026-10-02 — the engine's group diagnosis lines (camera steps, the 10 s media
+        // heartbeat: PeerConnection states, audio received per remote, what we publish)
+        // reach the phone log with the "group" tag (the engine's own prints are mostly
+        // masked by the log shipper). Numbers only, see `GroupDiagnostics`.
+        controller.diagLog = { [weak self] line in
+            DispatchQueue.main.async { self?.groupDiag(line) }
+        }
         groupCallController = controller
         return controller
     }
@@ -25150,6 +25278,7 @@ extension AppState {
             Task { [weak self] in await self?.callKit?.reportCallConnected(uuid: uuid) }
         }
         if var promotion = groupPromotion, promotion.groupCallId == groupCallController?.currentCallId {
+            if !promotion.mediaConnected { groupPromotionDiag(.mediaConnected) }
             promotion.mediaConnected = true
             groupPromotion = promotion
             finishGroupPromotionIfReady()
@@ -25170,10 +25299,14 @@ extension AppState {
     @MainActor
     func beginGroupPromotion(groupCallId: String, peerId: String) {
         groupPromotion = GroupPromotion(groupCallId: groupCallId, peerId: peerId)
+        groupPromotionStartedAt = Date()
+        groupPromotionDiag(.begun)
+        groupRouteDiag()
         groupPromotionTimeout?.cancel()
         let final = DispatchWorkItem { [weak self] in
             guard let self = self, let promotion = self.groupPromotion,
                   promotion.groupCallId == groupCallId else { return }
+            self.groupPromotionDiag(.forced)
             self.completeGroupPromotion()
         }
         let mediaCheck = DispatchWorkItem { [weak self] in
@@ -25195,10 +25328,22 @@ extension AppState {
     private func finishGroupPromotionIfReady() {
         guard let promotion = groupPromotion, promotion.mediaConnected else { return }
         let peerInGroup = groupCallManager?.participants.contains { $0.id == promotion.peerId } ?? false
-        if peerInGroup { completeGroupPromotion() }
+        if peerInGroup {
+            groupPromotionDiag(.peerJoined)
+            completeGroupPromotion()
+        }
     }
 
     /// Make-before-break: the group media is up, now the 1:1 leg goes.
+    ///
+    /// 2026-10-02 — what the user sees here, checked against reports 93005f73 /
+    /// 2e309206 / 313539e3 (the iPhone "error at once" when it creates the group): the
+    /// group cover is already up (`groupCallControllerState != .idle`), and `endCall()`
+    /// puts up no call-ended screen, toast or alert of its own. What did appear was the
+    /// bug-report sheet, opened by the audio route flip of this very step (see
+    /// W-HANDOVERROUTE in `endCall()` and `VolumeGestureDetector`). The 1:1 teardown is
+    /// now a declared audio transition, the group keeps its route, and every step is in
+    /// the phone log (`grp swap phase=<n>`, `grp route out=<n> vol=<n>`).
     @MainActor
     private func completeGroupPromotion() {
         guard groupPromotion != nil else { return }
@@ -25206,13 +25351,34 @@ extension AppState {
         groupPromotionTimeout?.cancel()
         groupPromotionTimeout = nil
         RTLog.info("call", "group promotion: hand-over complete - ending the 1:1 leg")
+        BugReporter.shared.noteAudioTransition()
         // `endCall()` itself tells the group audio unit to take over (below).
         endCall()
+        groupPromotionDiag(.handedOver)
+        // The 1:1 leg's CallKit / audio-unit teardown finishes asynchronously and may
+        // still move the route: the group (hands-free) keeps the loudspeaker. Both calls
+        // are no-ops unless the output is the earpiece.
+        routeGroupCallAudioToSpeaker()
+        groupRouteDiag()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self = self else { return }
+            switch self.groupCallControllerState {
+            case .connecting, .active:
+                self.routeGroupCallAudioToSpeaker()
+                self.groupPromotionDiag(.routeKept)
+                self.groupRouteDiag()
+            case .idle, .failed:
+                break
+            }
+            self.groupPromotionStartedAt = nil
+        }
     }
 
     /// The group call could not be set up: it is dropped, the 1:1 call goes on.
     @MainActor
     private func abandonGroupPromotion() {
+        groupPromotionDiag(.abandoned)
+        groupPromotionStartedAt = nil
         groupPromotion = nil
         groupPromotionTimeout?.cancel()
         groupPromotionTimeout = nil

@@ -770,6 +770,83 @@ check(red("dtlsfp s=5 ok=0", "call") == "",
       "DTLSB: the old 'dtlsfp' token started shipping (re-check why the line words were changed)")
 
 # ---------------------------------------------------------------------------
+# Group-call / bug-report diagnosis lines (2026-10-02, iOS branch
+# fix/group-ios-promotion-diag-reports). Built by QAudionEngine's GroupDiagnostics
+# (tag "group"), BugReporter (tag "bugreport") and MainThreadStallMonitor (tag "call"):
+# enum codes and counters only, from words this script already knows. Every shape must
+# ship VERBATIM, and must do so without spending any of the unknown-word allowance
+# (no vocabulary was added for them). The Swift side pins the identical strings in
+# GroupDiagnosticsTests / VolumeGestureDetectorTests; change both together.
+#   grp state=<0-3> old=<0-3> count=<n>          group screen state machine
+#   grp error code=<1-10>                        an error the user was shown
+#   grp swap phase=<1-9> ms=<n>                  1:1 -> group hand-over steps
+#   grp route out=<0-9> vol=<0-100>              audio output and volume
+#   grp check verified=<n> count=<n>             the "not verified" banner's input
+#   grp video camera=<0|1> phase=<1-6> ok=<0|1> code=<n> ms=<n>   camera publish steps
+#   grp hb ice send=<pc> recv=<pc>               10 s heartbeat: PeerConnection states
+#   grp hb audio mid=<n> bytes=<n> lost=<n> rxlvl=<0-100>         per remote audio received
+#   grp hb tx audio=<n> video=<n> frames=<n>     what this phone published
+#   trig src=<1|2> [delta=<ms> vol=<0-100>]      how the bug-report sheet was opened
+#   trig src=1 suppressed=1 why=<1-5>            a volume change that was NOT a press
+#   report send age=<ms> min=<n> count=<n>       a report sent (trigger->send, log window)
+#   hang ms=<n> site=1 background=<0|1>          a main-thread stall during a call
+# ---------------------------------------------------------------------------
+DIAG_LINES = (
+    ("group", "grp state=2 old=1 count=3"),
+    ("group", "grp state=0 old=2 count=0"),
+    ("group", "grp state=3 old=1 count=0"),
+    ("group", "grp error code=1"),
+    ("group", "grp error code=10"),
+    ("group", "grp swap phase=1 ms=0"),
+    ("group", "grp swap phase=4 ms=3460"),
+    ("group", "grp route out=2 vol=56"),
+    ("group", "grp route out=1 vol=100"),
+    ("group", "grp check verified=2 count=3"),
+    ("group", "grp video camera=1 phase=1 ok=1 code=0 ms=0"),
+    ("group", "grp video camera=1 phase=2 ok=0 code=3 ms=120"),
+    ("group", "grp video camera=1 phase=5 ok=1 code=0 ms=850"),
+    ("group", "grp video camera=0 phase=4 ok=1 code=0 ms=40"),
+    ("group", "grp hb ice send=2 recv=2"),
+    ("group", "grp hb ice send=1 recv=9"),
+    ("group", "grp hb audio mid=0 bytes=40960 lost=0 rxlvl=12"),
+    ("group", "grp hb audio mid=3 bytes=0 lost=9999999 rxlvl=100"),
+    ("group", "grp hb tx audio=40960 video=1200000 frames=150"),
+    ("bugreport", "trig src=1 delta=200 vol=56"),
+    ("bugreport", "trig src=2"),
+    ("bugreport", "trig src=1 suppressed=1 why=4"),
+    ("bugreport", "report send age=5200 min=5 count=2"),
+    ("call", "hang ms=5200 site=1 background=0"),
+    ("call", "hang ms=1200 site=1 background=1"),
+)
+
+
+def diag_misses():
+    drop_caches()
+    return [(t, l) for (t, l) in DIAG_LINES if red(l, t) != l]
+
+
+bad = diag_misses()
+check(not bad, "GRPDIAG: diagnosis lines not shipped verbatim: %r" % (bad,))
+slack = m.MAX_UNKNOWN_WORDS
+m.MAX_UNKNOWN_WORDS = 0
+try:
+    bad = diag_misses()
+finally:
+    m.MAX_UNKNOWN_WORDS = slack
+    drop_caches()
+check(not bad, "GRPDIAG: a diagnosis line needs the unknown-word allowance (a word is not "
+      "vocabulary): %r" % (bad,))
+# The shapes were built from existing vocabulary, nothing was widened: a free-text body
+# under the same tags is still dropped, and a PeerConnection state WORD under a non-enum
+# key is still masked (why the heartbeat uses numeric codes).
+for tag in ("group", "bugreport", "call"):
+    check(red("grp error the user typed something private here", tag) == "",
+          "GRPDIAG: prose shipped under tag %r" % tag)
+check(red("grp hb ice send=connected recv=connected", "group") != "grp hb ice send=connected recv=connected",
+      "GRPDIAG: a state word under a non-enum key shipped verbatim (re-check the numeric heartbeat format)")
+drop_caches()
+
+# ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
 for f in failures:
     print("  FAIL: " + f)

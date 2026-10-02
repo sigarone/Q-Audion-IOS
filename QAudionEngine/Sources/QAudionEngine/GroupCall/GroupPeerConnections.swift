@@ -401,6 +401,28 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         setActiveLayers(requestedLayerCount)
     }
 
+    /// Cumulative outbound counters (diagnosis only): audio bytes, and video bytes /
+    /// encoded frames summed over the simulcast layers (one `outbound-rtp` row each).
+    public func outboundStats() async -> GroupPublisherStats? {
+        guard let report = await statsReport() else { return nil }
+        var audioBytes = 0
+        var videoBytes = 0
+        var frames = 0
+        var rows = 0
+        for (_, stat) in report.statistics where stat.type == "outbound-rtp" {
+            rows += 1
+            let bytes = (stat.values["bytesSent"] as? NSNumber)?.intValue ?? 0
+            if (stat.values["kind"] as? String) == "video" {
+                videoBytes += bytes
+                frames += (stat.values["framesEncoded"] as? NSNumber)?.intValue ?? 0
+            } else {
+                audioBytes += bytes
+            }
+        }
+        guard rows > 0 else { return nil }
+        return GroupPublisherStats(audioBytesSent: audioBytes, videoBytesSent: videoBytes, framesEncoded: frames)
+    }
+
     /// Spec §12.1 teardown order. The sender cryptors stay ENABLED the whole time
     /// (a disabled one passes frames in the clear on this build, and the live
     /// microphone track would feed it):
@@ -656,6 +678,7 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
         }
         var videos: [GroupInboundVideoStat] = []
         var levels: [String: Double] = [:]
+        var audios: [GroupInboundAudioStat] = []
         var available: Double?
         for (_, stat) in report.statistics {
             if stat.type == "inbound-rtp" {
@@ -671,6 +694,10 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
                         frameHeight: (stat.values["frameHeight"] as? NSNumber)?.intValue ?? 0))
                 } else if kind == "audio" {
                     levels[mid] = (stat.values["audioLevel"] as? NSNumber)?.doubleValue ?? 0
+                    audios.append(GroupInboundAudioStat(
+                        mid: mid,
+                        bytesReceived: (stat.values["bytesReceived"] as? NSNumber)?.intValue ?? 0,
+                        packetsLost: (stat.values["packetsLost"] as? NSNumber)?.intValue ?? 0))
                 }
             } else if stat.type == "candidate-pair",
                       (stat.values["nominated"] as? NSNumber)?.boolValue == true,
@@ -678,7 +705,7 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
                 available = bps
             }
         }
-        return GroupSubscriberStats(videos: videos, availableIncomingBps: available, audioLevels: levels)
+        return GroupSubscriberStats(videos: videos, availableIncomingBps: available, audioLevels: levels, audios: audios)
     }
 
     public func close() {

@@ -1,12 +1,21 @@
 import Foundation
 import UIKit
 import AVFoundation
+import QAudionEngine
 
 /// W559 — Cross-platform bug report service.
 ///
 /// **Triggers:**
-///   - Manual: volume up-then-down (or down-then-up) within 400ms → overlay sheet.
+///   - Manual: volume up-then-down (or down-then-up) within 400ms, two presses in the same
+///     direction within 600ms, or a shake → overlay sheet. W-BUGREPPHANTOM (2026-10-02):
+///     only real button presses count (`VolumeGestureDetector`); the output-volume changes
+///     of an audio route change or a call transition used to open the sheet by
+///     themselves at every 1:1 -> group hand-over.
 ///   - Auto: 2+ errors with the same tag in monitored categories within 60s → silent banner.
+///
+/// **Capture:** a screenshot and the log tail at trigger time, then AGAIN at send time
+/// (the sheet can stay up for a while): the uploaded image shows both moments side by
+/// side, the log covers from `logWindowMinutes` before the trigger up to the send.
 ///
 /// **API constraint (CLAUDE.md rule #16):** never takes `AppState` as a parameter type.
 /// All AppState values are accessed via closures injected from `AppState.initialize()`.
@@ -42,15 +51,35 @@ public final class BugReporter: ObservableObject {
     // MARK: - Pending report model
 
     public struct PendingReport {
-        public let screenshot: UIImage?
-        public let logs: String
+        /// Trigger-time screenshot; at send time it becomes the trigger-time and the
+        /// send-time screenshots side by side.
+        public var screenshot: UIImage?
+        /// Trigger-time log tail; at send time it is replaced by the longer window.
+        public var logs: String
         public let trigger: String
         public let capturedAt: Date
         /// Extra plaintext multipart fields (abuse reports: the reported
         /// user/group id so triage can act without decrypting the body).
         /// Defaulted so the existing 4-argument call sites keep compiling.
         public var extraFields: [String: String] = [:]
+        /// How a manual report was opened (`TriggerSource.rawValue`; 0 = not manual).
+        public var source: Int = 0
+        /// Filled at send time, for the report's own "report" block.
+        public var sendDelayMs: Int = 0
+        public var logWindowMinutes: Double = 0
+        public var screenshotCount: Int = 0
     }
+
+    /// How a manual report was opened. Logged (`trig src=<n>`) and shown on the sheet.
+    public enum TriggerSource: Int {
+        case volumeGesture = 1
+        case shake = 2
+    }
+
+    /// Minutes of log before the trigger that a report carries; group calls ask for more
+    /// (`setLogWindowProvider`).
+    public typealias LogWindowProvider = @MainActor () -> Double
+    public static let defaultLogWindowMinutes: Double = 2
 
     // MARK: - Private state
 
@@ -64,13 +93,16 @@ public final class BugReporter: ObservableObject {
     /// `@Volatile`/lock needed — this whole class is `@MainActor`.
     private var cachedAdminPubKeyHex: String?
 
+    private var getLogWindowMinutes: LogWindowProvider?
+
     /// KVO observation token for AVAudioSession.outputVolume.
     private var volumeObservation: NSKeyValueObservation?
-    /// Ring buffer of the last two volume change timestamps and directions.
-    private struct VolumeEvent { let date: Date; let up: Bool }
-    private var volumeEvents: [VolumeEvent] = []
+    /// `AVAudioSession.routeChangeNotification` observer: a route change is the system
+    /// changing the output volume, never the user.
+    private var routeChangeObserver: NSObjectProtocol?
+    /// Tells real button presses from the system's volume changes (W-BUGREPPHANTOM).
+    private var volumeGesture = VolumeGestureDetector()
     private var lastVolume: Float = AVAudioSession.sharedInstance().outputVolume
-    private var volumeCooldownUntil: Date = .distantPast
 
     /// Auto-detection error event buffer per tag.
     private var errorEvents: [String: [(Date, String)]] = [:]
@@ -101,12 +133,26 @@ public final class BugReporter: ObservableObject {
         volumeObservation = session.observe(
             \.outputVolume,
             options: [.new, .old]
-        ) { [weak self] sess, change in
+        ) { [weak self] _, change in
+            // W-BUGREPPHANTOM: the time of the change is the time it was DELIVERED.
+            // Timestamping inside the main-actor hop (as before) squeezed changes that
+            // queued up behind a busy main thread (a call teardown) into a "rapid"
+            // pair.
+            let deliveredAt = ProcessInfo.processInfo.systemUptime
+            let newValue = change.newValue
+            let oldValue = change.oldValue
             Task { @MainActor [weak self] in
-                self?.handleVolumeChange(
-                    newValue: sess.outputVolume,
-                    oldValue: change.oldValue ?? sess.outputVolume
-                )
+                self?.handleVolumeChange(newValue: newValue, oldValue: oldValue, at: deliveredAt)
+            }
+        }
+        if routeChangeObserver == nil {
+            routeChangeObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil
+            ) { [weak self] _ in
+                let deliveredAt = ProcessInfo.processInfo.systemUptime
+                Task { @MainActor [weak self] in
+                    self?.volumeGesture.noteSystemVolumeChange(at: deliveredAt, reason: .routeChange)
+                }
             }
         }
     }
@@ -114,36 +160,47 @@ public final class BugReporter: ObservableObject {
     public func stopVolumeObserver() {
         volumeObservation?.invalidate()
         volumeObservation = nil
+        if let observer = routeChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            routeChangeObserver = nil
+        }
     }
 
-    private func handleVolumeChange(newValue: Float, oldValue: Float) {
-        let now = Date()
-        guard now > volumeCooldownUntil else { return }
-        let isUp = newValue > oldValue
-        let event = VolumeEvent(date: now, up: isUp)
-        volumeEvents.append(event)
-        // Keep only last 2 events
-        if volumeEvents.count > 2 {
-            volumeEvents.removeFirst(volumeEvents.count - 2)
+    /// A call transition the app itself is making (a call ending, a 1:1 -> group
+    /// hand-over, a group call starting or ending) is about to move the audio route, and
+    /// with it the output volume: those changes are not volume-button presses.
+    public func noteAudioTransition() {
+        volumeGesture.noteSystemVolumeChange(at: ProcessInfo.processInfo.systemUptime,
+                                             reason: .transition,
+                                             period: VolumeGestureDetector.transitionQuietPeriod)
+    }
+
+    /// Group calls carry a longer log window (see `AppState.bugReportLogWindowMinutes`).
+    public func setLogWindowProvider(_ provider: @escaping LogWindowProvider) {
+        getLogWindowMinutes = provider
+    }
+
+    private func handleVolumeChange(newValue: Float?, oldValue: Float?, at deliveredAt: TimeInterval) {
+        let current = AVAudioSession.sharedInstance().outputVolume
+        let new = newValue ?? current
+        let old = oldValue ?? lastVolume
+        lastVolume = new
+        // Accepted gestures (unchanged): A) up-then-down or down-then-up within 400ms,
+        // B) two presses in the SAME direction within 600ms (both volume buttons pressed
+        // together register as one direction, twice). What changed is what counts as a
+        // press: see `VolumeGestureDetector`.
+        switch volumeGesture.observe(old: old, new: new, at: deliveredAt) {
+        case .pressed:
+            return
+        case .ignored(let reason):
+            // Only the changes that the old detector would have counted as a press of a
+            // possible gesture are worth a line; a cool-down is the gesture just fired.
+            guard reason != .cooldown else { return }
+            RTLog.info("bugreport", "trig src=1 suppressed=1 why=\(reason.rawValue)")
+        case .gesture(let deltaMs):
+            RTLog.info("bugreport", "trig src=1 delta=\(deltaMs) vol=\(Int((new * 100).rounded()))")
+            triggerManual(source: .volumeGesture)
         }
-        guard volumeEvents.count == 2 else { return }
-        let first = volumeEvents[0]
-        let second = volumeEvents[1]
-        let delta = second.date.timeIntervalSince(first.date)
-        // Accepted gestures:
-        //   A) up-then-down or down-then-up within 400ms (original)
-        //   B) two rapid presses in the SAME direction within 600ms —
-        //      covers the "both volume buttons simultaneously" case: pressing
-        //      Vol+ and Vol- at the same instant is registered as a SINGLE
-        //      event (one direction), but pressing both within ~300ms produces
-        //      two same-direction events in quick succession.
-        let isOpposite = (first.up != second.up) && delta <= 0.4
-        let isSameRapid = (first.up == second.up) && delta <= 0.6
-        let isGesture = isOpposite || isSameRapid
-        guard isGesture else { return }
-        volumeEvents.removeAll()
-        volumeCooldownUntil = now.addingTimeInterval(5.0)
-        triggerManual()
     }
 
     // MARK: - Auto-detection
@@ -168,9 +225,15 @@ public final class BugReporter: ObservableObject {
 
     /// Public entry point for shake gesture (ShakeDetectorView in ContentView).
     /// Same as the private triggerManual() but callable from outside the class.
-    public func triggerManualPublic() { triggerManual() }
+    public func triggerManualPublic(source: TriggerSource = .shake) {
+        if source == .shake { RTLog.info("bugreport", "trig src=\(source.rawValue)") }
+        triggerManual(source: source)
+    }
 
-    private func triggerManual() {
+    private func triggerManual(source: TriggerSource) {
+        // A second gesture while the sheet is up must not replace the report the user
+        // is looking at (its screenshot and log tail are the ones being described).
+        guard !isShowingOverlay else { return }
         // W-DIAGOVERRIDE (2026-08-13, user's explicit call): diagnostic
         // capture must work in EVERY situation, even while
         // ScreenshotLockService's secure UITextField sentinel is installed
@@ -191,22 +254,37 @@ public final class BugReporter: ObservableObject {
         // dev/TestFlight-only. A store build captures without unlocking —
         // a blank image on a screenshot-locked screen is the correct
         // behaviour for a product marketed on screenshot protection.
-        #if QAUDION_DEV_TOOLS
-        let wasLocked = ScreenshotLockService.isLocked
-        if wasLocked { ScreenshotLockService.unlock() }
-        let screenshot = captureScreen()
-        if wasLocked { ScreenshotLockService.lock() }
-        #else
-        let screenshot = captureScreen()
-        #endif
-        let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: 2.0)
-        pendingReport = PendingReport(
+        let screenshot = captureScreenForReport()
+        let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: currentLogWindowMinutes())
+        var report = PendingReport(
             screenshot: screenshot,
             logs: logs,
             trigger: "manual",
             capturedAt: Date()
         )
+        report.source = source.rawValue
+        pendingReport = report
         isShowingOverlay = true
+    }
+
+    /// The screenshot for a manual report (trigger time and send time), with the
+    /// dev/TestFlight-only screenshot-lock bypass described in `triggerManual`.
+    private func captureScreenForReport() -> UIImage? {
+        #if QAUDION_DEV_TOOLS
+        let wasLocked = ScreenshotLockService.isLocked
+        if wasLocked { ScreenshotLockService.unlock() }
+        let screenshot = captureScreen()
+        if wasLocked { ScreenshotLockService.lock() }
+        return screenshot
+        #else
+        return captureScreen()
+        #endif
+    }
+
+    /// Minutes of log before the trigger (at least the historical 2).
+    private func currentLogWindowMinutes() -> Double {
+        let requested = getLogWindowMinutes?() ?? Self.defaultLogWindowMinutes
+        return max(Self.defaultLogWindowMinutes, min(requested, 10))
     }
 
     private func triggerAuto(tag: String) {
@@ -277,12 +355,53 @@ public final class BugReporter: ObservableObject {
     public func send(note: String) {
         guard let report = pendingReport else { return }
         isShowingOverlay = false
-        let capturedReport = report
-        let capturedNote = note
-        Task {
-            await uploadReport(report: capturedReport, note: capturedNote)
-        }
         pendingReport = nil
+        let capturedNote = note
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            // Re-sample at SEND time: the sheet can stay up for many seconds and what
+            // the user wants to report may have happened (or still be on screen) after
+            // the trigger. Wait for the sheet to slide away so the second picture shows
+            // the app, not the card.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            let resampled = self.resampledAtSend(report)
+            RTLog.info("bugreport", "report send age=\(resampled.sendDelayMs) min=\(Int(resampled.logWindowMinutes.rounded(.up))) count=\(resampled.screenshotCount)")
+            await self.uploadReport(report: resampled, note: capturedNote)
+        }
+    }
+
+    /// The trigger-time report with the send-time screenshot next to the trigger-time
+    /// one, and the log from `logWindowMinutes` before the trigger up to now.
+    private func resampledAtSend(_ report: PendingReport) -> PendingReport {
+        var out = report
+        let sinceTrigger = max(0, Date().timeIntervalSince(report.capturedAt))
+        let windowMinutes = currentLogWindowMinutes() + sinceTrigger / 60
+        let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: windowMinutes)
+        if !logs.isEmpty { out.logs = logs }
+        let sendShot = captureScreenForReport()
+        out.screenshot = Self.sideBySide(report.screenshot, sendShot)
+        out.screenshotCount = (report.screenshot == nil ? 0 : 1) + (sendShot == nil ? 0 : 1)
+        out.sendDelayMs = Int((sinceTrigger * 1000).rounded())
+        out.logWindowMinutes = windowMinutes
+        return out
+    }
+
+    /// Two screenshots in one image (left: trigger time, right: send time); either one
+    /// alone when the other is missing.
+    private static func sideBySide(_ left: UIImage?, _ right: UIImage?) -> UIImage? {
+        guard let left = left else { return right }
+        guard let right = right else { return left }
+        let gap: CGFloat = 12
+        let size = CGSize(width: left.size.width + gap + right.size.width,
+                          height: max(left.size.height, right.size.height))
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = min(left.scale, right.scale)
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.black.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            left.draw(in: CGRect(origin: .zero, size: left.size))
+            right.draw(in: CGRect(origin: CGPoint(x: left.size.width + gap, y: 0), size: right.size))
+        }
     }
 
     public func dismiss() {
@@ -365,7 +484,7 @@ public final class BugReporter: ObservableObject {
         let userPrefix = String((TokenVault.loadUserId() ?? "").prefix(8))
         let timestamp = BugReporter.isoFormatter.string(from: report.capturedAt)
         let callId = getActiveCallId?() ?? ""
-        let diagSnapshot = getDiagSnapshot?() ?? ""
+        let diagSnapshot = Self.addingReportBlock(to: getDiagSnapshot?() ?? "", report: report)
 
         let bodyPlaintext: String
         if note.isEmpty {
@@ -450,6 +569,30 @@ public final class BugReporter: ObservableObject {
         } catch {
             RTLog.warn("bugreport", "upload failed: " + error.localizedDescription)
         }
+    }
+
+    /// Adds the report's own facts to the diagnostic JSON snapshot: how the sheet was
+    /// opened, how long it stayed up, the log window and how many screenshots the image
+    /// holds (a phantom trigger, or a report sent long after what it describes, is then
+    /// visible without guessing). Numbers only. A snapshot that is not a JSON object is
+    /// left as it is.
+    private static func addingReportBlock(to snapshot: String, report: PendingReport) -> String {
+        guard report.trigger == "manual",
+              let data = snapshot.data(using: .utf8),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return snapshot
+        }
+        object["report"] = [
+            "source": report.source,
+            "send_delay_ms": report.sendDelayMs,
+            "log_window_min": Int(report.logWindowMinutes.rounded(.up)),
+            "screenshots": report.screenshotCount,
+        ]
+        guard let out = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let json = String(data: out, encoding: .utf8) else {
+            return snapshot
+        }
+        return json
     }
 
     // MARK: - Multipart helpers

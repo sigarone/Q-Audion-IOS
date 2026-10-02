@@ -1606,7 +1606,16 @@ class GroupCallViewModel: ObservableObject {
         let ids = participants.map(\.id)
         if !force && ids == verifiedRosterIds { return }
         verifiedRosterIds = ids
+        let previous = verification
         verification = verificationResolver(ids, selfUserId)
+        // 2026-10-02 — whether the "not verified" banner is up, in the phone log
+        // (`grp check verified=<n> count=<remote participants>`, numbers only): the banner
+        // is a security notice, and a report of an "error" on the group screen has to be
+        // checkable against it.
+        if verification != previous || !force {
+            let remotes = Set(ids.filter { $0 != selfUserId && !$0.isEmpty }).count
+            RTLog.info("group", "grp check verified=\(max(0, remotes - verification.count)) count=\(remotes)")
+        }
     }
 
     /// Re-reads whether the controller has a media link (the camera button's
