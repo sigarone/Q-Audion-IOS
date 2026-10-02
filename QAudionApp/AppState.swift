@@ -2012,8 +2012,13 @@ final class AppState: ObservableObject {
         /// path. Documented here as a deliberate, disclosed approximation
         /// rather than silently presented as exact.
         let readyAt = Date()
+        /// Monotonic ms at which this round's context was armed: the start of its KCMAC wait (`KcMacWindow`).
+        let armedAtMs = SasCommit.monotonicNowMs()
+        /// Round 1 has the longer waits of A1 (caller) and A5 (callee); every later round waits 5 s.
+        let isRound1: Bool
 
         init(event: QAudionCallIntegration.KcMacReadyEvent) {
+            isRound1 = event.round == 1
             peerId = event.peerId
             isInitiator = event.isInitiator
             kcKey = event.kcKey
@@ -2038,7 +2043,7 @@ final class AppState: ObservableObject {
     ///
     /// R-KCMAC: held for at most `KcMacRoundRules.earlyHoldSeconds` (10 s) — an older one is
     /// stale and is dropped, not verified.
-    private var kcEarlyInbound: [String: (raw: String, senderId: String, at: Date)] = [:]
+    private var kcEarlyInbound: [String: (raw: String, senderId: String, senderDeviceId: String?, at: Date)] = [:]
     /// R-KCMAC: the peer MAC verified for each key round of this call that is already DECIDED, kept for
     /// the whole call. An inbound MAC byte-identical to one of them (a retransmit, or the previous
     /// round's MAC arriving after the next round was armed) is dropped silently — it must never be
@@ -10018,7 +10023,9 @@ final class AppState: ObservableObject {
         //      guard below — it would be dropped before any handler runs.
         // Already on the main queue (caller dispatches the batch on .main).
         if (entry["msg_type"] as? String) == "opaque" {
-            dispatchInboundOpaque(senderId: senderId, blobStr: cipherB64)
+            dispatchInboundOpaque(
+                senderId: senderId, blobStr: cipherB64,
+                senderDeviceId: SasCommit.normalizedDeviceId(entry["sender_device_id"] as? String))
             // W-OPAQUEACKGAP (2026-09-17, parity with Android's identical
             // fix) — this branch used to return without ever reading
             // "message_id", so nothing could ack an offline-queued
@@ -12945,8 +12952,11 @@ final class AppState: ObservableObject {
             // is @MainActor (AppState is @MainActor) — hop to the main actor,
             // mirroring the original handler which wrapped every routing call in
             // `Task { @MainActor }`.
+            // R-COMMIT-KCMAC-DEVICE: the server stamps the sending socket's device id on every delivered
+            // opaque_message (never a client value). Absent for a server that does not stamp it.
+            let envelopeDeviceId = SasCommit.normalizedDeviceId(data["sender_device_id"] as? String)
             Task { @MainActor [weak self] in
-                self?.dispatchInboundOpaque(senderId: senderId, blobStr: blobStr)
+                self?.dispatchInboundOpaque(senderId: senderId, blobStr: blobStr, senderDeviceId: envelopeDeviceId)
             }
         }
     }
@@ -13068,7 +13078,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func dispatchInboundOpaque(senderId: String, blobStr: String) {
+    private func dispatchInboundOpaque(senderId: String, blobStr: String, senderDeviceId: String? = nil) {
         guard let cke = contactKeyExchange else { return }
 
         // Path A — base64-encoded QUAD binary frame (iOS / Desktop peers).
@@ -13289,7 +13299,7 @@ final class AppState: ObservableObject {
                 return
             }
             Task { @MainActor [weak self] in
-                self?.routeInboundCallPiggyBack(piggy, senderId: senderId)
+                self?.routeInboundCallPiggyBack(piggy, senderId: senderId, senderDeviceId: senderDeviceId)
             }
             return
         }
@@ -13314,7 +13324,7 @@ final class AppState: ObservableObject {
                 }
             case .accept:
                 Task { @MainActor [weak self] in
-                    self?.routeInboundAndroidAccept(parsed: parsed, senderId: senderId)
+                    self?.routeInboundAndroidAccept(parsed: parsed, senderId: senderId, envelopeSenderDeviceId: senderDeviceId)
                 }
             }
             return
@@ -13666,7 +13676,7 @@ final class AppState: ObservableObject {
 
     /// Caller-side dispatch for the signed JSON ACCEPT_v6 (the only 1:1 handshake dialect).
     @MainActor
-    private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String) {
+    private func routeInboundAndroidAccept(parsed: AndroidHandshakeEnvelope.Parsed, senderId: String, envelopeSenderDeviceId: String? = nil) {
         // Sender-identity check (2026-07-11 — same reasoning/fix as
         // routeInboundPqcAccept above; sibling dispatch for the
         // Android-JSON ACCEPT format, same missing guard.
@@ -13757,6 +13767,8 @@ final class AppState: ObservableObject {
                     // branch with no peer to verify against.
                     callerId: senderId,
                     callerDeviceId: senderDeviceId,
+                    // R-COMMIT-KCMAC-DEVICE: the device that sent THIS ACCEPT, recorded when round 1 binds to it.
+                    envelopeSenderDeviceId: envelopeSenderDeviceId,
                     eligiblePsks: eligiblePsks,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
@@ -13771,7 +13783,7 @@ final class AppState: ObservableObject {
     /// bookkeeping echo); CAPS is still silently dropped. See
     /// `apps/qaudion-desktop/docs/SCREEN_SHARE_PROTOCOL.md`.
     @MainActor
-    private func routeInboundCallPiggyBack(_ piggy: CallPiggyBack, senderId: String) {
+    private func routeInboundCallPiggyBack(_ piggy: CallPiggyBack, senderId: String, senderDeviceId: String? = nil) {
         switch piggy {
         case .screenShare(let callId, let active):
             handleRemoteScreenShareState(
@@ -13887,7 +13899,7 @@ final class AppState: ObservableObject {
         case .kcmac(let callId, let raw):
             // W-KCMAC — verify the peer's key-confirmation MAC of the live round:
             // a MAC that does not verify ends the call (`kcmac_mismatch`).
-            handleInboundKcMac(callId: callId, raw: raw, senderId: senderId)
+            handleInboundKcMac(callId: callId, raw: raw, senderId: senderId, senderDeviceId: senderDeviceId)
         case .sasReveal(let callId, let raw):
             // R-COMMIT-CHECK — the caller's REVEAL of its SAS nonce (WIRE_SPEC §3.7.4).
             handleInboundSasReveal(callId: callId, raw: raw, senderId: senderId)
@@ -14099,14 +14111,26 @@ final class AppState: ObservableObject {
             }
         }
 
-        // 5000 ms window: no peer MAC inside it is a failure (`kcmac_mismatch`), exactly like a MAC
-        // that arrived and failed to verify.
+        // The wait for the peer's MAC (`KcMacWindow`): 5 s from arming, longer in round 1 (the caller waits at
+        // least 15 s after it handed its REVEAL to the transport, A1; the callee at least 5 s after its OWN
+        // REVEAL verified, A5). No verified peer MAC inside it is a failure (`kcmac_mismatch`), exactly like a
+        // MAC that arrived and failed to verify. The end of the wait can move while the task sleeps (the callee's
+        // REVEAL verifies later), so every wake-up re-reads it instead of trusting the first sleep.
         state.deadlineTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run { [weak self] in
-                guard let self, let cur = self.kcCallStates[key], cur === state, !cur.resultRecorded else { return }
-                self.failKeyConfirmation(callId: event.callId, state: cur)
+            while !Task.isCancelled {
+                let remainingMs: Int? = await MainActor.run { [weak self] () -> Int? in
+                    guard let self, let cur = self.kcCallStates[key], cur === state, !cur.resultRecorded else { return nil }
+                    return self.kcWaitRemainingMs(callId: event.callId, state: cur)
+                }
+                guard let remainingMs else { return }
+                if remainingMs <= 0 {
+                    await MainActor.run { [weak self] in
+                        guard let self, let cur = self.kcCallStates[key], cur === state, !cur.resultRecorded else { return }
+                        self.failKeyConfirmation(callId: event.callId, state: cur)
+                    }
+                    return
+                }
+                try? await Task.sleep(nanoseconds: UInt64(remainingMs) * 1_000_000)
             }
         }
 
@@ -14114,8 +14138,44 @@ final class AppState: ObservableObject {
         // R-KCMAC: only a MAC held for at most 10 s is still verified; an older one is stale.
         if let early = kcEarlyInbound.removeValue(forKey: key),
            KcMacRoundRules.isEarlyHoldFresh(heldAt: early.at, now: Date()) {
-            handleInboundKcMac(callId: event.callId, raw: early.raw, senderId: early.senderId)
+            handleInboundKcMac(callId: event.callId, raw: early.raw, senderId: early.senderId, senderDeviceId: early.senderDeviceId)
         }
+    }
+
+    /// A2: drop what the app queued for a round-1 OFFER that a newer one replaced while this device had not sent
+    /// its ACCEPT: the deferred ring-time actions (they close over the replaced round's key), the media held behind
+    /// the identity gate, the held own KCMAC and any key-confirmation context. The ring key itself is replaced by
+    /// the replacing round's own write (`CallKeyStore` keeps the last one), so it is not wiped here.
+    @MainActor
+    private func discardUnansweredRound1AppState(callId: String) {
+        let cid = callId.lowercased()
+        pendingAcceptGatedActions[cid] = nil
+        pendingIdentityGatedMedia[cid] = nil
+        identityUnverifiedCallIds.remove(cid)
+        identityHoldCodeByCallId[cid] = nil
+        if identityUnverifiedCallIds.isEmpty { awaitingIdentityConfirmation = false }
+        kcPendingOwnMac[cid] = nil
+        kcCallStates[cid]?.deadlineTask?.cancel()
+        kcCallStates[cid] = nil
+        kcEarlyInbound.removeValue(forKey: cid)
+        RTLog.info("call", "offer superseded id=\(cid.prefix(8))")
+    }
+
+    /// Milliseconds left on this round's KCMAC wait (`KcMacWindow`), `0` when it has expired. The caller reads the
+    /// time of its own REVEAL from its integration's SAS book, the callee the time its REVEAL verified from the
+    /// responder integration's.
+    @MainActor
+    private func kcWaitRemainingMs(callId: String, state: KeyConfirmationCallState) -> Int {
+        let integration = state.isInitiator ? callService.callIntegration : responderCallIntegration
+        let nowMs = SasCommit.monotonicNowMs()
+        guard let book = integration?.sasCommit else {
+            return KcMacWindow.remainingMs(
+                isRound1: false, isInitiator: state.isInitiator, armedAtMs: state.armedAtMs, nowMs: nowMs,
+                revealHandedAtMs: nil, revealVerifiedAtMs: nil)
+        }
+        return book.kcWaitRemainingMs(
+            callId: callId, isRound1: state.isRound1, isInitiator: state.isInitiator,
+            armedAtMs: state.armedAtMs, nowMs: nowMs)
     }
 
     /// Record a failed key confirmation (verdict `.wrong`) and end the call (`kcmac_mismatch`).
@@ -14133,8 +14193,16 @@ final class AppState: ObservableObject {
     /// confirmation and ends the call (`kcmac_mismatch`, fail-closed); a `KCMAC:` from anyone but
     /// the call peer, or for another call, is dropped with a log line.
     @MainActor
-    private func handleInboundKcMac(callId: String, raw: String, senderId: String) {
+    private func handleInboundKcMac(callId: String, raw: String, senderId: String, senderDeviceId: String? = nil) {
         let key = callId.lowercased()
+        // R-COMMIT-KCMAC-DEVICE (A1, every round, A6): a CALLER judges only a KCMAC whose opaque envelope carries the
+        // `sender_device_id` of the ACCEPT it bound. Any other device, or none, is dropped silently: no judgment,
+        // no `kcmac_mismatch`, no early hold and no effect on any window. This comes BEFORE the duplicate test.
+        if callService.callIntegration?.sasCommit.callerKcMacSenderVerdict(
+            callId: callId, envelopeSenderDeviceId: senderDeviceId) == .dropSilently {
+            print("[AppState] KCMAC dropped — not from the device whose ACCEPT was bound callId=\(callId.prefix(8))…")
+            return
+        }
         // R-COMMIT-SIBLING: a device that left the call as a sibling (or ended it on a SAS-commit failure)
         // stops judging key-confirmation MACs: the loser must never end the real call.
         if let integration = responderCallIntegration, integration.isSasCallee(callId: callId),
@@ -14151,7 +14219,7 @@ final class AppState: ObservableObject {
             }
             // A retransmit of a round already decided is not "early" for anything.
             if KcMacRoundRules.isDuplicate(raw: raw, decidedPeerMacs: kcDecidedPeerMacs[key] ?? []) { return }
-            holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId)
+            holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId, senderDeviceId: senderDeviceId)
             return
         }
         guard state.peerId == senderId else {
@@ -14174,7 +14242,7 @@ final class AppState: ObservableObject {
             // end a healthy call. It is held (one at a time, small, at most 10 s) for the next
             // round's state, where it is judged fail-closed.
             if callContactId == senderId {
-                holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId)
+                holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId, senderDeviceId: senderDeviceId)
             }
             return
         }
@@ -14221,13 +14289,13 @@ final class AppState: ObservableObject {
     /// one is held), at most 512 characters, and held for at most 10 s (`handleKcMacReady` drops an
     /// older one). Holding never fails the call by itself.
     @MainActor
-    private func holdEarlyKcMac(key: String, callId: String, raw: String, senderId: String) {
+    private func holdEarlyKcMac(key: String, callId: String, raw: String, senderId: String, senderDeviceId: String?) {
         let now = Date()
         guard KcMacRoundRules.mayHoldEarly(raw: raw, heldAt: kcEarlyInbound[key]?.at, now: now) else {
             print("[AppState] KCMAC early dropped (one already held, or too large) callId=\(callId.prefix(8))…")
             return
         }
-        kcEarlyInbound[key] = (raw: raw, senderId: senderId, at: now)
+        kcEarlyInbound[key] = (raw: raw, senderId: senderId, senderDeviceId: senderDeviceId, at: now)
         print("[AppState] KCMAC early — held until the next key-confirmation round is armed callId=\(callId.prefix(8))…")
     }
 
@@ -15113,6 +15181,14 @@ final class AppState: ObservableObject {
                 self.runOrDeferUntilAccepted(event.callId) { [weak self] in
                     self?.handleKcMacReady(event)
                 }
+            }
+        }
+        // A2 (WIRE_SPEC §3.7.4): a newer round-1 OFFER replaced the unanswered one. Everything queued for the
+        // replaced round goes; the replacing OFFER's own callbacks all hop to the main actor after this one, so
+        // they queue their (new) work on a clean slate.
+        integration.onUnansweredRound1Superseded = { [weak self] cid in
+            Task { @MainActor [weak self] in
+                self?.discardUnansweredRound1AppState(callId: cid)
             }
         }
         // Pre-negotiation hooks — same shape the caller-side block in

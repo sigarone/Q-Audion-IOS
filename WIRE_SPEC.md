@@ -33,9 +33,7 @@ auth tag fails.
 | PSK mix into session key | `q-audion-psk-mix` | `q-audion-session-key` (hybrid path) |
 | Per-contact message PSK derivation | callId UTF-8 | `q-audion-msg-psk-v1` |
 | Message AEAD key | random 32 B | `q-audion-msg-key` |
-| Attachment AEAD key | random 32 B | `q-audion-attachment-aead-v1` |
-| Attachment AEAD nonce | random 32 B | `q-audion-attachment-nonce-v1` |
-| File transfer key | random 32 B | `q-audion-file-key` |
+| File key derivation (v2) | `file_id` (16 B) | `qaudion-file-v2-enc` / `qaudion-file-v2-nonce` / `qaudion-file-v2-commit` (§12) |
 | Forward-secrecy frame derivation | (per-session) | `q-audion-fs-frame` |
 | ZK auth proof key | salt | `q-audion-zk-auth` |
 | Password blinding | salt | `q-audion-pw-blind` |
@@ -897,8 +895,23 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
     `<callId>|KCMAC:<base64(role byte ‖ MAC[32])>` (role byte `0x01` for `init`, `0x02` for `resp` of THAT round).
     The message carries NO round field and none is added: a receiver attributes a MAC to a round by content, with the
     rules below, never by arrival order alone.
+  - **Round 1 exception (R-COMMIT-KCMAC-HOLD, §3.7.4):** the round-1 `resp` MAC is NOT sent as soon as the key is
+    derived. The callee device sends it only after its OWN REVEAL has verified (§3.7.4, R-COMMIT-CHECK step 7), so a
+    callee device that never verifies a REVEAL (it lost a double answer, or the REVEAL timer fired) never sends a
+    round-1 MAC. The caller's round-1 `init` MAC is unchanged (it follows the caller's REVEAL on the same ordered path).
+    Every rekey round is unchanged.
   - **Window:** the 5 s window of the KCMAC fail-closed rule below runs per round, from the moment that round's
-    context is armed (the round's key is derived).
+    context is armed (the round's key is derived). Two exceptions, both for round 1 (R-COMMIT-KCMAC-HOLD, §3.7.4):
+    the CALLER's wait for the callee's MAC ends no earlier than 15 s after the caller sent its REVEAL, because the
+    callee sends that MAC only after the REVEAL round trip; the CALLEE's wait for the caller's MAC ends no earlier
+    than 5 s after the callee's own REVEAL verified, because the caller sends its MAC right after the REVEAL, which
+    may itself arrive near the end of the 5 s REVEAL timer. Both waits may be longer, never shorter, and expiry is
+    the same `kcmac_mismatch`.
+  - **Sender device (caller, every round, R-COMMIT-KCMAC-DEVICE, §3.7.4):** a caller runs the duplicate test, the
+    hold and the judgment below only on a MAC whose opaque envelope `sender_device_id` equals the `sender_device_id`
+    of the opaque envelope that carried the ACCEPT it bound. A MAC from any other device, or without that field, is
+    dropped silently: no judgment, no `kcmac_mismatch`, no hold and no effect on any window. This test comes BEFORE
+    the duplicate test and the judgment.
   - **Duplicate:** a receiver keeps, for the rest of the call, the peer MAC (32 bytes) it verified for each decided
     round. An inbound MAC that is byte-identical to one of them (a retransmission, or the previous round's MAC arriving
     after the next round was armed) is a duplicate: it is dropped silently, never judged `wrong`, never ends the call.
@@ -914,7 +927,8 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
   - A call in which a KCMAC context is required but missing (no armed context for the live round) ends with
     `kcmac_mismatch` (R-EARBUD, §3.7.3).
 - **KCMAC fails closed.** Under v6 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: the call ends if
-  the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (5 s). There is no
+  the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (5 s; for the two round-1
+  exceptions, caller and callee, see the Window rule above). There is no
   observation-only mode and no hold-pending-SAS path for it.
 - Consequence for the DTLS binding: if anyone substitutes a fingerprint, even with the signatures stripped, the two
   legs build different `ACCEPT_v6` bytes and so derive different session keys. No media decrypts, the SAS differs and
@@ -1014,7 +1028,9 @@ Caller (offerer)                                      Callee device (acceptor)
   bind round 1 to this ACCEPT (first valid one)
   derive keys; compute SAS_v6
   ---- <callId>|SASREVEAL:<B> ----------------------->  check, open the commitment, compute SAS_v6
-  ---- <callId>|KCMAC:<...> ------------------------->  (KCMAC rules of §3.7.1 unchanged)
+  ---- <callId>|KCMAC:<...> ------------------------->  (KCMAC rules of §3.7.1)
+                                                      REVEAL verified: only now send the round-1 KCMAC
+  <--- <callId>|KCMAC:<...> ------------------------  (R-COMMIT-KCMAC-HOLD)
 ```
 
 **REVEAL message (R-COMMIT-REVEAL).** A literal UTF-8 string, the `data` of an `opaque_message` to the peer user, like
@@ -1062,7 +1078,8 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
    device sent): sibling rule below.
 6. A REVEAL was already verified for this call: byte-identical, drop silently; different, `sas_commit_mismatch`.
 7. `SHA-256("qaudion-sas-commit-v6" ‖ LP(callId) ‖ sasNonce)` equals the stored `sasCommit` (constant-time compare):
-   record it, cancel the REVEAL timer, compute the SAS. Otherwise `sas_commit_mismatch`.
+   record it, cancel the REVEAL timer, compute the SAS and only now send the round-1 KCMAC (R-COMMIT-KCMAC-HOLD below).
+   Otherwise `sas_commit_mismatch`.
 
 - The 5 s REVEAL timer starts at the FIRST send of this device's ACCEPT (a later byte-identical retransmission of the
   ACCEPT does not restart it). No verified REVEAL when it fires: `sas_reveal_timeout`. There is no early-REVEAL
@@ -1087,9 +1104,42 @@ steps 1-4 but names a different `acceptBinding` has lost the race to a sibling d
 REVEAL and leaves the call locally: no `call_hangup`, no `HANGUP:` piggyback, no security close reason, local history
 reason `answered_on_other_device`; it also stops its KCMAC and REVEAL timers and never sends a KCMAC for that round.
 The caller sends the REVEAL before its KCMAC on the same ordered path, so the loser leaves before it can judge the
-caller's MAC. Siblings that never sent an ACCEPT drop the REVEAL at step 2 and end through the existing
-`call_cancel` (`answered_on_other_device`). Whoever can inject a REVEAL as the peer user is the server, which can
+caller's MAC, and under R-COMMIT-KCMAC-HOLD it has no KCMAC of its own to send in the first place. Siblings that never
+sent an ACCEPT drop the REVEAL at step 2 and end through the existing `call_cancel` (`answered_on_other_device`). Whoever can inject a REVEAL as the peer user is the server, which can
 already drop or end any call: the sibling exit adds no capability to it.
+
+**KCMAC hold (R-COMMIT-KCMAC-HOLD).** Normative on every client, for round 1 (a rekey round is unchanged, there is no
+REVEAL for it).
+
+- Callee device: it sends its round-1 KCMAC (role byte `0x02`, §3.7.1) ONLY after its own REVEAL has verified
+  (R-COMMIT-CHECK step 7). Not when the ACCEPT is sent, not when the key is derived, not on any user action. A device
+  that never verifies a REVEAL (sibling exit, `sas_reveal_timeout`, `sas_commit_mismatch`) never sends a round-1 KCMAC.
+  A device that loses a double answer therefore never puts a MAC on the wire that the caller could judge.
+- Caller: it accepts the callee's round-1 KCMAC for at least 15 s after it sent its REVEAL. "Sent" is as for the ACCEPT:
+  the moment the REVEAL is handed to the transport. 15 s is the 5 s KCMAC wait of §3.7.1 plus margin for the
+  REVEAL / KCMAC round trip, because the callee now answers the REVEAL. The wait may be longer, never shorter. At
+  expiry without a verified MAC: `kcmac_mismatch`, as in §3.7.1.
+- Callee device, its own wait: it accepts the caller's round-1 KCMAC for at least 5 s after its own REVEAL verified
+  (step 7), even when the 5 s window armed with its round-1 key would end earlier. The caller sends its KCMAC right
+  after the REVEAL on the same ordered path, so these 5 s are margin, not a round trip. The wait may be longer, never
+  shorter. At expiry without a verified MAC: `kcmac_mismatch`, as in §3.7.1.
+
+**Sender device of a KCMAC (R-COMMIT-KCMAC-DEVICE).** Defence in depth against any device other than the one whose
+ACCEPT the caller bound.
+
+- Server fact. For every `opaque_message` it delivers to a connected recipient, on this node or through another
+  cluster node, the server builds the outgoing envelope itself as `{sender_id, sender_device_id, data}`.
+  `sender_device_id` is the device id the sending WebSocket authenticated with (from the access token), never a value
+  from the client's envelope, and it is an opaque string: compare it byte for byte. A message that was stored for an
+  offline recipient and is replayed later (`msg_pending_sync`, entries of `msg_type` `opaque`) carries the same
+  `sender_device_id` field in the entry, so a replayed ACCEPT or KCMAC is matched exactly like a live one.
+- The caller records, at binding (R-COMMIT-BIND), the `sender_device_id` of the envelope that carried the ACCEPT it
+  bound. If that field is absent (a message the server stored before it recorded the field) there is no device to match,
+  so no KCMAC will pass and the call ends at the KCMAC window: fail closed, never an unfiltered judgment.
+- From then on the caller judges only a KCMAC whose envelope `sender_device_id` equals the recorded value. A KCMAC from
+  any other device, or one without the field, is dropped silently. It is never judged, never produces
+  `kcmac_mismatch`, is not held as an early MAC and does not shorten or extend any window (§3.7.1, sender-device rule).
+- The REVEAL's `acceptBinding` (the callee-side sibling test) is unchanged; this rule is its caller-side counterpart.
 
 **SAS scope (R-COMMIT-SAS).** The SAS of a call is the round-1 SAS of §4, held or not, before and after any rekey: no
 platform computes or shows words for a round >= 2, and there is no SAS without `sasNonce`. A SAS confirmation pins
@@ -1123,6 +1173,8 @@ across reconnects.
 | identical REVEAL after verification | callee | drop |
 | different REVEAL naming own ACCEPT after verification | callee | `sas_commit_mismatch` |
 | REVEAL naming another ACCEPT | callee | sibling rule |
+| KCMAC whose envelope `sender_device_id` is not the bound ACCEPT's (or is absent) | caller | drop silently, no `kcmac_mismatch` (R-COMMIT-KCMAC-DEVICE) |
+| callee round-1 KCMAC before the callee's own REVEAL verified | callee | never sent (R-COMMIT-KCMAC-HOLD) |
 | any message other than an OFFER (see the pending-OFFER rule above) for an ended or unknown callId | both | drop, create no state |
 
 **Logging (R-COMMIT-LOG).** Never log `sasNonce`, `sasCommit`, `acceptBinding`, transcript hashes or SAS words; at most
@@ -1130,7 +1182,8 @@ a verdict and 8-character call ids.
 
 **What does not change (R-COMMIT-UNCHANGED).** The session key, KCMAC, frame keys (the labels containing `-v5` in
 §3.7.2 name the frame-key scheme and stay), the relay sealer, the DTLS binding (§3.8) and every media gate keep their
-formulas over the v6 transcripts. `sasNonce` enters no key and no MAC; `kc_transcript` covers the commitment only
+formulas over the v6 transcripts. Only the TIMING of the callee's round-1 KCMAC and the caller's wait for it change
+(R-COMMIT-KCMAC-HOLD). `sasNonce` enters no key and no MAC; `kc_transcript` covers the commitment only
 through `offerBinding`.
 
 ### 3.8 DTLS certificate binding
@@ -1348,7 +1401,8 @@ Wire-format changes follow these rules:
 Before launch, a binary-incompatible format change is a HARD SWITCH. All clients change in the same release
 train, the old format is deleted instead of negotiated, and no capability bit, flag or fallback keeps it alive.
 Rules 1-3 above apply from the first public release on. The signed transcript v6 (with the DTLS certificate binding
-and the SAS commitment, §3.7, §3.7.4, §3.8) and the frame IV counter change (§11) are hard switches of this kind.
+and the SAS commitment, §3.7, §3.7.4, §3.8), the frame IV counter change (§11) and the file format v2 (§12) are hard
+switches of this kind.
 
 ---
 
@@ -2151,9 +2205,284 @@ receiving key handler and its windows MUST therefore survive that teardown (§11
 handler would open a fresh window for an old ssrc and accept a replayed frame of the current epoch once. The periodic
 rekey (`docs/GROUP_CALLS_V2.md` §12.6) bounds the lifetime of any key that is replayable at all.
 
-Latest: 2026-10-02 (SAS commitment: signed transcript v6 §3.7, new §3.7.4 commitment and REVEAL, §4 SAS v6 over a
+## 12. File transfer v2 (AES-256-GCM) — cross-platform contract
+
+Added 2026-10-02. Source of truth: the file-transfer program's format document (`FILE_V2_FORMAT`), which this
+section reproduces; the known-answer vectors are `test/kat/file_v2/file-v2-kat.json` in the server repository
+(generated by `tools/katgen/filev2`, standard library only), copied byte for byte into each client repository,
+where each test pins the SHA-256 of the file.
+
+This is a HARD SWITCH (§6): one format for every file, image, video, voice note, avatar, thumbnail and group
+attachment, over every transport, with no negotiation and no legacy path. It replaces all earlier file and
+attachment encryption schemes (the `qa_fa_announce` / QAFA chunked announce, `qa_ctl` `attach_announce`, `qa_att`,
+`qfile`, the Android voice-note format, and the group attachment v1 envelope), whose labels are removed from §1.
+`MUST`, `MUST NOT` and `SHOULD` have their RFC 2119 meaning. All integers are big-endian; `||` is concatenation;
+`u32be(x)` and `u64be(x)` are unsigned integers on 4 and 8 bytes.
+
+### 12.1 Constants
+
+| Name | Value |
+|---|---|
+| `CHUNK` | 1 048 576 bytes (2^20) of plaintext per chunk |
+| `TAG` | 16 bytes (GCM tag, 128 bit) |
+| `STRIDE` | `CHUNK + TAG` = 1 048 592 bytes |
+| `HEADER_LEN` | 64 bytes |
+| `MAX_SIZE` | 5 368 709 120 bytes (5 GiB) of plaintext file |
+| `MAX_STREAM` | 5 368 709 120 (`padme(MAX_SIZE)`, which is exactly 5 GiB) |
+| `MAX_CHUNKS` | 5 120 |
+| `MAX_BLOB` | `HEADER_LEN + MAX_STREAM + MAX_CHUNKS × TAG` = 5 368 791 104 bytes |
+| `MAGIC` | `51 41 46 02` ("QAF" followed by the version byte 0x02) |
+
+`CHUNK` is fixed and does not appear in the header: one value, one set of vectors.
+
+### 12.2 Keys and derivations
+
+For every file the sender draws from the operating system's cryptographic generator: `K`, 32 random bytes (the file
+key), and `file_id`, 16 random bytes. Everything else derives from `K` with HKDF-SHA256 (RFC 5869):
+
+```
+PRK          = HKDF-Extract(salt = file_id, IKM = K)
+K_enc        = HKDF-Expand(PRK, "qaudion-file-v2-enc",    32)
+nonce_prefix = HKDF-Expand(PRK, "qaudion-file-v2-nonce",   8)
+commitment   = HKDF-Expand(PRK, "qaudion-file-v2-commit", 32)
+```
+
+The `info` strings are ASCII without a terminator. `K` MUST NOT be used directly as an AES key. `K` and `file_id`
+MUST NOT be reused for a second content: forwarding a file, re-encrypting it after an edit and re-sending it after
+a cancel each generate a new (`K`, `file_id`). `K` MUST NOT be restored from a backup; the resume state that holds
+it is local to the device (§12.8).
+
+### 12.3 Padding (Padmé)
+
+The server sees the blob length, so the plaintext stream is extended with zero bytes up to `stream_len = padme(size)`:
+
+```
+padme(L):            // L >= 1
+  E = bitlen(L) - 1  // floor(log2 L)
+  S = bitlen(E)      // floor(log2 E) + 1, with bitlen(0) = 0
+  z = E - S
+  if z <= 0: return L
+  mask = (1 << z) - 1
+  return (L + mask) & ~mask
+```
+
+The overhead is at most 12.5% up to 255 bytes, under 6.25% up to 64 KiB, under 3.2% up to 4 GiB and under 1.6%
+beyond. The function is monotonic and `padme(5 GiB) = 5 GiB`. The plaintext stream is
+`P = file || 0x00 × (stream_len - size)`; the padding is encrypted and authenticated like the rest, and the
+receiver MUST check that it is all zero.
+
+### 12.4 Header (64 bytes)
+
+```
+offset  len  field
+0       4    magic_version = 51 41 46 02
+4       16   file_id
+20      8    stream_len     u64be, 1..MAX_STREAM
+28      4    total_chunks   u32be = ceil(stream_len / CHUNK), 1..MAX_CHUNKS
+32      32   commitment
+```
+
+### 12.5 Chunk encryption
+
+`P` is split into `n = total_chunks` chunks: chunk `i < n-1` is `CHUNK` bytes, the last is
+`stream_len - (n-1) × CHUNK` bytes (1 to `CHUNK`).
+
+```
+nonce_i = nonce_prefix || u32be(i)                                       // 12 bytes
+final_i = 0x01 if i == n-1, otherwise 0x00
+AAD_i   = "qaudion-file-v2-chunk" || header(64) || u32be(i) || final_i   // 90 bytes
+C_i     = AES-256-GCM(K_enc, nonce_i, AAD_i, P_i) = ciphertext || tag(16)
+
+blob        = header(64) || C_0 || C_1 || ... || C_{n-1}
+offset(C_i) = 64 + i × STRIDE
+len(blob)   = 64 + stream_len + 16 × n
+```
+
+The AAD binds the whole header (version, `file_id`, `stream_len`, `total_chunks`, `commitment`), the index (a moved
+chunk does not open: reordering, duplication), `final_i` together with `total_chunks` (a truncated or extended blob
+does not open) and `file_id` with the commitment (a chunk of another file does not open).
+
+Nonce uniqueness: inside one file the nonce is unique because the index is unique and `MAX_CHUNKS` is far below
+2^32; across files the keys `K_enc` are independent. The only way to reuse a nonce is to encrypt two different
+plaintexts under the same (`K`, `file_id`, `i`), which §12.8 forbids on every path. AES-GCM limits are not
+approached: 1 MiB per invocation, at most 5 120 invocations and 5 GiB per key.
+
+### 12.6 Key commitment
+
+AES-GCM does not bind a ciphertext to one key. The `commitment` in the header, derived from `K`, and the header's
+presence in every chunk's AAD close that gap: a blob opens under one key only, so a sender cannot hand different keys
+to different recipients for the same blob and make each see different content. The receiver:
+
+1. derives `commitment` from `K` and compares it with the header (constant time) BEFORE decrypting any chunk;
+2. compares the header it receives from the source (server or direct channel) with the header of the descriptor,
+   byte for byte.
+
+### 12.7 End-to-end descriptor
+
+The key and all metadata travel in a JSON descriptor carried exactly where chat text travels: in a 1:1 chat, as the
+body of an ordinary chat message sealed by the existing message channel (same encryption, sender authentication and
+per-device distribution; where the channel uses the hybrid post-quantum exchange, files inherit it); in a group,
+inside the group payload 0xE4 with `msg_type = 1`. There is no separate announce, no per-device X25519 envelope and
+no dedicated signature. If the channel cannot send a text message to a contact it MUST NOT send the file either.
+
+```json
+{
+  "qa_file": 2,
+  "id":   "<b64 16 B file_id>",
+  "k":    "<b64 32 B K>",
+  "h":    "<b64 64 B header>",
+  "sz":   1234567,
+  "kind": "file | image | video | voice | avatar | thumb",
+  "nm":   "report.pdf",
+  "mt":   "application/pdf",
+  "src":  { "via": "srv", "obj": "<server object id>", "tok": { "v": "<hex>", "exp": 0, "max": 0 } },
+  "m":    { "w": 1920, "h": 1080, "dur": 5234, "wave": [] },
+  "pv":   "<b64 preview, at most 2048 B>",
+  "th":   { "qa_file": 2, "kind": "thumb", "...": "complete descriptor of the thumbnail" },
+  "ex":   0,
+  "xp":   1
+}
+```
+
+- `id` MUST equal the header's `file_id`; `padme(sz)` MUST equal `stream_len`; `sz` is 1..`MAX_SIZE`.
+- `nm` is at most 255 UTF-8 bytes and `mt` at most 128; the receiver still sanitises them (canonical path, no
+  overwriting).
+- `src.via = "direct"` means the direct path with no copy on the server; `src.via = "srv"` carries the server object
+  and the download token.
+- `m` carries only the fields of its own `kind`. `pv` is a tiny preview (decoded length at most 2048 bytes). The real
+  thumbnail is a separate v2 file (`kind: "thumb"`, own key) described in `th`.
+- `ex` and `xp` keep their current meaning (ephemeral-message lifetime, export permission).
+- The serialised descriptor MUST stay under 8 KiB (the server limits WebSocket frames to 32 KiB and the descriptor
+  travels encrypted and base64-encoded).
+
+Control messages on the same channel: `{"qa_file_src": 2, "id": ..., "src": {...}}` adds a source (for example the
+server after a failed direct path); `{"qa_file_cancel": 2, "id": ...}` means the sender cancelled and the receiver
+discards the chunks received. Delivery receipts keep their current form, keyed by `id`.
+
+### 12.8 Resume, retries, parallelism: the nonce-reuse rule
+
+Encryption is deterministic: the same (`K`, `file_id`) always gives the same bytes for the same plaintext chunk, so a
+chunk can be re-encrypted on every retry or resume instead of being kept on disk, provided the content has not
+changed. The sender MUST keep a local transfer state, never included in a backup (Android: excluded from the backup
+rules and `K` wrapped by the Keystore; iOS: Keychain `ThisDeviceOnly`; desktop: `safeStorage`), holding `file_id`,
+the wrapped `K`, `stream_len`, the source identity (path or URI, size, modification time), `T[i]` (the tag of every
+chunk already encrypted at least once, at most 80 KiB) and the transport state.
+
+1. Before resuming, if the source's size or modification time changed, the transfer is cancelled: new `K` and
+   `file_id`, restart from zero.
+2. Whenever a chunk `i` already present in `T` is encrypted again, the new tag MUST equal `T[i]` before the chunk
+   leaves the process. If it differs the content changed: the chunk MUST NOT be transmitted, the transfer is
+   cancelled and the sender sends `qa_file_cancel`.
+3. In parallel, each index is assigned to one worker. A part that fails is resent with the same bytes (from memory,
+   or re-encrypted under rule 2).
+4. The direct path and the server path transmit the same bytes: same (`K`, `file_id`), rule 2 on both.
+5. A forwarded or re-sent file is a new file.
+
+The reason for a cancellation does not go to the server: it sees only that an object is deleted and another created;
+the receiver gets `qa_file_cancel` on the encrypted channel.
+
+### 12.9 Reception
+
+Checks, in this mandatory order:
+
+1. the descriptor is valid (fields, lengths, `kind`), `sz` between 1 and `MAX_SIZE`;
+2. the header of the descriptor: magic, `file_id == id`, `stream_len` in range, `total_chunks == ceil(stream_len /
+   CHUNK)` and in range, `stream_len == padme(sz)`, `commitment` equal to the one derived from `K`;
+3. the header of the source (the first 64 bytes of the blob, or the `HELLO` frame of the direct channel) equals the
+   descriptor's header byte for byte;
+4. for each chunk: index `i < total_chunks` (otherwise discarded without allocating anything), exact length
+   (`STRIDE`, or the last chunk's length), AES-GCM open with `nonce_i`, `AAD_i` and the whole 16-byte tag (truncated
+   tags are rejected). On failure the chunk is discarded and requested again, from the same or another source, at
+   most 3 times, then error. A chunk already verified that arrives again is ignored: completion is counted on the map
+   of verified chunks, never on the number of messages received;
+5. at the end: all `total_chunks` chunks verified, padding all zero, truncation to `sz`.
+
+The receiver writes verified chunks at their position (`i × CHUNK`), keeps the map of verified chunks, may resume from
+any point and from any source, and checks it has room for `stream_len` before starting. No plaintext byte is shown to
+the user before its chunk is verified; progressive playback may use verified chunks in order.
+
+Error codes common to the three platforms (telemetry and negative vectors): `bad_descriptor`, `bad_header`,
+`commit_mismatch`, `header_mismatch`, `chunk_auth`, `bad_padding`, `size_mismatch`, `cancelled`. The mapping of the
+checks above, as the reference receiver of the vector generator applies it:
+
+| Check | Code |
+|---|---|
+| descriptor fields, lengths, `kind`, `sz` range | `bad_descriptor` |
+| magic, `file_id != id`, `stream_len` or `total_chunks` out of range or inconsistent | `bad_header` |
+| `stream_len != padme(sz)` | `size_mismatch` |
+| commitment differs from the derived one | `commit_mismatch` |
+| source header differs from the descriptor header | `header_mismatch` |
+| blob length differs from `64 + stream_len + 16 × total_chunks` (including a missing last chunk) | `size_mismatch` |
+| chunk of the wrong length, or GCM open fails | `chunk_auth` |
+| chunk index `>= total_chunks` | discarded, no error |
+| non-zero padding | `bad_padding` |
+| sender cancelled | `cancelled` |
+
+### 12.10 Transports
+
+The format does not depend on the transport: the bytes of `C_i` are the same on every path.
+
+- Server: the blob is an opaque object. The header is delivered when the object is created; the chunks travel in
+  parts of 8 chunks (8 × `STRIDE` bytes), aligned to chunk boundaries, uploaded and downloaded in parallel with range
+  requests. Part `p` occupies the bytes from `64 + p × 8 × STRIDE`. The server does not know the format: it knows
+  "a 64-byte header followed by parts of a fixed size", checks transport integrity per part with
+  `Content-Digest: sha-256` (RFC 9530) while writing, and caps an object and a user's quota at `MAX_BLOB`. The client
+  no longer sends `mime` or `sha256_b64` in the upload metadata. (The server's parts protocol arrives with the
+  client pipelines; this section fixes the bytes it will carry.)
+- Direct channel (WebRTC DataChannel over DTLS 1.3 AES-256 of the M150 build, DTLS fingerprints signed as in §3.7):
+  frames `HELLO(header)`, then the chunks split into 64 KiB messages and reassembled before verification,
+  `HAVE(map)` to resume, `DONE`, `CANCEL`. DTLS authenticates the channel; the chunk GCM remains the only guarantee
+  about the content.
+- Several sources: the receiver may take different chunks from different sources, because each chunk verifies on its
+  own with the same `K`.
+
+### 12.11 Download token
+
+The token remains the server's HMAC token (opaque to clients): bound to the object and the recipient, with a
+byte cap (8 times the blob length) and a use counted only by a request that starts at offset 0. In v2:
+
+- the token travels only in the descriptor, hence encrypted end to end;
+- a use is the start of a download, that is the read of the first 64 bytes; the parallel requests that follow consume
+  only the byte cap;
+- groups: one token with group scope (the server checks group membership at download time) instead of a per-member
+  token map, which does not fit the descriptor limit for large groups;
+- streaming delivery: the server issues the token at object creation (today it answers 409 before completion).
+
+### 12.12 Removal of the earlier formats and the CI marker check
+
+The v2 release deletes the earlier code, it does not switch it off. A check in CI in every repository fails if a
+source file (tests included) contains any of these markers: `qaudion-fa-v1`, `qa_fa_announce`, `qa_att`,
+`attach_announce`, `"qfile"`, `q-audion-attachment-`, `q-audion-file-key`, `qaudion-vn-`, `XChaCha`, `HChaCha`.
+Out of scope and unchanged: the backup format (scrypt + AES-256-GCM), the local on-device file encryption (Jetpack
+`EncryptedFile`, AES-256) and the end-of-call diagnostics packages.
+
+### 12.13 Platform primitives and vectors
+
+| Platform | AES-256-GCM | HKDF-SHA256 |
+|---|---|---|
+| Android | `javax.crypto` `AES/GCM/NoPadding` from Conscrypt, a new `Cipher` per chunk; no BouncyCastle on the file path | `Mac HmacSHA256` |
+| iOS | CryptoKit `AES.GCM` with a 12-byte nonce | CryptoKit `HKDF<SHA256>` |
+| Desktop | `node:crypto` `aes-256-gcm` in the main process | `crypto.hkdfSync` |
+| Server | none | none (generates the vectors only) |
+
+Vectors (`test/kat/file_v2/file-v2-kat.json`): derivations; Padmé inputs; complete files with deterministic content
+(byte `j` = `j mod 251`) of 1, 1023, 2^20 - 1, 2^20, 2^20 + 1 and 3 × 2^20 + 5 bytes with header, per-chunk nonce,
+AAD, tag and ciphertext SHA-256 and the blob SHA-256 (the blob itself for the small ones); the derivations for the
+maximum chunk index of a 5 GiB file; negative vectors (header and descriptor tampering, wrong commitment, swapped,
+duplicated, removed and foreign chunks, wrong `final` flag, non-zero padding, `stream_len` not Padmé, inconsistent
+`total_chunks`, source header differing from the descriptor, truncated and extended blobs), each with its expected
+error code; and descriptor examples, three valid (file with thumbnail, voice note, group image) and invalid ones.
+Multi-chunk negative vectors are given as a recipe on a named positive vector plus the SHA-256 of the resulting blob.
+All keys in the file are test keys derived from public labels.
+
+Latest: 2026-10-02 (afternoon: R-COMMIT-KCMAC-HOLD and R-COMMIT-KCMAC-DEVICE in §3.7.4, §3.7.1 timing; server
+stamps `sender_device_id` on live `opaque_message`; the callee's round-1 KCMAC wait ends no earlier than 5 s after its
+REVEAL verified; §12 file transfer v2 merged from main).
+Previous: 2026-10-02 (SAS commitment: signed transcript v6 §3.7, new §3.7.4 commitment and REVEAL, §4 SAS v6 over a
 caller nonce, close reasons `sas_commit_mismatch` / `sas_reveal_timeout`, round-1-only SAS, KAT
 `tools/kat/handshake-sig-v6/`; v5 transcript, `sigV5` and the v5 KAT removed).
+Previous: 2026-10-02 (new §12 file transfer v2, AES-256-GCM chunked format, hard switch; §1 label rows for the earlier
+attachment and file key schemes replaced by the v2 derivation row; known-answer vectors in test/kat/file_v2).
 Previous: 2026-10-01 (v5 review round: R-ROLE and R-SLOT in §3.7.2, R-KCMAC on every round in §3.7.1,
 R-ROUND in §3.1, R-EARBUD §3.7.3, R-CERT in §3.8, reflection handling §11.5/§11.7, random-byte slot retirement).
 Previous: 2026-10-01 (§3 rewritten: single JSON dialect, signed transcript v5 §3.7 with

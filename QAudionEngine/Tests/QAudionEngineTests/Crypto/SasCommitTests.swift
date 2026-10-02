@@ -636,6 +636,238 @@ final class SasCommitTests: XCTestCase {
         XCTAssertFalse(primitives.contains("RTLog"), "the primitives never log")
     }
 
+    // MARK: - A1 / A5: the KCMAC wait of a key round (WIRE_SPEC 3.7.1 Window rule, 3.7.4 KCMAC hold)
+
+    /// Every round that is not round 1 waits exactly 5 s from the moment its context is armed.
+    func testARekeyRoundWaitsFiveSecondsFromArming() {
+        for isInitiator in [true, false] {
+            XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
+                                                   nowMs: 5_999, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 1)
+            XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
+                                                   nowMs: 6_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
+                           "the REVEAL times never stretch a rekey round")
+        }
+    }
+
+    /// A1: the caller accepts the callee's round-1 MAC for at least 15 s after it handed its REVEAL to the
+    /// transport (the callee sends that MAC only after the REVEAL round trip).
+    func testTheCallerWaitsFifteenSecondsAfterHandingItsRevealToTheTransport() {
+        func left(_ now: Int, handed: Int?) -> Int {
+            KcMacWindow.remainingMs(isRound1: true, isInitiator: true, armedAtMs: 1_000, nowMs: now,
+                                    revealHandedAtMs: handed, revealVerifiedAtMs: nil)
+        }
+        XCTAssertGreaterThan(left(14_000, handed: 1_000), 0, "a callee MAC 13 s after the REVEAL is still judged")
+        XCTAssertEqual(left(15_999, handed: 1_000), 1)
+        XCTAssertEqual(left(16_000, handed: 1_000), 0, "expiry: kcmac_mismatch")
+        XCTAssertEqual(left(5_999, handed: nil), 1, "no REVEAL handed over yet: the base 5 s from arming")
+        XCTAssertEqual(left(6_000, handed: nil), 0)
+        XCTAssertEqual(KcMacWindow.callerRound1AfterRevealMs, 15_000)
+    }
+
+    /// A5: the callee's round-1 wait for the caller's MAC ends no earlier than 5 s after its OWN REVEAL verified,
+    /// even when the 5 s armed with the round-1 key would end first. The decision's own scenario: REVEAL verified
+    /// 4.9 s after the key, caller MAC at 5.3 s: the call survives; nothing by 5 s after the REVEAL: mismatch.
+    func testTheCalleeWaitsFiveSecondsAfterItsOwnRevealVerified() {
+        func left(_ now: Int, verified: Int?) -> Int {
+            KcMacWindow.remainingMs(isRound1: true, isInitiator: false, armedAtMs: 0, nowMs: now,
+                                    revealHandedAtMs: nil, revealVerifiedAtMs: verified)
+        }
+        XCTAssertGreaterThan(left(5_300, verified: 4_900), 0, "REVEAL at 4.9 s, caller MAC at 5.3 s: still judged")
+        XCTAssertEqual(left(9_899, verified: 4_900), 1)
+        XCTAssertEqual(left(9_900, verified: 4_900), 0, "no MAC 5 s after the REVEAL verified: kcmac_mismatch")
+        XCTAssertEqual(left(4_999, verified: -100), 1, "a REVEAL verified before the round was armed keeps the 5 s armed with the key")
+        XCTAssertEqual(left(5_000, verified: -100), 0)
+        // Before the REVEAL verified the wait is held open past the REVEAL timer, so a missing REVEAL ends the call
+        // with sas_reveal_timeout (5 s after the ACCEPT was sent) and never with kcmac_mismatch first.
+        XCTAssertGreaterThan(KcMacWindow.calleeRound1PreRevealBackstopMs, SasCommit.revealTimeoutMs)
+        XCTAssertGreaterThan(left(9_999, verified: nil), 0)
+        XCTAssertEqual(left(10_000, verified: nil), 0)
+    }
+
+    /// The book feeds the round-1 extensions from this call's own REVEAL times: the caller's from the latest
+    /// REVEAL it handed to the transport (only after binding), the callee's from its REVEAL verifying.
+    func testTheBookFeedsTheRoundOneWaitsFromThisCallsRevealTimes() {
+        let callerBook = SasCommitBook()
+        _ = callerBook.beginCaller(callId: callId, nonce: nonce)
+        callerBook.callerRevealHanded(callId: callId, nowMs: 500)
+        XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
+                                                    armedAtMs: 0, nowMs: 5_000), 0,
+                       "no REVEAL can be handed over before binding")
+        _ = callerBook.callerOnAccept(callId: callId, acceptHash: ownHash, senderDeviceId: "dev-a")
+        callerBook.callerRevealHanded(callId: callId, nowMs: 1_000)
+        XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
+                                                    armedAtMs: 1_000, nowMs: 15_000), 1_000)
+        callerBook.callerRevealHanded(callId: callId, nowMs: 3_000)
+        XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
+                                                    armedAtMs: 1_000, nowMs: 15_000), 3_000,
+                       "a re-send may make the wait longer, never shorter")
+        callerBook.callerRevealHanded(callId: callId, nowMs: 2_000)
+        XCTAssertEqual(callerBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: true,
+                                                    armedAtMs: 1_000, nowMs: 15_000), 3_000)
+
+        let calleeBook = SasCommitBook()
+        XCTAssertTrue(calleeBook.beginCallee(callId: callId, commit: commit()))
+        calleeBook.calleeSetAccept(callId: callId, acceptHash: ownHash)
+        XCTAssertTrue(calleeBook.calleeAcceptSent(callId: callId, nowMs: 0))
+        XCTAssertEqual(calleeBook.calleeOnReveal(callId: callId, data: reveal(), nowMs: 4_900), .sasReady)
+        XCTAssertGreaterThan(calleeBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: false,
+                                                          armedAtMs: 0, nowMs: 5_300), 0)
+        XCTAssertEqual(calleeBook.kcWaitRemainingMs(callId: callId, isRound1: true, isInitiator: false,
+                                                    armedAtMs: 0, nowMs: 9_900), 0)
+    }
+
+    // MARK: - R-COMMIT-KCMAC-DEVICE: the caller's sender-device rule (A1, every round A6)
+
+    func testTheCallerJudgesOnlyKcmacsFromTheDeviceWhoseAcceptItBound() {
+        let book = SasCommitBook()
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-a"), .notApplicable,
+                       "no caller context: the rule does not apply (a callee judges by its own rules)")
+        _ = book.beginCaller(callId: callId, nonce: nonce)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-a"), .dropSilently,
+                       "nothing bound yet: no device to match")
+        let (decision, _) = book.callerOnAccept(callId: callId, acceptHash: ownHash, senderDeviceId: "dev-a")
+        XCTAssertEqual(decision, .bindAndReveal)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId.uppercased(), envelopeSenderDeviceId: "dev-a"), .admit)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-b"), .dropSilently,
+                       "a sibling device of the same user")
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "DEV-A"), .dropSilently,
+                       "an opaque string compared byte for byte")
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: nil), .dropSilently)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: ""), .dropSilently)
+        // A duplicate of the bound ACCEPT, or another ACCEPT, from any device never moves the binding.
+        _ = book.callerOnAccept(callId: callId, acceptHash: ownHash, senderDeviceId: "dev-b")
+        _ = book.callerOnAccept(callId: callId, acceptHash: otherHash, senderDeviceId: "dev-b")
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-a"), .admit)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-b"), .dropSilently)
+        // A6: the rule keys on the call, not on a round: it still holds after the round-1 material is recorded.
+        book.recordRound1(callId: callId, sessionKey: Data(repeating: 0x42, count: 32), acceptHash: ownHash)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-a"), .admit)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-b"), .dropSilently)
+        book.clear(callId: callId)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-a"), .notApplicable)
+    }
+
+    /// An ACCEPT whose envelope carried no `sender_device_id` (a row stored before the server recorded it) leaves
+    /// no device to match: no KCMAC passes and the window ends the call (fail closed, never an unfiltered judgment).
+    func testABoundAcceptWithoutADeviceIdAdmitsNoKcmac() {
+        let book = SasCommitBook()
+        _ = book.beginCaller(callId: callId, nonce: nonce)
+        _ = book.callerOnAccept(callId: callId, acceptHash: ownHash, senderDeviceId: nil)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: "dev-a"), .dropSilently)
+        XCTAssertEqual(book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: nil), .dropSilently)
+        let empty = SasCommitBook()
+        _ = empty.beginCaller(callId: callId, nonce: nonce)
+        _ = empty.callerOnAccept(callId: callId, acceptHash: ownHash, senderDeviceId: "")
+        XCTAssertEqual(empty.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: ""), .dropSilently)
+    }
+
+    /// The app wiring: the envelope's server-stamped `sender_device_id` is read on the live and the replayed
+    /// opaque path, travels with the ACCEPT into the bind, and the caller's sender test runs first in the KCMAC
+    /// handler, before the sibling test, the early hold and the duplicate test. The KCMAC deadline reads the
+    /// round's window on every wake-up instead of one fixed 5 s sleep, and the REVEAL hand-over is stamped
+    /// before the write.
+    func testTheAppWiresTheSenderDeviceAndTheRoundOneWaits() throws {
+        let app = try sourceText("QAudionApp/AppState.swift")
+        XCTAssertTrue(app.contains("SasCommit.normalizedDeviceId(data[\"sender_device_id\"] as? String)"), "live opaque_message")
+        XCTAssertTrue(app.contains("SasCommit.normalizedDeviceId(entry[\"sender_device_id\"] as? String)"), "msg_pending_sync replay")
+        XCTAssertTrue(app.contains("envelopeSenderDeviceId: envelopeSenderDeviceId,"), "the ACCEPT carries its device into the bind")
+        let start = try XCTUnwrap(app.range(of: "private func handleInboundKcMac(callId: String, raw: String, senderId: String, senderDeviceId: String? = nil) {"))
+        let end = try XCTUnwrap(app.range(of: "private func holdEarlyKcMac("))
+        let handler = String(app[start.upperBound..<end.lowerBound])
+        let deviceAt = try XCTUnwrap(handler.range(of: "callerKcMacSenderVerdict("))
+        for later in ["integration.acceptsKeyConfirmation(callId: callId)", "KcMacRoundRules.isDuplicate(", "holdEarlyKcMac("] {
+            let at = try XCTUnwrap(handler.range(of: later), later)
+            XCTAssertLessThan(deviceAt.lowerBound, at.lowerBound, "the sender-device rule runs before \(later)")
+        }
+        XCTAssertTrue(handler.contains("== .dropSilently"))
+        XCTAssertFalse(app.contains("try? await Task.sleep(nanoseconds: 5_000_000_000)\n            guard !Task.isCancelled else { return }\n            await MainActor.run { [weak self] in\n                guard let self, let cur = self.kcCallStates[key]"),
+                       "the KCMAC deadline is no longer a fixed 5 s")
+        XCTAssertTrue(app.contains("return self.kcWaitRemainingMs(callId: event.callId, state: cur)"))
+        XCTAssertTrue(app.contains("isRound1 = event.round == 1"))
+
+        let src = try integrationText()
+        let fnStart = try XCTUnwrap(src.range(of: "private func sendSasReveal(_ wire: String, callId: String, resend: Bool) async {"))
+        let fn = String(src[fnStart.upperBound...].prefix(1_200))
+        let stampAt = try XCTUnwrap(fn.range(of: "sasCommit.callerRevealHanded(callId: callId, nowMs: SasCommit.monotonicNowMs())"))
+        let writeAt = try XCTUnwrap(fn.range(of: "try await sender(wire)"))
+        XCTAssertLessThan(stampAt.lowerBound, writeAt.lowerBound, "\"sent\" is the hand-over to the transport")
+        XCTAssertTrue(src.contains("senderDeviceId: envelopeSenderDeviceId)"))
+        XCTAssertTrue(src.contains("round: innerAadEpoch\n"), "the responder leg reports its signed round")
+        XCTAssertTrue(src.contains("round: innerAadEpochCaller\n"), "the caller leg reports its signed round")
+    }
+
+    // MARK: - A2: the newest valid round-1 OFFER replaces an unanswered one
+
+    func testOnlyACalleeThatHasNotSentItsAcceptCanBeSuperseded() {
+        let book = SasCommitBook()
+        XCTAssertFalse(book.calleeCanBeSuperseded(callId: callId), "no callee context")
+        XCTAssertTrue(book.beginCallee(callId: callId, commit: commit()))
+        book.calleeSetAccept(callId: callId, acceptHash: ownHash)
+        XCTAssertTrue(book.calleeCanBeSuperseded(callId: callId), "the ACCEPT is held while ringing")
+        XCTAssertTrue(book.calleeAcceptSent(callId: callId, nowMs: 0))
+        XCTAssertFalse(book.calleeCanBeSuperseded(callId: callId), "the answered commitment is frozen once the ACCEPT is out")
+        let ended = SasCommitBook()
+        XCTAssertTrue(ended.beginCallee(callId: callId, commit: commit()))
+        ended.calleeSetAccept(callId: callId, acceptHash: ownHash)
+        XCTAssertTrue(ended.calleeAcceptSent(callId: callId, nowMs: 0))
+        _ = ended.calleeTimerFired(callId: callId)
+        XCTAssertFalse(ended.calleeCanBeSuperseded(callId: callId))
+    }
+
+    func testTheReplacementDecisionNeedsAValidRoundOneOfferAndAnUnsentAccept() {
+        func decide(round: Int? = 1, code: String? = nil, context: Bool = true, retransmit: Bool = false,
+                    unsent: Bool = true) -> Bool {
+            QAudionCallIntegration.isUnansweredRound1Replacement(
+                round: round, commitmentCode: code, hasCallContext: context,
+                isKnownRetransmit: retransmit, acceptNotYetSent: unsent)
+        }
+        XCTAssertTrue(decide(), "a different valid round-1 OFFER before the ACCEPT left replaces the held one")
+        XCTAssertFalse(decide(unsent: false), "after the ACCEPT is sent a different round-1 OFFER is dropped")
+        XCTAssertFalse(decide(retransmit: true), "a byte-identical OFFER re-sends the cached ACCEPT or is dropped")
+        XCTAssertFalse(decide(context: false), "the first OFFER of a call is not a replacement")
+        XCTAssertFalse(decide(round: 2), "a rekey OFFER never replaces round 1")
+        XCTAssertFalse(decide(round: nil))
+        XCTAssertFalse(decide(code: "commit_missing"), "an invalid commitment never replaces a valid OFFER")
+        XCTAssertFalse(decide(code: "commit_malformed"))
+    }
+
+    /// A2: while the answered OFFER is held (ACCEPT not sent), an OFFER that is not a valid round-1 OFFER is
+    /// dropped silently instead of ending the ringing call; once the ACCEPT is out the ordinary rules apply.
+    func testAnInvalidOfferWhileTheAnsweredOneIsHeldIsDroppedSilently() {
+        func drop(round: Int? = 1, code: String? = nil, context: Bool = true, retransmit: Bool = false,
+                  unsent: Bool = true) -> Bool {
+            QAudionCallIntegration.isInvalidOfferWhileUnanswered(
+                round: round, commitmentCode: code, hasCallContext: context,
+                isKnownRetransmit: retransmit, acceptNotYetSent: unsent)
+        }
+        XCTAssertTrue(drop(code: "commit_missing"))
+        XCTAssertTrue(drop(code: "commit_malformed"))
+        XCTAssertTrue(drop(round: 2), "a rekey OFFER before the ACCEPT left")
+        XCTAssertTrue(drop(round: nil))
+        XCTAssertFalse(drop(), "a valid round-1 OFFER is the replacement case, not a drop")
+        XCTAssertFalse(drop(code: "commit_missing", unsent: false), "after the ACCEPT: the ordinary malformed rule")
+        XCTAssertFalse(drop(round: 2, unsent: false), "after the ACCEPT: an ordinary rekey round")
+        XCTAssertFalse(drop(code: "commit_missing", context: false), "a first OFFER keeps the first-OFFER rule")
+        XCTAssertFalse(drop(round: 2, retransmit: true), "a retransmit re-sends the cached ACCEPT")
+    }
+
+    /// A2 wiring: the drop and the replacement are decided before the first-OFFER rule and before any of the
+    /// held round is touched, and a replacement is refused when the malformed checks refuse the new OFFER.
+    func testTheOfferIntakeDecidesA2BeforeTouchingTheHeldRound() throws {
+        let src = try integrationText()
+        let offerCase = try XCTUnwrap(src.range(of: "let replacementOfferKey = callId.lowercased()"))
+        let tail = String(src[offerCase.upperBound...])
+        let dropAt = try XCTUnwrap(tail.range(of: "if Self.isInvalidOfferWhileUnanswered("))
+        let probeAt = try XCTUnwrap(tail.range(of: "if case .malformed = evaluateInbound("))
+        let supersedeAt = try XCTUnwrap(tail.range(of: "supersedeUnansweredRound1(callId: callId)"))
+        let firstRuleAt = try XCTUnwrap(tail.range(of: "HandshakeSigningPolicy.firstRoundMalformedCode("))
+        XCTAssertLessThan(dropAt.lowerBound, probeAt.lowerBound)
+        XCTAssertLessThan(probeAt.lowerBound, supersedeAt.lowerBound)
+        XCTAssertLessThan(supersedeAt.lowerBound, firstRuleAt.lowerBound)
+        let between = String(tail[dropAt.upperBound..<probeAt.lowerBound])
+        XCTAssertFalse(between.contains("reportHandshakeFatal"), "the drop sends no hangup")
+    }
+
     // MARK: - WIRE_SPEC lock
 
     /// The spec copy and the lock agree: the committed WIRE_SPEC.md hashes to the EXPECTED value of the

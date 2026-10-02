@@ -805,11 +805,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         /// second, divergent selection computation. Local-only: never
         /// serialized to the wire, no capability flag.
         public let selectedFp: String?
+        /// The signed `rekeyRound` (>= 1) of the key round this event arms. Round 1 has the longer KCMAC waits of
+        /// `KcMacWindow` (A1 caller, A5 callee); every later round waits 5 s.
+        public let round: UInt32
 
         public init(
             peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
             kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
-            sigOk: Bool, peerAdvertisedRoles: [Int], selectedFp: String? = nil
+            sigOk: Bool, peerAdvertisedRoles: [Int], selectedFp: String? = nil, round: UInt32 = 1
         ) {
             self.peerId = peerId
             self.callId = callId
@@ -822,9 +825,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             self.sigOk = sigOk
             self.peerAdvertisedRoles = peerAdvertisedRoles
             self.selectedFp = selectedFp
+            self.round = round
         }
     }
     public var onKcMacReady: ((KcMacReadyEvent) -> Void)?
+
+    /// A2 — a newer round-1 OFFER replaced the unanswered one (the ACCEPT was never sent): the app drops what it
+    /// queued or installed for the replaced round (deferred ring-time actions, the ring key, the identity gate).
+    public var onUnansweredRound1Superseded: ((String) -> Void)?
 
     /// Set a BCryptoRestClient to enable userId pre-resolution before OFFER.
     /// Without this, OFFERs use the raw recipientId which may cause server routing failures.
@@ -1667,6 +1675,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         callId: String,
         callerId: String = "",
         callerDeviceId: String? = nil,
+        envelopeSenderDeviceId: String? = nil,
         eligiblePsks: [String: Data] = [:],
         sendOpaqueRaw: @escaping (String) async throws -> Void
     ) async throws {
@@ -1760,6 +1769,47 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             //     device) pin + capability pins.
             // R-COMMIT-FIRST-ROUND: the first OFFER a callee sees for a callId must be round 1; any other
             // first round is malformed and ends the call without an ACCEPT.
+            // A2 (WIRE_SPEC §3.7.4): a callee takes the commitment from the OFFER it actually ANSWERS. While this
+            // device has NOT sent its round-1 ACCEPT (the default signalling-only ring holds it until the human
+            // answers) the newest valid round-1 OFFER replaces the one already processed: the unanswered round is
+            // wiped and this OFFER runs as the first one. After the ACCEPT is out a different round-1 OFFER is
+            // dropped as before (the stale-round refusal below) and the frozen commitment stays.
+            let replacementOfferKey = callId.lowercased() + "#" + Data(SHA256.hash(data: pqcPub + x25519Pub)).base64EncodedString()
+            // A2, invalid OFFER: while the answered OFFER is held (its ACCEPT not sent yet) an OFFER that is not a
+            // valid round-1 OFFER (another round, a missing or malformed commitment, a §3.1 malformed bundle) is
+            // dropped silently: no state, no hangup, no ACCEPT. The held round stays untouched.
+            let (holdsCallContext, isKnownOfferRetransmit) = lock.withLock { () -> (Bool, Bool) in
+                (sessionInitializedByCall.contains(callId.lowercased()),
+                 processedOfferFingerprintsByCall.contains(replacementOfferKey))
+            }
+            let acceptNotYetSent = sasCommit.calleeCanBeSuperseded(callId: callId)
+            let replacementCommitmentCode = HandshakeSigningPolicy.sasCommitMalformedCode(
+                isOffer: true, round: bundle.rekeyRound, sasCommitB64: bundle.sasCommit)
+            if Self.isInvalidOfferWhileUnanswered(
+                round: bundle.rekeyRound, commitmentCode: replacementCommitmentCode,
+                hasCallContext: holdsCallContext, isKnownRetransmit: isKnownOfferRetransmit,
+                acceptNotYetSent: acceptNotYetSent) {
+                print("[QAudionCallIntegration] OFFER dropped — not a valid round-1 OFFER while the answered one is held callId=\(callId.prefix(8))…")
+                return
+            }
+            let replacesUnansweredOffer = Self.isUnansweredRound1Replacement(
+                round: bundle.rekeyRound, commitmentCode: replacementCommitmentCode,
+                hasCallContext: holdsCallContext, isKnownRetransmit: isKnownOfferRetransmit,
+                acceptNotYetSent: acceptNotYetSent)
+            if replacesUnansweredOffer {
+                // Only a VALID OFFER replaces the held one: one the malformed checks refuse is dropped here, before
+                // anything of the held round is touched. The probe leaves no state behind for a malformed bundle;
+                // for a valid one its call-scoped pin notes go with the wiped round and the real check below makes
+                // them again.
+                if case .malformed = evaluateInbound(
+                    bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,
+                    expectedOfferBinding: nil).verdict {
+                    print("[QAudionCallIntegration] OFFER dropped — a malformed OFFER never replaces the held one callId=\(callId.prefix(8))…")
+                    return
+                }
+                print("[QAudionCallIntegration] a newer round-1 OFFER replaces the unanswered one callId=\(callId.prefix(8))…")
+                supersedeUnansweredRound1(callId: callId)
+            }
             let isFirstOfferOfCall = lock.withLock { !sessionInitializedByCall.contains(callId.lowercased()) }
             if let code = HandshakeSigningPolicy.firstRoundMalformedCode(
                 isFirstOfferOfCall: isFirstOfferOfCall, round: bundle.rekeyRound) {
@@ -2160,7 +2210,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // UNCHANGED either way — only the wire send is gated.
             try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: !isReKeyRound)
             if !isReKeyRound {
-                try engine.initialize()
+                if replacesUnansweredOffer {
+                    // The replaced round already initialised the engine, and a second `initialize()` from an active
+                    // session is refused; `initSession` below re-keys it in place. An engine the replaced round
+                    // never got to initialise is initialised here.
+                    try? engine.initialize()
+                } else {
+                    try engine.initialize()
+                }
             }
             // W479 — Android peer: use AdaptivePaddingController-compatible
             // audio scheme (static session key, no AAD, 2-byte len + 120B padding).
@@ -2309,7 +2366,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 peerId: callerId, callId: callId, isInitiator: false, sessionKey: combined,
                 kcKey: kcKeyForEvent, transcript: kcTranscriptForEvent, n: kcN,
                 peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
-                peerAdvertisedRoles: kcPeerAdvertisedRoles, selectedFp: selectedFp
+                peerAdvertisedRoles: kcPeerAdvertisedRoles, selectedFp: selectedFp,
+                round: innerAadEpoch
             ))
 
             // Pre-negotiation: the PQC OFFER is fully deserialised and our ACCEPT is on the
@@ -2462,7 +2520,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 if case .malformed = acceptCheck.verdict { isMalformedVerdict = true }
                 if !isMalformedVerdict {
                     let (decision, revealWire) = sasCommit.callerOnAccept(
-                        callId: callId, acceptHash: HandshakeTranscript.offerBinding(boundTranscript))
+                        callId: callId, acceptHash: HandshakeTranscript.offerBinding(boundTranscript),
+                        senderDeviceId: envelopeSenderDeviceId)
                     switch decision {
                     case .bindAndReveal:
                         round1RevealWire = revealWire
@@ -2886,7 +2945,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // never resolves there, which silently forced the NFC-in-common
                 // branch of AssuranceState.decide() unreachable whenever iOS
                 // placed the call — see establishedPskFp's derivation at :2177.
-                selectedFp: establishedPskFp
+                selectedFp: establishedPskFp,
+                round: innerAadEpochCaller
             ))
 
             // W529: caller's ACCEPT decapsulation succeeded → cancel
@@ -3660,6 +3720,50 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         isReKeyAccept && echoedRound == 1
     }
 
+    /// A2: true for a round-1 OFFER that replaces the unanswered round-1 OFFER this callee already processed:
+    /// round 1 with a valid commitment (`commitmentCode == nil`), for a call that has a context, which is not a
+    /// retransmit of an OFFER already processed (that one re-sends the cached ACCEPT), and only while this device
+    /// has not sent its ACCEPT. After the ACCEPT is sent it is false: the OFFER is dropped as a stale round.
+    /// `internal` so a unit test can pin the decision.
+    static func isUnansweredRound1Replacement(round: Int?, commitmentCode: String?, hasCallContext: Bool,
+                                              isKnownRetransmit: Bool, acceptNotYetSent: Bool) -> Bool {
+        round == 1 && commitmentCode == nil && hasCallContext && !isKnownRetransmit && acceptNotYetSent
+    }
+
+    /// A2: true for an OFFER that must be dropped silently because this callee holds an answered round-1 OFFER
+    /// whose ACCEPT it has not sent yet, and the new one is not a valid round-1 OFFER (any other round, or a
+    /// missing / malformed commitment). No hangup and no state: the held round stays. A retransmit of an OFFER
+    /// already processed is not concerned (it re-sends the cached ACCEPT), and once the ACCEPT is out the
+    /// ordinary rules apply again. `internal` so a unit test can pin the decision.
+    static func isInvalidOfferWhileUnanswered(round: Int?, commitmentCode: String?, hasCallContext: Bool,
+                                              isKnownRetransmit: Bool, acceptNotYetSent: Bool) -> Bool {
+        hasCallContext && !isKnownRetransmit && acceptNotYetSent && (round != 1 || commitmentCode != nil)
+    }
+
+    /// A2: wipe the round-1 handshake state of a call whose ACCEPT was never sent, so the newest round-1 OFFER can
+    /// be processed as the first one (WIRE_SPEC §3.7.4). The dedup and freshness bookkeeping, the pinned DTLS
+    /// fingerprint, the key-round map, the held ACCEPT, the held-media flag, the call-scoped SAS pins and the whole
+    /// SAS commitment context of the replaced round go; `onUnansweredRound1Superseded` lets the app drop what it
+    /// queued for the replaced round (deferred ring-time actions, the ring key, the identity gate).
+    func supersedeUnansweredRound1(callId: String) {
+        let id = callId.lowercased()
+        let prefix = id + "#"
+        cancelSasRevealTimer(callId: callId)
+        lock.withLock {
+            sessionInitializedByCall.remove(id)
+            processedOfferFingerprintsByCall = processedOfferFingerprintsByCall.filter { !$0.hasPrefix(prefix) }
+            acceptWireByOfferFingerprint = acceptWireByOfferFingerprint.filter { !$0.key.hasPrefix(prefix) }
+            lastAcceptedRekeyRoundByCall.removeValue(forKey: id)
+            peerDtlsFingerprintByCall.removeValue(forKey: id)
+            keyRoundByCall.removeValue(forKey: id)
+            heldAcceptByCall.removeValue(forKey: id)
+            heldCalls.remove(id)
+        }
+        sasPins.clear(callId: callId)
+        sasCommit.clear(callId: callId)
+        onUnansweredRound1Superseded?(callId)
+    }
+
     static func rekeyFreshnessValue(callId: String, rekeyNonce: Data, round: UInt32) -> Data {
         precondition(rekeyNonce.count == 8, "rekeyNonce must be 8 bytes")
         var ikm = Data(callId.utf8)
@@ -4025,6 +4129,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             print("[QAudionCallIntegration] sas_commit reveal not sent (no sender) callId=\(callId.prefix(8))…")
             return
         }
+        // A1: "sent" is the hand-over to the transport. The caller's 15 s wait for the callee's round-1 KCMAC
+        // (`KcMacWindow`) runs from here, before the write completes.
+        sasCommit.callerRevealHanded(callId: callId, nowMs: SasCommit.monotonicNowMs())
         do {
             try await sender(wire)
             print("[QAudionCallIntegration] sas_commit \(resend ? "resent" : "revealed") callId=\(callId.prefix(8))…")

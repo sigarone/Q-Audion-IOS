@@ -70,6 +70,13 @@ public enum SasCommit {
         return diff == 0
     }
 
+    /// A server-stamped `sender_device_id` is an opaque string compared byte for byte; an absent or empty one
+    /// means "no device" (`nil`) and never matches anything (R-COMMIT-KCMAC-DEVICE).
+    public static func normalizedDeviceId(_ id: String?) -> String? {
+        guard let id, !id.isEmpty else { return nil }
+        return id
+    }
+
     /// Monotonic milliseconds for the REVEAL timer (never wall-clock: a clock change must not fire it).
     public static func monotonicNowMs() -> Int {
         Int(DispatchTime.now().uptimeNanoseconds / 1_000_000)
@@ -144,6 +151,9 @@ public struct SasCommitCallee {
     public private(set) var acceptHash: Data?
     public private(set) var acceptSentAtMs: Int?
     public private(set) var verifiedNonce: Data?
+    /// Monotonic time (ms) at which the REVEAL verified (R-COMMIT-CHECK step 7): the start of the callee's own
+    /// round-1 KCMAC wait (A5, `KcMacWindow`).
+    public private(set) var verifiedAtMs: Int?
     /// Ended with a security reason, or left locally (sibling): every later event is ignored.
     public private(set) var finished = false
     public private(set) var leftLocally = false
@@ -152,6 +162,10 @@ public struct SasCommitCallee {
         self.callId = callId
         self.storedCommit = storedCommit
     }
+
+    /// A2 (WIRE_SPEC 3.7.4, pending OFFER): while this device has NOT sent its round-1 ACCEPT, the newest valid
+    /// round-1 OFFER replaces the one it holds. True while the ACCEPT is not out and the call is not over.
+    public var canBeSuperseded: Bool { acceptSentAtMs == nil && !finished }
 
     /// The `SHA-256(ACCEPT_v6)` of the ACCEPT this device built for the commitment (at ring time on
     /// iOS). Ignored once the ACCEPT was sent: the answered OFFER is frozen.
@@ -198,6 +212,7 @@ public struct SasCommitCallee {
                 return fail(SasCommit.reasonMismatch)
             }
             verifiedNonce = nonce
+            verifiedAtMs = nowMs
             return .sasReady
         }
     }
@@ -247,6 +262,12 @@ public struct SasCommitCaller {
     public let commit: Data
     private var nonce: Data?
     public private(set) var boundAcceptHash: Data?
+    /// The `sender_device_id` of the opaque envelope that carried the bound ACCEPT (R-COMMIT-KCMAC-DEVICE).
+    /// `nil` when the envelope carried none: no KCMAC will ever pass the sender-device rule (fail closed).
+    public private(set) var boundSenderDeviceId: String?
+    /// Monotonic time (ms) at which the latest REVEAL was handed to the transport: the start of the caller's
+    /// 15 s wait for the callee's round-1 KCMAC (A1, `KcMacWindow`).
+    public private(set) var revealHandedAtMs: Int?
     public private(set) var revealsSent = 0
     public private(set) var ended = false
 
@@ -260,10 +281,11 @@ public struct SasCommitCaller {
 
     /// A round-1 ACCEPT that parsed and passed the malformed checks. Binding is atomic by construction:
     /// the book calls this under its lock.
-    public mutating func onAccept(acceptHash: Data) -> AcceptDecision {
+    public mutating func onAccept(acceptHash: Data, senderDeviceId: String? = nil) -> AcceptDecision {
         guard !ended, acceptHash.count == 32, nonce != nil else { return .drop }
         guard let bound = boundAcceptHash else {
             boundAcceptHash = acceptHash
+            boundSenderDeviceId = SasCommit.normalizedDeviceId(senderDeviceId)
             revealsSent = 1
             return .bindAndReveal
         }
@@ -290,6 +312,21 @@ public struct SasCommitCaller {
     /// The nonce, for the caller's own SAS derivation (only after binding).
     public var sasNonce: Data? { boundAcceptHash == nil ? nil : nonce }
 
+    /// The REVEAL was handed to the transport (first send or a re-send): the caller's 15 s wait for the callee's
+    /// round-1 KCMAC runs from the latest one (a longer wait is allowed, never a shorter one).
+    public mutating func revealHanded(nowMs: Int) {
+        guard !ended, boundAcceptHash != nil else { return }
+        revealHandedAtMs = max(revealHandedAtMs ?? nowMs, nowMs)
+    }
+
+    /// R-COMMIT-KCMAC-DEVICE: the sender-device rule. True only for an envelope whose `sender_device_id` equals
+    /// the one recorded at binding; an absent id on either side never matches.
+    public func admitsKcMac(fromDeviceId deviceId: String?) -> Bool {
+        guard !ended, let bound = boundSenderDeviceId,
+              let device = SasCommit.normalizedDeviceId(deviceId) else { return false }
+        return device == bound
+    }
+
     /// A caller never receives a REVEAL honestly: always dropped.
     public func onReveal() -> AcceptDecision { .drop }
 
@@ -297,6 +334,41 @@ public struct SasCommitCaller {
     public mutating func end() {
         ended = true
         nonce = nil
+    }
+}
+
+/// The KCMAC wait of one key round (WIRE_SPEC 3.7.1 Window rule, 3.7.4 KCMAC hold). Every key round waits 5 s from
+/// the moment its context is armed. Round 1 has two extensions, both because the callee's round-1 KCMAC follows the
+/// REVEAL round trip:
+/// - the CALLER (round-1 `init`) waits for the callee's MAC no earlier than 15 s after it handed its REVEAL to the
+///   transport (A1);
+/// - the CALLEE (round-1 `resp`) waits for the caller's MAC no earlier than 5 s after its OWN REVEAL verified
+///   (A5), because the REVEAL may arrive near the end of the 5 s REVEAL timer and the caller's MAC follows it on the
+///   same ordered path.
+/// A wait may be longer, never shorter. Expiry without a verified MAC is `kcmac_mismatch`.
+public enum KcMacWindow {
+    public static let baseMs = 5_000
+    public static let callerRound1AfterRevealMs = 15_000
+    public static let calleeRound1AfterRevealVerifiedMs = 5_000
+    /// Callee, round 1, REVEAL not verified yet: the wait is held open this long from arming. The REVEAL timer
+    /// (5 s after the first ACCEPT send) ends such a call with `sas_reveal_timeout` first; this only keeps the
+    /// KCMAC wait from pre-empting it with a different reason.
+    public static let calleeRound1PreRevealBackstopMs = 10_000
+
+    /// Milliseconds left, `0` when expired. Pure: every time is monotonic milliseconds.
+    public static func remainingMs(isRound1: Bool, isInitiator: Bool, armedAtMs: Int, nowMs: Int,
+                                   revealHandedAtMs: Int?, revealVerifiedAtMs: Int?) -> Int {
+        var end = armedAtMs + baseMs
+        if isRound1 {
+            if isInitiator {
+                if let handed = revealHandedAtMs { end = max(end, handed + callerRound1AfterRevealMs) }
+            } else if let verified = revealVerifiedAtMs {
+                end = max(end, verified + calleeRound1AfterRevealVerifiedMs)
+            } else {
+                end = max(end, armedAtMs + calleeRound1PreRevealBackstopMs)
+            }
+        }
+        return max(0, end - nowMs)
     }
 }
 
@@ -356,11 +428,15 @@ public final class SasCommitBook: @unchecked Sendable {
 
     /// A round-1 ACCEPT was parsed and passed the malformed checks: bind it (atomically) or classify it.
     /// Returns the decision and, for bind / re-send, the REVEAL wire string to send.
-    public func callerOnAccept(callId: String, acceptHash: Data) -> (SasCommitCaller.AcceptDecision, String?) {
+    ///
+    /// `senderDeviceId` is the `sender_device_id` of the opaque envelope that carried the ACCEPT. It is recorded
+    /// at the binding (R-COMMIT-KCMAC-DEVICE) and nowhere else: a duplicate or a different ACCEPT never changes it.
+    public func callerOnAccept(callId: String, acceptHash: Data,
+                               senderDeviceId: String? = nil) -> (SasCommitCaller.AcceptDecision, String?) {
         let id = callId.lowercased()
         return lock.withLock { () -> (SasCommitCaller.AcceptDecision, String?) in
             guard var caller = callers[id] else { return (.drop, nil) }
-            let decision = caller.onAccept(acceptHash: acceptHash)
+            let decision = caller.onAccept(acceptHash: acceptHash, senderDeviceId: senderDeviceId)
             callers[id] = caller
             switch decision {
             case .bindAndReveal, .resendReveal: return (decision, caller.revealWire())
@@ -378,6 +454,36 @@ public final class SasCommitBook: @unchecked Sendable {
             let decision = caller.onReauth()
             callers[id] = caller
             return decision == .resendReveal ? caller.revealWire() : nil
+        }
+    }
+
+    /// The REVEAL was handed to the transport (first send or re-send): starts the caller's round-1 KCMAC wait.
+    public func callerRevealHanded(callId: String, nowMs: Int) {
+        let id = callId.lowercased()
+        lock.withLock {
+            guard var caller = callers[id] else { return }
+            caller.revealHanded(nowMs: nowMs)
+            callers[id] = caller
+        }
+    }
+
+    /// What the caller's sender-device rule says about one inbound KCMAC (R-COMMIT-KCMAC-DEVICE).
+    public enum KcMacSenderVerdict: Equatable {
+        /// This device is not the caller of `callId`: the rule does not apply (the callee judges by its own rules).
+        case notApplicable
+        /// The envelope's `sender_device_id` is the bound ACCEPT's: duplicate test, hold and judgment may run.
+        case admit
+        /// Another device, no device id, or no bound ACCEPT: dropped silently. No judgment, no `kcmac_mismatch`,
+        /// no hold, no effect on any window.
+        case dropSilently
+    }
+
+    /// R-COMMIT-KCMAC-DEVICE, caller side, every KCMAC of the call and every round (A6). Comes BEFORE the
+    /// duplicate test and the judgment.
+    public func callerKcMacSenderVerdict(callId: String, envelopeSenderDeviceId: String?) -> KcMacSenderVerdict {
+        lock.withLock { () -> KcMacSenderVerdict in
+            guard let caller = callers[callId.lowercased()] else { return .notApplicable }
+            return caller.admitsKcMac(fromDeviceId: envelopeSenderDeviceId) ? .admit : .dropSilently
         }
     }
 
@@ -470,6 +576,13 @@ public final class SasCommitBook: @unchecked Sendable {
         lock.withLock { callees[callId.lowercased()]?.acceptsKeyConfirmation ?? true }
     }
 
+    /// A2: true while this device is a callee of `callId` that has NOT sent its round-1 ACCEPT (and has not ended):
+    /// the newest valid round-1 OFFER then replaces the one it holds. False once the ACCEPT is out (the
+    /// answered commitment is frozen and a different round-1 OFFER is dropped) and for a device that is no callee.
+    public func calleeCanBeSuperseded(callId: String) -> Bool {
+        lock.withLock { callees[callId.lowercased()]?.canBeSuperseded ?? false }
+    }
+
     public func isCallee(callId: String) -> Bool {
         lock.withLock { callees[callId.lowercased()] != nil }
     }
@@ -478,6 +591,22 @@ public final class SasCommitBook: @unchecked Sendable {
     public func isWaitingForReveal(callId: String) -> Bool {
         let id = callId.lowercased()
         return lock.withLock { (callees[id]?.isWaitingForReveal ?? false) && wordsByCall[id] == nil }
+    }
+
+    // MARK: - Round-1 KCMAC wait (A1 caller, A5 callee)
+
+    /// Milliseconds left on the KCMAC wait of one key round, `0` once it has expired (`KcMacWindow`). The round-1
+    /// extensions read this call's own REVEAL times: the caller's from the REVEAL it handed to the transport, the
+    /// callee's from its own REVEAL verifying. `nowMs` is `SasCommit.monotonicNowMs()`.
+    public func kcWaitRemainingMs(callId: String, isRound1: Bool, isInitiator: Bool,
+                                  armedAtMs: Int, nowMs: Int) -> Int {
+        let id = callId.lowercased()
+        let (handed, verified) = lock.withLock { () -> (Int?, Int?) in
+            (callers[id]?.revealHandedAtMs, callees[id]?.verifiedAtMs)
+        }
+        return KcMacWindow.remainingMs(
+            isRound1: isRound1, isInitiator: isInitiator, armedAtMs: armedAtMs, nowMs: nowMs,
+            revealHandedAtMs: handed, revealVerifiedAtMs: verified)
     }
 
     // MARK: - Round 1 material and words
