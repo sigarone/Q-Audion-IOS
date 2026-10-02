@@ -54,15 +54,9 @@ final class RingSignalingDecisionsTests: XCTestCase {
 
     // MARK: - shouldStartMediaPlane
 
-    func testShouldStartMediaPlaneFalseWhenLegacyMode() {
-        XCTAssertFalse(RingSignalingDecisions.shouldStartMediaPlane(
-            mode: 0, accepted: true, hasSdp: true, state: .none
-        ))
-    }
-
     func testShouldStartMediaPlaneFalseBeforeAccept() {
         XCTAssertFalse(RingSignalingDecisions.shouldStartMediaPlane(
-            mode: 1, accepted: false, hasSdp: true, state: .none
+            accepted: false, hasSdp: true, state: .none
         ))
     }
 
@@ -70,79 +64,66 @@ final class RingSignalingDecisionsTests: XCTestCase {
         // ACCEPTED without SDP (cold-start PushKit/FCM race, §2.1) — not
         // yet startable, but not a failure either; the 2s timer decides.
         XCTAssertFalse(RingSignalingDecisions.shouldStartMediaPlane(
-            mode: 1, accepted: true, hasSdp: false, state: .awaitingSdp
+            accepted: true, hasSdp: false, state: .awaitingSdp
         ))
     }
 
     func testShouldStartMediaPlaneTrueOnceAcceptedAndSdpPresent() {
         XCTAssertTrue(RingSignalingDecisions.shouldStartMediaPlane(
-            mode: 1, accepted: true, hasSdp: true, state: .none
+            accepted: true, hasSdp: true, state: .none
         ))
         XCTAssertTrue(RingSignalingDecisions.shouldStartMediaPlane(
-            mode: 1, accepted: true, hasSdp: true, state: .awaitingSdp
+            accepted: true, hasSdp: true, state: .awaitingSdp
         ))
     }
 
     func testShouldStartMediaPlaneIdempotentOnceBuildingOrDone() {
         for state: RingSignalingRegistry.MediaPlaneState in [.building, .ready, .failed] {
             XCTAssertFalse(RingSignalingDecisions.shouldStartMediaPlane(
-                mode: 1, accepted: true, hasSdp: true, state: state
+                accepted: true, hasSdp: true, state: state
             ), "state \(state) must never re-trigger a build")
         }
     }
 
     // MARK: - shouldHoldAccept (I11)
 
-    func testShouldHoldAcceptFalseWhenLegacyMode() {
-        XCTAssertFalse(RingSignalingDecisions.shouldHoldAccept(
-            mode: 0, acceptedAtMs: nil, answerSent: false, released: false, nowMs: 1_000
-        ))
-    }
-
     func testShouldHoldAcceptTrueBeforeHumanAccept() {
         XCTAssertTrue(RingSignalingDecisions.shouldHoldAccept(
-            mode: 1, acceptedAtMs: nil, answerSent: false, released: false, nowMs: 1_000
+            acceptedAtMs: nil, answerSent: false, released: false, nowMs: 1_000
         ))
     }
 
     func testShouldHoldAcceptFalseOnceAnswerSent() {
         XCTAssertFalse(RingSignalingDecisions.shouldHoldAccept(
-            mode: 1, acceptedAtMs: 1_000, answerSent: true, released: false, nowMs: 1_100
+            acceptedAtMs: 1_000, answerSent: true, released: false, nowMs: 1_100
         ))
     }
 
     func testShouldHoldAcceptTrueWithinReserveWindowWithoutAnswer() {
         XCTAssertTrue(RingSignalingDecisions.shouldHoldAccept(
-            mode: 1, acceptedAtMs: 1_000, answerSent: false, released: false, nowMs: 1_000 + 4_999
+            acceptedAtMs: 1_000, answerSent: false, released: false, nowMs: 1_000 + 4_999
         ))
     }
 
     func testShouldHoldAcceptFalseAfterFiveSecondReserveElapsed() {
         XCTAssertFalse(RingSignalingDecisions.shouldHoldAccept(
-            mode: 1, acceptedAtMs: 1_000, answerSent: false, released: false, nowMs: 1_000 + 5_000
+            acceptedAtMs: 1_000, answerSent: false, released: false, nowMs: 1_000 + 5_000
         ))
     }
 
     func testShouldHoldAcceptFalseOnceAlreadyReleased() {
         XCTAssertFalse(RingSignalingDecisions.shouldHoldAccept(
-            mode: 1, acceptedAtMs: nil, answerSent: false, released: true, nowMs: 1_000
+            acceptedAtMs: nil, answerSent: false, released: true, nowMs: 1_000
         ))
     }
 
     // MARK: - audioIOGate
 
-    func testAudioIOGateProceedsWhenNotSignalingOnlyMode() {
-        XCTAssertEqual(
-            RingSignalingDecisions.audioIOGate(mode: 0, mediaPlane: .building, predictedNative: true),
-            .proceed
-        )
-    }
-
     func testAudioIOGateProceedsWhenPredictedNonNative() {
         // A call that will use the custom (non-native) audio path never
         // needs to wait on the PeerConnection.
         XCTAssertEqual(
-            RingSignalingDecisions.audioIOGate(mode: 1, mediaPlane: .building, predictedNative: false),
+            RingSignalingDecisions.audioIOGate(mediaPlane: .building, predictedNative: false),
             .proceed
         )
     }
@@ -150,7 +131,7 @@ final class RingSignalingDecisionsTests: XCTestCase {
     func testAudioIOGateDefersWhilePcIsBuilding() {
         for state: RingSignalingRegistry.MediaPlaneState in [.none, .awaitingSdp, .building] {
             XCTAssertEqual(
-                RingSignalingDecisions.audioIOGate(mode: 1, mediaPlane: state, predictedNative: true),
+                RingSignalingDecisions.audioIOGate(mediaPlane: state, predictedNative: true),
                 .deferGate5,
                 "state \(state) must defer when native is predicted"
             )
@@ -160,7 +141,7 @@ final class RingSignalingDecisionsTests: XCTestCase {
     func testAudioIOGateProceedsOncePcIsReadyOrFailed() {
         for state: RingSignalingRegistry.MediaPlaneState in [.ready, .failed] {
             XCTAssertEqual(
-                RingSignalingDecisions.audioIOGate(mode: 1, mediaPlane: state, predictedNative: true),
+                RingSignalingDecisions.audioIOGate(mediaPlane: state, predictedNative: true),
                 .proceed
             )
         }

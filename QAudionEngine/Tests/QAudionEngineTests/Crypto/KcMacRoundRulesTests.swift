@@ -90,13 +90,16 @@ final class KcMacRoundRulesTests: XCTestCase {
         XCTAssertEqual(decided.last, Data([UInt8(299 & 0xFF), UInt8(299 >> 8)]))
     }
 
-    func testEarlyMacIsHeldForAtMostTenSeconds() {
+    /// T3: an early MAC is held for 2 x CONFIRM_TIMEOUT = 30 s, never shorter (it was 10 s).
+    func testEarlyMacIsHeldForThirtySeconds() {
         let t0 = Date(timeIntervalSince1970: 1_000_000)
-        XCTAssertEqual(KcMacRoundRules.earlyHoldSeconds, 10)
+        XCTAssertEqual(KcMacRoundRules.earlyHoldSeconds, 30)
         XCTAssertTrue(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0))
-        XCTAssertTrue(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0.addingTimeInterval(9.9)))
-        XCTAssertTrue(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0.addingTimeInterval(10)))
-        XCTAssertFalse(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0.addingTimeInterval(10.1)))
+        XCTAssertTrue(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0.addingTimeInterval(10.1)),
+                      "the old 10 s hold would have dropped it")
+        XCTAssertTrue(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0.addingTimeInterval(29.9)))
+        XCTAssertTrue(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0.addingTimeInterval(30)))
+        XCTAssertFalse(KcMacRoundRules.isEarlyHoldFresh(heldAt: t0, now: t0.addingTimeInterval(30.1)))
     }
 
     /// One early MAC at a time (a further one is dropped while a fresh one is held), at most 512
@@ -107,7 +110,7 @@ final class KcMacRoundRulesTests: XCTestCase {
         XCTAssertTrue(KcMacRoundRules.mayHoldEarly(raw: small, heldAt: nil, now: now))
         XCTAssertFalse(KcMacRoundRules.mayHoldEarly(raw: small, heldAt: now.addingTimeInterval(-3), now: now),
                        "a fresh held MAC is kept; the further one is dropped")
-        XCTAssertTrue(KcMacRoundRules.mayHoldEarly(raw: small, heldAt: now.addingTimeInterval(-11), now: now),
+        XCTAssertTrue(KcMacRoundRules.mayHoldEarly(raw: small, heldAt: now.addingTimeInterval(-31), now: now),
                       "a stale held MAC no longer blocks")
         let huge = String(repeating: "A", count: KcMacRoundRules.maxHeldPayloadCharacters + 1)
         XCTAssertFalse(KcMacRoundRules.mayHoldEarly(raw: huge, heldAt: nil, now: now))

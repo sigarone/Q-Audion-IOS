@@ -206,7 +206,7 @@ public enum DtlsFingerprint {
     /// only, never a fingerprint:
     /// - 1 `sdp_remote`, 2 `sdp_local`, 4 `pin_timeout`;
     /// - 3 `stats`: check (b) saw a REAL certificate mismatch in the transport stats;
-    /// - 5 `stats_timeout`: check (b) reached its 5 s deadline with NO VERDICT: the peer
+    /// - 5 `stats_timeout`: check (b) reached its `CONFIRM_TIMEOUT` (15 s) deadline with NO VERDICT: the peer
     ///   certificate was neither confirmed nor shown to differ, so the call is unverified, NOT
     ///   proven benign (and not proven hostile either), and it still ends fail-closed. The
     ///   pending causes, every one of them an incomplete report and not a mismatch:
@@ -232,5 +232,11 @@ public enum DtlsFingerprint {
         case "stats_timeout": return 5
         default: return 3
         }
+    }
+
+    /// True for the stage that is an EXPIRY of a confirmation timer (check (b) ran out of time without a verdict), the one
+    /// that additionally emits the `confirm_timeout` event of R-CONFIRM-TELEMETRY (T5). A real mismatch is not one.
+    public static func isStatsTimeout(stage: String) -> Bool {
+        stage == "stats_timeout"
     }
 }

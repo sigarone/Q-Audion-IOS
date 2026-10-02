@@ -2205,8 +2205,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 sasCommit.calleeSetAccept(callId: callId, acceptHash: acceptBinding)
             }
             // W-MEDIAATACCEPT (option b) — I11: the first responder ACCEPT
-            // for this call. Held (not sent) when `mode == 1` and the human
-            // has not accepted yet; the derivation/session-init below is
+            // for this call. Held (not sent) until the human has answered; the derivation/session-init below is
             // UNCHANGED either way — only the wire send is gated.
             try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: !isReKeyRound)
             if !isReKeyRound {
@@ -2463,10 +2462,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if lock.withLock({ processedAcceptFingerprintsByCall.contains(acceptDedupKey) }) {
                 print("[QAudionCallIntegration] ACCEPT duplicate (pre-verify) for callId=\(callId.prefix(8))… — skipping verify + initSession")
                 // R-COMMIT-REVEAL: a byte-identical duplicate of the BOUND round-1 ACCEPT (a callee-side
-                // retransmit) means its REVEAL may have been lost: re-send the identical REVEAL, within
-                // the per-call budget. A duplicate of any other (rekey) ACCEPT never triggers one.
+                // retransmit) means its REVEAL may have been lost: re-send the identical REVEAL. The duplicate
+                // is ONE event of the per-call re-send budget (R-KCMAC-RESEND), shared with the socket
+                // re-authentication re-sends. A duplicate of any other (rekey) ACCEPT never triggers one.
                 let isBoundAccept = lock.withLock { boundRound1AcceptKeyByCall[normalizedIdForDedup] == acceptDedupKey }
-                if !isReKeyAccept, isBoundAccept, let wire = sasCommit.callerResendReveal(callId: callId) {
+                if !isReKeyAccept, isBoundAccept, let wire = sasCommit.callerRevealForDuplicateAccept(callId: callId) {
                     await sendSasReveal(wire, callId: callId, resend: true)
                 }
                 return
@@ -4129,8 +4129,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             print("[QAudionCallIntegration] sas_commit reveal not sent (no sender) callId=\(callId.prefix(8))…")
             return
         }
-        // A1: "sent" is the hand-over to the transport. The caller's 15 s wait for the callee's round-1 KCMAC
-        // (`KcMacWindow`) runs from here, before the write completes.
+        // A1/T3: "sent" is the hand-over to the transport. The caller's 30 s (2 x CONFIRM_TIMEOUT) wait for the
+        // callee's round-1 KCMAC (`KcMacWindow`) runs from here, before the write completes.
         sasCommit.callerRevealHanded(callId: callId, nowMs: SasCommit.monotonicNowMs())
         do {
             try await sender(wire)
@@ -4140,8 +4140,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
-    /// The round-1 ACCEPT is actually on the wire: the FIRST such send starts the callee's 5 s REVEAL
-    /// timer. Later sends (retransmissions, cached replays) never restart it, and a call that is not a
+    /// The round-1 ACCEPT is actually on the wire: the FIRST such send starts the callee's REVEAL timer
+    /// (`ConfirmTimeout.confirmTimeoutMs`, 15 s). Later sends (retransmissions, cached replays) never restart it, and a call that is not a
     /// callee of a round-1 OFFER (no commitment stored) is a no-op.
     private func noteResponderAcceptSent(callId: String) {
         guard sasCommit.calleeAcceptSent(callId: callId, nowMs: SasCommit.monotonicNowMs()) else { return }
@@ -4150,10 +4150,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     private func armSasRevealTimer(callId: String) {
         let id = callId.lowercased()
+        let armedAtMs = SasCommit.monotonicNowMs()
         let task = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(SasCommit.revealTimeoutMs) * 1_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(ConfirmTimeout.confirmTimeoutMs) * 1_000_000)
             guard !Task.isCancelled, let self else { return }
-            self.sasRevealTimerFired(callId: id)
+            self.sasRevealTimerFired(callId: id, armedAtMs: armedAtMs)
         }
         let previous: Task<Void, Never>? = lock.withLock {
             let old = sasRevealTimers[id]
@@ -4163,12 +4164,47 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         previous?.cancel()
     }
 
-    private func sasRevealTimerFired(callId: String) {
+    private func sasRevealTimerFired(callId: String, armedAtMs: Int) {
         lock.withLock { _ = sasRevealTimers.removeValue(forKey: callId) }
         if case .end(let reason) = sasCommit.calleeTimerFired(callId: callId) {
             print("[QAudionCallIntegration] sas_commit timeout callId=\(callId.prefix(8))…")
+            // T5 (R-CONFIRM-TELEMETRY): one event for the expiry, before the call ends.
+            let nowMs = SasCommit.monotonicNowMs()
+            onConfirmTimeout?(ConfirmTimeoutEvent(
+                timer: .reveal, elapsedMs: nowMs - armedAtMs, round: 1,
+                reauths: sasCommit.reauths(callId: callId, sinceMs: armedAtMs), callId: callId))
             reportHandshakeFatal(callId: callId, reason: reason)
         }
+    }
+
+    /// T5 (R-CONFIRM-TELEMETRY): a confirmation timer owned by this integration (the callee's REVEAL timer) ended
+    /// the call. The app emits the one `confirm_timeout` event (log line and telemetry). Carries no key, MAC, nonce,
+    /// word, fingerprint, address or full id.
+    public var onConfirmTimeout: ((ConfirmTimeoutEvent) -> Void)?
+
+    /// T5: the signalling socket of this device re-authenticated (the app calls this for every re-authentication
+    /// while a call is live). It only counts, per call, for the telemetry of a later expiry.
+    public func noteSocketReauth(callId: String) {
+        sasCommit.noteReauth(callId: callId, nowMs: SasCommit.monotonicNowMs())
+    }
+
+    /// R-KCMAC-RESEND: ONE re-send event after a socket re-authentication. Takes one unit of the per-call budget and
+    /// returns whether the app may re-send now (a fifth event re-sends nothing). The app asks only when something is
+    /// due (`ConfirmResend.due`): an event with nothing due consumes nothing.
+    public func takeResendEvent(callId: String) -> Bool {
+        sasCommit.takeResendEvent(callId: callId)
+    }
+
+    /// R-KCMAC-RESEND: the caller's byte-identical REVEAL, again, after a re-authentication event whose budget unit
+    /// was taken (`takeResendEvent`). A no-op before binding or after the call ended.
+    public func resendRevealAfterReauth(callId: String) async {
+        guard let wire = sasCommit.callerRevealForResend(callId: callId) else { return }
+        await sendSasReveal(wire, callId: callId, resend: true)
+    }
+
+    /// True when this device is the caller of `callId` and bound a round-1 ACCEPT: a REVEAL exists.
+    public func hasBoundSasAccept(callId: String) -> Bool {
+        sasCommit.callerHasBound(callId: callId)
     }
 
     private func cancelSasRevealTimer(callId: String) {
@@ -4325,7 +4361,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// is released, not before.
     private func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool) async throws {
         let cid = callId.lowercased()
-        if !cid.isEmpty, shouldHoldResponderAccept?(cid) == true {
+        // T2 / R-ANSWER-FIRST: the commitment binds the callId, so a call without one cannot run v6. No ACCEPT
+        // is ever sent for it and there is no fallback: the call ends with `handshake_malformed`.
+        guard !cid.isEmpty else {
+            print("[QAudionCallIntegration] ACCEPT not sent: the call has no callId — ending the call")
+            reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+            return
+        }
+        if shouldHoldResponderAccept?(cid) == true {
             lock.withLock { heldAcceptByCall[cid] = .json(wire) }
             print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT held (json) callId=\(cid.prefix(8))…")
             await releaseIfHoldLifted(cid)
@@ -4339,7 +4382,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// Review fix — closes the check-then-store race of the two gates above:
     /// the app may lift the hold (ACCEPT released after its own call_answer,
-    /// or a `mode == 0` latch) on another thread BETWEEN the
+    /// or the plan being wiped) on another thread BETWEEN the
     /// `shouldHoldResponderAccept` read and the `heldAcceptByCall` store; its
     /// `releaseHeldAccept` then found nothing and nobody would ever send this
     /// ACCEPT (caller without a key, silent call). Re-reading the gate after
@@ -4356,7 +4399,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// whatever ACCEPT is currently held for `callId`, if any, using the
     /// sender captured at computation time. Returns whether a held ACCEPT
     /// was actually found and sent; a `false` with no held entry is the
-    /// ordinary case for a call that was never in `mode == 1` (nothing was
+    /// ordinary case for a call whose ACCEPT was never held (nothing was
     /// ever held) or was already released.
     @discardableResult
     public func releaseHeldAccept(callId: String) async -> Bool {
@@ -4412,14 +4455,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
         guard let startedAt = snapshot.started else { return }
         guard Date().timeIntervalSince(startedAt) < handshakeTimeoutSec else { return }
-        // R-COMMIT-REVEAL: a caller that already bound its round-1 ACCEPT re-sends the byte-identical
-        // REVEAL on a WS re-auth inside the handshake window (the callee drops duplicates silently), at
-        // most `SasCommit.maxRevealResends` times per call. This runs whatever the state: the caller is
-        // `.active` as soon as its session key is installed, long before the callee has the REVEAL.
-        if snapshot.isCaller, let callId = lock.withLock({ pendingOutgoingCallId }),
-           let revealWire = sasCommit.callerResendReveal(callId: callId) {
-            await sendSasReveal(revealWire, callId: callId, resend: true)
-        }
+        // The caller's REVEAL (and every device's own KCMAC) is NOT re-sent here: a re-authentication is ONE
+        // re-send event of a budget shared by all of them (R-KCMAC-RESEND), decided by the app, which knows the KCMAC
+        // state (`takeResendEvent`, `resendRevealAfterReauth`). This replay is only the OFFER/ACCEPT replay.
         // Skip if the handshake is already done — caller transitions
         // to .active when ACCEPT decapsulates, responder also moves
         // through .active. Also bail on terminal/reset states. Replay

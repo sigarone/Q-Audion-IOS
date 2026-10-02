@@ -23,12 +23,13 @@ public struct KcMacRound: Equatable {
 ///   inbound MAC byte-identical to one of them is a DUPLICATE: dropped silently, never judged
 ///   `wrong`, and the duplicate test comes BEFORE the judgment against the live round;
 /// - a MAC that is not a duplicate and arrives while no round is armed and undecided is held (at
-///   most one at a time, at most 512 characters of payload, at most 10 s) and judged when the next
-///   round is armed.
+///   most one at a time, at most 512 characters of payload, held for at least 2 x `CONFIRM_TIMEOUT` = 30 s,
+///   never shorter) and judged when the next round is armed.
 public enum KcMacRoundRules {
 
-    /// A peer MAC for a round this side has not armed yet is held at most this long.
-    public static let earlyHoldSeconds: TimeInterval = 10
+    /// A peer MAC for a round this side has not armed yet is held this long (T3: 2 x `CONFIRM_TIMEOUT` = 30 s, never
+    /// shorter) and dropped silently after that. Holding never fails the call by itself and never extends a window.
+    public static let earlyHoldSeconds: TimeInterval = TimeInterval(ConfirmTimeout.earlyKcMacHoldMs) / 1000
     /// Longest `KCMAC:` payload (base64 characters) that may be held.
     public static let maxHeldPayloadCharacters = 512
     /// Wire payload of a `KCMAC:` message: `role byte (1) || MAC (32)`.

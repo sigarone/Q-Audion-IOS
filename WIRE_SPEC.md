@@ -719,8 +719,9 @@ incompatible wire format (Path B in `wireOpaqueMessageHandler`).
 ### 3.5 Call acceptance gate (`call_accepted`)
 
 `call_answer` signals that the callee's transport/media stack is ready
-("the network is ready"); it MAY be sent automatically by a client ahead
-of any real user action, as an optimization to reduce P2P setup latency.
+("the network is ready"). Under R-ANSWER-FIRST (§3.7.4) a 1:1 callee device sets up no media and sends no ACCEPT
+before the user has answered, so it sends `call_answer` only after that; the earlier optimization of sending it
+ahead of any real user action no longer exists for a 1:1 callee.
 `call_accepted` is a distinct, additive message that a client MUST send
 if and only if a real user (or an equivalent human-input surface: system
 Answer UI, notification action, hardware/watch button) explicitly
@@ -735,6 +736,9 @@ the finalization performed on the second. The server treats
 with no per-call singleton/dedup enforcement (unlike `call_answer`'s
 `TryMarkAnswered`) — the message is idempotent by construction;
 duplicates are harmless.
+
+`call_accepted` gates only what the caller shows (the SAS, the fully-active state). It never gates a handshake message:
+the caller sends its REVEAL and its round-1 KCMAC without waiting for it (R-KCMAC-NOGATE, §3.7.1).
 
 ---
 
@@ -895,18 +899,34 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
     `<callId>|KCMAC:<base64(role byte ‖ MAC[32])>` (role byte `0x01` for `init`, `0x02` for `resp` of THAT round).
     The message carries NO round field and none is added: a receiver attributes a MAC to a round by content, with the
     rules below, never by arrival order alone.
+  - **No gate on the sending (R-KCMAC-NOGATE).** A device sends its MAC at the moment named here and at no later
+    one: it is never held back for `call_accepted` (§3.5), for a UI step, for the media connection or for the SAS.
+    The CALLER sends its round-1 MAC right after its REVEAL is handed to the transport (§3.7.4), exactly like the
+    desktop and iOS do, whether or not a `call_accepted` has arrived. A device sends its MAC for a rekey round when
+    it derives that round's key. Holding a MAC until `call_accepted` makes the peer's window run out while the callee
+    is still on the answer screen, which would end an honest call.
   - **Round 1 exception (R-COMMIT-KCMAC-HOLD, §3.7.4):** the round-1 `resp` MAC is NOT sent as soon as the key is
     derived. The callee device sends it only after its OWN REVEAL has verified (§3.7.4, R-COMMIT-CHECK step 7), so a
     callee device that never verifies a REVEAL (it lost a double answer, or the REVEAL timer fired) never sends a
     round-1 MAC. The caller's round-1 `init` MAC is unchanged (it follows the caller's REVEAL on the same ordered path).
     Every rekey round is unchanged.
-  - **Window:** the 5 s window of the KCMAC fail-closed rule below runs per round, from the moment that round's
-    context is armed (the round's key is derived). Two exceptions, both for round 1 (R-COMMIT-KCMAC-HOLD, §3.7.4):
-    the CALLER's wait for the callee's MAC ends no earlier than 15 s after the caller sent its REVEAL, because the
-    callee sends that MAC only after the REVEAL round trip; the CALLEE's wait for the caller's MAC ends no earlier
-    than 5 s after the callee's own REVEAL verified, because the caller sends its MAC right after the REVEAL, which
-    may itself arrive near the end of the 5 s REVEAL timer. Both waits may be longer, never shorter, and expiry is
-    the same `kcmac_mismatch`.
+  - **Window (R-CONFIRM-TIMEOUT).** One constant, `CONFIRM_TIMEOUT = 15 s`, is the confirmation window of this
+    protocol: the key-confirmation window of every round, the callee's REVEAL timer (§3.7.4) and the DTLS statistics
+    check (§3.8.4). A platform defines it once and uses that one constant. The KCMAC window of the fail-closed rule
+    below is `CONFIRM_TIMEOUT` and runs per round, from the moment that round's context is armed (the round's key is
+    derived), rekey rounds included. Two exceptions, both for round 1 (R-COMMIT-KCMAC-HOLD, §3.7.4): the CALLER's wait
+    for the callee's MAC ends no earlier than `2 × CONFIRM_TIMEOUT` = 30 s after the caller handed its REVEAL to the
+    transport, because the callee sends that MAC only after the REVEAL round trip and each of the two legs (REVEAL
+    to the callee, MAC back) may need a socket re-authentication and a re-send; the CALLEE's wait for the caller's
+    MAC ends no earlier than `CONFIRM_TIMEOUT` = 15 s after the callee's own REVEAL verified, because the caller sends
+    its MAC right after the REVEAL, and the REVEAL may itself arrive at the very end of the REVEAL timer, after the
+    window armed with the callee's own round-1 key would have ended. All waits are minimums: a platform may wait
+    longer, never shorter, and expiry is the same `kcmac_mismatch`. A platform uses exactly these values unless it has a
+    reason to wait longer: the wait is local and no peer depends on its length. "Handed to the transport" is as defined
+    for the ACCEPT in §3.7.4 (a message that is queued behind a socket re-authentication counts from the moment it is
+    queued). Why a long window is safe: delaying a message
+    only lets whoever delays it end the call, which the server can already do; every mismatch still ends the call
+    fail-closed, and media under a wrong key never decrypts (AEAD).
   - **Sender device (caller, every round, R-COMMIT-KCMAC-DEVICE, §3.7.4):** a caller runs the duplicate test, the
     hold and the judgment below only on a MAC whose opaque envelope `sender_device_id` equals the `sender_device_id`
     of the opaque envelope that carried the ACCEPT it bound. A MAC from any other device, or without that field, is
@@ -921,15 +941,18 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
   - **Early MAC:** a MAC that is not a duplicate and arrives while no round is armed and undecided (for example the
     peer derived its key first) is held, at most one per call at a time (a further early MAC while one is held is
     dropped silently), at most 512 characters of payload, and judged when the next round is armed. It is held for at
-    most 10 s from receipt and dropped silently after that. Holding never fails the call by itself; the round's own
-    5 s window then ends the call if the peer's MAC for it never verifies.
+    least `2 × CONFIRM_TIMEOUT` = 30 s from receipt (never shorter) and dropped silently after that. Holding never
+    fails the call by itself and never extends a window: the round's own window (`CONFIRM_TIMEOUT`, or the round-1
+    exception above) alone ends the call if the peer's MAC for it never verifies. The slot is one MAC; whoever can
+    fill it with a bogus MAC is a party that can already end the call (the server, or the peer user).
   - A receiver MUST NOT use "the latest MAC seen" as the peer's MAC of the current round.
   - A call in which a KCMAC context is required but missing (no armed context for the live round) ends with
     `kcmac_mismatch` (R-EARBUD, §3.7.3).
 - **KCMAC fails closed.** Under v6 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: the call ends if
-  the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (5 s; for the two round-1
-  exceptions, caller and callee, see the Window rule above). There is no
-  observation-only mode and no hold-pending-SAS path for it.
+  the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (`CONFIRM_TIMEOUT` = 15 s;
+  for the two round-1 exceptions, caller 30 s and callee 15 s from its own REVEAL verified, see the Window rule
+  above). There is no observation-only mode and no hold-pending-SAS path for it. An expiry emits the telemetry event
+  of R-CONFIRM-TELEMETRY (§3.7.4).
 - Consequence for the DTLS binding: if anyone substitutes a fingerprint, even with the signatures stripped, the two
   legs build different `ACCEPT_v6` bytes and so derive different session keys. No media decrypts, the SAS differs and
   the KCMAC fails.
@@ -1021,17 +1044,33 @@ sasCommit  = SHA-256( "qaudion-sas-commit-v6"     21 bytes ASCII, not length-pre
 Caller (offerer)                                      Callee device (acceptor)
   draw sasNonce; sasCommit = H(...)
   ---- <callId>|{OFFER, ..., sasCommit, sigV6} ---->  parse; first OFFER must be round 1 with sasCommit;
+                                                      while the call rings it is only held (no ACCEPT, no
+                                                      media, no timer: R-ANSWER-FIRST); the USER ANSWERS;
                                                       store sasCommit; build ACCEPT_v6
                                                       when the ACCEPT is SENT: freeze sasCommit,
-                                                      acceptHash = SHA-256(ACCEPT_v6), start the 5 s REVEAL timer
+                                                      acceptHash = SHA-256(ACCEPT_v6), start the REVEAL timer
+                                                      (CONFIRM_TIMEOUT = 15 s)
   <--- <callId>|{ACCEPT, ..., sigV6} --------------
   bind round 1 to this ACCEPT (first valid one)
   derive keys; compute SAS_v6
   ---- <callId>|SASREVEAL:<B> ----------------------->  check, open the commitment, compute SAS_v6
-  ---- <callId>|KCMAC:<...> ------------------------->  (KCMAC rules of §3.7.1)
+  ---- <callId>|KCMAC:<...> ------------------------->  (KCMAC rules of §3.7.1; sent right after the REVEAL,
+                                                      never gated on call_accepted: R-KCMAC-NOGATE)
                                                       REVEAL verified: only now send the round-1 KCMAC
   <--- <callId>|KCMAC:<...> ------------------------  (R-COMMIT-KCMAC-HOLD)
+  caller waits >= 30 s after the REVEAL for this MAC;  callee waits >= 15 s after its REVEAL verified for the
+  caller's MAC. After a socket re-authentication each side re-sends what the peer has not yet confirmed
+  (R-KCMAC-RESEND).
 ```
+
+**Answer first (R-ANSWER-FIRST).** A callee device does nothing of the handshake before the user has answered the
+call: it sends no ACCEPT, arms no handshake timer and sets up no media (PeerConnection, tracks, audio session). While
+the call rings, the only thing it may do with an OFFER is hold it under the pending-OFFER rule below. There is a single
+callee path and no pre-answer mode: no flag served by the server (for example a ring-signalling-only setting) selects
+another one, and a client does not read such a flag. The call context a callee needs for the handshake is the `callId`
+(the commitment binds it): a call whose `call_incoming` carries no `callId` cannot run v6, and the callee ends it
+with `handshake_malformed` before any ACCEPT is sent, with no fallback to a handshake-less or differently bound path.
+The REVEAL timer therefore starts only after the answer, at the first send of the ACCEPT.
 
 **REVEAL message (R-COMMIT-REVEAL).** A literal UTF-8 string, the `data` of an `opaque_message` to the peer user, like
 KCMAC:
@@ -1059,7 +1098,10 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
   REVEAL. It never sends a REVEAL before binding, for an ACCEPT that failed parsing or the malformed checks, or after
   the call ended.
 - A byte-identical duplicate of the bound ACCEPT is dropped and answered by re-sending the byte-identical REVEAL (and
-  nothing else). A WS re-authentication before the call is active may also re-send it. At most 4 re-sends per call.
+  nothing else). A WS re-authentication also re-sends it, for as long as the caller has not verified the callee's round-1 KCMAC (a
+  verified MAC proves the REVEAL arrived; a later copy is harmless and the callee drops it), together with the KCMAC
+  re-send of R-KCMAC-RESEND. Re-sends of the REVEAL and of a KCMAC share one budget of 4 per call
+  (R-KCMAC-RESEND).
 - Any other round-1 ACCEPT after binding (a sibling device, a forgery) is dropped and never used for keys, SAS or
   REVEAL. A SASREVEAL received by a caller is dropped silently.
 - The caller computes the SAS once it has sent the REVEAL.
@@ -1081,9 +1123,9 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
    record it, cancel the REVEAL timer, compute the SAS and only now send the round-1 KCMAC (R-COMMIT-KCMAC-HOLD below).
    Otherwise `sas_commit_mismatch`.
 
-- The 5 s REVEAL timer starts at the FIRST send of this device's ACCEPT (a later byte-identical retransmission of the
-  ACCEPT does not restart it). No verified REVEAL when it fires: `sas_reveal_timeout`. There is no early-REVEAL
-  hold.
+- The REVEAL timer is `CONFIRM_TIMEOUT` = 15 s (§3.7.1). It starts at the FIRST send of this device's ACCEPT (a later
+  byte-identical retransmission of the ACCEPT does not restart it). No verified REVEAL when it fires:
+  `sas_reveal_timeout`, with the telemetry event of R-CONFIRM-TELEMETRY. There is no early-REVEAL hold.
 - A callee takes the commitment from the OFFER it actually answered: if several round-1 OFFERs for one `callId` arrive
   before the ACCEPT is sent, the newest replaces the stash; after the ACCEPT is sent, a different round-1 OFFER is
   dropped and the frozen commitment stays. A byte-identical OFFER re-sends the cached ACCEPT or is dropped, never a
@@ -1097,7 +1139,7 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
   `callId` is discarded, never applied to that call. An OFFER for a `callId` that already ended or was answered
   elsewhere is dropped without creating state.
 - Until the REVEAL is verified the callee has no SAS words: its UI shows a waiting state and the SAS confirmation
-  action is disabled. Polling UIs MUST cover the 5 s window or be event-driven.
+  action is disabled. Polling UIs MUST cover the whole 15 s window (`CONFIRM_TIMEOUT`) or be event-driven.
 
 **Sibling devices (R-COMMIT-SIBLING).** A callee device that has sent its ACCEPT and receives a REVEAL that passes
 steps 1-4 but names a different `acceptBinding` has lost the race to a sibling device of the same user. It drops the
@@ -1115,14 +1157,52 @@ REVEAL for it).
   (R-COMMIT-CHECK step 7). Not when the ACCEPT is sent, not when the key is derived, not on any user action. A device
   that never verifies a REVEAL (sibling exit, `sas_reveal_timeout`, `sas_commit_mismatch`) never sends a round-1 KCMAC.
   A device that loses a double answer therefore never puts a MAC on the wire that the caller could judge.
-- Caller: it accepts the callee's round-1 KCMAC for at least 15 s after it sent its REVEAL. "Sent" is as for the ACCEPT:
-  the moment the REVEAL is handed to the transport. 15 s is the 5 s KCMAC wait of §3.7.1 plus margin for the
-  REVEAL / KCMAC round trip, because the callee now answers the REVEAL. The wait may be longer, never shorter. At
-  expiry without a verified MAC: `kcmac_mismatch`, as in §3.7.1.
-- Callee device, its own wait: it accepts the caller's round-1 KCMAC for at least 5 s after its own REVEAL verified
-  (step 7), even when the 5 s window armed with its round-1 key would end earlier. The caller sends its KCMAC right
-  after the REVEAL on the same ordered path, so these 5 s are margin, not a round trip. The wait may be longer, never
-  shorter. At expiry without a verified MAC: `kcmac_mismatch`, as in §3.7.1.
+- Caller: it accepts the callee's round-1 KCMAC for at least `2 × CONFIRM_TIMEOUT` = 30 s after it sent its REVEAL.
+  "Sent" is as for the ACCEPT: the moment the REVEAL is handed to the transport. 30 s is one `CONFIRM_TIMEOUT` for
+  the REVEAL to reach the callee (a socket re-authentication and a re-send may be needed) plus one for the MAC to come
+  back, because the callee now answers the REVEAL. The wait may be longer, never shorter. At expiry without a verified
+  MAC: `kcmac_mismatch`, as in §3.7.1.
+- Callee device, its own wait: it accepts the caller's round-1 KCMAC for at least `CONFIRM_TIMEOUT` = 15 s after its
+  own REVEAL verified (step 7), even when the window armed with its round-1 key would end earlier (the REVEAL may
+  have arrived at the very end of the REVEAL timer). The caller sends its KCMAC right after the REVEAL on the same
+  ordered path, so these 15 s are margin, not a round trip. The wait may be longer, never shorter. At expiry without a
+  verified MAC: `kcmac_mismatch`, as in §3.7.1.
+
+**KCMAC re-send and the re-send budget (R-KCMAC-RESEND).** A message handed to a signalling socket that is
+replaced before the message reaches the peer can be lost. After its signalling socket
+re-authenticates, a device re-sends, byte-identical, its OWN KCMAC of every round whose PEER MAC it has not yet
+verified. A device re-sends only a MAC it has already sent once: a device that has no MAC of its own for a round (key not
+yet derived, or a callee whose REVEAL has not verified, R-COMMIT-KCMAC-HOLD) re-sends nothing for it and does not
+start sending it now. A callee whose REVEAL verified, and which sent its round-1 MAC, re-sends that MAC for as long
+as the caller's round-1 MAC is not verified. The receiver is unchanged: its duplicate rule (§3.7.1)
+drops an already-verified copy silently, and the sender-device rule is unaffected because the copy comes from the
+same device.
+
+The budget is ONE counter per call and per device, shared by every re-send of the call: the REVEAL re-sent on a
+duplicate ACCEPT, the REVEAL and the KCMACs re-sent after a re-authentication. Only re-sends count: the first send of
+an ACCEPT, a REVEAL or a MAC is not an event and consumes nothing, so a call has 4 re-send events. An EVENT is a
+duplicate ACCEPT received by the caller, or a socket re-authentication of the device. It consumes one unit of the
+budget and re-sends in that event everything that is due; it does not consume one unit per message. The two kinds
+of event are independent: a duplicate ACCEPT re-sends the REVEAL and nothing else (as above), a re-authentication
+re-sends everything due (the caller's REVEAL while the callee's round-1 MAC is unverified, and the MACs above). A
+fifth event re-sends nothing.
+
+**Telemetry for every confirmation expiry (R-CONFIRM-TELEMETRY).** When any confirmation timer ends a call, the
+device emits exactly one event, in addition to the verdict events of this section and §3.8.4:
+
+```
+{event:"confirm_timeout", timer:"reveal"|"kcmac_r1_caller"|"kcmac_r1_callee"|"kcmac_round"|"dtlsfp_stats",
+ elapsedMs, round, reauths, callId8}
+```
+
+`timer` names the timer that expired: `reveal` (the callee's REVEAL timer), `kcmac_r1_caller` and `kcmac_r1_callee`
+(the two round-1 exceptions of §3.7.1), `kcmac_round` (the ordinary window of a round, and any round >= 2),
+`dtlsfp_stats` (§3.8.4). `elapsedMs` is the time from the start of that wait to its expiry, `round` the key round
+(`1` for the REVEAL and the DTLS check), `reauths` the number of signalling-socket re-authentications of this device
+during the wait, `callId8` the first 8 characters of the `callId`. The event carries no key, MAC, nonce, SAS word,
+fingerprint, address or full identifier. Each platform sends it through its own diagnostics path (Android the
+`qaudion.audit` telemetry, iOS the hsfatal-style line and telemetry, desktop the log and telemetry). The server
+treats it as an ordinary telemetry event and defines no behaviour for it.
 
 **Sender device of a KCMAC (R-COMMIT-KCMAC-DEVICE).** Defence in depth against any device other than the one whose
 ACCEPT the caller bound.
@@ -1146,16 +1226,20 @@ platform computes or shows words for a round >= 2, and there is no SAS without `
 round 1's `signerIdentityKey` and is refused if any round of the call was signed by another key. R-HELD-REKEY is
 unchanged: a caller defers rekeys while held.
 
-**Close reasons (R-COMMIT-REASONS).** Both are security-class reasons and notify the peer like `kcmac_mismatch`:
+**Close reasons (R-COMMIT-REASONS).** These are security-class reasons and notify the peer like `kcmac_mismatch`.
+The table also maps every confirmation timer of §3.7.1, §3.7.4 and §3.8.4 to its reason:
 
 | Reason | Cause |
 |---|---|
 | `sas_commit_mismatch` | ill-formed REVEAL naming this device's ACCEPT, a nonce that does not open the commitment, or a second different REVEAL |
-| `sas_reveal_timeout` | no verified REVEAL 5 s after this device first sent its ACCEPT |
-| `handshake_malformed` | (existing) now also: missing, misplaced, non-canonical or wrong-length `sasCommit`, and a first OFFER whose round is not 1 |
+| `sas_reveal_timeout` | no verified REVEAL `CONFIRM_TIMEOUT` (15 s) after this device first sent its ACCEPT |
+| `kcmac_mismatch` | (existing) a KCMAC that does not verify, or no verified peer KCMAC within the round's window: 15 s from arming, round 1 caller 30 s after its REVEAL was handed to the transport, round 1 callee 15 s after its own REVEAL verified (§3.7.1) |
+| `dtls_fp_mismatch` | (existing) a fingerprint mismatch, or no verdict of check (b) within `CONFIRM_TIMEOUT` (15 s) after `connected` (§3.8.4) |
+| `handshake_malformed` | (existing) now also: missing, misplaced, non-canonical or wrong-length `sasCommit`, a first OFFER whose round is not 1, and a callee call without a `callId` (R-ANSWER-FIRST) |
 
 The sibling exit is not a security reason. Telemetry carries verdicts only: callee `{event:"sas_commit",
-result:"ok"|"mismatch"|"timeout"|"sibling"}`, caller `{event:"sas_commit", result:"revealed"|"resent"}`.
+result:"ok"|"mismatch"|"timeout"|"sibling"}`, caller `{event:"sas_commit", result:"revealed"|"resent"}`. A timer
+expiry additionally emits the `confirm_timeout` event of R-CONFIRM-TELEMETRY.
 
 **Duplicates, reordering, replays.** The server stores opaque messages for a recipient without a fresh socket and
 replays them at authentication, possibly duplicated and up to 24 h old, so receivers MUST NOT rely on arrival order
@@ -1175,6 +1259,7 @@ across reconnects.
 | REVEAL naming another ACCEPT | callee | sibling rule |
 | KCMAC whose envelope `sender_device_id` is not the bound ACCEPT's (or is absent) | caller | drop silently, no `kcmac_mismatch` (R-COMMIT-KCMAC-DEVICE) |
 | callee round-1 KCMAC before the callee's own REVEAL verified | callee | never sent (R-COMMIT-KCMAC-HOLD) |
+| KCMAC byte-identical to one already verified for a round (a re-send after a socket re-authentication) | either | drop silently, no judgment (§3.7.1 duplicate rule, R-KCMAC-RESEND) |
 | any message other than an OFFER (see the pending-OFFER rule above) for an ended or unknown callId | both | drop, create no state |
 
 **Logging (R-COMMIT-LOG).** Never log `sasNonce`, `sasCommit`, `acceptBinding`, transcript hashes or SAS words; at most
@@ -1182,8 +1267,8 @@ a verdict and 8-character call ids.
 
 **What does not change (R-COMMIT-UNCHANGED).** The session key, KCMAC, frame keys (the labels containing `-v5` in
 §3.7.2 name the frame-key scheme and stay), the relay sealer, the DTLS binding (§3.8) and every media gate keep their
-formulas over the v6 transcripts. Only the TIMING of the callee's round-1 KCMAC and the caller's wait for it change
-(R-COMMIT-KCMAC-HOLD). `sasNonce` enters no key and no MAC; `kc_transcript` covers the commitment only
+formulas over the v6 transcripts. Only the TIMING of the callee's round-1 KCMAC and the confirmation windows change
+(R-COMMIT-KCMAC-HOLD, R-CONFIRM-TIMEOUT). `sasNonce` enters no key and no MAC; `kc_transcript` covers the commitment only
 through `offerBinding`.
 
 ### 3.8 DTLS certificate binding
@@ -1238,8 +1323,8 @@ call. A client:
    - It parses.
    - `sigV6` has gone through the policy (§3.8.6).
    - `fpPeer` is pinned for the call.
-   Remote SDP that arrives earlier is buffered. This affects a client that sets up WebRTC while ringing: it must
-   create the PC and certificate at ring time but defer SRD until the OFFER bundle has arrived.
+   Remote SDP that arrives earlier is buffered. A callee device creates its PC and certificate only after the user
+   answered (R-ANSWER-FIRST, §3.7.4), and defers SRD until the OFFER bundle has been processed.
    The SAS REVEAL (§3.7.4) is not a precondition of SRD or of any media gate: only the callee's SAS waits for it.
 4. The acceptor sends ACCEPT **before** `call_answer`, so the offerer normally has `fpPeer` before the answer
    arrives. The offerer still buffers the answer if it does not.
@@ -1279,7 +1364,9 @@ Trigger it on every transition of a DTLS transport, or of the PC `connectionStat
    - `certificate[remoteCertificateId]`: `fingerprintAlgorithm` must equal `sha-256` (case-insensitive), and the
      upper-cased `fingerprint` must equal the canonical HEX of `fpPeer`.
    - `certificate[localCertificateId]`: the same comparison against `fpSelf`.
-3. Stats are missing or incomplete: retry every 250 ms for up to 5 s, then fail.
+3. Stats are missing or incomplete: retry every 250 ms for up to `CONFIRM_TIMEOUT` (15 s, §3.7.1) after the transition to
+   `connected`, then fail. Each such transition starts its own check and its own 15 s. The media gate below stays
+   closed for the whole retry.
 
 The media gate is the AND of this check and all existing gates (SAS hold, attach gates):
 
@@ -1288,7 +1375,8 @@ The media gate is the AND of this check and all existing gates (SAS hold, attach
 - The FrameCryptor is **never** disabled as a gate, because a disabled cryptor passes clear text.
 
 A pass opens the gate. A fail ends the call with `dtls_fp_mismatch` and telemetry `stage:"stats"`. No verdict within
-5 s of `connected` is a fail.
+`CONFIRM_TIMEOUT` (15 s) of `connected` is a fail; that expiry (as opposed to a verified mismatch) additionally emits
+the `confirm_timeout` event with `timer:"dtlsfp_stats"` (R-CONFIRM-TELEMETRY, §3.7.4).
 
 #### 3.8.5 Relay fallback (no DTLS)
 
@@ -1317,7 +1405,7 @@ still DTLS end to end, so it is fully covered.
   SAS covers both fingerprints (§3.7.1), so confirming a matching SAS also authenticates them.
 - A KCMAC failure ends the call with reason `kcmac_mismatch` (§3.7.1).
 - A REVEAL that does not open the commitment ends the call with `sas_commit_mismatch`, and a callee that gets no
-  verified REVEAL within 5 s of sending its ACCEPT ends it with `sas_reveal_timeout` (§3.7.4).
+  verified REVEAL within `CONFIRM_TIMEOUT` (15 s) of sending its ACCEPT ends it with `sas_reveal_timeout` (§3.7.4).
 
 The identity pins (Ed25519 trust on first use) are the anchor for `sigV6` and are unchanged. The DTLS certificate is
 not pinned across calls. Group calls are unaffected: §10.2 pins the SFU certificate.
@@ -2475,7 +2563,15 @@ error code; and descriptor examples, three valid (file with thumbnail, voice not
 Multi-chunk negative vectors are given as a recipe on a named positive vector plus the SHA-256 of the resulting blob.
 All keys in the file are test keys derived from public labels.
 
-Latest: 2026-10-02 (afternoon: R-COMMIT-KCMAC-HOLD and R-COMMIT-KCMAC-DEVICE in §3.7.4, §3.7.1 timing; server
+Latest: 2026-10-02 (evening, "no legitimate call may end after 5 s": one `CONFIRM_TIMEOUT` = 15 s in §3.7.1 for every
+confirmation window; callee REVEAL timer 15 s; caller's round-1 KCMAC wait 30 s after its REVEAL, callee's 15 s after its
+own REVEAL verified, early-MAC hold 30 s; R-KCMAC-NOGATE (the caller's round-1 KCMAC is never gated on `call_accepted`);
+R-KCMAC-RESEND (KCMAC re-sent after a socket re-authentication, one shared re-send budget of 4); R-ANSWER-FIRST (a 1:1
+callee never sends an ACCEPT or sets up media before the user answers, a call without `callId` ends with
+`handshake_malformed`; §3.5 and §3.8.2 follow); DTLS statistics check retried for 15 s after `connected` (§3.8.4);
+R-CONFIRM-TELEMETRY `confirm_timeout` event; close-reason table maps every timer; supersedes the 5 s / 10 s / 15 s values
+of the previous entry).
+Previous: 2026-10-02 (afternoon: R-COMMIT-KCMAC-HOLD and R-COMMIT-KCMAC-DEVICE in §3.7.4, §3.7.1 timing; server
 stamps `sender_device_id` on live `opaque_message`; the callee's round-1 KCMAC wait ends no earlier than 5 s after its
 REVEAL verified; §12 file transfer v2 merged from main).
 Previous: 2026-10-02 (SAS commitment: signed transcript v6 §3.7, new §3.7.4 commitment and REVEAL, §4 SAS v6 over a

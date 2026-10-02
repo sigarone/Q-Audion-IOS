@@ -4,7 +4,7 @@ import WebRTC
 #endif
 
 /// W-MEDIAATACCEPT (option b) — §4.8 (G2/iOS-10): LOCAL-ONLY prewarm during
-/// RING for a `mode == 1` incoming call, so the accept-time media-plane
+/// RING for an incoming call, so the accept-time media-plane
 /// build (`AppState.startIncomingMediaPlane` → `buildIncomingWebRtcMediaPlane`)
 /// finds this device's two slowest one-time setup costs already paid:
 ///
@@ -39,7 +39,7 @@ import WebRTC
 /// call already makes anyway, just earlier.
 public enum RingMediaPlanePrewarm {
 
-    /// Fire-and-forget from `call_incoming` when `mode == 1` (AppState wires
+    /// Fire-and-forget from `call_incoming` (AppState wires
     /// this — see `AppState.latchIncomingNativeSrtpSnapshot`). Safe to call
     /// more than once per call (e.g. a duplicate `call_incoming`, or the
     /// same call also going through the legacy OFFER path): both

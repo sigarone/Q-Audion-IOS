@@ -955,8 +955,8 @@ final class CallService: @unchecked Sendable {
     /// existed, and every call whose kill switch is off) makes
     /// `startAudioIOIfReady` byte-for-byte what it was before.
     public var getUsesNativeAudioSrtp: (() -> Bool)?
-    /// W-MEDIAATACCEPT (option b) — §4.6 (gate 5): `true` while `mode == 1`
-    /// AND this call is predicted to end up native AND its PeerConnection
+    /// W-MEDIAATACCEPT (option b) — §4.6 (gate 5): `true` while
+    /// this call is predicted to end up native AND its PeerConnection
     /// is still being built (`.awaitingSdp`/`.building`) — see
     /// `RingSignalingDecisions.audioIOGate`. Wired once at login by
     /// AppState, same live-getter pattern as the others here. `nil`
@@ -4103,7 +4103,7 @@ final class CallService: @unchecked Sendable {
         // end up native, would race a second VoiceProcessingIO unit
         // against WebRTC's own once the PC arms (W-ADMFALLBACK). AppState
         // wires this to `RingSignalingDecisions.audioIOGate` — `false`
-        // (not predicted native, or not `mode == 1`, or the plane is
+        // (not predicted native, or the plane is
         // already ready/failed) never defers, so this is inert on every
         // call this feature doesn't apply to.
         if mediaPlanePending?() == true {
