@@ -47,7 +47,10 @@ public final class RuntimeLogSink: ObservableObject {
         }
     }
 
-    private let maxEntries = 5000
+    /// 2026-10-02: 5000 -> 12000. A group call logs ~1700 lines a minute (report
+    /// 93005f73: 3489 lines in its 2-minute tail), so 5000 could not hold the 4-minute
+    /// window a group-call bug report now carries (`AppState.bugReportLogWindowMinutes`).
+    private let maxEntries = 12000
     private let lock = NSLock()
     private var entries: [Entry] = []
 

@@ -38,6 +38,22 @@ public struct GroupInboundVideoStat: Equatable, Sendable {
     }
 }
 
+/// One remote audio stream's cumulative inbound counters (subscriber side), for the
+/// diagnosis heartbeat: a stream whose `bytesReceived` stops growing is a participant
+/// this phone no longer hears.
+public struct GroupInboundAudioStat: Equatable, Sendable {
+    /// Subscriber-side mid.
+    public let mid: String
+    public let bytesReceived: Int
+    public let packetsLost: Int
+
+    public init(mid: String, bytesReceived: Int, packetsLost: Int) {
+        self.mid = mid
+        self.bytesReceived = bytesReceived
+        self.packetsLost = packetsLost
+    }
+}
+
 public struct GroupSubscriberStats: Equatable, Sendable {
     public let videos: [GroupInboundVideoStat]
     public let availableIncomingBps: Double?
@@ -45,11 +61,30 @@ public struct GroupSubscriberStats: Equatable, Sendable {
     /// frame decryption: the audio-level RTP extension is not negotiated, so
     /// "who is speaking" is computed here on the receiver (spec §4.4).
     public let audioLevels: [String: Double]
+    /// Cumulative inbound counters of every remote audio stream (diagnosis only).
+    public let audios: [GroupInboundAudioStat]
 
-    public init(videos: [GroupInboundVideoStat], availableIncomingBps: Double?, audioLevels: [String: Double] = [:]) {
+    public init(videos: [GroupInboundVideoStat], availableIncomingBps: Double?, audioLevels: [String: Double] = [:],
+                audios: [GroupInboundAudioStat] = []) {
         self.videos = videos
         self.availableIncomingBps = availableIncomingBps
         self.audioLevels = audioLevels
+        self.audios = audios
+    }
+}
+
+/// The publisher's cumulative outbound counters (diagnosis only): what this phone sends.
+/// `framesEncoded` is summed over the simulcast layers; it starts growing with the first
+/// frame the encoder produced after the camera started.
+public struct GroupPublisherStats: Equatable, Sendable {
+    public let audioBytesSent: Int
+    public let videoBytesSent: Int
+    public let framesEncoded: Int
+
+    public init(audioBytesSent: Int, videoBytesSent: Int, framesEncoded: Int) {
+        self.audioBytesSent = audioBytesSent
+        self.videoBytesSent = videoBytesSent
+        self.framesEncoded = framesEncoded
     }
 }
 
@@ -76,6 +111,14 @@ public protocol GroupPublisherLink: GroupPeerLink {
     /// The local offer, already munged (`GroupSdpRules.mungeLocal`).
     func createOffer(iceRestart: Bool) async throws -> String
     func applyAnswer(_ sdp: String) async throws
+    /// Cumulative outbound counters (diagnosis heartbeat, first encoded frame). nil while
+    /// there is no PeerConnection or no stats yet.
+    func outboundStats() async -> GroupPublisherStats?
+}
+
+public extension GroupPublisherLink {
+    /// Default for links that report no outbound stats (test fakes).
+    func outboundStats() async -> GroupPublisherStats? { nil }
 }
 
 public protocol GroupSubscriberLink: GroupPeerLink {
@@ -155,6 +198,12 @@ public final class GroupMediaSession: @unchecked Sendable {
         /// How long the first connect of the publisher may take before a rejoin.
         public var startWatchdogSeconds: Double = 15
         public var statsIntervalSeconds: Double = 1
+        /// How often the stats loop writes the diagnosis heartbeat (`GroupDiagnostics`:
+        /// PeerConnection states, per-remote audio received, what we publish).
+        public var heartbeatSeconds: Double = 10
+        /// A camera switched on whose encoder produced no frame within this long is
+        /// reported as such (`grp video ... phase=5 ok=0`).
+        public var firstFrameTimeoutSeconds: Double = 30
         /// Janus re-validates the signed session token on EVERY request and it
         /// lives 600 s: ask for a fresh one every 300 s (spec §11).
         public var tokenRefreshSeconds: Double = 300
@@ -207,6 +256,14 @@ public final class GroupMediaSession: @unchecked Sendable {
     private var desiredLayers: [String: (substream: Int, temporal: Int)] = [:]
     private var appliedLayers: [String: (substream: Int, temporal: Int)] = [:]
     private var lastStats: [String: GroupInboundVideoStat] = [:]
+    /// Diagnosis heartbeat: when it last ran, and the cumulative counters it last saw
+    /// (per remote audio mid, and our own outbound ones) to print deltas.
+    private var lastHeartbeatMs: Int64 = 0
+    private var heartbeatAudio: [String: GroupInboundAudioStat] = [:]
+    private var heartbeatOutbound: GroupPublisherStats?
+    /// The camera publish being watched for its first encoded frame: when it was asked
+    /// for, and the encoder's frame count at that moment. nil = nothing to watch.
+    private var firstFrameWatch: (sinceMs: Int64, framesAtStart: Int?)?
     private var pcStates: [GroupTelemetry.PcRole: GroupPcState] = [:]
     private var statsTask: Task<Void, Never>?
     private var tokenRefreshTask: Task<Void, Never>?
@@ -311,11 +368,35 @@ public final class GroupMediaSession: @unchecked Sendable {
     }
 
     /// `configure video:true|false` on the publisher (camera on / off, or the
-    /// congestion policy stopping the video publish).
+    /// congestion policy stopping the video publish). The outcome goes to the phone log
+    /// (`GroupDiagnostics.videoLine`, phases 3 and 4: it used to be dropped by a `try?`,
+    /// so a camera that never published left no trace); a camera switched on is then
+    /// watched until its first encoded frame (phase 5, from the stats loop).
     public func setPublishVideo(_ on: Bool) async {
-        guard let handle = currentPubHandle() else { return }
-        await pubQueue.run {
-            _ = try? await self.room.configurePublisher(handle: handle, video: on)
+        guard let handle = currentPubHandle() else {
+            emitVideoDiag(camera: on, phase: .configureSent, ok: false, code: 1)
+            return
+        }
+        let sentAtMs = nowMs()
+        emitVideoDiag(camera: on, phase: .configureSent, ok: true)
+        let answered: Bool = await pubQueue.run {
+            do {
+                _ = try await self.room.configurePublisher(handle: handle, video: on)
+                return true
+            } catch {
+                return false
+            }
+        }
+        emitVideoDiag(camera: on, phase: .configureAnswered, ok: answered, ms: Int(nowMs() - sentAtMs))
+        if on {
+            let framesNow = await publisher.outboundStats()?.framesEncoded
+            lock.lock()
+            firstFrameWatch = (sinceMs: sentAtMs, framesAtStart: framesNow)
+            lock.unlock()
+        } else {
+            lock.lock()
+            firstFrameWatch = nil
+            lock.unlock()
         }
     }
 
@@ -798,7 +879,9 @@ public final class GroupMediaSession: @unchecked Sendable {
     }
 
     private func pollStats() async {
+        await watchFirstFrame()
         guard let link = currentSubscriber(), let stats = await link.inboundStats() else {
+            await heartbeatIfDue(stats: nil)
             evaluatePolicy()
             return
         }
@@ -826,7 +909,100 @@ public final class GroupMediaSession: @unchecked Sendable {
         }
         lock.unlock()
         if !levelsByFeed.isEmpty { emit(.audioLevels(levelsByFeed)) }
+        await heartbeatIfDue(stats: stats)
         evaluatePolicy()
+    }
+
+    // MARK: - Diagnosis (phone log)
+
+    /// A `GroupDiagnostics` line for the controller's `diagLog`; nothing after `close()`.
+    private func emitDiag(_ line: String, slot: String? = nil, values: [String: Int] = [:]) {
+        if isClosed { return }
+        emit(.telemetry(GroupTelemetry.diagLine(line, slot: slot, values: values)))
+    }
+
+    /// A camera-publish line (`GroupDiagnostics.videoLine`), also kept as the "video" slot.
+    private func emitVideoDiag(camera: Bool, phase: GroupDiagnostics.VideoPhase, ok: Bool, code: Int = 0, ms: Int = 0) {
+        emitDiag(GroupDiagnostics.videoLine(camera: camera, phase: phase, ok: ok, code: code, ms: ms),
+                 slot: "video",
+                 values: ["camera": camera ? 1 : 0, "phase": phase.rawValue, "ok": ok ? 1 : 0, "code": code, "ms": ms])
+    }
+
+    /// The camera publish asked for by `setPublishVideo(true)`: reports its first encoded
+    /// frame (or that none came within `firstFrameTimeoutSeconds`), once.
+    private func watchFirstFrame() async {
+        lock.lock()
+        let watch = firstFrameWatch
+        lock.unlock()
+        guard let watch = watch else { return }
+        let frames = await publisher.outboundStats()?.framesEncoded
+        let elapsedMs = nowMs() - watch.sinceMs
+        let produced = (frames ?? 0) > (watch.framesAtStart ?? 0)
+        let timedOut = Double(elapsedMs) >= config.firstFrameTimeoutSeconds * 1000
+        guard produced || timedOut else { return }
+        lock.lock()
+        // Still the same watch (the camera was not switched again meanwhile)?
+        let current = firstFrameWatch?.sinceMs == watch.sinceMs
+        if current { firstFrameWatch = nil }
+        lock.unlock()
+        guard current else { return }
+        emitVideoDiag(camera: true, phase: .firstFrame, ok: produced, ms: Int(elapsedMs))
+    }
+
+    /// Every `heartbeatSeconds`: both PeerConnections' state, what we published and, per
+    /// remote audio stream, what we received since the previous heartbeat. The first
+    /// call only starts the clock.
+    private func heartbeatIfDue(stats: GroupSubscriberStats?) async {
+        let now = nowMs()
+        lock.lock()
+        if lastHeartbeatMs == 0 {
+            lastHeartbeatMs = now
+            lock.unlock()
+            return
+        }
+        let due = Double(now - lastHeartbeatMs) >= config.heartbeatSeconds * 1000
+        if due { lastHeartbeatMs = now }
+        let publisherState = pcStates[.pub]
+        let subscriberState: GroupPcState? = subscriber == nil ? nil : pcStates[.sub]
+        lock.unlock()
+        guard due else { return }
+
+        emitDiag(GroupDiagnostics.iceLine(publisher: publisherState, subscriber: subscriberState),
+                 slot: "ice",
+                 values: ["send": GroupDiagnostics.pcStateCode(publisherState),
+                          "recv": GroupDiagnostics.pcStateCode(subscriberState)])
+
+        if let outbound = await publisher.outboundStats() {
+            lock.lock()
+            let previous = heartbeatOutbound
+            heartbeatOutbound = outbound
+            lock.unlock()
+            emitDiag(GroupDiagnostics.txLine(audioBytes: outbound.audioBytesSent - (previous?.audioBytesSent ?? 0),
+                                             videoBytes: outbound.videoBytesSent - (previous?.videoBytesSent ?? 0),
+                                             framesEncoded: outbound.framesEncoded - (previous?.framesEncoded ?? 0)),
+                     slot: "tx",
+                     values: ["tx_audio_bytes": outbound.audioBytesSent,
+                              "tx_video_bytes": outbound.videoBytesSent,
+                              "frames_encoded": outbound.framesEncoded])
+        }
+
+        guard let stats = stats else { return }
+        var lines: [(line: String, values: [String: Int])] = []
+        lock.lock()
+        for (index, audio) in stats.audios.sorted(by: { $0.mid < $1.mid }).enumerated() {
+            let previous = heartbeatAudio[audio.mid]
+            heartbeatAudio[audio.mid] = audio
+            let line = GroupDiagnostics.rxAudioLine(
+                mid: audio.mid, index: index,
+                bytes: audio.bytesReceived - (previous?.bytesReceived ?? 0),
+                lost: audio.packetsLost - (previous?.packetsLost ?? 0),
+                level: stats.audioLevels[audio.mid] ?? 0)
+            lines.append((line: line, values: ["mid": GroupDiagnostics.midNumber(audio.mid, index: index),
+                                               "bytes_total": audio.bytesReceived,
+                                               "lost_total": audio.packetsLost]))
+        }
+        lock.unlock()
+        for item in lines { emitDiag(item.line, slot: "rx", values: item.values) }
     }
 
     // MARK: - Janus events
