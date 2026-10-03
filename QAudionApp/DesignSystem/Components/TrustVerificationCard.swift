@@ -14,6 +14,21 @@ public enum TrustSafetyNumberState: Equatable {
     case identityChanged
 }
 
+/// Fase di caricamento della valutazione mostrata dalla card. Separata da
+/// `TrustSafetyNumberState`: `.unverified` e' un verdetto FINALE ("contatto
+/// non verificato, identita' non pubblicata"), non "sto ancora calcolando" ne'
+/// "il calcolo e' fallito" - prima i tre casi erano indistinguibili e un fetch
+/// fallito restava per sempre su "Calcolo del trust in corso...".
+public enum TrustCardPhase: Equatable {
+    /// Valutazione in corso (fetch dell'identita' del peer + HKDF).
+    case loading
+    /// Valutazione conclusa: `state` e `safetyNumber` sono il risultato.
+    case ready
+    /// Valutazione non riuscita (offline, server non raggiungibile, timeout):
+    /// `message` e' il testo gia' localizzato; la card offre "Riprova".
+    case failed(message: String)
+}
+
 /// Risultato della derivazione safety number (HKDF-SHA256 cross-platform).
 /// 12 gruppi da 5 cifre = 60 cifre totali, mostrate in griglia 4 colonne × 3 righe.
 public struct TrustSafetyNumber: Equatable {
@@ -74,8 +89,10 @@ public enum TrustVerificationMethod: String, CaseIterable, Equatable {
 ///   2. Hairline divider
 ///   3. Grid 4×3 dei 12 gruppi safety-number, mono 14pt centered
 ///   4. Hairline divider
-///   5. Action footer state-dependent:
-///        UNVERIFIED          → "Calcolo del trust in corso…"
+///   5. Action footer state-dependent (fase `.ready`; `.loading` mostra
+///      "Calcolo del trust in corso…", `.failed` il messaggio + "Riprova"):
+///        UNVERIFIED          → "Safety number non disponibile" (identita'
+///                               del contatto non pubblicata)
 ///        IDENTITY_PINNED_TOFU → "Mark as verified" Menu (5 metodi)
 ///        USER_VERIFIED       → "✓ Verificato {metodo} il {data}" + "Re-verify"
 ///        IDENTITY_CHANGED    → banner errorContainer + "I trust the new
@@ -91,6 +108,8 @@ public struct TrustVerificationCard: View {
     public let verificationMethod: TrustVerificationMethod?
     public let onMarkVerified: (TrustVerificationMethod) -> Void
     public let onAcceptNewFingerprint: () -> Void
+    public let phase: TrustCardPhase
+    public let onRetry: () -> Void
 
     @State private var showingAcceptDialog = false
 
@@ -99,13 +118,17 @@ public struct TrustVerificationCard: View {
                 verifiedAt: Date? = nil,
                 verificationMethod: TrustVerificationMethod? = nil,
                 onMarkVerified: @escaping (TrustVerificationMethod) -> Void = { _ in },
-                onAcceptNewFingerprint: @escaping () -> Void = {}) {
+                onAcceptNewFingerprint: @escaping () -> Void = {},
+                phase: TrustCardPhase = .ready,
+                onRetry: @escaping () -> Void = {}) {
         self.state = state
         self.safetyNumber = safetyNumber
         self.verifiedAt = verifiedAt
         self.verificationMethod = verificationMethod
         self.onMarkVerified = onMarkVerified
         self.onAcceptNewFingerprint = onAcceptNewFingerprint
+        self.phase = phase
+        self.onRetry = onRetry
     }
 
     public var body: some View {
@@ -139,15 +162,20 @@ public struct TrustVerificationCard: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: headerIcon)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(headerColor)
-                .frame(width: 22, height: 22)
+            if phase == .loading {
+                ProgressView()
+                    .frame(width: 22, height: 22)
+            } else {
+                Image(systemName: headerIcon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(headerColor)
+                    .frame(width: 22, height: 22)
+            }
             Text(headerLabel)
                 .qaudionStyle(type.labelLarge)
                 .foregroundStyle(headerColor)
             Spacer()
-            if state == .userVerified, let dateLabel {
+            if phase == .ready, state == .userVerified, let dateLabel {
                 Text(dateLabel)
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
@@ -156,6 +184,7 @@ public struct TrustVerificationCard: View {
     }
 
     private var headerIcon: String {
+        if case .failed = phase { return "exclamationmark.triangle.fill" }
         switch state {
         case .unverified:          return "exclamationmark.triangle.fill"
         case .identityPinnedTofu:  return "lock.fill"
@@ -170,6 +199,14 @@ public struct TrustVerificationCard: View {
     // language, same convention as SAS/ML-KEM elsewhere — see the l10n
     // glossary.
     private var headerLabel: String {
+        switch phase {
+        case .loading:
+            return String(localized: "trust.header.loading", defaultValue: "Verifica in corso…", comment: "Contact trust badge — the safety number / trust evaluation is still being computed")
+        case .failed:
+            return String(localized: "trust.header.failed", defaultValue: "Verifica non riuscita", comment: "Contact trust badge — the safety number / trust evaluation could not be computed (offline, server unreachable, timeout)")
+        case .ready:
+            break
+        }
         switch state {
         case .unverified:          return String(localized: "trust.header.unverified", defaultValue: "Non verificato", comment: "Contact trust badge — unverified state")
         case .identityPinnedTofu:  return "Pinned (TOFU)"
@@ -179,6 +216,11 @@ public struct TrustVerificationCard: View {
     }
 
     private var headerColor: Color {
+        switch phase {
+        case .loading: return scheme.onSurfaceVariant
+        case .failed:  return extras.warning
+        case .ready:   break
+        }
         switch state {
         case .unverified:          return scheme.onSurfaceVariant
         case .identityPinnedTofu:  return scheme.tertiary
@@ -188,6 +230,11 @@ public struct TrustVerificationCard: View {
     }
 
     private var borderColor: Color {
+        switch phase {
+        case .loading: return scheme.outline
+        case .failed:  return extras.warning
+        case .ready:   break
+        }
         switch state {
         case .userVerified:    return scheme.primary
         case .identityChanged: return extras.riskHigh
@@ -218,20 +265,26 @@ public struct TrustVerificationCard: View {
             let groupCount  = TrustSafetyNumber.groupCount
             let gridColumns = TrustSafetyNumber.gridColumns
 
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 6),
-                               count: gridColumns),
-                spacing: 6
-            ) {
-                ForEach(0..<min(groupCount, safetyNumber.groups.count), id: \.self) { idx in
-                    digitCell(safetyNumber.groups[idx], index: idx)
-                }
-                // Padding rows se groups < groupCount — manteniamo la
-                // griglia sempre 4×3.
-                let missing = max(0, groupCount - safetyNumber.groups.count)
-                if missing > 0 {
-                    ForEach(0..<missing, id: \.self) { _ in
-                        digitCell("·····", index: -1)
+            // Griglia 4×3 fissa, NON lazy: una sola identità per cella (indice
+            // 0..<12), il contenuto è il gruppo reale oppure il segnaposto.
+            // Prima erano un LazyVGrid con DUE ForEach sugli stessi id
+            // (0..<n reali + 0..<missing segnaposto): quando la valutazione
+            // passava da "in corso" a risolta l'header cambiava ma le celle
+            // potevano restare sui segnaposto (screenshot del report 3b24290e:
+            // "Pinned (TOFU)" con 12 celle "·····", stato che il codice produce
+            // solo con 12 gruppi veri). 12 celle non giustificano un contenitore lazy.
+            let groups = safetyNumber.groups
+            VStack(spacing: 6) {
+                ForEach(0..<(groupCount / gridColumns), id: \.self) { row in
+                    HStack(spacing: 6) {
+                        ForEach(0..<gridColumns, id: \.self) { column in
+                            let idx = row * gridColumns + column
+                            if idx < groups.count {
+                                digitCell(groups[idx], index: idx)
+                            } else {
+                                digitCell("·····", index: -1)
+                            }
+                        }
                     }
                 }
             }
@@ -261,9 +314,51 @@ public struct TrustVerificationCard: View {
 
     @ViewBuilder
     private var footer: some View {
+        switch phase {
+        case .loading:
+            Text("Calcolo del trust in corso…")
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        case .failed(let message):
+            failedFooter(message)
+        case .ready:
+            readyFooter
+        }
+    }
+
+    /// Footer of a failed evaluation: what went wrong + an explicit retry
+    /// (the evaluation otherwise runs once per visit / reconnect).
+    private func failedFooter(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(message)
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .accessibilityIdentifier("trust-card-error-message")
+            Button(action: onRetry) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Riprova")
+                        .qaudionStyle(type.labelLarge)
+                }
+                .foregroundStyle(scheme.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(scheme.primary, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("trust-card-retry")
+        }
+    }
+
+    @ViewBuilder
+    private var readyFooter: some View {
         switch state {
         case .unverified:
-            Text("Calcolo del trust in corso…")
+            Text(String(localized: "trust.footer.unavailable", defaultValue: "Safety number non disponibile: il contatto non ha ancora pubblicato la propria identità.", comment: "Contact trust card — final result when the peer has not published an identity key yet, so no safety number can be derived"))
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
         case .identityPinnedTofu:
@@ -395,6 +490,16 @@ public struct TrustVerificationCard: View {
 #Preview {
     ScrollView {
         VStack(spacing: 16) {
+            TrustVerificationCard(
+                state: .unverified,
+                safetyNumber: TrustSafetyNumber(groups: [], fingerprintHex: ""),
+                phase: .loading
+            )
+            TrustVerificationCard(
+                state: .unverified,
+                safetyNumber: TrustSafetyNumber(groups: [], fingerprintHex: ""),
+                phase: .failed(message: "Sei offline. Non è stato possibile calcolare il trust del contatto.")
+            )
             TrustVerificationCard(
                 state: .unverified,
                 safetyNumber: TrustSafetyNumber(groups: [], fingerprintHex: "")
