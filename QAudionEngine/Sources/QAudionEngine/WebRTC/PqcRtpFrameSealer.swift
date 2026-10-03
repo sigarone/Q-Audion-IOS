@@ -369,7 +369,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             if shift >= Self.replayWindowSize {
                 for i in replayWindow.indices { replayWindow[i] = 0 }
             } else {
-                shiftWindowRight(by: Int(shift))
+                ageWindow(by: Int(shift))
             }
             setWindowBit(0)
             replayHighest = counter
@@ -390,26 +390,33 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         (replayWindow[index / 64] & (1 << UInt64(index % 64))) != 0
     }
 
-    /// Right-shifts the whole multi-word bitmask by `n` bits (n < window
-    /// size, guaranteed by the caller). word[0] holds the least-significant
-    /// (most recent) bits, so shifting right moves bits toward higher words
-    /// — same direction as the original single-UInt64 `>> shift`.
-    private func shiftWindowRight(by n: Int) {
+    /// Ages every recorded counter by `n` positions (n < window size, guaranteed by the caller):
+    /// the window's highest counter moved up by `n`, so the frame that sat at logical index `i`
+    /// (gap `i` from the old highest) now sits at `i + n`. word[0] holds indices 0..63 (most
+    /// recent), so bits move toward HIGHER words and higher bit offsets, i.e. a logical LEFT shift
+    /// of the multi-word value (Desktop's `(window << shift)`; Android keeps a ring of counters).
+    /// Indices that reach the window size fall off: those counters are "too old" from now on.
+    ///
+    /// W-M15ORDER verifier fix (2026-10-03): this used to move bits toward LOWER indices, so every
+    /// advance of the highest counter erased the record of the frames just below it. Only the exact
+    /// highest counter was then protected: any other already-accepted frame inside the window could
+    /// be replayed and opened again.
+    private func ageWindow(by n: Int) {
         guard n > 0 else { return }
         let wordShift = n / 64
         let bitShift = n % 64
         let count = replayWindow.count
-        if bitShift == 0 {
-            for i in 0..<count {
-                replayWindow[i] = (i + wordShift < count) ? replayWindow[i + wordShift] : 0
-            }
-            return
-        }
+        let old = replayWindow
         for i in 0..<count {
-            let lo = (i + wordShift < count) ? (replayWindow[i + wordShift] >> UInt64(bitShift)) : 0
-            let hiIdx = i + wordShift + 1
-            let hi = (hiIdx < count) ? (replayWindow[hiIdx] << UInt64(64 - bitShift)) : 0
-            replayWindow[i] = lo | hi
+            let src = i - wordShift
+            guard src >= 0 else { replayWindow[i] = 0; continue }
+            if bitShift == 0 {
+                replayWindow[i] = old[src]
+                continue
+            }
+            let hi = old[src] << UInt64(bitShift)
+            let lo = (src - 1 >= 0) ? (old[src - 1] >> UInt64(64 - bitShift)) : 0
+            replayWindow[i] = hi | lo
         }
     }
 

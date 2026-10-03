@@ -104,6 +104,43 @@ final class PqcRtpFrameSealerM15OrderTests: XCTestCase {
         XCTAssertEqual(err?.isReplayRejection, true)
     }
 
+    /// The window must remember every accepted counter below the highest, not only the highest:
+    /// advancing the highest counter used to shift the record of the frames just below it out of
+    /// the window, so an already-accepted older frame could be replayed and opened again.
+    func testReplayOfAnOlderAcceptedFrameInsideTheWindowIsRejected() throws {
+        let (a, b) = try pair()
+        let frames = try (0..<4).map { try a.send.seal(Data("f\($0)".utf8)) }
+        for f in frames { XCTAssertNoThrow(try b.recv.open(f)) }
+        for i in [0, 1, 2] {
+            XCTAssertEqual(sealerError { _ = try b.recv.open(frames[i]) }, .replayRejected,
+                           "frame \(i) was accepted once and must not open a second time")
+        }
+    }
+
+    /// Same, across the 64-bit word boundaries of the multi-word window and across a jump of the
+    /// highest counter; a frame that never arrived stays acceptable exactly once.
+    func testReplayAcrossWordBoundariesAndJumpsIsRejected() throws {
+        let (a, b) = try pair()
+        let frames = try (0..<300).map { try a.send.seal(Data("f\($0)".utf8)) }
+        for i in 0..<200 where i != 150 { XCTAssertNoThrow(try b.recv.open(frames[i])) }
+        for i in [5, 62, 63, 64, 65, 127, 128, 129, 191, 192, 199] {
+            XCTAssertEqual(sealerError { _ = try b.recv.open(frames[i]) }, .replayRejected,
+                           "replay of frame \(i) must be rejected")
+        }
+        XCTAssertEqual(try b.recv.open(frames[150]), Data("f150".utf8), "a late, never-seen frame is accepted")
+        XCTAssertEqual(sealerError { _ = try b.recv.open(frames[150]) }, .replayRejected)
+        // Jump the highest counter by 99 (199 -> 298), then replay below it and fill a gap.
+        XCTAssertNoThrow(try b.recv.open(frames[298]))
+        for i in [10, 150, 197, 198, 199] {
+            XCTAssertEqual(sealerError { _ = try b.recv.open(frames[i]) }, .replayRejected,
+                           "replay of frame \(i) after the jump must be rejected")
+        }
+        XCTAssertEqual(try b.recv.open(frames[250]), Data("f250".utf8))
+        XCTAssertEqual(sealerError { _ = try b.recv.open(frames[250]) }, .replayRejected)
+        XCTAssertEqual(try b.recv.open(frames[299]), Data("f299".utf8))
+        XCTAssertEqual(sealerError { _ = try b.recv.open(frames[298]) }, .replayRejected)
+    }
+
     func testFrameOlderThanTheWindowIsAReplayRejection() throws {
         let (a, b) = try pair()
         let old = try a.send.seal(Data("old".utf8))

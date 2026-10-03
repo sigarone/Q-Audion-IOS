@@ -724,9 +724,14 @@ public final class QAudionEngine: @unchecked Sendable {
         (innerAudioReplayWindow[index / 64] & (1 << UInt64(index % 64))) != 0
     }
 
-    /// Right-shifts the whole multi-word bitmask by `n` bits — identical
-    /// layout/direction to `PqcRtpFrameSealer.shiftWindowRight`: word[0]
+    /// Right-shifts the whole multi-word bitmask by `n` bits: word[0]
     /// holds the least-significant (most recent) bits.
+    ///
+    /// KNOWN DEFECT (W-M15ORDER review, 2026-10-03), not fixed here because this path only runs
+    /// with `innerAudioAadV1` negotiated (kill switch off): this moves recorded bits toward LOWER
+    /// indices, so only the highest seq stays protected, and the caller records the seq BEFORE the
+    /// AEAD check. `PqcRtpFrameSealer.ageWindow` / `open` carry the corrected direction and order;
+    /// port both before turning `innerAudioAadV1` on.
     private func innerAudioShiftWindowRight(by n: Int) {
         guard n > 0 else { return }
         let wordShift = n / 64
