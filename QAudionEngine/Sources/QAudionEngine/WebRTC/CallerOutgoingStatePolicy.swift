@@ -95,7 +95,7 @@ public enum CallerOutgoingStatePolicy {
     /// yet, so the continuation would then finish the camera start and build a WebRTC controller for a call that no
     /// longer exists. False when `CallService.endCall()` ran since the OFFER was started: stop, build nothing.
     public static func shouldContinueSetupAfterVideoStart(callTornDown: Bool) -> Bool {
-        true  // TEMP MUTANT: pre-fix behaviour, always continue
+        !callTornDown
     }
 
     /// Whether the video pipeline `startCall` creates after the OFFER starts paused (nothing leaves the device until
@@ -103,6 +103,6 @@ public enum CallerOutgoingStatePolicy {
     /// exist yet: a call that already finalized inside the OFFER window (an early `call_ready` replayed a held answer)
     /// would then get a pipeline paused for its whole life. Paused only while the call is not finalized.
     public static func videoStartsPaused(callAlreadyFinalized: Bool) -> Bool {
-        true  // TEMP MUTANT: pre-fix behaviour, always paused
+        !callAlreadyFinalized
     }
 }
