@@ -16659,6 +16659,11 @@ final class AppState: ObservableObject {
         // conversation/threat-report store on the device untouched.
         LocalCryptoWipe.wipeAll()
         resetAccountScopedRuntimeState()
+        // `wipeAll()` empties ContactsStore without posting `.contactsDidChange`,
+        // so the in-memory snapshot of the account that left (names used for
+        // incoming-call labels and the Siri donation) would otherwise stay until
+        // the next login refreshes it. The store is empty now: so is the cache.
+        cachedContacts = []
         // Released here, rebuilt by `ensureCallEngine` on the next login / call.
         if callEngineLifecycle.teardown() {
             RTLog.info("call", "engine released on logout")
@@ -16694,6 +16699,10 @@ final class AppState: ObservableObject {
         isAuthenticated = false
         callState = .idle
         isInCall = false
+        // A start admitted by `callStartGate` but never committed (a future exit
+        // path that forgets `end()`) must not outlive the session that took it:
+        // left set, it would refuse every call of the next login.
+        callStartGate.end()
         deepfakeAlert = false
         // M-14: remove the CallSessionKeyBroker.sasReadyNotification
         // observer registered by wireSasReadyToController() so it
@@ -17221,6 +17230,9 @@ final class AppState: ObservableObject {
         callState = .connecting
         isInCall = true
         // Commit point: `isInCall` is now the guard against a second start.
+        // INVARIANT: every exit path added between `callStartGate.tryBegin()`
+        // above and this commit must call `callStartGate.end()` first, or the
+        // gate stays set and every later start is refused until logout().
         callStartGate.end()
         isVideoCall = video
         // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
