@@ -17303,6 +17303,15 @@ final class AppState: ObservableObject {
                         // `AcceptGateDecisions.shouldAcceptAnswer` — a late or
                         // duplicate `call_ready` is purely informational.
                         guard self.callFinalizedCallId != self.canonicalActiveCallId() else { return }
+                        // W-CALLERSTATEGUARD (2026-10-03) — `call_ready` may arrive while
+                        // `beginAndroidOutgoing` is still building the OFFER (phase `.connecting`):
+                        // it is applied then, and `startCall` no longer overwrites it afterwards. A
+                        // late one on a finished call (`.idle`/`.ended`) or on one whose ACCEPT is
+                        // already bound (`.encrypted`) is stale and ignored.
+                        guard CallerOutgoingStatePolicy.phaseOnCallReady(self.callState.latchPhase) != nil else {
+                            RTLog.info("call", "callready ignored=1 stale=1")
+                            return
+                        }
                         // Peer finished PQC setup; flip UI to "Ringing".
                         self.callState = .ringing
                         // W-RINGBACKCONFIRMED — the far end's phone is
@@ -17329,7 +17338,10 @@ final class AppState: ObservableObject {
                         self.isInCall = false
                         self.callContactId = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                            self?.callState = .idle
+                            // W-CALLERSTATEGUARD — settle only the `.ended` this teardown left; a
+                            // redial inside the second owns the state by now.
+                            guard let self, CallerOutgoingStatePolicy.shouldSettleToIdle(self.callState.latchPhase) else { return }
+                            self.callState = .idle
                         }
                     }
                 }
@@ -17350,7 +17362,10 @@ final class AppState: ObservableObject {
                         self.isInCall = false
                         self.callContactId = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                            self?.callState = .idle
+                            // W-CALLERSTATEGUARD — settle only the `.ended` this teardown left; a
+                            // redial inside the second owns the state by now.
+                            guard let self, CallerOutgoingStatePolicy.shouldSettleToIdle(self.callState.latchPhase) else { return }
+                            self.callState = .idle
                         }
                     }
                 }
@@ -17413,6 +17428,11 @@ final class AppState: ObservableObject {
             // duplicate server call-session and ghost call_incoming events.
             // Set to the real UUID inside the `if let integration` block.
             var sharedOutgoingCallId: String = ""
+            // W-CALLERSTATEGUARD (2026-10-03) — `CallService.endCall()` bumps this at its single
+            // choke point, so "it changed" means THIS call was torn down while the OFFER below was
+            // in flight (a hangup, peer offline, busy, cancel), even if a new call has since put the
+            // phase back to `.connecting`. See `CallerOutgoingStatePolicy`.
+            let offerCallGeneration: Int = callService.currentCallGeneration()
 
             // W72: integration responder-side wiring. When THIS device is
             // the responder receiving a call, the engine emits these
@@ -17777,6 +17797,13 @@ final class AppState: ObservableObject {
                     )
                 } catch is CancellationError {
                     print("[AppState] startCall cancelled mid-OFFER for callId=\(outgoingCallId.prefix(8))…")
+                    // W-CALLERSTATEGUARD — a call already torn down (hangup, peer offline, ...) must not
+                    // be torn down again: `callService.endCall()` and the resets below would end whatever
+                    // call is current by now.
+                    if CallerOutgoingStatePolicy.afterOfferThrew(
+                        callTornDown: callService.currentCallGeneration() != offerCallGeneration) == .leaveAlone {
+                        return
+                    }
                     callService.endCall()
                     callState = .idle
                     isInCall = false
@@ -17785,6 +17812,11 @@ final class AppState: ObservableObject {
                     return
                 } catch {
                     print("[AppState] beginAndroidOutgoing failed for callId=\(outgoingCallId.prefix(8))…: \(error)")
+                    // W-CALLERSTATEGUARD — same as the cancellation branch above.
+                    if CallerOutgoingStatePolicy.afterOfferThrew(
+                        callTornDown: callService.currentCallGeneration() != offerCallGeneration) == .leaveAlone {
+                        return
+                    }
                     errorMessage = "Avvio chiamata fallito: \(error.localizedDescription)"
                     callService.endCall()
                     callState = .idle
@@ -17795,7 +17827,37 @@ final class AppState: ObservableObject {
                 }
             }
 
-            callState = .active
+            // W-CALLERSTATEGUARD (2026-10-03) — the OFFER round trip returning moves `.connecting` to
+            // the pre-ring `.active` and NOTHING else. By now an early `call_ready` may have moved the
+            // call to `.ringing`, the callee's ACCEPT may have been bound (`.encrypted`), or the call
+            // may have been torn down (hangup / peer offline / busy / cancel): each of those used to be
+            // overwritten with `.active` here, and a torn-down call was resurrected and built on.
+            switch CallerOutgoingStatePolicy.afterOfferReturned(
+                phase: callState.latchPhase,
+                callTornDown: callService.currentCallGeneration() != offerCallGeneration
+            ) {
+            case .advanceToActive:
+                callState = .active
+            case .keepPhase:
+                RTLog.info("call", "offer returned keep=1 ringing=\(callState == .ringing ? 1 : 0) enc=\(callState == .encrypted ? 1 : 0)")
+            case .abandon:
+                // The call ended while its OFFER was being built. `endCall()` could only hang up a call
+                // whose id was already bound, so the peer may be ringing for an OFFER that left after
+                // it: dismiss it by its own id (a no-op for an id that is not the bound one).
+                RTLog.warn("call", "offer returned abandon=1 torndown=1")
+                if let api = liveProvider?.callingApi {
+                    let abandonedCallId: String = nativeSrtpOutgoingCallId
+                    Task {
+                        if let impl = api as? BCryptoCallingApiImpl {
+                            try? await impl.sendCallHangupForId(
+                                callId: abandonedCallId, recipientId: contactId, reason: "local_hangup")
+                        } else {
+                            try? await api.sendCallHangupForId(callId: abandonedCallId, recipientId: contactId)
+                        }
+                    }
+                }
+                return
+            }
             // W-TELEMANSWERED (2026-09-14) — `call.media.connected`/
             // `sas_source: "answered"` used to ship HERE, the instant
             // beginAndroidOutgoing's own offer-send returns — before the
@@ -17833,7 +17895,33 @@ final class AppState: ObservableObject {
             // resumes real capture via setVideoPaused(false) once the peer
             // genuinely accepts.
             if video {
-                await startVideoPipeline(for: contactId, startPaused: true)
+                // W-CALLERSTATEGUARD (2026-10-03) — paused only while the call has not finalized: a call
+                // that finalized inside the OFFER window ran `finalizeCallActive()` before this pipeline
+                // existed, so its `setVideoPaused(false)` did nothing, and a pipeline created paused here
+                // would stay paused for the whole call.
+                let finalizedInOfferWindow: Bool = callFinalizedCallId == nativeSrtpOutgoingCallId
+                let pipelineBeforeVideoStart = videoPipeline
+                await startVideoPipeline(
+                    for: contactId,
+                    startPaused: CallerOutgoingStatePolicy.videoStartsPaused(
+                        callAlreadyFinalized: finalizedInOfferWindow))
+                // The camera start is a second suspension point: a hangup inside it ran `endCall()` with no
+                // pipeline to stop yet, so the pipeline just assigned (camera on) and the WebRTC controller
+                // below would belong to a call that no longer exists.
+                if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart(
+                    callTornDown: callService.currentCallGeneration() != offerCallGeneration) {
+                    RTLog.warn("call", "video start returned abandon=1 torndown=1")
+                    // A pipeline the start just assigned is this dead call's, whoever owns the call state now: a
+                    // redial's own camera start only runs after its OFFER and begins by stopping a leftover one.
+                    if videoPipeline !== pipelineBeforeVideoStart {
+                        abrController?.stop()
+                        abrController = nil
+                        videoPipeline?.stop()
+                        videoPipeline = nil
+                        videoNackCache = nil
+                    }
+                    return
+                }
             }
             // W347: also kick off a WebRTC outgoing call. This rides in
             // PARALLEL with the legacy SDP-less PQC path during the
