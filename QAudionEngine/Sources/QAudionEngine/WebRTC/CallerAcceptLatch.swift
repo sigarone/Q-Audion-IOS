@@ -230,7 +230,7 @@ public struct CallerAcceptLatch: Equatable {
     /// leave that call ringing.
     public mutating func cancelArrived(envelopeCallId: String?, phase: Phase, dialling: Bool) -> CancelRoute {
         let id: String? = Self.nonEmpty(envelopeCallId?.lowercased())
-        let outgoingLive: Bool = outgoingCallId != nil  // TEMP-MUTANT-CANCELROUTE
+        let outgoingLive: Bool = outgoingCallId != nil && dialling && Self.isLive(phase)
         if let id, let current = outgoingCallId, id == current {
             guard outgoingLive else { return .ignore(.notInCall) }
             reset()
