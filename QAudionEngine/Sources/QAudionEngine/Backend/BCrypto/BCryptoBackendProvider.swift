@@ -127,9 +127,8 @@ public final class BCryptoBackendProvider: BackendProvider {
         // or WebSocket component reading tokens from `self.config` will see the
         // new pair immediately because `updateConfig` is broadcast to both
         // clients on `applyTokenPair`.
-        self.restClient.setTokenRefresher { [weak self] in
+        self.restClient.setTokenRefresher { [weak self] refresh in
             guard let self else { throw BCryptoError.unauthorized }
-            guard let refresh = self.config.refreshToken else { throw BCryptoError.unauthorized }
             // W-B1CRASHFRAME (2026-09-02) — was `as!`. `accountApi` is a
             // public `var`, always `BCryptoAccountApiImpl` from this same
             // init today (see its declaration above), but nothing in the
@@ -140,9 +139,17 @@ public final class BCryptoBackendProvider: BackendProvider {
             guard let accountApiImpl = self.accountApi as? BCryptoAccountApiImpl else {
                 throw BCryptoError.unexpectedAccountApiImplementation
             }
+            // `refresh` is the token the coordinator read from the shared store (or the
+            // caller's own copy when no store is attached). The closure only performs the
+            // call: the coordinator persists with compare-and-swap, then every client that
+            // took part applies the result through `onTokensApplied` below.
             let pair = try await accountApiImpl.refreshToken(refresh)
-            self.applyTokenPair(access: pair.accessToken, refresh: pair.refreshToken)
-            return (accessToken: pair.accessToken, refreshToken: pair.refreshToken)
+            return AuthTokenSet(accessToken: pair.accessToken,
+                                refreshToken: pair.refreshToken,
+                                expiresInSec: pair.expiresIn)
+        }
+        self.restClient.onTokensApplied = { [weak self] tokens in
+            self?.applyTokenPair(access: tokens.accessToken, refresh: tokens.refreshToken, persist: false)
         }
 
         // NOTE: the WebSocket client and its `onAuthFailedRecover` bridge are
