@@ -33,7 +33,6 @@ targets:
           - AppStateFilesServerUrlTests.swift
           - BugReportFreezeTests.swift
           - BugReporterRetryQueueTests.swift
-          - BugReporterRetryQueueTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
           - CallerBusyOutcomeTests.swift

@@ -554,7 +554,7 @@ public final class BugReporter: ObservableObject {
             // The diagnostics opt-in is re-read on EVERY pass, not only when the report was
             // triggered: a kept report is retried minutes later, and an automatic one the user
             // has since opted out of must not leave the phone.
-            if Self.isConsentWithdrawn(for: next.report) {
+            if Self.isConsentWithdrawn(for: next.report, diagnosticsEnabled: TelemetryService.isEnabled) {
                 removeQueuedReport(matching: next)
                 RTLog.info("bugreport", "queued auto report dropped: diagnostics opt-in OFF")
                 continue
@@ -612,8 +612,7 @@ public final class BugReporter: ObservableObject {
     /// while the diagnostics opt-in is ON (`triggerAuto`). Manual and abuse reports end in an
     /// explicit user action and are never gated. `diagnosticsEnabled` is a parameter so the
     /// rule can be tested without touching the user's real preference.
-    static func isConsentWithdrawn(for report: PendingReport,
-                                   diagnosticsEnabled: Bool = TelemetryService.isEnabled) -> Bool {
+    static func isConsentWithdrawn(for report: PendingReport, diagnosticsEnabled: Bool) -> Bool {
         return report.trigger == "auto" && !diagnosticsEnabled
     }
 
@@ -712,7 +711,7 @@ public final class BugReporter: ObservableObject {
 
         // The pubkey fetch and the assembly above can take a while: read the opt-in once more,
         // right before the bytes leave the phone.
-        if Self.isConsentWithdrawn(for: report) {
+        if Self.isConsentWithdrawn(for: report, diagnosticsEnabled: TelemetryService.isEnabled) {
             RTLog.info("bugreport", "auto report not sent: diagnostics opt-in OFF")
             return .abandon
         }
