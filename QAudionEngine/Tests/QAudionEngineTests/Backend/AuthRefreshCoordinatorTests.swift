@@ -481,7 +481,7 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
     func test_resetBackoffForgetsTheCooldownTheRenewCooldownAndTheDeadToken() async {
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R-dead")
         let (coordinator, _) = makeCoordinator()
-        let renewFails: AuthRefreshRequest.Renewer = { throw AuthRecoveryFailure(reason: .renewServerError, status: 503) }
+        let renewFails: AuthRefreshRequest.Renewer = { throw AuthRecoveryFailure(reason: .renewServerError, status: 500) }
         let rejected: AuthRefreshRequest.Refresher = { _ in throw AuthRecoveryFailure(reason: .refreshRejected, status: 401) }
         _ = await coordinator.refresh(request(.proactive, store: store, refresher: rejected, renewer: renewFails,
                                               ignoreCooldown: true))
@@ -565,7 +565,8 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
         }
         let renewer: AuthRefreshRequest.Renewer = {
             _ = renews.hit()
-            throw AuthRecoveryFailure(reason: .renewServerError, status: 503)
+            // A 500 is the origin handler's own answer: it took a token from the 6/h bucket.
+            throw AuthRecoveryFailure(reason: .renewServerError, status: 500)
         }
         func attempt() async -> AuthRefreshOutcome {
             // The proactive refresh ignores the ordinary cooldown, like the foreground and push-wake paths.
@@ -660,6 +661,180 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
         XCTAssertEqual(renews.calls, 3)
     }
 
+    func test_threeRenewNetworkFailuresInARowCallTheRenewerThreeTimesWithNoRenewBudgetBlock() async {
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+        let (coordinator, probe) = makeCoordinator()
+        let renews = Probe()
+        let renewer: AuthRefreshRequest.Renewer = {
+            _ = renews.hit()
+            throw AuthRecoveryFailure(reason: .renewNetwork)
+        }
+        for _ in 0..<3 {
+            let out = await coordinator.refresh(request(.proactive, store: store, renewer: renewer, ignoreCooldown: true))
+            XCTAssertEqual(out.failure?.reason, .renewNetwork)
+        }
+        XCTAssertEqual(renews.calls, 3, "offline / DNS / pin failure / a cancelled request spend no server budget")
+        XCTAssertFalse(probe.text.contains("renew_budget"), probe.text)
+    }
+
+    func test_aRenewNetworkFailureKeepsTheOrdinaryLadderNotTheTenMinuteBlock() async {
+        // The shape of the Wi-Fi/cellular handoff: the refresh token is dead (or absent) and the
+        // challenge GET / renew POST is cancelled on the wire. The next 401 must heal in seconds.
+        let clock = Clock0()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R-dead")
+        let (coordinator, _) = makeCoordinator(now: { clock.now })
+        let refreshes = Probe()
+        let renews = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            _ = refreshes.hit(token: token)
+            throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+        }
+        let renewer: AuthRefreshRequest.Renewer = {
+            let n = renews.hit()
+            if n == 1 { throw AuthRecoveryFailure(reason: .renewNetwork) }
+            return AuthTokenSet(accessToken: "A-renewed", refreshToken: "R-renewed", expiresInSec: nil)
+        }
+        func attempt() async -> AuthRefreshOutcome {
+            await coordinator.refresh(request(.rest401, stale: "A0", store: store, refresher: refresher, renewer: renewer))
+        }
+
+        let first = await attempt()
+        XCTAssertEqual(first.failure?.reason, .renewNetwork)
+        XCTAssertEqual(first.failure?.retryAfterSec, AuthRefreshCoordinator.backoffSeconds(forFailures: 1),
+                       "the ladder's first step, not the 10 minute renew block")
+
+        let second = await attempt()
+        XCTAssertEqual(second.failure?.reason, .cooldown, "inside the 5 s ladder step REST callers fail fast")
+        XCTAssertEqual(second.failure?.underlyingReason, .renewNetwork)
+        XCTAssertEqual(renews.calls, 1)
+
+        clock.advance(by: 6)
+        let third = await attempt()
+        XCTAssertEqual(renews.calls, 2, "seconds later the renew runs again")
+        XCTAssertTrue(third.isSuccess)
+        XCTAssertEqual(refreshes.calls, 1, "the rejected refresh token is still never presented again")
+    }
+
+    func test_onlyAFailureThatNeverProvedTheOriginRanKeepsTheLadder() async {
+        let notSpent: [(String, AuthRecoveryFailure)] = [
+            ("transport", AuthRecoveryFailure(reason: .renewNetwork)),
+            ("cancelled / unclassified", AuthRecoveryFailure(reason: .renewOther)),
+            ("malformed challenge", AuthRecoveryFailure(reason: .renewMalformedChallenge)),
+            ("502 from the gateway", AuthRecoveryFailure(reason: .renewServerError, status: 502)),
+            ("503 from the gateway", AuthRecoveryFailure(reason: .renewServerError, status: 503)),
+            ("504 from the gateway", AuthRecoveryFailure(reason: .renewServerError, status: 504)),
+            ("keychain locked", AuthRecoveryFailure(reason: .renewKeychainLocked)),
+        ]
+        for (name, failure) in notSpent {
+            let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+            let (coordinator, probe) = makeCoordinator()
+            let renews = Probe()
+            for _ in 0..<2 {
+                _ = await coordinator.refresh(request(.proactive, store: store, renewer: {
+                    _ = renews.hit()
+                    throw failure
+                }, ignoreCooldown: true))
+            }
+            XCTAssertEqual(renews.calls, 2, "\(name): spends no renew budget, so nothing holds the leg back")
+            XCTAssertFalse(probe.text.contains("renew_budget"), "\(name)\n\(probe.text)")
+        }
+    }
+
+    func test_everyAnswerOfTheOriginHandlerStartsTheTenMinuteBlock() async {
+        let spent: [(String, AuthRecoveryFailure)] = [
+            ("429 bucket empty", AuthRecoveryFailure(reason: .renewServerError, status: 429, retryAfterSec: 60)),
+            ("500", AuthRecoveryFailure(reason: .renewServerError, status: 500)),
+            ("400 clock skew", AuthRecoveryFailure(reason: .renewRejected, status: 400)),
+            ("401 bad signature", AuthRecoveryFailure(reason: .renewRejected, status: 401)),
+            ("410 consumed nonce", AuthRecoveryFailure(reason: .renewRejected, status: 410)),
+            ("412 key not registered", AuthRecoveryFailure(reason: .renewRejected, status: 412)),
+        ]
+        for (name, failure) in spent {
+            let clock = Clock0()
+            let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+            let (coordinator, _) = makeCoordinator(now: { clock.now })
+            let renews = Probe()
+            let renewer: AuthRefreshRequest.Renewer = {
+                _ = renews.hit()
+                throw failure
+            }
+            let first = await coordinator.refresh(request(.proactive, store: store, renewer: renewer, ignoreCooldown: true))
+            XCTAssertGreaterThanOrEqual(first.failure?.retryAfterSec ?? 0, AuthRefreshCoordinator.renewCooldownFloorSec,
+                                        "\(name): at least 10 minutes (6/h)")
+            clock.advance(by: 30)
+            let second = await coordinator.refresh(request(.proactive, store: store, renewer: renewer, ignoreCooldown: true))
+            XCTAssertEqual(renews.calls, 1, "\(name): the renew leg waits out its budget, even for the proactive refresh")
+            XCTAssertEqual(second.failure?.reason, .renewBudget, name)
+            XCTAssertEqual(second.failure?.underlyingReason, failure.reason, name)
+        }
+    }
+
+    func test_aRenewCancelledByANetworkHandoffDoesNotBlockTheNextAttempt() async {
+        // Through the REST client, which classifies what the closure throws: both a cancelled
+        // URLSession request and a cancelled Task are transport failures.
+        let renews = Probe()
+        let client = BCryptoRestClient(config: BackendConfig(
+            serverUrl: "https://example.invalid", accessToken: "A0", refreshToken: "R0"))
+        client.authCoordinator = AuthRefreshCoordinator()
+        client.credentialStore = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        client.setTokenRefresher { _ in throw BCryptoError.unauthorized }
+        client.setDeviceRenewFallback {
+            let n = renews.hit()
+            if n == 1 { throw URLError(.cancelled) }
+            throw CancellationError()
+        }
+        for _ in 0..<3 {
+            let out = await client.refreshSession(trigger: .proactive, ignoreCooldown: true)
+            XCTAssertEqual(out.failure?.reason, .renewNetwork)
+            XCTAssertEqual(out.failure?.isFinal, false)
+        }
+        XCTAssertEqual(renews.calls, 3)
+    }
+
+    func test_aCancelledRequestIsATransportFailureOfTheRenew() {
+        XCTAssertEqual(AuthFailureClassifier.classifyRenew(CancellationError()).reason, .renewNetwork)
+        XCTAssertEqual(AuthFailureClassifier.classifyRenew(URLError(.cancelled)).reason, .renewNetwork)
+        XCTAssertEqual(AuthFailureClassifier.classifyRenew(BCryptoError.certPinningFailed).reason, .renewNetwork)
+    }
+
+    // MARK: - (6b) a signed-out store is never written to, even without a refresh token
+
+    func test_aRenewOnlySessionThatLogsOutWhileTheRenewIsOnTheWireStaysSignedOut() async throws {
+        // Access token, no refresh token: `expectedRefresh` is nil, and so is the cleared store's.
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+        let (coordinator, _) = makeCoordinator()
+        let out = await coordinator.refresh(request(.rest401, stale: "A0", store: store, renewer: {
+            store.overwrite(access: nil, refresh: nil) // logout / remote wipe while the renew is on the wire
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: nil)
+        }))
+        XCTAssertFalse(out.isSuccess)
+        XCTAssertEqual(out.failure?.reason, .casLost)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: nil, refresh: nil),
+                       "a result that arrives after the logout must not put tokens back into the cleared store")
+    }
+
+    func test_casRefusesAnEmptyStoreWhateverTheExpectedToken() throws {
+        for expected in [nil, ""] as [String?] {
+            let store = InMemoryAuthCredentialStore(access: nil, refresh: nil)
+            let ok = try store.compareAndSwap(
+                expectedRefresh: expected, with: AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: nil))
+            XCTAssertFalse(ok)
+            XCTAssertEqual(try store.load(), AuthStoredCredentials(access: nil, refresh: nil))
+        }
+        // A store that holds only an access token is a live renew-only session: still swappable.
+        let renewOnly = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+        XCTAssertTrue(try renewOnly.compareAndSwap(
+            expectedRefresh: nil, with: AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: nil)))
+        XCTAssertEqual(try renewOnly.load(), AuthStoredCredentials(access: "A1", refresh: "R1"))
+    }
+
+    func test_hasAnyTokenTreatsNilAndEmptyAsNone() {
+        XCTAssertFalse(AuthRefreshCoordinator.hasAnyToken(access: nil, refresh: nil))
+        XCTAssertFalse(AuthRefreshCoordinator.hasAnyToken(access: "", refresh: ""))
+        XCTAssertTrue(AuthRefreshCoordinator.hasAnyToken(access: "A", refresh: nil))
+        XCTAssertTrue(AuthRefreshCoordinator.hasAnyToken(access: nil, refresh: "R"))
+    }
+
     func test_aRenewThatWorksClearsTheRenewCooldown() async {
         let clock = Clock0()
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
@@ -668,7 +843,7 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
         let outcomes: [Bool] = [false, true, true]  // fail, then succeed, then be called again
         let renewer: AuthRefreshRequest.Renewer = {
             let n = renews.hit()
-            if !outcomes[n - 1] { throw AuthRecoveryFailure(reason: .renewServerError, status: 503) }
+            if !outcomes[n - 1] { throw AuthRecoveryFailure(reason: .renewServerError, status: 500) }
             return AuthTokenSet(accessToken: "A\(n)", refreshToken: "R\(n)", expiresInSec: nil)
         }
         func attempt() async -> AuthRefreshOutcome {
@@ -710,6 +885,8 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
             ("keychain locked", KeyVaultError.deviceLocked, .renewKeychainLocked, false),
             ("keychain error", KeyVaultError.loadFailed(-34018), .renewKeychainError, false),
             ("network", URLError(.notConnectedToInternet), .renewNetwork, false),
+            ("request cancelled by a network handoff", URLError(.cancelled), .renewNetwork, false),
+            ("task cancelled", CancellationError(), .renewNetwork, false),
             ("server revoked device", BCryptoDeviceRenewClient.Error.serverRejected(.httpError(403)),
              .renewRejected, true),
             ("server bad signature", BCryptoDeviceRenewClient.Error.serverRejected(.unauthorized),

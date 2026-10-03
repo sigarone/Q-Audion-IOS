@@ -73,6 +73,12 @@ enum TokenVault {
         try casLock.withLock {
             let current = try loadChecked(account: refreshAccount)
             guard AuthRefreshCoordinator.sameRefreshToken(current, expectedRefresh) else { return false }
+            // Never write into an empty store. A session without a refresh token (device-renew
+            // only) has `nil == nil` here, so the comparison above cannot tell "unchanged" from
+            // "logged out while the renew was on the wire" (`clear()` ran, then this CAS):
+            // writing would put tokens back into a store whose device and user ids are gone.
+            let currentAccess = try loadChecked(account: accessAccount)
+            guard AuthRefreshCoordinator.hasAnyToken(access: currentAccess, refresh: current) else { return false }
             if let r = tokens.refreshToken, !r.isEmpty {
                 let st = saveUnlocked(account: refreshAccount, value: r)
                 guard st == errSecSuccess else { throw AuthCredentialStoreError.unreadable(status: st) }

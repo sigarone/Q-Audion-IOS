@@ -80,6 +80,10 @@ enum AuthFailureClassifier {
         // The challenge GET is not wrapped by `serverRejected`: it throws the raw client error.
         if let e = error as? BCryptoError { return renewHTTP(e) }
         if isNetwork(error) { return AuthRecoveryFailure(reason: .renewNetwork) }
+        // A request cancelled from outside (the REST client cancels every in-flight call of the
+        // previous network generation on a Wi-Fi/cellular handoff) says nothing about the
+        // server: it is a transport failure like a lost connection, never a spent renew.
+        if error is CancellationError { return AuthRecoveryFailure(reason: .renewNetwork) }
         return AuthRecoveryFailure(reason: .renewOther)
     }
 

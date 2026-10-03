@@ -38,8 +38,12 @@ import Foundation
 //      token presented again as a reuse event. So device-renew is attempted only when the
 //      refresh token was REJECTED (401/403) or there is none (never on a network error, a 5xx
 //      or a 429 of the refresh), a refresh token the server already rejected is not presented
-//      again (for half an hour), and after a renew failure that can have reached the server the renew leg waits
-//      at least 10 minutes (6/h), longer if the server says so with Retry-After.
+//      again (for half an hour), and after a renew failure that PROVES the server's handler ran
+//      (a 4xx/429/500 answer of device-renew or its challenge, or tokens that could not be
+//      stored) the renew leg waits at least 10 minutes (6/h), longer if the server says so with
+//      Retry-After. A failure that spent nothing (offline, a request cancelled by a network
+//      handoff, a gateway 502/503/504, a locked Keychain) only keeps the 5/15/45/120 s ladder:
+//      the server's own limiter (a free 429 once the burst is used) is the safety net there.
 //
 // The coordinator is Foundation-only on purpose: it holds no secrets in logs, has no
 // dependency on the transport, and is exercised by plain unit tests.
@@ -91,8 +95,9 @@ public protocol AuthCredentialStore: Sendable {
     func load() throws -> AuthStoredCredentials
     /// Persist `tokens` only if the stored refresh token still equals `expectedRefresh`
     /// (both compared with `AuthRefreshCoordinator.sameRefreshToken`). Returns `false`,
-    /// writing nothing, when the store holds something else. A `nil`/empty
-    /// `tokens.refreshToken` leaves the stored refresh token untouched.
+    /// writing nothing, when the store holds something else, and always when the store is
+    /// empty (no access and no refresh token: signed out, even if `expectedRefresh` is nil
+    /// too). A `nil`/empty `tokens.refreshToken` leaves the stored refresh token untouched.
     func compareAndSwap(expectedRefresh: String?, with tokens: AuthTokenSet) throws -> Bool
 }
 
@@ -257,8 +262,9 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         return ladder[max(0, min(n - 1, ladder.count - 1))]
     }
 
-    /// Minimum wait before the renew leg runs again after a failure that can have reached the
-    /// server. The server grants device-renew 6/h per device (burst 2), i.e. one per 10 min.
+    /// Minimum wait before the renew leg runs again after a failure that provably spent the
+    /// server's renew budget (see `spendsRenewBudget`). The server grants device-renew 6/h per
+    /// device (burst 2), i.e. one per 10 min.
     public static let renewCooldownFloorSec = 600
     /// Minimum cooldown after a 429, whatever `Retry-After` said (the server sends 60).
     public static let rateLimitFloorSec = 60
@@ -274,6 +280,12 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         let x = (a?.isEmpty ?? true) ? nil : a
         let y = (b?.isEmpty ?? true) ? nil : b
         return x == y
+    }
+
+    /// False when a store holds neither token (nil and "" both mean none): a signed-out store.
+    /// A compare-and-swap must refuse such a store even when `expectedRefresh` is nil too.
+    public static func hasAnyToken(access: String?, refresh: String?) -> Bool {
+        !((access?.isEmpty ?? true) && (refresh?.isEmpty ?? true))
     }
 
     /// The account an access token (a compact JWT) was minted for: its `uid` claim, else `sub`.
@@ -302,12 +314,20 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         return x == y
     }
 
-    /// Failures of the renew leg that happen on the device before any request leaves it:
-    /// they spend none of the server's renew budget and so do not start the renew cooldown.
-    private static func isLocalPreflight(_ reason: AuthRecoveryReason) -> Bool {
-        switch reason {
-        case .renewNoDeviceId, .renewKeyNotProvisioned, .renewKeychainLocked, .renewKeychainError:
-            return true
+    /// True only for a renew-leg failure that PROVES the origin's device-renew handler ran, and so
+    /// took a token from the server's 6/h bucket: an answer that carries a status the handler
+    /// writes (400 clock skew, 401 bad signature or raced nonce, 403 revoked, 410 consumed nonce,
+    /// 412 key not registered yet, 429 bucket empty, 500). Everything else did not provably spend
+    /// anything and keeps the ordinary 5/15/45/120 s ladder: the local preflights (no device id,
+    /// key not provisioned, Keychain locked), a transport failure (offline, DNS, timeout, pin
+    /// failure, a request cancelled by a Wi-Fi/cellular handoff), a malformed challenge, and a
+    /// gateway answer (502/503/504) that the origin never saw. The server limits itself: past
+    /// the burst it answers a 429 without charging a token, and that 429 starts the 10 minute block.
+    private static func spendsRenewBudget(_ f: AuthRecoveryFailure) -> Bool {
+        switch f.reason {
+        case .renewRejected, .renewServerError:
+            guard let status = f.status else { return false }
+            return !(502...504).contains(status)
         default:
             return false
         }
@@ -588,7 +608,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             let outcome = finalize(tokens, expectedRefresh: expectedRefresh, request: request, via: .deviceRenew)
             if case .failed(let f) = outcome {
                 // The renew reached the server and spent budget even though storing the result failed.
-                return .failed(noteRenewFailure(f, epoch: startEpoch))
+                return .failed(noteRenewFailure(f, epoch: startEpoch, serverMintedTokens: true))
             }
             lock.withLock {
                 guard epoch == startEpoch else { return }
@@ -610,12 +630,15 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         }
     }
 
-    /// Start the renew cooldown for a failure that can have reached the server: at least
-    /// `renewCooldownFloorSec` (6/h), or what the server asked for, whichever is longer.
-    /// Failures that never left the device (no device id, key not provisioned, locked
-    /// Keychain) spend no budget and keep the ordinary ladder.
-    private func noteRenewFailure(_ failure: AuthRecoveryFailure, epoch startEpoch: Int) -> AuthRecoveryFailure {
-        guard !Self.isLocalPreflight(failure.reason) else { return failure }
+    /// Start the renew cooldown for a failure that provably spent the server's renew budget
+    /// (`spendsRenewBudget`), or for a renew the server answered with tokens that could not be
+    /// stored (`serverMintedTokens`): at least `renewCooldownFloorSec` (6/h), or what the server
+    /// asked for, whichever is longer. Any other failure (local preflight, transport error,
+    /// gateway answer) spends no budget and keeps the ordinary ladder, so a dropped connection
+    /// or a network handoff never locks the session out for ten minutes.
+    private func noteRenewFailure(_ failure: AuthRecoveryFailure, epoch startEpoch: Int,
+                                  serverMintedTokens: Bool = false) -> AuthRecoveryFailure {
+        guard serverMintedTokens || Self.spendsRenewBudget(failure) else { return failure }
         var f = failure
         let wait = min(max(Self.renewCooldownFloorSec, f.retryAfterSec), Self.maxCooldownSec)
         f.retryAfterSec = wait
@@ -691,6 +714,8 @@ public final class InMemoryAuthCredentialStore: AuthCredentialStore, @unchecked 
         try lock.withLock {
             if let s = unreadableStatus { throw AuthCredentialStoreError.unreadable(status: s) }
             guard AuthRefreshCoordinator.sameRefreshToken(refresh, expectedRefresh) else { return false }
+            // Never write into an empty (signed-out) store, even when `expectedRefresh` is nil too.
+            guard AuthRefreshCoordinator.hasAnyToken(access: access, refresh: refresh) else { return false }
             access = tokens.accessToken
             if let r = tokens.refreshToken, !r.isEmpty { refresh = r }
             return true
