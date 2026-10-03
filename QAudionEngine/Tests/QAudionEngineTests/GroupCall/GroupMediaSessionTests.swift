@@ -11,6 +11,17 @@ final class FakePublisherLink: GroupPublisherLink, @unchecked Sendable {
     var offerSdp = FakeJanusServer.sdp(setup: "a=setup:actpass")
     var observation: GroupTransportPolicy.Observed? = FakePublisherLink.goodTransport
     var failStart: Error?
+    private var _stats: GroupPublisherStats?
+    private var _fallbacks = 0
+
+    /// What `outboundStats()` reports (nil = no stats), settable from the test.
+    var stats: GroupPublisherStats? {
+        get { lock.lock(); defer { lock.unlock() }; return _stats }
+        set { lock.lock(); _stats = newValue; lock.unlock() }
+    }
+
+    /// How many times the session asked for the single-layer fallback.
+    var fallbackCount: Int { lock.lock(); defer { lock.unlock() }; return _fallbacks }
 
     static let goodTransport = GroupTransportPolicy.Observed(
         tlsVersion: "FEFC", dtlsCipher: "TLS_AES_256_GCM_SHA384", srtpCipher: "AEAD_AES_256_GCM", candidateType: "host")
@@ -35,6 +46,8 @@ final class FakePublisherLink: GroupPublisherLink, @unchecked Sendable {
     }
 
     func applyAnswer(_ sdp: String) async throws { record("answer") }
+    func outboundStats() async -> GroupPublisherStats? { stats }
+    func fallBackToSingleLayer() { lock.lock(); _fallbacks += 1; lock.unlock() }
     func transportObservation() async -> GroupTransportPolicy.Observed? { observation }
     func addRemoteCandidate(_ candidate: GroupIceCandidate?) async { record("remote-candidate") }
     func updateIceServers(_ servers: [GroupCallWire.IceServer]) { record("ice=\(servers.first?.username ?? "")") }
@@ -1019,6 +1032,60 @@ final class GroupMediaSessionTests: XCTestCase {
         let lines = h.diagLines()
         XCTAssertTrue(lines.contains("grp video camera=1 phase=3 ok=1 code=0 ms=0"), "\(lines)")
         XCTAssertTrue(lines.contains { $0.hasPrefix("grp video camera=1 phase=4 ok=1 code=0 ms=") }, "\(lines)")
+        h.session.close()
+    }
+
+    private func fallbackConfig() -> GroupMediaSession.Config {
+        var config = GroupMediaSession.Config()
+        config.reconnectBackoffSeconds = [0.05, 0.05]
+        config.restartWatchdogSeconds = 0.3
+        config.statsIntervalSeconds = 0.05
+        config.transportCheckAttempts = 3
+        config.transportCheckIntervalMs = 10
+        config.debounceMs = 10
+        config.encoderFallbackSeconds = 0.2
+        return config
+    }
+
+    /// iPhone 1.0.1205: the VP8 encoder failed to initialise, `framesEncoded` stayed 0 with the
+    /// camera on and nothing was ever sent. A connected publisher whose encoder stays silent is
+    /// re-configured to a single layer, ONCE, and the phone log says so.
+    func testASilentEncoderOnAConnectedPublisherFallsBackToASingleLayerOnce() async throws {
+        let h = SessionHarness(config: fallbackConfig())
+        h.publisher.stats = GroupPublisherStats(audioBytesSent: 100, videoBytesSent: 0, framesEncoded: 0)
+        try await h.session.start(publishVideo: true)
+        h.publisher.onState?(.connected)
+        await h.session.setPublishVideo(true)
+        let fell = await h.waitUntil { h.publisher.fallbackCount == 1 }
+        XCTAssertTrue(fell, "\(h.diagLines())")
+        let logged = await h.waitUntil { h.diagLines().contains { $0.hasPrefix("grp video camera=1 phase=7 ok=1 code=0 ms=") } }
+        XCTAssertTrue(logged, "\(h.diagLines())")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(h.publisher.fallbackCount, 1, "once per watch")
+        h.session.close()
+    }
+
+    func testAnEncoderThatProducesFramesNeverTriggersTheFallback() async throws {
+        let h = SessionHarness(config: fallbackConfig())
+        h.publisher.stats = GroupPublisherStats(audioBytesSent: 100, videoBytesSent: 0, framesEncoded: 0)
+        try await h.session.start(publishVideo: true)
+        h.publisher.onState?(.connected)
+        await h.session.setPublishVideo(true)
+        h.publisher.stats = GroupPublisherStats(audioBytesSent: 200, videoBytesSent: 5_000, framesEncoded: 12)
+        let reported = await h.waitUntil { h.diagLines().contains { $0.hasPrefix("grp video camera=1 phase=5 ok=1") } }
+        XCTAssertTrue(reported, "\(h.diagLines())")
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(h.publisher.fallbackCount, 0)
+        h.session.close()
+    }
+
+    func testAPublisherThatIsNotConnectedYetNeverTriggersTheFallback() async throws {
+        let h = SessionHarness(config: fallbackConfig())
+        h.publisher.stats = GroupPublisherStats(audioBytesSent: 0, videoBytesSent: 0, framesEncoded: 0)
+        try await h.session.start(publishVideo: true)
+        await h.session.setPublishVideo(true)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(h.publisher.fallbackCount, 0)
         h.session.close()
     }
 

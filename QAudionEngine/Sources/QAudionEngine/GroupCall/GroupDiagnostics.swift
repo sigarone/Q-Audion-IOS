@@ -105,6 +105,10 @@ public enum GroupDiagnostics {
         case firstFrame = 5
         /// There was no media link to switch.
         case noLink = 6
+        /// A connected publisher's encoder produced no frame for too long: the sender was
+        /// re-configured to the l layer alone (`GroupVideoEncoderWatchdog`); `ms` = how long it
+        /// had been silent.
+        case singleLayerFallback = 7
     }
 
     /// `GroupCameraResult` as a number: 0 started, 1 stopped, 2 permission denied,

@@ -1300,8 +1300,9 @@ class GroupCallViewModel: ObservableObject {
     /// toggles, camera and end-call route through it; falls back to direct
     /// manager calls if nil (legacy preview path).
     private let controller: GroupCallController?
-    private var startTime = Date()
-    private var timer: Timer?
+    /// The call clock behind `elapsedTime`: starts once, whichever thread reports `.active` (see
+    /// `GroupCallElapsedTimer`).
+    private let elapsedTimer = GroupCallElapsedTimer()
     /// Item 3: local mirror of `GroupCallController.raisedHands`, used to
     /// seed each `ParticipantUI.handRaised` when the roster rebuilds in
     /// `onParticipants` below (that closure only ever has the fresh
@@ -1327,6 +1328,8 @@ class GroupCallViewModel: ObservableObject {
     init(manager: BCryptoGroupCallManager, controller: GroupCallController? = nil) {
         self.manager = manager
         self.controller = controller
+        // The clock delivers on the main queue (`GroupCallElapsedTimer.onChange`).
+        elapsedTimer.onChange = { [weak self] text in self?.elapsedTime = text }
 
         // W-GRPVIDEO: `controller` is captured `weak` here even though this
         // closure is only ever installed ONTO `controller.onManagerStateChanged`
@@ -1357,9 +1360,9 @@ class GroupCallViewModel: ObservableObject {
                     self.isMediaReady = controller?.hasMediaLink ?? false
                 }
             }
-            if state == .active { self?.startTimer() }
+            if state == .active { self?.elapsedTimer.start() }
             if state == .ended {
-                self?.timer?.invalidate()
+                self?.elapsedTimer.stop()
                 // In-call chat panel — clear the previous call's group
                 // binding so a subsequent, different call (this ViewModel
                 // is long-lived across calls) doesn't leak the old one.
@@ -1793,19 +1796,6 @@ class GroupCallViewModel: ObservableObject {
             controller.leave()
         } else {
             manager.leaveGroupCall()
-        }
-    }
-
-    private func startTimer() {
-        startTime = Date()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            let elapsed = Int(Date().timeIntervalSince(self.startTime))
-            let min = elapsed / 60
-            let sec = elapsed % 60
-            DispatchQueue.main.async {
-                self.elapsedTime = String(format: "%d:%02d", min, sec)
-            }
         }
     }
 }

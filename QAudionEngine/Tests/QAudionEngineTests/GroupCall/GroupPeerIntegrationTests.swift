@@ -56,6 +56,19 @@ final class GroupPeerIntegrationTests: XCTestCase {
         XCTAssertEqual(GroupSdpRules.videoMids(in: offer).count, 1, text)
     }
 
+    /// iPhone 1.0.1205: VP8 `InitEncode` failed with -15 because the three layers had different
+    /// `maxFramerate`. The encodings the transceiver is created with carry ONE frame rate, and the
+    /// ladder's bitrate / resolution steps are intact.
+    func testTheVideoSendEncodingsShareOneFrameRate() {
+        let encodings = GroupPublisherPeer.videoSendEncodings()
+        XCTAssertEqual(encodings.map { $0.rid }, ["l", "m", "h"])
+        XCTAssertEqual(Set(encodings.map { $0.maxFramerate?.intValue }), [GroupSimulcastLadder.fps])
+        XCTAssertEqual(Set(encodings.map { $0.numTemporalLayers?.intValue }), [GroupSimulcastLadder.temporalLayers])
+        XCTAssertEqual(encodings.map { $0.scaleResolutionDownBy?.doubleValue }, [4, 2, 1])
+        XCTAssertEqual(encodings.map { $0.maxBitrateBps?.intValue }, [150_000, 450_000, 1_200_000])
+        XCTAssertTrue(encodings.allSatisfy { $0.isActive })
+    }
+
     func testSubscriberAnswersAJanusStyleOfferPassiveAndAttachesTheReceiverCryptors() async throws {
         let factory = await QAudionPeerConnectionFactory.shared.factory()
         // The publisher offer stands in for Janus' (send-only) offer.
