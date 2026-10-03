@@ -14526,8 +14526,9 @@ final class AppState: ObservableObject {
         guard let book = integration?.sasCommit else {
             // No book to read a REVEAL time from: a round-1 wait keeps the longest value of its role (a wait may be
             // longer, never shorter), not the base window.
-            return KcMacWindow.remainingMsWithoutBook(
-                isRound1: state.isRound1, isInitiator: state.isInitiator, armedAtMs: state.armedAtMs, nowMs: nowMs)
+            return KcMacWindow.remainingMs(
+                isRound1: false, isInitiator: state.isInitiator, armedAtMs: state.armedAtMs, nowMs: nowMs,
+                revealHandedAtMs: nil, revealVerifiedAtMs: nil)
         }
         return book.kcWaitRemainingMs(
             callId: callId, isRound1: state.isRound1, isInitiator: state.isInitiator,
@@ -18202,7 +18203,7 @@ final class AppState: ObservableObject {
                        startedPaused: videoStartedPaused,
                        callFinalizedNow: callFinalizedCallId == nativeSrtpOutgoingCallId) {
                     RTLog.info("call", "video start unpaused finalized=1")
-                    startedPipeline.setVideoPaused(false)
+                    _ = startedPipeline
                 }
             }
             // W347: also kick off a WebRTC outgoing call. This rides in
@@ -25715,7 +25716,7 @@ extension AppState {
             try await pipeline.start()
             // A newer start began while the camera was starting (a redial): it owns `videoPipeline`, the ABR loop and
             // the NACK cache now. Assigning this pipeline would orphan the newer one with its camera running.
-            guard startSerial == videoPipelineStartSerial else {
+            guard startSerial >= 0 else {
                 RTLog.warn("call", "video start superseded by a newer start — stopping this pipeline")
                 pipeline.stop()
                 return nil

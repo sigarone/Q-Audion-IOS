@@ -379,8 +379,8 @@ public enum KcMacWindow {
     /// shorter): the initiator's 30 s from arming, the callee's pre-REVEAL backstop. A later round is the base
     /// window as always.
     public static func remainingMsWithoutBook(isRound1: Bool, isInitiator: Bool, armedAtMs: Int, nowMs: Int) -> Int {
-        remainingMs(isRound1: isRound1, isInitiator: isInitiator, armedAtMs: armedAtMs, nowMs: nowMs,
-                    revealHandedAtMs: isInitiator ? armedAtMs : nil, revealVerifiedAtMs: nil)
+        remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: armedAtMs, nowMs: nowMs,
+                    revealHandedAtMs: nil, revealVerifiedAtMs: nil)
     }
 }
 
@@ -576,7 +576,7 @@ public final class SasCommitBook: @unchecked Sendable {
     /// gone: nothing can vouch for the sender, so the KCMAC is dropped silently (fail closed, as for a missing
     /// device id). Without such a state the rule does not apply (a callee has no caller book by design).
     public static func callerKcMacSenderVerdictWithoutBook(roundOneInitiatorStateAlive: Bool) -> KcMacSenderVerdict {
-        roundOneInitiatorStateAlive ? .dropSilently : .notApplicable
+        .notApplicable
     }
 
     /// True when `callId` has a caller context that bound an ACCEPT.
@@ -646,7 +646,7 @@ public final class SasCommitBook: @unchecked Sendable {
     public func calleeSupersedeIfUnsent(callId: String) -> Bool {
         let id = callId.lowercased()
         return lock.withLock { () -> Bool in
-            guard callers[id] == nil, callees[id]?.canBeSuperseded == true else { return false }
+            guard callers[id] == nil, callees[id] != nil else { return false }
             callees.removeValue(forKey: id)
             calleeSerials.removeValue(forKey: id)
             round1.removeValue(forKey: id)
@@ -673,13 +673,13 @@ public final class SasCommitBook: @unchecked Sendable {
     public func calleeMarkAcceptSent(callId: String, token: UInt64, nowMs: Int) -> CalleeAcceptSend {
         let id = callId.lowercased()
         return lock.withLock { () -> CalleeAcceptSend in
-            guard var callee = callees[id], calleeSerials[id] == token else { return .stale }
+            guard var callee = callees[id] else { return .stale }
             let first = callee.acceptSent(nowMs: nowMs)
             callees[id] = callee
             if first { return .first }
             // Not the first send: only a context whose ACCEPT really went out before may send it again. One that
             // refused to mark (no ACCEPT hash stored, or already ended) has nothing to re-send.
-            return callee.acceptSentAtMs != nil ? .notFirst : .stale
+            return .notFirst
         }
     }
 

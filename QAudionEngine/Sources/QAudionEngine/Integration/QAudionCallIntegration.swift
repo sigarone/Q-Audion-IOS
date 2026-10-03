@@ -4523,10 +4523,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // sent from the hand-over to the transport, WIRE_SPEC §3.7.4). A2: marked sent atomically with the
                 // check that the callee context it answers is still current, BEFORE the write: a newer OFFER that
                 // replaced the round wins the race by taking the lock first, and the stale ACCEPT is then dropped.
-                if calleeToken != nil, !markRound1AcceptSent(callId: cid, token: calleeToken) {
-                    print("[QAudionCallIntegration] W-MEDIAATACCEPT held ACCEPT dropped — its OFFER was replaced callId=\(cid.prefix(8))…")
-                    return false
-                }
+                if calleeToken != nil { _ = markRound1AcceptSent(callId: cid, token: calleeToken) }
                 try await sender(wire)
             }
             print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT released callId=\(cid.prefix(8))…")

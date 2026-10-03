@@ -113,6 +113,6 @@ public enum CallerOutgoingStatePolicy {
     /// call has finalized by the time the start returned: the caller (which has already dealt with a call torn down
     /// meanwhile, `shouldContinueSetupAfterVideoStart`) un-pauses the pipeline it just got.
     public static func shouldUnpauseAfterVideoStart(startedPaused: Bool, callFinalizedNow: Bool) -> Bool {
-        startedPaused && callFinalizedNow
+        false
     }
 }

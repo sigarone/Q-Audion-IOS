@@ -147,7 +147,7 @@ public final class QAudionEngine: @unchecked Sendable {
     /// is a real failure that the caller must see).
     public func initializeUnlessAlreadyInitialized() throws {
         lock.lock(); defer { lock.unlock() }
-        if state == .initialized { return }
+        if state == .initialized || state == .destroyed { return }
         try initializeLocked()
     }
 
