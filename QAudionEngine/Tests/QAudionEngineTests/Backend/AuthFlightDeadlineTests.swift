@@ -775,4 +775,89 @@ final class AuthFlightDeadlineTests: XCTestCase {
         XCTAssertEqual(path, .deviceRenew)
         XCTAssertEqual(renews.calls, 1)
     }
+
+    /// Review of #164, finding 3 (mutant "the zombie's renew success clears the cooldown"
+    /// survived): a newer flight started the renew cooldown, THEN the zombie's renew answers
+    /// with SUCCESS. A success normally lifts the cooldown, but not one written by a flight the
+    /// coordinator already gave up on: the newer flight's verdict stands.
+    func test_aLateRenewSuccessOfAnAbandonedFlightLeavesTheNewerRenewCooldownInPlace() async {
+        let (c, probe) = makeCoordinator()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let renewHang = Hang()
+        let newerRenews = Probe()
+        let lastRenews = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { _ in
+            throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+        }
+        defer { renewHang.release() }
+
+        // Flight 1: refresh rejected, then the renew leg hangs until the deadline cuts the flight.
+        let first = await bounded(c, request(store: store, refresher: refresher, renewer: {
+            await renewHang.wait()
+            return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: 900)
+        }))
+        XCTAssertEqual(first.failure?.reason, .flightTimeout)
+
+        // A newer session and a newer flight: its renew is answered 429, which starts the cooldown.
+        store.overwrite(access: "A5", refresh: "R5")
+        let newer = await bounded(c, request(.proactive, store: store, refresher: refresher, renewer: {
+            newerRenews.hit()
+            throw AuthRecoveryFailure(reason: .renewServerError, status: 429, retryAfterSec: 60)
+        }, ignoreCooldown: true))
+        XCTAssertEqual(newer.failure?.reason, .renewServerError, "\(newer)")
+        XCTAssertEqual(newerRenews.calls, 1)
+
+        // The zombie finally answers with a SUCCESS. Its pair loses the compare-and-swap.
+        renewHang.release()
+        let landed = await eventually { probe.text.contains("late flight result") }
+        XCTAssertTrue(landed, probe.text)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A5", refresh: "R5"))
+
+        // The cooldown of the newer flight is still in force: no renew call goes out.
+        store.overwrite(access: "A7", refresh: "R7")
+        let again = await bounded(c, request(.proactive, store: store, refresher: refresher, renewer: {
+            lastRenews.hit()
+            return AuthTokenSet(accessToken: "A8", refreshToken: "R8", expiresInSec: 900)
+        }, ignoreCooldown: true))
+        XCTAssertEqual(again.failure?.reason, .renewBudget, "the zombie must not lift the cooldown: \(again)")
+        XCTAssertEqual(lastRenews.calls, 0, "the renew budget is not spent again")
+    }
+
+    // MARK: - (6) a late refresh SUCCESS proves the token spent, even when it cannot be stored
+
+    /// Review of #164, finding 2: the abandoned flight's late answer is a SUCCESS (the server
+    /// rotated the pair, R0 is spent) but the store cannot be written (locked Keychain). The
+    /// token it sent must still be remembered as dead, or the next caller presents R0 again:
+    /// a reuse event on the server. (A late REJECTION is deliberately not remembered, see (5).)
+    func test_aLateRefreshSuccessThatCannotBeStoredStillMarksTheSentTokenDead() async {
+        let (c, probe) = makeCoordinator()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let hang = Hang()
+        let net = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            let n = net.hit(token: token)
+            if n == 1 { await hang.wait() }
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
+        }
+        defer { hang.release() }
+
+        let first = await bounded(c, request(store: store, refresher: refresher))
+        XCTAssertEqual(first.failure?.reason, .flightTimeout)
+
+        // The Keychain locks while the zombie is still on the wire; its success cannot be stored.
+        store.setUnreadable(status: -25308)
+        hang.release()
+        let landed = await eventually { probe.text.contains("late flight result") }
+        XCTAssertTrue(landed, probe.text)
+        XCTAssertTrue(probe.text.contains("reason=keychain_unreadable"), probe.text)
+        store.setUnreadable(status: nil)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A0", refresh: "R0"))
+
+        // R0 is spent: the next flight must not present it, whatever the trigger.
+        let second = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        XCTAssertEqual(net.tokens, ["R0"], "the spent token is presented once only: \(second)\n\(probe.text)")
+        XCTAssertTrue(probe.text.contains("refresh_token_known_dead=1"), probe.text)
+        XCTAssertEqual(second.failure?.reason, .refreshRejected, "\(second)")
+        XCTAssertEqual(second.failure?.isFinal, false, "a store-backed client stays transient")
+    }
 }

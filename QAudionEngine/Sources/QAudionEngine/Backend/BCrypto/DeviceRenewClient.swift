@@ -34,6 +34,10 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
         /// `BCryptoError.httpError`.
         case serverRejected(BCryptoError)
         case malformedNonceHex
+        /// The REST client this renew was installed on was released while the renew was
+        /// pending (a flight is process-wide and can outlive the client that started it).
+        /// Nothing reached the server: a transient failure, never a verdict on the session.
+        case restClientGone
     }
 
     private let rest: BCryptoRestClient
@@ -42,6 +46,38 @@ public final class BCryptoDeviceRenewClient: @unchecked Sendable {
     public init(rest: BCryptoRestClient, deviceKeyManager: DeviceKeyManager) {
         self.rest = rest
         self.deviceKeyManager = deviceKeyManager
+    }
+
+    /// The device-renew fallback of `rest`, built so that it does NOT keep `rest` alive.
+    ///
+    /// The REST client stores the returned closure (`setDeviceRenewFallback`), and a renew
+    /// client holds the REST client (and, through the key manager's KMS client, again the
+    /// REST client). A closure that captured a renew client built here and now would close
+    /// that loop: `BCryptoRestClient.deinit` (which cancels the NWPathMonitor) would never
+    /// run and every wired provider would leak its URLSession and path monitor. So the
+    /// closure holds the REST client weakly and builds the renew client (and the key
+    /// manager, from the live REST client) per call, strongly referenced for that call only.
+    ///
+    /// - Parameters:
+    ///   - makeKeyManager: builds the key manager for the live REST client.
+    ///   - loadDeviceId: the stored device id, read on every call so a log-out / log-in
+    ///     cycle picks up the new value. nil or empty throws `noDeviceId`.
+    public static func makeFallback(
+        for rest: BCryptoRestClient,
+        makeKeyManager: @escaping @Sendable (BCryptoRestClient) -> DeviceKeyManager,
+        loadDeviceId: @escaping @Sendable () -> String?
+    ) -> BCryptoRestClient.DeviceRenewFallback {
+        return { [weak rest] in
+            guard let did = loadDeviceId(), !did.isEmpty else {
+                throw AuthRenewPreconditionError.noDeviceId
+            }
+            guard let rest else { throw Error.restClientGone }
+            let client = BCryptoDeviceRenewClient(rest: rest, deviceKeyManager: makeKeyManager(rest))
+            let fresh = try await client.renew(deviceId: did)
+            return AuthTokenSet(accessToken: fresh.accessToken,
+                                refreshToken: fresh.refreshToken,
+                                expiresInSec: fresh.expiresInSec)
+        }
     }
 
     /// Run the cascade. Returns the fresh tokens; caller is responsible
