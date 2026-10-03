@@ -67,6 +67,10 @@ struct ContentView: View {
     /// documented "no 1:1 call surface shows a real avatar photo" gap
     /// for the incoming-ring and outgoing/connecting screens below.
     @State private var outgoingAvatarUrl: URL? = nil
+    /// W-CALLERBUSY (review of #169) — the contact id the three values above were resolved for (`nil` when they
+    /// are cleared). The incoming ring takes them only when they belong to ITS caller (`PeerNameScope`), so the
+    /// person just dialled never shows on the next incoming call.
+    @State private var outgoingResolvedFor: String? = nil
     private let contactsStore = ContactsStore()
 
     /// W-OUTGOINGDOT3 (2026-08-16) — `inCallStack` used to branch straight
@@ -226,13 +230,23 @@ struct ContentView: View {
         .animation(.easeInOut, value: appState.isInCall)
         .animation(.easeInOut, value: appState.isVideoCall)
         .animation(.easeInOut, value: appState.callState)
+        .animation(.easeInOut, value: appState.callerOutcome)
         .animation(.easeInOut, value: splashResolved)
         // WIRE_SPEC §8.1 — animate the auto-fallback to the audio-only
         // call screen when both sides pause their camera.
         .animation(.easeInOut, value: appState.localVideoPaused)
         .animation(.easeInOut, value: appState.remoteVideoPaused)
         .onChange(of: appState.callContactId) { id in
+            // W-CALLERBUSY — `endCall` clears `callContactId` the instant a busy / unreachable callee ends the
+            // call; the outcome screen that follows still shows who was dialled, so keep the resolved name.
+            if id == nil, appState.callerOutcome != nil { return }
             resolveOutgoingName(id)
+        }
+        // W-CALLERBUSY (review of #169) — the outcome screen is over (hold elapsed, close button, or a redial
+        // cleared it): drop the dialled person's name / number / avatar it kept alive. With the call contact gone
+        // this clears the three values; for a redial that already set a new contact it resolves that one.
+        .onChange(of: appState.callerOutcome) { outcome in
+            if outcome == nil { resolveOutgoingName(appState.callContactId) }
         }
         // W-OUTGOINGDOT3 — see showLiveCallScreen's doc above. Async on
         // purpose: this must fire AFTER inCallStack already rendered once
@@ -327,14 +341,19 @@ struct ContentView: View {
     /// (E2EE avatar transport, 2026-07-30) — falls back to the initials
     /// bubble only when no decrypted avatar is cached yet for this peer.
     private func incoming1to1CallScreen() -> some View {
-        let name = outgoingDisplayName.isEmpty
-            ? appState.incomingCallerName
-            : outgoingDisplayName
+        // W-CALLERBUSY (review of #169) — the resolved name / number / avatar are used only when they were resolved
+        // for THIS caller (`PeerNameScope`): the outcome screen of a busy / unreachable outgoing call keeps the
+        // dialled person's values alive, and the first frame of the next incoming call must not show them.
+        let resolvedIsThisCallers: Bool = PeerNameScope.matches(
+            resolvedFor: outgoingResolvedFor, callContactId: appState.callContactId)
+        let name: String = PeerNameScope.incomingRingName(
+            resolvedName: outgoingDisplayName, resolvedFor: outgoingResolvedFor,
+            callContactId: appState.callContactId, wireName: appState.incomingCallerName) ?? ""
         return IncomingCallScreen(
             peerDisplayName: name.isEmpty ? "Sconosciuto" : name,
-            avatarUrl: outgoingAvatarUrl,
+            avatarUrl: resolvedIsThisCallers ? outgoingAvatarUrl : nil,
             callType: appState.isVideoCall ? .video : .audio,
-            peerShortNumber: outgoingShortNumber,
+            peerShortNumber: resolvedIsThisCallers ? outgoingShortNumber : nil,
             onAccept: { audioOnly in appState.answerIncomingCall(audioOnly: audioOnly) },
             onReject: { appState.declineIncomingCall() }
         )
@@ -398,6 +417,10 @@ struct ContentView: View {
     private var mainStack: some View {
         if appState.isInCall {
             inCallStack
+        } else if let outcome = appState.callerOutcome {
+            // W-CALLERBUSY — the outgoing call ended because the callee is busy / unreachable: say so for a
+            // few seconds instead of dropping straight to Home. `startCall` and the close button clear it.
+            callerOutcomeScreen(outcome)
         } else if !splashResolved {
             // W18.C: brand splash on cold start. Resolves itself
             // after the 400ms minimum window and toggles
@@ -463,6 +486,21 @@ struct ContentView: View {
         }
     }
 
+    /// W-CALLERBUSY — the outgoing screen in its ended state, with the outcome as its message ("Occupato" /
+    /// "Non raggiungibile", Android parity). The hangup button becomes "close" and dismisses it at once.
+    private func callerOutcomeScreen(_ outcome: CallerTerminalOutcome) -> OutgoingCallScreen {
+        let name: String = outgoingDisplayName.isEmpty ? "…" : outgoingDisplayName
+        return OutgoingCallScreen(
+            peerDisplayName: name,
+            avatarUrl: outgoingAvatarUrl,
+            state: .ended,
+            elapsedSeconds: 0,
+            errorMessage: CallerOutcomeText.message(for: outcome),
+            peerShortNumber: outgoingShortNumber,
+            onHangup: { appState.dismissCallerOutcome() }
+        )
+    }
+
     private func makeOutgoingScreen() -> OutgoingCallScreen {
         let cs = appState.callState
         // W-OUTGOINGDOT3 — cs can now legitimately be .active/.encrypted
@@ -515,8 +553,10 @@ struct ContentView: View {
             outgoingDisplayName = ""
             outgoingShortNumber = nil
             outgoingAvatarUrl = nil
+            outgoingResolvedFor = nil
             return
         }
+        outgoingResolvedFor = id
         let contacts = contactsStore.load()
         let match = contacts.first(where: { $0.userId == id })
         let wireCandidate = appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName

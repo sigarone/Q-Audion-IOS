@@ -19,16 +19,20 @@ public struct CallRecord: Codable, Identifiable, Sendable {
     public let peerExtension: Int?      // PBX short number if known
     /// Post-v5: one of the allow-listed `CallCloseReason` tokens when the call closed over a failed
     /// handshake / identity check, else nil. Shown as a label in the call history. Optional, so records
-    /// saved before this field existed decode with nil.
+    /// saved before this field existed decode with nil. W-CALLERBUSY: an outgoing call the server answered
+    /// with `call_busy` / `call_peer_offline` carries `busy` / `peer_offline` (`CallerTerminalOutcome`).
     public var closeReason: String? = nil
 
     public enum Direction: String, Codable, Sendable {
         case incoming, outgoing, missed
     }
 
-    /// Positive call duration in whole seconds. nil for missed or still-ongoing calls.
+    /// Positive call duration in whole seconds. nil for missed or still-ongoing calls, and for an outgoing
+    /// call that never connected because the callee was busy or unreachable: the seconds it took the server
+    /// to say so are not a call duration.
     public var durationSeconds: Int? {
         guard let e = endedAt else { return nil }
+        if CallerTerminalOutcome.accepted(closeReason) != nil { return nil }
         let d = Int(e.timeIntervalSince(startedAt))
         return d > 0 ? d : nil
     }
@@ -574,7 +578,8 @@ public final class PersistentCallRecordStore: ObservableObject {
     }
 
     /// Mark a call as ended (sets `endedAt` to now). `closeReason` is stored only when it is one of the
-    /// allow-listed `CallCloseReason` tokens, never a free-form string.
+    /// allow-listed `CallCloseReason` tokens or a `CallerTerminalOutcome` token (`busy`, `peer_offline`),
+    /// never a free-form string.
     /// Call from `AppState.endCall()`.
     public func endCall(id: String, closeReason: String? = nil) {
         retryDeferredLoad()
@@ -592,6 +597,7 @@ public final class PersistentCallRecordStore: ObservableObject {
             isVideo: old.isVideo,
             peerExtension: old.peerExtension,
             closeReason: CallCloseReason.accepted(closeReason)?.rawValue
+                ?? CallerTerminalOutcome.accepted(closeReason)?.rawValue
         )
         records[idx] = updated
         save()

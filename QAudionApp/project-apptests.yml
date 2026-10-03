@@ -34,6 +34,7 @@ targets:
           - BugReportFreezeTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
+          - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
           - PersistentCallRecordStoreTests.swift
           - TrustEvaluationModelTests.swift
