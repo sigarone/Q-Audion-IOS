@@ -152,23 +152,31 @@ public final class RuntimeLogSink: ObservableObject {
     /// W559 — Returns the last `minutes` minutes of log entries as a
     /// plain-text string formatted as `[timestamp] [LEVEL] [tag] message`.
     /// Thread-safe; allocates a temporary copy of the ring buffer.
+    ///
+    /// W-REPORTFREEZE (2026-10-03): the redaction of every message is the expensive part (up
+    /// to 12,000 entries of regex passes), so it lives in `BugReportLogFormatter`, which is
+    /// not main-actor isolated. The bug report no longer calls this: it takes
+    /// `recentRawEntries` on the main actor (a cheap copy) and formats off it.
     public func recentLogsAsString(minutes: Double = 2.0) -> String {
+        return BugReportLogFormatter.format(recentRawEntries(minutes: minutes))
+    }
+
+    /// The last `minutes` minutes of the ring, oldest first, UNREDACTED: a copy under the lock
+    /// and a filter, nothing else, so it is cheap to run on the main actor. The caller
+    /// redacts (`BugReportLogFormatter.format`) wherever it is not blocking the UI.
+    func recentRawEntries(minutes: Double) -> [LiveLogRawEntry] {
         lock.lock()
         let copy = entries
         lock.unlock()
         let cutoff = Date().addingTimeInterval(-minutes * 60.0)
-        let recent = copy.filter { $0.timestamp >= cutoff }
-        var out = String()
-        out.reserveCapacity(recent.count * 200)
-        for e in recent {
-            out.append(Self.isoFormatter.string(from: e.timestamp))
-            out.append(" [")
-            out.append(e.level.rawValue.uppercased())
-            out.append("] [")
-            out.append(e.tag)
-            out.append("] ")
-            out.append(RuntimeLogSink.redactStructured(e.message))
-            out.append("\n")
+        var out: [LiveLogRawEntry] = []
+        out.reserveCapacity(copy.count)
+        for e in copy where e.timestamp >= cutoff {
+            out.append(LiveLogRawEntry(seq: e.seq,
+                                       timestamp: e.timestamp,
+                                       level: e.level.rawValue,
+                                       tag: e.tag,
+                                       message: e.message))
         }
         return out
     }

@@ -54,8 +54,10 @@ public final class BugReporter: ObservableObject {
         /// Trigger-time screenshot; at send time it becomes the trigger-time and the
         /// send-time screenshots side by side.
         public var screenshot: UIImage?
-        /// Trigger-time log tail; at send time it is replaced by the longer window.
-        public var logs: String
+        /// Trigger-time log tail, as a raw (unredacted) copy of the ring; at send time it is
+        /// replaced by the longer window. W-REPORTFREEZE: kept as entries, not as text, so the
+        /// expensive redaction runs off the main actor (`BugReportAssembler`).
+        var logEntries: [LiveLogRawEntry]
         public let trigger: String
         public let capturedAt: Date
         /// Extra plaintext multipart fields (abuse reports: the reported
@@ -255,10 +257,10 @@ public final class BugReporter: ObservableObject {
         // a blank image on a screenshot-locked screen is the correct
         // behaviour for a product marketed on screenshot protection.
         let screenshot = captureScreenForReport()
-        let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: currentLogWindowMinutes())
+        let logEntries = RuntimeLogSink.shared.recentRawEntries(minutes: currentLogWindowMinutes())
         var report = PendingReport(
             screenshot: screenshot,
-            logs: logs,
+            logEntries: logEntries,
             trigger: "manual",
             capturedAt: Date()
         )
@@ -297,10 +299,10 @@ public final class BugReporter: ObservableObject {
             RTLog.info("bugreport", "auto report suppressed (diagnostics opt-in OFF): " + tag)
             return
         }
-        let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: 2.0)
+        let logEntries = RuntimeLogSink.shared.recentRawEntries(minutes: 2.0)
         let report = PendingReport(
             screenshot: nil,
-            logs: logs,
+            logEntries: logEntries,
             trigger: "auto",
             capturedAt: Date()
         )
@@ -337,7 +339,7 @@ public final class BugReporter: ObservableObject {
         var fields: [String: String] = ["report_category": category]
         if let u = reportedUserId, !u.isEmpty { fields["reported_user_id"] = u }
         if let g = reportedGroupId, !g.isEmpty { fields["reported_group_id"] = g }
-        var report = PendingReport(screenshot: nil, logs: "", trigger: "abuse", capturedAt: Date())
+        var report = PendingReport(screenshot: nil, logEntries: [], trigger: "abuse", capturedAt: Date())
         report.extraFields = fields
         var lines: [String] = ["ABUSE REPORT", "category=" + category]
         if let u = reportedUserId, !u.isEmpty { lines.append("reported_user_id=" + u) }
@@ -376,8 +378,8 @@ public final class BugReporter: ObservableObject {
         var out = report
         let sinceTrigger = max(0, Date().timeIntervalSince(report.capturedAt))
         let windowMinutes = currentLogWindowMinutes() + sinceTrigger / 60
-        let logs = RuntimeLogSink.shared.recentLogsAsString(minutes: windowMinutes)
-        if !logs.isEmpty { out.logs = logs }
+        let logEntries = RuntimeLogSink.shared.recentRawEntries(minutes: windowMinutes)
+        if !logEntries.isEmpty { out.logEntries = logEntries }
         let sendShot = captureScreenForReport()
         out.screenshot = Self.sideBySide(report.screenshot, sendShot)
         out.screenshotCount = (report.screenshot == nil ? 0 : 1) + (sendShot == nil ? 0 : 1)
@@ -495,66 +497,39 @@ public final class BugReporter: ObservableObject {
             bodyPlaintext = note + "\n\n---DIAG---\n" + diagSnapshot
         }
 
-        let diagSummary = ReportCrypto.buildDiagSummary(logs: report.logs, note: note, trigger: report.trigger)
-
-        guard let bodyEnc = try? ReportCrypto.encrypt(
-            adminPubKeyHex: adminPubKey, plaintext: Data(bodyPlaintext.utf8)
-        ) else {
-            RTLog.warn("bugreport", "ReportCrypto.encrypt(body) failed — report aborted")
-            return
-        }
-        guard let logsEnc = try? ReportCrypto.encrypt(
-            adminPubKeyHex: adminPubKey, plaintext: Data(report.logs.utf8)
-        ) else {
-            RTLog.warn("bugreport", "ReportCrypto.encrypt(logs) failed — report aborted")
-            return
-        }
-        let screenshotEnc: ReportCrypto.EncryptedPayload? = report.screenshot
-            .flatMap { $0.pngData() }
-            .flatMap { try? ReportCrypto.encrypt(adminPubKeyHex: adminPubKey, plaintext: $0) }
-
         let endpoint = serverUrl + "/api/v1/report"
         guard let url = URL(string: endpoint) else { return }
 
-        let boundary = "BugReportBoundary" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        // W-REPORTFREEZE (2026-10-03): everything heavy -- the log text and its redaction, the
+        // diagnostic summary, the PNG encode, the three encryptions, the multipart body -- runs
+        // off the main actor, at utility priority so it does not compete with a call's media
+        // threads. This method is `@MainActor`; the detached task is not. Run on the main
+        // actor it froze the iPhone for ~32 s in the group call of 2026-10-03.
+        let input = BugReportAssembler.Input(
+            adminPubKeyHex: adminPubKey,
+            trigger: report.trigger,
+            appVersion: appVersion,
+            osVersion: osVersion,
+            deviceModel: deviceModel,
+            userPrefix: userPrefix,
+            timestamp: timestamp,
+            callId: callId,
+            note: note,
+            bodyPlaintext: bodyPlaintext,
+            logEntries: report.logEntries,
+            extraFields: report.extraFields,
+            screenshot: report.screenshot
+        )
+        let assembledReport = await Task.detached(priority: .utility) {
+            BugReportAssembler.assemble(input)
+        }.value
+        guard let assembled = assembledReport else { return }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=" + boundary, forHTTPHeaderField: "Content-Type")
+        request.setValue("multipart/form-data; boundary=" + assembled.boundary, forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
-
-        var body = Data()
-        appendField(&body, boundary: boundary, name: "platform", value: "ios")
-        appendField(&body, boundary: boundary, name: "trigger", value: report.trigger)
-        appendField(&body, boundary: boundary, name: "app_version", value: appVersion)
-        appendField(&body, boundary: boundary, name: "os_version", value: osVersion)
-        appendField(&body, boundary: boundary, name: "device_model", value: deviceModel)
-        appendField(&body, boundary: boundary, name: "user_id", value: userPrefix)
-        appendField(&body, boundary: boundary, name: "timestamp", value: timestamp)
-        if !callId.isEmpty {
-            appendField(&body, boundary: boundary, name: "call_id", value: callId)
-        }
-        appendField(&body, boundary: boundary, name: "diag_summary", value: diagSummary)
-        for (key, value) in report.extraFields.sorted(by: { $0.key < $1.key }) {
-            appendField(&body, boundary: boundary, name: key, value: value)
-        }
-        appendField(&body, boundary: boundary, name: "ephemeral_pub", value: bodyEnc.ephemeralPubHex)
-        appendField(&body, boundary: boundary, name: "logs_ephemeral_pub", value: logsEnc.ephemeralPubHex)
-        appendFilePart(&body, boundary: boundary, name: "body_enc",
-                       filename: "body.enc", mimeType: "application/octet-stream", data: bodyEnc.ciphertext)
-        appendFilePart(&body, boundary: boundary, name: "logs_enc",
-                       filename: "logs.enc", mimeType: "application/octet-stream", data: logsEnc.ciphertext)
-        if let screenshotEnc = screenshotEnc {
-            appendField(&body, boundary: boundary, name: "screenshot_ephemeral_pub",
-                        value: screenshotEnc.ephemeralPubHex)
-            appendFilePart(&body, boundary: boundary, name: "screenshot_enc",
-                           filename: "screenshot.enc", mimeType: "application/octet-stream",
-                           data: screenshotEnc.ciphertext)
-        }
-        let closingBoundary = "--" + boundary + "--\r\n"
-        if let closingData = closingBoundary.data(using: .utf8) {
-            body.append(closingData)
-        }
-        request.httpBody = body
+        request.httpBody = assembled.body
         // W-AUXPIN: same 60 s idle timeout as before (see fetchAdminPubKey) —
         // this is the multi-MB encrypted upload, the one request here that
         // must not inherit the pinned session's 15 s default.
@@ -593,33 +568,6 @@ public final class BugReporter: ObservableObject {
             return snapshot
         }
         return json
-    }
-
-    // MARK: - Multipart helpers
-
-    private func appendField(_ body: inout Data, boundary: String, name: String, value: String) {
-        var part = "--" + boundary + "\r\n"
-        part += "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n"
-        part += value + "\r\n"
-        if let data = part.data(using: .utf8) {
-            body.append(data)
-        }
-    }
-
-    private func appendFilePart(_ body: inout Data, boundary: String,
-                                name: String, filename: String,
-                                mimeType: String, data: Data) {
-        var header = "--" + boundary + "\r\n"
-        header += "Content-Disposition: form-data; name=\"" + name
-        header += "\"; filename=\"" + filename + "\"\r\n"
-        header += "Content-Type: " + mimeType + "\r\n\r\n"
-        if let headerData = header.data(using: .utf8) {
-            body.append(headerData)
-        }
-        body.append(data)
-        if let tail = "\r\n".data(using: .utf8) {
-            body.append(tail)
-        }
     }
 
     // MARK: - Screen capture
