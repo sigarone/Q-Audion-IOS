@@ -164,6 +164,9 @@ public final class TelemetryService {
             TelemetryService.shared.activate()
         } else {
             TelemetryService.shared.disableAndClearBuffer()
+            // W-RETRYAFTER: a bug report the auto-detector queued for a retry is diagnostic
+            // egress under the same opt-in; withdrawing it clears that queue as well.
+            BugReporter.shared.dropQueuedAutoReports()
         }
     }
 
@@ -418,7 +421,7 @@ public final class TelemetryService {
                                         jitterUnit: Double.random(in: 0...1))
         let statusText = status.map { String($0) } ?? "net"
         let hint = UploadRetryPolicy.parseRetryAfter(retryAfterHeader, now: Date())
-        let hintText = hint.map { String(Int($0.rounded())) } ?? "none"
+        let hintText = UploadRetryPolicy.hintLogSeconds(hint)
         RTLog.warn("telemetry", "upload paused status=" + statusText + " retry_after=" + hintText
                    + " pause=" + String(Int(delay.rounded())) + " queued=" + String(queue.count))
     }

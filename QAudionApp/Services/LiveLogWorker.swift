@@ -555,7 +555,7 @@ actor LiveLogWorker {
             // response had none), the pause actually applied and how many log lines are queued.
             // No payload content.
             let statusStr: String = status.map { String(describing: $0) } ?? "net"
-            let raStr: String = retryAfter.map { String(describing: Int($0.rounded())) } ?? "none"
+            let raStr: String = UploadRetryPolicy.hintLogSeconds(retryAfter)
             let queuedStr: String = String(describing: backlog.count)
             let backoffLine: String = "livelog backoff n=" + streakStr + " s=" + secondsStr + " ra=" + hintStr
                 + " status=" + statusStr + " retry_after=" + raStr + " queued=" + queuedStr

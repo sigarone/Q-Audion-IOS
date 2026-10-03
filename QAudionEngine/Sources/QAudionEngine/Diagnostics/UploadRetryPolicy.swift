@@ -69,6 +69,25 @@ public enum UploadRetryPolicy {
         return LiveLogBackoff.parseRetryAfter(raw, now: now)
     }
 
+    /// The largest `Retry-After` a log line will print. `parseRetryAfter` only rejects nil,
+    /// negative and non-finite values, so a hostile or broken header ("1e300",
+    /// "99999999999999999999") comes back as a finite Double far outside Int's range, and
+    /// `Int(_: Double)` traps on those. The pause itself is capped by `delay`; this caps what
+    /// the LOG converts.
+    public static let maxLoggedHintSeconds: TimeInterval = 86_400
+
+    /// The parsed `Retry-After` as the text a log line carries: whole seconds, clamped to
+    /// 0...`maxLoggedHintSeconds`, or "none" when there is no usable hint.
+    ///
+    /// Every uploader's "upload paused" line goes through this instead of converting the
+    /// raw hint with `Int(...)`, which crashes the app on a hostile header (and these
+    /// uploaders run in the background, always on).
+    public static func hintLogSeconds(_ hint: TimeInterval?) -> String {
+        guard let hint = hint, hint.isFinite else { return "none" }
+        let clamped = min(max(hint, 0), maxLoggedHintSeconds)
+        return String(Int(clamped.rounded()))
+    }
+
     /// How long to stay quiet after a kept failure.
     ///
     /// - A parsable `Retry-After` replaces the schedule: floor 1 s, cap 300 s. This holds

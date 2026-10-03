@@ -101,6 +101,49 @@ final class UploadRetryPolicyTests: XCTestCase {
         XCTAssertEqual(absurd, 300, accuracy: 0.0001)
     }
 
+    // MARK: - Logging a hostile Retry-After
+
+    /// `parseRetryAfter` only rejects nil, negative and non-finite values, so these come back
+    /// as finite Doubles far outside Int's range. The "upload paused" lines of the four
+    /// background uploaders used to print them with `Int($0.rounded())`, which TRAPS there:
+    /// a hostile or broken header would have crashed the app. `hintLogSeconds` clamps first.
+    func test_hintLogSecondsDoesNotTrapOnAHostileHeader() {
+        let raws = [
+            "1e300",
+            "99999999999999999999",       // 1e20, past Int.max (about 9.22e18)
+            "9223372036854775808",        // Int.max + 1
+            "1e19",
+            "1.7976931348623157e308",     // Double.greatestFiniteMagnitude
+        ]
+        for raw in raws {
+            let hint = UploadRetryPolicy.parseRetryAfter(raw, now: wall)
+            XCTAssertNotNil(hint, "\(raw) parses to a finite Double, which is the dangerous case")
+            XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(hint), "86400", raw)
+        }
+    }
+
+    func test_hintLogSecondsClampsAFarFutureHttpDate() {
+        let hint = UploadRetryPolicy.parseRetryAfter("Fri, 31 Dec 9999 23:59:59 GMT", now: wall)
+        XCTAssertNotNil(hint)
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(hint), "86400")
+    }
+
+    func test_hintLogSecondsSaysNoneWithoutAUsableHint() {
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(nil), "none")
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(UploadRetryPolicy.parseRetryAfter("1e400", now: wall)), "none",
+                       "overflows to infinity: no hint")
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(Double.infinity), "none")
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(Double.nan), "none")
+    }
+
+    func test_hintLogSecondsPrintsOrdinaryHintsAsWholeSeconds() {
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(60), "60")
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(0), "0")
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(59.6), "60")
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(86_400), "86400")
+        XCTAssertEqual(UploadRetryPolicy.hintLogSeconds(-5), "0", "defensive: parse never returns a negative")
+    }
+
     func test_anHttpDateHeaderIsHonoured() {
         let delay = UploadRetryPolicy.delay(status: 503, retryAfterHeader: "Sun, 06 Nov 1994 08:49:37 GMT",
                                             now: wall, consecutiveFailures: 1, jitterUnit: 0)

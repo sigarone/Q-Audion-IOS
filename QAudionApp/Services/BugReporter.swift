@@ -103,10 +103,18 @@ public final class BugReporter: ObservableObject {
     /// stays here, in memory, until the server takes it. Bounded: a report holds a screenshot
     /// and a log window, so only `maxQueuedReports` wait at once; when a new one arrives
     /// beyond that the OLDEST is dropped, with a log line.
-    private struct QueuedReport {
+    ///
+    /// `callId` and `diagSnapshot` are fixed when the report is QUEUED and travel with it: a
+    /// report kept for a retry 30-300+ s later must still say which call it was about and what
+    /// the app's state was at trigger time, not the call (and state) the user is in by then.
+    /// The token and the server URL are different: they are read again on every attempt, so a
+    /// retry never uses a token that was refreshed or revoked in the meantime.
+    struct QueuedReport {
         let id = UUID()
         let report: PendingReport
         let note: String
+        let callId: String
+        let diagSnapshot: String
         var attempts: Int = 0
     }
     private var queuedReports: [QueuedReport] = []
@@ -134,6 +142,13 @@ public final class BugReporter: ObservableObject {
     private var autoCooldownUntil: Date = .distantPast
 
     private init() {}
+
+    /// A reporter of its own for unit tests, so they never touch `shared`. Production code
+    /// uses `shared` only.
+    init(forTesting: Void) {}
+
+    /// Test seam: stands in for `attemptUpload` (no network). nil in production.
+    var attemptOverride: (@MainActor (QueuedReport) async -> UploadAttemptOutcome)?
 
     // MARK: - Configuration
 
@@ -490,7 +505,7 @@ public final class BugReporter: ObservableObject {
     }
 
     /// W-RETRYAFTER -- how one upload attempt ended.
-    private enum UploadAttemptOutcome {
+    enum UploadAttemptOutcome {
         /// The server took the report.
         case done
         /// Nothing more to try (no token/URL, nothing to assemble, a rejected report).
@@ -515,13 +530,20 @@ public final class BugReporter: ObservableObject {
     /// single shot. The report is queued, then the queue is drained one report at a time,
     /// never before the uploader's pause (the server's `Retry-After`) has passed; a failure
     /// that is not the report's fault (429/503/5xx/auth/network) keeps it for another try.
-    private func uploadReport(report: PendingReport, note: String) async {
+    func uploadReport(report: PendingReport, note: String) async {
         if queuedReports.count >= Self.maxQueuedReports {
             queuedReports.removeFirst()
             RTLog.warn("bugreport", "upload queue full: oldest report dropped cap="
                        + String(Self.maxQueuedReports))
         }
-        queuedReports.append(QueuedReport(report: report, note: note))
+        // The call the report is about and the app's state are read ONCE, here, at trigger/send
+        // time (see `QueuedReport`); every retry sends exactly these.
+        queuedReports.append(QueuedReport(
+            report: report,
+            note: note,
+            callId: getActiveCallId?() ?? "",
+            diagSnapshot: Self.addingReportBlock(to: getDiagSnapshot?() ?? "", report: report)
+        ))
         // One drain loop at a time; a report queued while it runs is picked up by it.
         guard !isDrainingUploads else { return }
         isDrainingUploads = true
@@ -529,13 +551,26 @@ public final class BugReporter: ObservableObject {
 
         while let next = queuedReports.first {
             if Task.isCancelled { return }
+            // The diagnostics opt-in is re-read on EVERY pass, not only when the report was
+            // triggered: a kept report is retried minutes later, and an automatic one the user
+            // has since opted out of must not leave the phone.
+            if Self.isConsentWithdrawn(for: next.report) {
+                removeQueuedReport(matching: next)
+                RTLog.info("bugreport", "queued auto report dropped: diagnostics opt-in OFF")
+                continue
+            }
             let now = ProcessInfo.processInfo.systemUptime
             if uploadPause.isPaused(now: now) {
                 let wait = uploadPause.remainingSeconds(now: now)
                 try? await Task.sleep(nanoseconds: UInt64((wait + 0.05) * 1_000_000_000))
                 continue
             }
-            let outcome = await attemptUpload(report: next.report, note: next.note)
+            let outcome: UploadAttemptOutcome
+            if let attemptOverride = attemptOverride {
+                outcome = await attemptOverride(next)
+            } else {
+                outcome = await attemptUpload(queued: next)
+            }
             // The queue may have dropped its oldest while that attempt was out: only touch the
             // entry if it is still the one that was tried.
             switch outcome {
@@ -553,7 +588,7 @@ public final class BugReporter: ObservableObject {
                                                       jitterUnit: Double.random(in: 0...1))
                 let statusText = status.map { String($0) } ?? "net"
                 let hint = UploadRetryPolicy.parseRetryAfter(retryAfter, now: Date())
-                let hintText = hint.map { String(Int($0.rounded())) } ?? "none"
+                let hintText = UploadRetryPolicy.hintLogSeconds(hint)
                 RTLog.warn("bugreport", "upload paused status=" + statusText + " retry_after=" + hintText
                            + " pause=" + String(Int(delay.rounded())) + " queued=" + String(queuedReports.count)
                            + " attempt=" + String(attempts))
@@ -573,8 +608,40 @@ public final class BugReporter: ObservableObject {
         }
     }
 
+    /// An automatic report is diagnostic egress the user never asked for: it is allowed only
+    /// while the diagnostics opt-in is ON (`triggerAuto`). Manual and abuse reports end in an
+    /// explicit user action and are never gated. `diagnosticsEnabled` is a parameter so the
+    /// rule can be tested without touching the user's real preference.
+    static func isConsentWithdrawn(for report: PendingReport,
+                                   diagnosticsEnabled: Bool = TelemetryService.isEnabled) -> Bool {
+        return report.trigger == "auto" && !diagnosticsEnabled
+    }
+
+    /// The diagnostics opt-in was switched OFF: forget every queued automatic report now, so
+    /// none stays in memory through a long pause (the drain loop also re-checks before each
+    /// attempt, and `attemptUpload` once more before the POST). Manual and abuse reports
+    /// stay: the user asked for those.
+    func dropQueuedAutoReports() {
+        let before = queuedReports.count
+        queuedReports.removeAll { $0.report.trigger == "auto" }
+        let dropped = before - queuedReports.count
+        if dropped > 0 {
+            RTLog.info("bugreport", "queued auto reports dropped: diagnostics opt-in OFF n=" + String(dropped))
+        }
+    }
+
+    /// What the queue holds, for tests: trigger, the call id and snapshot fixed at queue
+    /// time, and the attempts so far.
+    var queuedReportsForTesting: [(trigger: String, callId: String, diagSnapshot: String, attempts: Int)] {
+        return queuedReports.map { ($0.report.trigger, $0.callId, $0.diagSnapshot, $0.attempts) }
+    }
+
     /// One attempt: pubkey, assemble, POST. Never throws; says what to do with the report.
-    private func attemptUpload(report: PendingReport, note: String) async -> UploadAttemptOutcome {
+    /// The call id and the diagnostic snapshot come from the queue entry (fixed when it was
+    /// queued), never from the live providers; the token and the server URL are read now.
+    private func attemptUpload(queued: QueuedReport) async -> UploadAttemptOutcome {
+        let report = queued.report
+        let note = queued.note
         guard let getServerUrl = getServerUrl,
               let getToken = getToken else { return .abandon }
         let serverUrl = getServerUrl()
@@ -603,8 +670,8 @@ public final class BugReporter: ObservableObject {
         // Same convention as LogExportService now: first 8 of the user id.
         let userPrefix = String((TokenVault.loadUserId() ?? "").prefix(8))
         let timestamp = BugReporter.isoFormatter.string(from: report.capturedAt)
-        let callId = getActiveCallId?() ?? ""
-        let diagSnapshot = Self.addingReportBlock(to: getDiagSnapshot?() ?? "", report: report)
+        let callId = queued.callId
+        let diagSnapshot = queued.diagSnapshot
 
         let bodyPlaintext: String
         if note.isEmpty {
@@ -642,6 +709,13 @@ public final class BugReporter: ObservableObject {
             BugReportAssembler.assemble(input)
         }.value
         guard let assembled = assembledReport else { return .abandon }
+
+        // The pubkey fetch and the assembly above can take a while: read the opt-in once more,
+        // right before the bytes leave the phone.
+        if Self.isConsentWithdrawn(for: report) {
+            RTLog.info("bugreport", "auto report not sent: diagnostics opt-in OFF")
+            return .abandon
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

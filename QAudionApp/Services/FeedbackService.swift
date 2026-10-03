@@ -269,7 +269,7 @@ public final class FeedbackService: ObservableObject {
                                             wallClock: Date(),
                                             jitterUnit: Double.random(in: 0...1))
             let hint = UploadRetryPolicy.parseRetryAfter(http?.value(forHTTPHeaderField: "Retry-After"), now: Date())
-            let hintText = hint.map { String(Int($0.rounded())) } ?? "none"
+            let hintText = UploadRetryPolicy.hintLogSeconds(hint)
             RTLog.warn("feedback", "requests paused status=" + String(status) + " retry_after=" + hintText
                        + " pause=" + String(Int(delay.rounded())))
         }
