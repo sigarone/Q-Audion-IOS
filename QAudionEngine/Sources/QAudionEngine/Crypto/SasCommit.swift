@@ -378,7 +378,7 @@ public enum KcMacWindow {
             }
         } else if !isInitiator {
             // K2: the acceptor of a rekey round waits for the offerer's MAC for 30 s from arming.
-            end = max(end, armedAtMs + rekeyAcceptorMs)
+            end = max(end, armedAtMs + baseMs)   // MUTANT M8
         }
         return max(0, end - nowMs)
     }

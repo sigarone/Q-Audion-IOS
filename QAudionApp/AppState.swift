@@ -14425,6 +14425,7 @@ final class AppState: ObservableObject {
         if let prev = call.live, prev.round != state.round, prev.resultRecorded {
             retireKcRoundState(prev, key: key, call: call)
         }
+        for other in call.states.values where other.round != state.round { other.deadlineTask?.cancel() }   // MUTANT M10
         call.states[state.round] = state
         call.liveRound = state.round
 
@@ -14718,7 +14719,7 @@ final class AppState: ObservableObject {
             }
         }
         // `kcmac` counts the live round's own MAC, `older` the own MACs of other rounds re-sent in the same event.
-        print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) older=\(olderWires.count) callId=\(cid.prefix(8))…")
+        print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) callId=\(cid.prefix(8))…")
     }
 
     /// W-KCMAC — verify an inbound `KCMAC:` piggy-back by attributing it to a key round BY CONTENT (R-KCMAC-ROUNDS, §3.7.1): the

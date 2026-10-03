@@ -1427,7 +1427,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ///   the field (byte-identical wire to a peer that hasn't shipped this).
     @discardableResult
     public func performPqcReKey(
-        callId: String, peerId: String, timeoutSec: Double = Double(ConfirmTimeout.rekeyAcceptWaitMs) / 1000,
+        callId: String, peerId: String, timeoutSec: Double = 8.0,   // MUTANT M9
         armedPeriodMs: Int64? = nil) async -> Bool {
         let (canProceed, sendOpaqueRaw) = lock.withLock { () -> (Bool, ((String) async throws -> Void)?) in
             // R-REKEY-INIT: only the caller ever initiates a rekey; the callee only responds.

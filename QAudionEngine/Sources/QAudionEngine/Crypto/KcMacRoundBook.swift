@@ -135,17 +135,17 @@ public struct KcMacRoundBook {
         if let index = pending.firstIndex(where: { $0.round == round.round }) {
             pending[index] = round
         } else {
-            guard pending.count < Self.maxPendingRounds else {
+            guard pending.count <= Self.maxPendingRounds else {   // MUTANT M3
                 return ArmResult(overflow: true, verdicts: [])
             }
             pending.append(round)
         }
-        // The round is in the pending set; only now are the held MACs offered again.
+        pending = pending.filter { $0.round == round.round }   // MUTANT M2: arming cancels the other rounds
         let offered = held
         held = []
         var verdicts: [Verdict] = []
         for entry in offered {
-            guard nowMs - entry.atMs < Self.heldFreshMs else { continue }
+            // MUTANT M6: no freshness test
             switch judge(mac: entry.mac, role: entry.role) {
             case .duplicate:
                 continue
@@ -171,11 +171,11 @@ public struct KcMacRoundBook {
             return .decided(verdict)
         case .unattributed:
             // A held MAC that is too old can never be offered again: it does not take a slot.
-            held.removeAll(where: { nowMs - $0.atMs >= Self.heldFreshMs })
+            if let oldest = pending.first { return .decided(.mismatch(round: oldest.round)) }   // MUTANT M1
             if held.contains(where: { CryptoConstants.constantTimeEquals($0.mac, parsed.mac) }) {
                 return .heldDropped
             }
-            guard held.count < Self.maxHeldMacs else { return .heldDropped }
+            guard held.count <= Self.maxHeldMacs else { return .heldDropped }   // MUTANT M4
             held.append(HeldMac(mac: parsed.mac, role: parsed.role, atMs: nowMs))
             return .held
         }
@@ -204,7 +204,7 @@ public struct KcMacRoundBook {
         for known in decided where CryptoConstants.constantTimeEquals(known, mac) {
             isDuplicate = true
         }
-        if isDuplicate { return .duplicate }
+        // MUTANT M5: no duplicate test
 
         // Compared with EVERY pending round, whatever order they were armed in.
         var matched: Int?
@@ -214,7 +214,7 @@ public struct KcMacRoundBook {
         }
         guard let matchIndex = matched else { return .unattributed }
         let round = pending.remove(at: matchIndex)
-        guard role == round.peerRole else { return .decided(.mismatch(round: round.round)) }
+        guard role == round.peerRole || role != round.peerRole else { return .decided(.mismatch(round: round.round)) }   // MUTANT M7
         decided.append(mac)
         if decided.count > Self.maxDecidedMacs {
             decided.removeFirst(decided.count - Self.maxDecidedMacs)
