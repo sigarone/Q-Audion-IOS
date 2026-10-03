@@ -109,6 +109,7 @@ final class PersistentCallRecordStoreTests: XCTestCase {
         let dir = try makeDirectory()
         let (url, provider, bytesBefore) = try seededFile(in: dir)
         let createsBefore = provider.createCalls
+        let backupBefore = try Data(contentsOf: backupURL(url))   // left by the seeding saves
         provider.lockedStatus = errSecInteractionNotAllowed
 
         let store = makeStore(provider, at: url)
@@ -121,7 +122,7 @@ final class PersistentCallRecordStoreTests: XCTestCase {
         XCTAssertEqual(store.records.map(\.id), ["c3"])
         XCTAssertEqual(try Data(contentsOf: url), bytesBefore, "the file must not be overwritten while the key is unreadable")
         XCTAssertEqual(provider.createCalls, createsBefore, "no new key may be minted while the real one is only unreadable")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: backupURL(url).path))
+        XCTAssertEqual(try Data(contentsOf: backupURL(url)), backupBefore, "the backup is not rotated either")
         XCTAssertFalse(FileManager.default.fileExists(atPath: unreadableURL(url).path))
     }
 
@@ -279,6 +280,7 @@ final class PersistentCallRecordStoreTests: XCTestCase {
     func test_keyNotFound_withExistingFile_movesTheFileAside() throws {
         let dir = try makeDirectory()
         let (url, _, bytesBefore) = try seededFile(in: dir)
+        let backupBefore = try Data(contentsOf: backupURL(url))   // left by the seeding saves
         let newProvider = FakeKeyProvider()   // the old key is gone (restore to a new device)
 
         let store = makeStore(newProvider, at: url)
@@ -290,8 +292,8 @@ final class PersistentCallRecordStoreTests: XCTestCase {
         begin(store, "c3")
         XCTAssertEqual(try readRecords(at: url, key: try XCTUnwrap(newProvider.key)).map(\.id), ["c3"])
         XCTAssertEqual(try Data(contentsOf: unreadableURL(url)), bytesBefore, "the old file is still kept")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: backupURL(url).path),
-                       "an unreadable file must not become the backup")
+        XCTAssertEqual(try Data(contentsOf: backupURL(url)), backupBefore,
+                       "an unreadable file must not replace the backup")
     }
 
     @MainActor
