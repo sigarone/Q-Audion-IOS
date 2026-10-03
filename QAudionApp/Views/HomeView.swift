@@ -536,21 +536,27 @@ private struct CallsTabView: View {
                             HStack {
                                 Label(displayNameFor(call), systemImage: "phone.fill")
                                 Spacer()
+                                // Explicit .borderless + a real hit area: one tap, one call
+                                // start (see CallHistoryRow for the List-row hit-target issue).
                                 Button {
                                     Task { await appState.startCall(contactId: call, video: false) }
                                 } label: {
                                     Image(systemName: "phone.fill")
                                         .foregroundStyle(.blue)
+                                        .frame(width: 36, height: 36)
+                                        .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.borderless)
 
                                 Button {
                                     Task { await appState.startCall(contactId: call, video: true) }
                                 } label: {
                                     Image(systemName: "video.fill")
                                         .foregroundStyle(.green)
+                                        .frame(width: 36, height: 36)
+                                        .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.borderless)
                             }
                         }
                     }
