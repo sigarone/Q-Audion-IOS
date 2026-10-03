@@ -182,7 +182,7 @@ public struct CallerAcceptLatch: Equatable {
 
     /// `startCall` began an outgoing call with this wire id. Clears whatever the previous call left behind first.
     public mutating func beginOutgoing(callId: String) {
-        // TEMP-MUTANT-STALEENVELOPE (do not merge): reset removed
+        reset()
         outgoingCallId = Self.nonEmpty(callId.lowercased())
     }
 
@@ -202,12 +202,11 @@ public struct CallerAcceptLatch: Equatable {
     public mutating func terminalEnvelopeArrived(envelopeCallId: String?, phase: Phase) -> TerminalStep {
         guard let id = Self.nonEmpty(envelopeCallId?.lowercased()) else { return .ignore(.noCallId) }
         guard let current = outgoingCallId else { return .ignore(.noOutgoingCall) }
-        // TEMP-MUTANT-STALEENVELOPE (do not merge): id check removed
-        _ = current
+        guard id == current else { return .ignore(.otherCall) }
         switch phase {
         case .idle, .ended: return .ignore(.notInCall)
         case .connecting, .ringing, .active, .encrypted:
-            // TEMP-MUTANT-STALEENVELOPE (do not merge): reset removed
+            reset()
             return .endOutgoingCall
         }
     }
