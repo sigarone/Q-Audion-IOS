@@ -359,6 +359,32 @@ jobs:
             echo "::endgroup::"
           done
 
+      # 2026-10-03 — diagnostic, every run. The xcodebuild log does not name the test cases that ran, so a skipped
+      # or never-discovered suite looks exactly like a green one. This prints the executed cases by name (with the
+      # suites of the caller-busy work echoed separately) and uploads the full list. Never fails the job.
+      - name: List the executed test cases (xcresult)
+        if: always()
+        run: |
+          for bundle in /tmp/ios-sim-results-attempt*.xcresult; do
+            [ -d "$bundle" ] || continue
+            n=$(basename "$bundle" .xcresult)
+            echo "::group::$bundle test cases"
+            python3 scripts/ci/xcresult_test_list.py "$bundle" "/tmp/engine-test-cases-$n.txt" \
+              CallerBusyWiringTests OutgoingCallKitStartPolicyTests OutgoingCallKitFallbackTests \
+              CallTeardownLatchTests CallKitLateActivationTests PeerNameScopeTests \
+              CallerBusyPeerSilenceTests CallerBusyTeardownTests BusyToneTests || true
+            echo "::endgroup::"
+          done
+      - name: Upload the executed test case list
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: engine-test-cases-${{ github.run_number }}
+          path: /tmp/engine-test-cases-*.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
   # ----------------------------------------------------------------
   # Report-only checks added 2026-07-28. Each of these three jobs is
   # independent of `test`/`ios-simulator-tests` above (no `needs:`,

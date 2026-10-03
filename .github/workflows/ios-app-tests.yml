@@ -181,6 +181,14 @@ jobs:
             exit 1
           fi
 
+      # 2026-10-03 — diagnostic: the executed app-target cases by name (the summary above only counts them).
+      - name: List the executed app-target test cases (xcresult)
+        if: always()
+        run: |
+          python3 ../scripts/ci/xcresult_test_list.py /tmp/app-tests.xcresult /tmp/app-test-cases.txt \
+            CallerBusyOutcomeTests PersistentCallRecordStoreTests || true
+        working-directory: QAudionApp
+
       - name: Upload logs
         if: always()
         continue-on-error: true
@@ -190,5 +198,6 @@ jobs:
           path: |
             QAudionApp/build-sim.log
             QAudionApp/app-tests.log
+            /tmp/app-test-cases.txt
           retention-days: 7
           if-no-files-found: ignore
