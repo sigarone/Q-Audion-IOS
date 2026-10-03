@@ -142,6 +142,9 @@ final class AuthService {
         }
         TokenVault.saveDeviceId(creds.deviceId)
         TokenVault.saveUserId(creds.userId)
+        // A new login starts a new session: the previous session's recovery backoff, renew
+        // cooldown and remembered-dead refresh token must not follow it.
+        AuthRefreshCoordinator.shared.resetBackoff()
     }
 
     func saveToken(_ token: String) {
@@ -186,6 +189,9 @@ final class AuthService {
 
     func clearToken() {
         TokenVault.clear()
+        // Logout / session loss: drop the recovery state of the session that just ended, and
+        // invalidate any flight still on the wire (its outcome must not leak into the next one).
+        AuthRefreshCoordinator.shared.resetBackoff()
         UserDefaults.standard.removeObject(forKey: tokenKey)
         UserDefaults.standard.removeObject(forKey: refreshTokenKey)
         UserDefaults.standard.removeObject(forKey: userIdKey)

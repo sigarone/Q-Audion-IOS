@@ -4,20 +4,24 @@ import os
 import Network
 
 public final class BCryptoRestClient {
-    /// Callback invoked when a protected request returns HTTP 401.
-    /// Implementations should call POST /api/v1/auth/refresh with the current
-    /// refresh token and return the new (accessToken, refreshToken) pair so
-    /// the client can update its config and retry the original request. If
-    /// refresh fails the callback should throw — the original request will
-    /// then bubble up the 401 as BCryptoError.unauthorized.
-    public typealias TokenRefresher = @Sendable () async throws -> (accessToken: String, refreshToken: String?)
+    /// Callback invoked (through `AuthRefreshCoordinator`) when a protected request
+    /// returns HTTP 401. Implementations call POST /api/v1/auth/refresh with the
+    /// refresh token they are GIVEN — the coordinator reads it from the shared
+    /// credential store, so a long-lived client never presents its own stale copy —
+    /// and return the new tokens. They must NOT write them anywhere: persistence is
+    /// the coordinator's compare-and-swap. If refresh fails the callback throws and
+    /// the cascade continues with the device-renew fallback.
+    public typealias TokenRefresher = @Sendable (_ refreshToken: String) async throws -> AuthTokenSet
 
     /// 2026-05-06 session-renewal Phase 2 — Ed25519 device-bound silent
     /// re-auth fallback. Invoked when the primary `tokenRefresher`
     /// throws (refresh token rejected or absent). On success returns
-    /// the fresh tokens and the 401-retry proceeds; on failure the
-    /// caller surfaces `BCryptoError.unauthorized`.
-    public typealias DeviceRenewFallback = @Sendable () async throws -> (accessToken: String, refreshToken: String?)
+    /// the fresh tokens (not persisted by the closure, see above) and the
+    /// 401-retry proceeds; on failure the caller surfaces
+    /// `BCryptoError.unauthorized` only when the failure proves the credentials
+    /// are gone (device revoked, no device credential, signed out, account
+    /// changed), and `BCryptoSessionRecoveryError` (transient) otherwise.
+    public typealias DeviceRenewFallback = @Sendable () async throws -> AuthTokenSet
 
     private var config: BackendConfig
     /// The server this client was BUILT with — the certificate-pinned primary,
@@ -32,10 +36,18 @@ public final class BCryptoRestClient {
     private let session: URLSession
     private var tokenRefresher: TokenRefresher?
     private var deviceRenewFallback: DeviceRenewFallback?
-    /// Serialises concurrent refresh attempts so we don't fire N /auth/refresh
-    /// calls when many in-flight requests simultaneously hit 401.
-    private let refreshLock = OSAllocatedUnfairLock<Void>(initialState: ())
-    private var refreshInFlight: Task<Bool, Error>?
+    /// The ONE refresh single-flight of the process. Every path that refreshes the
+    /// session (REST 401, socket `auth_failed`, the app's proactive refresh, the tus
+    /// client) goes through it, so two refreshes are never in flight with the same
+    /// refresh token no matter how many clients exist. Tests inject their own instance.
+    public var authCoordinator: AuthRefreshCoordinator = .shared
+    /// The app's shared credential store (Keychain). When set, the refresh token is read
+    /// from it and results are written back with compare-and-swap; when nil (onboarding,
+    /// tests) this client uses its own config copy and persists nothing.
+    public var credentialStore: AuthCredentialStore?
+    /// Called, for every caller of a coordinated refresh, with the tokens it should now
+    /// use. The owning provider wires it to broadcast them to every transport.
+    public var onTokensApplied: (@Sendable (AuthTokenSet) -> Void)?
 
     // MARK: - IOS-E2 — anti-zombie-pool HTTP trio + W-INFLIGHTCANCEL
     //
@@ -372,7 +384,7 @@ public final class BCryptoRestClient {
     private func requestUncancellable(_ method: String, path: String, body: Data?, headers: [String: String],
                                        baseUrlOverride: String? = nil) async throws -> Data {
         // First attempt with the currently cached access token.
-        let (data, status, _) = try await performRequest(method, path: path, body: body, headers: headers,
+        let (data, status, retryAfter) = try await performRequest(method, path: path, body: body, headers: headers,
                                                            baseUrlOverride: baseUrlOverride)
         if (200...299).contains(status) {
             return data
@@ -385,9 +397,18 @@ public final class BCryptoRestClient {
         //      (Ed25519 challenge-response) — fired when (1) is absent
         //      or fails, and the request path is not one of the auth
         //      endpoints themselves.
-        let isAuthEndpoint = path.hasSuffix("/auth/refresh")
-            || path.hasSuffix("/auth/device-renew")
-            || path.hasSuffix("/auth/device-challenge")
+        // The challenge GET carries `?device_id=...`, which a plain `hasSuffix` never matched.
+        let pathOnly = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map(String.init) ?? path
+        let isAuthEndpoint = pathOnly.hasSuffix("/auth/refresh")
+            || pathOnly.hasSuffix("/auth/device-renew")
+            || pathOnly.hasSuffix("/auth/device-challenge")
+        // The session-recovery endpoints are rate-limited per device and per IP and answer
+        // 429 with `Retry-After`. `httpError(Int)` cannot carry the header, and the recovery
+        // coordinator must honour it, so these (and only these) endpoints throw a typed error.
+        if status == 429, isAuthEndpoint {
+            throw BCryptoRateLimitedError(retryAfterSec: BCryptoRateLimitedError.parse(retryAfter))
+        }
         if status == 401, !isAuthEndpoint {
             let refreshed = try await tryRefreshToken()
             if refreshed {
@@ -396,7 +417,10 @@ public final class BCryptoRestClient {
                 if (200...299).contains(retryStatus) {
                     return retryData
                 }
-                if retryStatus == 401 { throw BCryptoError.unauthorized }
+                // The recovery just succeeded, so the session is alive: a second 401 is not a
+                // proof that the credentials are gone (and `.unauthorized` is what the app
+                // answers with a forced QR re-pair). Transient error, the next call tries again.
+                if retryStatus == 401 { throw BCryptoSessionRecoveryError.rejectedAfterRecovery }
                 // W-B10PAYREQ (2026-09-02) — same mapping as the primary
                 // attempt below, applied here too so a 402 landing on the
                 // post-refresh retry isn't left as the generic httpError
@@ -498,6 +522,9 @@ public final class BCryptoRestClient {
         }
         let (retryData, retryStatus, retryRetryAfter) = try await performRequest(
             method, path: path, body: nil, headers: headers, baseUrlOverride: primaryServerUrl)
+        // Same rule as `requestUncancellable`: a 401 right after a recovery that worked is not
+        // a loss of credentials.
+        if retryStatus == 401 { throw BCryptoSessionRecoveryError.rejectedAfterRecovery }
         return (retryData, retryStatus, retryRetryAfter)
     }
 
@@ -564,72 +591,76 @@ public final class BCryptoRestClient {
         throw BCryptoError.httpError(lastStatus)
     }
 
-    /// Invoke the installed token refresher at most once per batch of concurrent
-    /// 401-affected requests. Returns `true` if the refresh succeeded and
-    /// `config.accessToken` was updated; `false` if neither path produced
-    /// fresh tokens (caller surfaces 401).
+    /// Run the session-recovery cascade for a 401-affected request. Returns `true` if
+    /// fresh tokens are now available in this client's `config` (from the network or
+    /// adopted from the shared store); `false` when the failure PROVES the credentials are
+    /// gone (the caller surfaces `BCryptoError.unauthorized`); throws
+    /// `BCryptoSessionRecoveryError` for every other failure.
     ///
-    /// Cascade: primary `tokenRefresher` (POST /auth/refresh) → on
-    /// failure or absence of a refresh token, the Phase 2
-    /// `deviceRenewFallback` (Ed25519 challenge-response). Concurrent
-    /// 401 callers coalesce on the same in-flight Task so we never
-    /// fire two parallel cascades.
+    /// The distinction matters because the process-wide coordinator makes one transient
+    /// failure (a cooldown, a dropped connection, a 5xx, a 429, a locked Keychain, a flight
+    /// timeout) visible to several callers at once, and `.unauthorized` is what the app
+    /// answers with a forced QR re-pair (`AuthSessionLossPolicy`). Only a definitive loss
+    /// (`AuthRecoveryFailure.provesCredentialLoss`: device revoked, no device credential,
+    /// signed out, account changed, or no recovery path at all) may say so.
+    ///
+    /// The cascade itself (primary `tokenRefresher` = POST /auth/refresh, then the Phase 2
+    /// `deviceRenewFallback`) and its single flight live in `AuthRefreshCoordinator`, which
+    /// is shared by every client in the process: concurrent 401 callers, the socket's
+    /// `auth_failed` recovery and the app's proactive refresh all await ONE network call.
     private func tryRefreshToken() async throws -> Bool {
-        // Read or create the in-flight task under the lock (non-async closure,
-        // so OSAllocatedUnfairLock.withLock is safe here).
-        let task: Task<Bool, Error> = refreshLock.withLock {
-            if let existing = refreshInFlight { return existing }
-            let primary = self.tokenRefresher
-            let fallback = self.deviceRenewFallback
-            let hasRefreshToken = self.config.refreshToken != nil
-            let newTask = Task<Bool, Error> {
-                // SECURITY H-2 — release the in-flight slot ONLY after
-                // the new tokens have been written to `config`. The old
-                // code cleared `refreshInFlight` in an outer `defer`
-                // that ran around `task.value`, so a 3rd concurrent 401
-                // could observe a nil slot, see the not-yet-written
-                // stale `config.accessToken`, and spawn a *second*
-                // refresh with the stale token. Holding the slot for
-                // the full refresh + config-update window and clearing
-                // it here makes the release atomic with the token swap.
-                defer { self.refreshLock.withLock { self.refreshInFlight = nil } }
-                // Step 1: try the primary refresher (POST /auth/refresh).
-                if let refresher = primary, hasRefreshToken {
-                    do {
-                        let pair = try await refresher()
-                        self.config.accessToken = pair.accessToken
-                        if let newRefresh = pair.refreshToken { self.config.refreshToken = newRefresh }
-                        return true
-                    } catch {
-                        // Fall through to the device-renew fallback.
-                    }
-                }
-                // Step 2: device-bound silent re-auth (Phase 2).
-                if let fallback {
-                    do {
-                        let pair = try await fallback()
-                        self.config.accessToken = pair.accessToken
-                        if let newRefresh = pair.refreshToken { self.config.refreshToken = newRefresh }
-                        return true
-                    } catch {
-                        return false
-                    }
-                }
-                return false
-            }
-            refreshInFlight = newTask
-            return newTask
+        let outcome = await refreshSession(trigger: .rest401)
+        if outcome.isSuccess { return true }
+        if let failure = outcome.failure, !failure.provesCredentialLoss {
+            throw BCryptoSessionRecoveryError(failure: failure)
         }
+        return false
+    }
 
-        // NOTE (H-2): no outer `defer` clearing `refreshInFlight` here —
-        // the slot is owned and released by the Task's own `defer`
-        // above, AFTER `config` is updated, so the release is atomic
-        // with the token swap. Persisting the refreshed tokens to the
-        // Keychain (TokenVault) is done at the app layer: the installed
-        // `tokenRefresher` / `deviceRenewFallback` closures (AppState)
-        // write the new pair, and `AuthService.loadToken()` sweeps any
-        // plaintext copy into the Keychain on the next cold start.
-        return try await task.value
+    /// Run (or join) the coordinated session recovery and apply the result to this client.
+    /// Never throws: failure is a value carrying a reason code.
+    ///
+    /// Every caller of a shared flight applies the tokens to its own config here, so a
+    /// client that merely joined the flight (or adopted a pair rotated elsewhere) ends up
+    /// on the same tokens as the one that did the network call.
+    public func refreshSession(trigger: AuthRefreshTrigger,
+                               ignoreCooldown: Bool = false) async -> AuthRefreshOutcome {
+        let request = AuthRefreshRequest(
+            trigger: trigger,
+            staleAccessToken: trigger.adoptsNewerStoredAccess ? config.accessToken : nil,
+            callerRefreshToken: config.refreshToken,
+            store: credentialStore,
+            refresher: tokenRefresher.map { Self.wrapRefresher($0) },
+            renewer: deviceRenewFallback.map { Self.wrapRenewer($0) },
+            ignoreCooldown: ignoreCooldown)
+        let outcome = await authCoordinator.refresh(request)
+        if let tokens = outcome.tokens {
+            config.accessToken = tokens.accessToken
+            if let newRefresh = tokens.refreshToken, !newRefresh.isEmpty { config.refreshToken = newRefresh }
+            onTokensApplied?(tokens)
+        }
+        return outcome
+    }
+
+    /// Classify whatever the closures throw into reason codes, once, at the boundary.
+    private static func wrapRefresher(_ refresher: @escaping TokenRefresher) -> AuthRefreshRequest.Refresher {
+        return { (token: String) async throws -> AuthTokenSet in
+            do {
+                return try await refresher(token)
+            } catch {
+                throw AuthFailureClassifier.classifyRefresh(error)
+            }
+        }
+    }
+
+    private static func wrapRenewer(_ renewer: @escaping DeviceRenewFallback) -> AuthRefreshRequest.Renewer {
+        return { () async throws -> AuthTokenSet in
+            do {
+                return try await renewer()
+            } catch {
+                throw AuthFailureClassifier.classifyRenew(error)
+            }
+        }
     }
 
     /// The base server URL from the current configuration.
@@ -653,7 +684,7 @@ public final class BCryptoRestClient {
     /// the internal path — this only widens WHO may ask, never what
     /// happens. Returns `true` when a fresh access token is available.
     public func refreshAccessTokenForExternalClient() async throws -> Bool {
-        try await tryRefreshToken()
+        await refreshSession(trigger: .external).isSuccess
     }
 
     /// Current refresh token — used by the WS auth-recovery bridge so the
@@ -678,11 +709,58 @@ public final class BCryptoRestClient {
     /// Never throws to the caller — recovery failure is reported as `false` so
     /// the WS client can park its loop without QR.
     public func recoverAuth() async -> Bool {
-        do {
-            return try await tryRefreshToken()
-        } catch {
-            return false
-        }
+        await refreshSession(trigger: .wsAuthFailed).isSuccess
+    }
+}
+
+/// A request answered 401, the session recovery behind it could not complete NOW (or the
+/// retried request was rejected again right after a recovery that worked), and nothing proves
+/// the credentials are gone. Transient: callers retry later, and nothing may clear a token or
+/// start a re-pair because of it (`BCryptoError.unauthorized` is reserved for the definitive
+/// case, see `AuthRecoveryFailure.provesCredentialLoss`). A separate type, not a case of
+/// `BCryptoError`, for the same reason as `BCryptoRateLimitedError`: that enum is switched
+/// exhaustively across the app.
+public struct BCryptoSessionRecoveryError: Error, Sendable, Equatable, CustomStringConvertible {
+    /// Why the recovery did not complete (reason code, HTTP status, pacing hint).
+    public let failure: AuthRecoveryFailure
+
+    public init(failure: AuthRecoveryFailure) {
+        self.failure = failure
+    }
+
+    /// How long until another attempt makes sense (0 when the failure gave no hint).
+    public var retryAfterSec: Int { failure.retryAfterSec }
+
+    /// The recovery succeeded, yet the retried request got 401 again.
+    static let rejectedAfterRecovery = BCryptoSessionRecoveryError(
+        failure: AuthRecoveryFailure(reason: .rejectedAfterRecovery, status: 401))
+
+    /// `BCryptoSessionRecoveryError(reason=... status=N final=0 retry_in=S)`: reason codes and
+    /// numbers only, no secrets (this reaches `String(describing:)` log lines).
+    public var description: String {
+        "BCryptoSessionRecoveryError(\(failure.logFields) retry_in=\(failure.retryAfterSec))"
+    }
+}
+
+/// HTTP 429 from one of the session-recovery endpoints (`/auth/refresh`, `/auth/device-challenge`,
+/// `/auth/device-renew`), carrying the server's `Retry-After`. A separate type, not a case of
+/// `BCryptoError`: that enum is switched exhaustively across the app and every other 429 keeps
+/// arriving as `BCryptoError.httpError(429)`. Only `AuthFailureClassifier` consumes this.
+public struct BCryptoRateLimitedError: Error, Sendable, Equatable {
+    /// `Retry-After` in whole seconds when the server sent a delta-seconds value, else nil.
+    public let retryAfterSec: Int?
+
+    public init(retryAfterSec: Int?) {
+        self.retryAfterSec = retryAfterSec
+    }
+
+    /// RFC 7231 delta-seconds only (the one form this server sends); an HTTP-date, a negative
+    /// or an unparsable value is nil. Capped at an hour.
+    static func parse(_ header: String?) -> Int? {
+        guard let header,
+              let secs = Double(header.trimmingCharacters(in: .whitespaces)),
+              secs.isFinite, secs > 0 else { return nil }
+        return Int(min(secs, 3600).rounded(.up))
     }
 }
 
