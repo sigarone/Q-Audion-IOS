@@ -60,16 +60,17 @@ public enum CallerOutgoingStatePolicy {
     ///   - phase: the caller's phase right now.
     ///   - callTornDown: `CallService.endCall()` ran since the OFFER was started (its generation changed).
     public static func afterOfferReturned(phase: Phase, callTornDown: Bool) -> OfferReturnedStep {
-        // TEMP MUTANT (do not merge): the old unconditional `callState = .active`.
-        _ = (phase, callTornDown)
-        return .advanceToActive
+        if callTornDown { return .abandon }
+        switch phase {
+        case .idle, .ended: return .abandon
+        case .connecting: return .advanceToActive
+        case .ringing, .active, .encrypted: return .keepPhase
+        }
     }
 
     /// `beginAndroidOutgoing` threw.
     public static func afterOfferThrew(callTornDown: Bool) -> OfferThrewStep {
-        // TEMP MUTANT (do not merge): the old unconditional teardown.
-        _ = callTornDown
-        return .teardownAndIdle
+        callTornDown ? .leaveAlone : .teardownAndIdle
     }
 
     /// The phase an inbound `call_ready` moves the caller to, or nil when it must be ignored. `call_ready` only
@@ -77,16 +78,15 @@ public enum CallerOutgoingStatePolicy {
     /// redelivered envelope must not re-open it) and on one whose ACCEPT is already bound (`.encrypted`, the callee
     /// answered, R-ANSWER-FIRST). A call already finalized is excluded by the caller of this function.
     public static func phaseOnCallReady(_ phase: Phase) -> Phase? {
-        // TEMP MUTANT (do not merge): the old unconditional `callState = .ringing`.
-        _ = phase
-        return .ringing
+        switch phase {
+        case .connecting, .active, .ringing: return .ringing
+        case .encrypted, .idle, .ended: return nil
+        }
     }
 
     /// The deferred `.ended` -> `.idle` settle after a peer-offline / busy teardown. True only while the state is
     /// still the `.ended` that teardown left: a redial inside the hold window owns the state by then.
     public static func shouldSettleToIdle(_ phase: Phase) -> Bool {
-        // TEMP MUTANT (do not merge): the old unconditional `callState = .idle`.
-        _ = phase
-        return true
+        phase == .ended
     }
 }
