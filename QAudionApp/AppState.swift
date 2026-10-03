@@ -24,6 +24,22 @@ enum CallState: String {
     case ended
 }
 
+extension CallState {
+    /// W-ACCEPTLATCH (2026-10-03) — the engine-side mirror of this state, the
+    /// input of `CallerAcceptLatch` (kept in the engine so every arrival order of
+    /// the caller's accept messages can be unit-tested without `AppState`).
+    var latchPhase: CallerAcceptLatch.Phase {
+        switch self {
+        case .idle: return .idle
+        case .connecting: return .connecting
+        case .ringing: return .ringing
+        case .active: return .active
+        case .encrypted: return .encrypted
+        case .ended: return .ended
+        }
+    }
+}
+
 // MARK: - Messaging Models
 
 /// Legacy conversation row used by AppState's in-memory `conversations` array
@@ -509,6 +525,14 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != callState else { return }
             updateProximityMonitoring()
+            // W-ACCEPTLATCH — an early `call_answer` held while the caller was
+            // still `.connecting` is re-applied once the call has moved on (async:
+            // the replay may itself change `callState`).
+            if acceptLatch.held != nil {
+                DispatchQueue.main.async { [weak self] in
+                    self?.replayHeldAcceptAnswer()
+                }
+            }
             // W-VPNCALLGATE — belt-and-suspenders clear: the controller's own
             // teardown already fires `onActiveCandidatePairRemoteHost(nil)`
             // on every call-end path it owns, but this is the ONE chokepoint
@@ -2851,16 +2875,16 @@ final class AppState: ObservableObject {
     /// Never answerable: `performAcceptIncoming` refuses them.
     private var ghostPlaceholderCallIds = RecentlyEndedCallLedger()
 
-    /// call_accepted two-flag latch (WIRE_SPEC §3.5) — set once THIS
-    /// device's local handshake-completion logic (the call_answer
-    /// state-advance) has run for a given callId. Whichever of {this,
-    /// `callAcceptedCallId`} lands first is latched; `finalizeCallActive()`
-    /// runs exactly once, on the second.
-    private var localHandshakeReadyCallId: String?
-    /// call_accepted two-flag latch (WIRE_SPEC §3.5) — set when
-    /// `onCallAccepted` fires for a given callId (the callee's real user
-    /// tapped Answer). See `localHandshakeReadyCallId`.
-    private var callAcceptedCallId: String?
+    /// call_accepted two-flag latch (WIRE_SPEC §3.5). W-ACCEPTLATCH (2026-10-03) —
+    /// the local-handshake flag (set once the call_answer state-advance has run for
+    /// a callId), the accepted flag (set when `call_accepted` fires for it), the
+    /// finalized marker, the held early `call_answer` and every admit/drop/finalize
+    /// decision live in this one engine value (`CallerAcceptLatch`, unit-tested for
+    /// every arrival order of `call_answer`, `call_accepted`, the ACCEPT and
+    /// `call_ready`). Whichever flag lands first is latched; `finalizeCallActive()`
+    /// runs exactly once, on the second. Writes go through its methods;
+    /// `acceptLatch.reset()` re-arms everything at call end.
+    private var acceptLatch = CallerAcceptLatch()
     /// W-MEDIAATACCEPT (option b) — review fix for the §5 caller watchdog
     /// (`armCallAcceptedWithoutAnswerWatchdog`): the (lowercased) call id of
     /// the last `call_answer` envelope received, gate or no gate. The spec's
@@ -2879,7 +2903,7 @@ final class AppState: ObservableObject {
     /// `AcceptGateDecisions.shouldAcceptAnswer` tell them apart, so a
     /// `call_answer` arriving before `call_ready` isn't dropped, while a
     /// `call_answer` redelivered after finalizing doesn't re-open the latch.
-    private var callFinalizedCallId: String?
+    private var callFinalizedCallId: String? { acceptLatch.finalizedCallId }
 
     /// Bug A guard — the call UUID for which `onAnswerCall` has already run.
     /// On the double-dialer second call (PushKit native UI + in-app banner
@@ -9800,45 +9824,27 @@ final class AppState: ObservableObject {
                 // `callFinalizedCallId` rules out the OTHER thing `.active`
                 // means (this function's own non-PQC finalize outcome) so a
                 // redelivered answer can't re-open an already-closed latch.
-                guard let callId = self.canonicalActiveCallId() else {
-                    // W-ACCEPTEDBEFOREREADY (2026-09-10) — this branch was
-                    // silent before; live logs tonight showed the SIBLING
-                    // guard below (handleCallAccepted) dropping every
-                    // progression signal with zero trace, so this one gets
-                    // the same visibility rather than being trusted blind.
-                    RTLog.warn("call", "callanswer dropped=1 reason=nocallid")
-                    return
-                }
-                guard AcceptGateDecisions.shouldAcceptAnswer(
-                    isRinging: self.callState == .ringing,
-                    isPreRingActive: self.callState == .active,
-                    alreadyFinalized: self.callFinalizedCallId == callId
-                ) else {
-                    RTLog.warn("call", "callanswer dropped=1 reason=gate ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) finalized=\(self.callFinalizedCallId == callId ? 1 : 0)")
-                    return
-                }
-                // W-ACCEPTGATE-SDP (2026-08-14) — an SDP-bearing `call_answer`
-                // is a WebRTC handshake artifact, NOT a human accepting: since
-                // W-DCSTUCK the callee builds its controller at RING time and
-                // answers with SDP right there, before anyone touches the
-                // screen. Arming the 7s net on that made the CALLER declare
-                // itself connected against a phone that was still ringing.
-                // Only a BARE answer still arms it. See `AcceptGateDecisions`.
-                let action = AcceptGateDecisions.resolve(
-                    peerAlreadyAccepted: self.callAcceptedCallId == callId,
-                    answerCarriedSdp: answerCarriedSdp
+                // W-ACCEPTLATCH (2026-10-03) — the whole decision now lives in
+                // `CallerAcceptLatch` (engine, unit-tested for every arrival
+                // order): which phases admit the latch (`.encrypted` too — the
+                // session-key observer moves a pre-ring `.active` caller there
+                // as soon as the callee's ACCEPT is bound, and an answer that
+                // lands afterwards used to be dropped, leaving the microphone
+                // muted for the whole call), the one held answer while the
+                // caller is still `.connecting`, and the other-call check. The
+                // envelope's own call id is used when present; the bound active
+                // call otherwise.
+                let activeId: String? = self.canonicalActiveCallId()
+                let envelopeId: String = answerEnvelopeCallId.lowercased()
+                let answerStep = self.acceptLatch.answerArrived(
+                    envelopeCallId: envelopeId,
+                    activeCallId: activeId,
+                    carriedSdp: answerCarriedSdp,
+                    phase: self.callState.latchPhase
                 )
-                if action == .finalizeNow {
-                    self.finalizeCallActive()
-                } else {
-                    self.localHandshakeReadyCallId = callId
-                    if let secs = AcceptGateDecisions.fallbackSeconds(for: action) {
-                        self.armAcceptGateTimeout(callId: callId, after: secs)
-                    }
-                    let sdpFlag: String = answerCarriedSdp ? "1" : "0"
-                    let gateLine: String = "accept gate sdp=" + sdpFlag + " id=" + String(callId.prefix(8))
-                    RTLog.info("call", gateLine)
-                }
+                let appliedId: String = envelopeId.isEmpty ? (activeId ?? "") : envelopeId
+                self.applyAcceptLatchAnswerStep(
+                    answerStep, callId: appliedId, carriedSdp: answerCarriedSdp)
             }
         }
         // W-RESTARTICEREQ (2026-08-29) — the peer's network changed and it is
@@ -18600,8 +18606,10 @@ final class AppState: ObservableObject {
         // what lets a later `.active` (this function's own non-PQC outcome)
         // be told apart from the caller's pre-ring `.active`. See
         // `AcceptGateDecisions.shouldAcceptAnswer`.
-        self.callFinalizedCallId = self.canonicalActiveCallId()
-        if self.callSasKeySource == .mlKem {
+        self.acceptLatch.markFinalized(callId: self.canonicalActiveCallId())
+        // W-ACCEPTLATCH — an answer applied while the caller is already `.encrypted`
+        // (the ACCEPT was bound first) must never walk the state back to `.active`.
+        if self.callSasKeySource == .mlKem || self.callState == .encrypted {
             self.callState = .encrypted
             RTLog.info("call", "call_answer: PQC already done — .ringing → .encrypted")
         } else {
@@ -18896,35 +18904,26 @@ final class AppState: ObservableObject {
         // and a latch that depends on case is a latch that silently stops
         // closing the next time it drifts.
         let wireId = callId.lowercased()
-        self.callAcceptedCallId = wireId
-        // W-ACCEPTEDBEFOREREADY (2026-09-10) — live raw-log evidence (two
-        // separate real calls, iOS↔iOS WS-relay, both devices foregrounded):
-        // `call_ready` never arrives at all on this call shape, so the
-        // caller's `callState` never leaves the pre-ring `.active` set by
-        // `startCall()` and never reaches `.ringing`. This guard's old
-        // `callState == .ringing`-only check therefore silently dropped
-        // EVERY `call_accepted` on both real test calls tonight — zero
-        // `finalizeCallActive()` runs, the outgoing key-exchange ring cue
-        // (`QAudionRingtonePlayer`) never stopped, even with real WebRTC
-        // media already flowing both ways. Exactly the same race
-        // `AcceptGateDecisions.shouldAcceptAnswer` was already fixed for
-        // (W-ANSWERBEFOREREADY, 2026-09-08) on its sibling inbound edge —
-        // that fix was never extended to this one. Reusing the same,
-        // already-reviewed decision function instead of duplicating its
-        // three-state logic here.
-        guard AcceptGateDecisions.shouldAcceptAnswer(
-            isRinging: self.callState == .ringing,
-            isPreRingActive: self.callState == .active,
-            alreadyFinalized: self.callFinalizedCallId == wireId
-        ) else {
-            // W-ACCEPTEDBEFOREREADY — this used to be a silent `return`,
-            // which is exactly why the bug above went unnoticed until raw
-            // device logs were pulled by hand. Short, numeric-tailed so it
-            // survives the remote-log redactor (reference_ios_log_pipeline_limits).
-            RTLog.warn("call", "callaccepted dropped=1 ringing=\(self.callState == .ringing ? 1 : 0) active=\(self.callState == .active ? 1 : 0) handshakeready=\(self.localHandshakeReadyCallId == wireId ? 1 : 0)")
-            return
-        }
-        guard self.localHandshakeReadyCallId == wireId else {
+        // W-ACCEPTLATCH (2026-10-03) — the accept flag, the phase gate and the
+        // two-flag decision now live in `CallerAcceptLatch` (engine, unit-tested
+        // for every arrival order). The gate admits `.encrypted` as well as
+        // `.ringing` and the pre-ring `.active`: the old `.ringing`/`.active`-only
+        // check (W-ACCEPTEDBEFOREREADY, 2026-09-10, fixed the pre-ring half) dropped
+        // an accept that landed after the session-key observer had already moved the
+        // caller to `.encrypted`, and the latch then never closed. While the caller
+        // is still `.connecting` the accept flag is recorded and the answer closes
+        // the latch later; an accept for another call no longer overwrites this
+        // call's flag. `call_ready` never arriving at all on some call shapes
+        // (W-ACCEPTEDBEFOREREADY's live evidence) is why pre-ring `.active` counts.
+        let acceptedStep = self.acceptLatch.acceptedArrived(
+            envelopeCallId: wireId,
+            activeCallId: self.canonicalActiveCallId(),
+            phase: self.callState.latchPhase
+        )
+        switch acceptedStep {
+        case .finalizeNow:
+            self.finalizeCallActive()
+        case .waitForAnswer:
             // W-MEDIAATACCEPT (option b) — §5 item 2: an accept landing
             // before OUR own handshake is ready is the ORDINARY path
             // against a (b) callee (D1: its ACCEPT is trattenuto until
@@ -18935,9 +18934,20 @@ final class AppState: ObservableObject {
             // §5 item 1: 12s "accepted but no answer" watchdog — today the
             // call would otherwise ride the server's own 60s ring timeout.
             self.armCallAcceptedWithoutAnswerWatchdog(wireId: wireId)
-            return
+        case .latched:
+            RTLog.info("call", "callaccepted latched=1 connecting=1")
+        case .dropped(let reason):
+            // W-ACCEPTEDBEFOREREADY — this used to be a silent `return`,
+            // which is exactly why the bug above went unnoticed until raw
+            // device logs were pulled by hand. Short, numeric-tailed so it
+            // survives the remote-log redactor (reference_ios_log_pipeline_limits).
+            let ringingFlag: Int = self.callState == .ringing ? 1 : 0
+            let activeFlag: Int = self.callState == .active ? 1 : 0
+            let encryptedFlag: Int = self.callState == .encrypted ? 1 : 0
+            let readyFlag: Int = self.acceptLatch.localHandshakeReadyCallId == wireId ? 1 : 0
+            let dropLine: String = "callaccepted dropped=1 why=\(reason.rawValue) ringing=\(ringingFlag) active=\(activeFlag) enc=\(encryptedFlag) handshakeready=\(readyFlag)"
+            RTLog.warn("call", dropLine)
         }
-        self.finalizeCallActive()
     }
 
     /// W-MEDIAATACCEPT (option b) — §5 item 1. Armed the moment
@@ -19051,10 +19061,58 @@ extension AppState {
     @MainActor
     private func armAcceptGateTimeout(callId: String, after seconds: Double) {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-            guard let self, self.callState == .ringing, self.localHandshakeReadyCallId == callId else { return }
+            // W-ACCEPTLATCH — every admitted phase, not only `.ringing`: a caller in the
+            // pre-ring `.active` or in `.encrypted` whose peer never sends `call_accepted`
+            // used to wait forever on a net that could not fire.
+            guard let self, self.acceptLatch.netFired(callId: callId, phase: self.callState.latchPhase) else { return }
             RTLog.warn("call", "call_accepted not received within timeout, proceeding anyway callId=\(callId)")
             self.finalizeCallActive()
         }
+    }
+
+    /// W-ACCEPTLATCH (2026-10-03) — carries out one `CallerAcceptLatch` decision for
+    /// a `call_answer`: from the WS handler, and from the replay of a held answer.
+    @MainActor
+    private func applyAcceptLatchAnswerStep(
+        _ step: CallerAcceptLatch.AnswerStep,
+        callId: String,
+        carriedSdp: Bool
+    ) {
+        switch step {
+        case .finalizeNow:
+            finalizeCallActive()
+        case .waitForAccept(let netSeconds):
+            if let secs = netSeconds {
+                armAcceptGateTimeout(callId: callId, after: secs)
+            }
+            let sdpFlag: String = carriedSdp ? "1" : "0"
+            let gateLine: String = "accept gate sdp=" + sdpFlag + " id=" + String(callId.prefix(8))
+            RTLog.info("call", gateLine)
+        case .held:
+            RTLog.info("call", "callanswer held=1 connecting=1")
+        case .dropped(let reason):
+            // Numeric-tailed so it survives the remote-log redactor. `reason=gate`
+            // keeps the shape earlier builds shipped for a phase/finalized drop.
+            let gateReason: String = (reason == .finalized || reason == .notInCall) ? "gate" : reason.rawValue
+            let ringingFlag: Int = callState == .ringing ? 1 : 0
+            let activeFlag: Int = callState == .active ? 1 : 0
+            let encryptedFlag: Int = callState == .encrypted ? 1 : 0
+            let finalizedFlag: Int = reason == .finalized ? 1 : 0
+            let dropLine: String = "callanswer dropped=1 reason=\(gateReason) ringing=\(ringingFlag) active=\(activeFlag) enc=\(encryptedFlag) finalized=\(finalizedFlag)"
+            RTLog.warn("call", dropLine)
+        }
+    }
+
+    /// W-ACCEPTLATCH — re-apply the one `call_answer` held while the caller was
+    /// still `.connecting`, now that the call has moved on (hooked from
+    /// `callState`'s `didSet`, only when an answer is actually held).
+    @MainActor
+    private func replayHeldAcceptAnswer() {
+        guard acceptLatch.held != nil else { return }
+        guard let replay = acceptLatch.phaseChanged(
+            to: callState.latchPhase, activeCallId: canonicalActiveCallId()
+        ) else { return }
+        applyAcceptLatchAnswerStep(replay.step, callId: replay.callId, carriedSdp: replay.carriedSdp)
     }
 
     /// W478 — answer an incoming call from the in-app ringing banner.
@@ -20339,10 +20397,10 @@ extension AppState {
         activeCallKitId = nil
         answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
         incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
-        localHandshakeReadyCallId = nil  // call_accepted latch — re-arm for the next call
-        callAcceptedCallId = nil  // call_accepted latch — re-arm for the next call
+        // call_accepted latch + W-ANSWERBEFOREREADY finalized marker + the held early
+        // call_answer (W-ACCEPTLATCH): all re-armed for the next call in one place.
+        acceptLatch.reset()
         callAnswerSeenCallId = nil  // W-MEDIAATACCEPT §5 watchdog latch — re-arm for the next call
-        callFinalizedCallId = nil  // W-ANSWERBEFOREREADY — re-arm for the next call
         pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
         pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
         pendingAnswerAudioOnlyCallId = nil  // W-VIDPRIVACY — re-arm for the next call
@@ -21852,11 +21910,13 @@ extension AppState {
                 // The call_answer WS handler below now drives .ringing → .active
                 // (and → .encrypted if PQC is already done). (report 10a131a4)
                 let prev = self.callState
-                switch self.callState {
-                case .active, .connecting:
+                // W-ACCEPTLATCH — the transition table is the engine's
+                // (`CallerAcceptLatch.phaseOnSessionKeyReady`, pinned by tests):
+                // only .active/.connecting advance; .idle, .ringing, .ended and an
+                // already .encrypted call are left alone.
+                if prev != .encrypted,
+                   CallerAcceptLatch.phaseOnSessionKeyReady(prev.latchPhase) == .encrypted {
                     self.callState = .encrypted
-                default:
-                    break  // .idle, .ringing, .ended, already .encrypted — skip
                 }
                 if self.callState == .encrypted && prev != .encrypted {
                     // W541-3: emit caller-side encrypted-reached
