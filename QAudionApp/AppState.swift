@@ -17940,7 +17940,31 @@ final class AppState: ObservableObject {
             // resumes real capture via setVideoPaused(false) once the peer
             // genuinely accepts.
             if video {
-                await startVideoPipeline(for: contactId, startPaused: true)
+                // W-CALLERSTATEGUARD (2026-10-03) — paused only while the call has not finalized: a call
+                // that finalized inside the OFFER window ran `finalizeCallActive()` before this pipeline
+                // existed, so its `setVideoPaused(false)` did nothing, and a pipeline created paused here
+                // would stay paused for the whole call.
+                let finalizedInOfferWindow: Bool = callFinalizedCallId == nativeSrtpOutgoingCallId
+                await startVideoPipeline(
+                    for: contactId,
+                    startPaused: CallerOutgoingStatePolicy.videoStartsPaused(
+                        callAlreadyFinalized: finalizedInOfferWindow))
+                // The camera start is a second suspension point: a hangup inside it ran `endCall()` with no
+                // pipeline to stop yet, so the pipeline just assigned (camera on) and the WebRTC controller
+                // below would belong to a call that no longer exists.
+                if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart(
+                    callTornDown: callService.currentCallGeneration() != offerCallGeneration) {
+                    RTLog.warn("call", "video start returned abandon=1 torndown=1")
+                    // Only when no newer call is live: a redial owns `videoPipeline` / `abrController` now.
+                    if callState == .idle || callState == .ended {
+                        abrController?.stop()
+                        abrController = nil
+                        videoPipeline?.stop()
+                        videoPipeline = nil
+                        videoNackCache = nil
+                    }
+                    return
+                }
             }
             // W347: also kick off a WebRTC outgoing call. This rides in
             // PARALLEL with the legacy SDP-less PQC path during the

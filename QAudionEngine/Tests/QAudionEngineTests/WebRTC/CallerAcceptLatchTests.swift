@@ -36,6 +36,10 @@ final class CallerAcceptLatchTests: XCTestCase {
         var offerGeneration = 0
         /// `startCall` hit the `.abandon` branch after the OFFER returned.
         var abandoned = false
+        /// `startCall`'s video start (after the OFFER): whether the pipeline was created paused, and whether the
+        /// setup stopped there because the call was torn down during the camera start.
+        var videoStartedPaused: Bool?
+        var abandonedAfterVideoStart = false
 
         /// `startCall()`: the OFFER round trip returned, the call is in its pre-ring `.active`.
         init(call: String, phase: Phase = .active) {
@@ -99,6 +103,16 @@ final class CallerAcceptLatchTests: XCTestCase {
             case .advanceToActive: setPhase(.active)
             case .keepPhase: break
             case .abandon: abandoned = true
+            }
+        }
+
+        /// `startCall` after `await startVideoPipeline(...)`: the pipeline start and the teardown check.
+        mutating func videoStarted() {
+            let finalized = latch.finalizedCallId != nil && latch.finalizedCallId == activeCallId
+            videoStartedPaused = CallerOutgoingStatePolicy.videoStartsPaused(callAlreadyFinalized: finalized)
+            if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart(
+                callTornDown: generation != offerGeneration) {
+                abandonedAfterVideoStart = true
             }
         }
 
@@ -625,6 +639,44 @@ final class CallerAcceptLatchTests: XCTestCase {
         XCTAssertEqual(quiet.phase, .idle, "with no redial the .ended still settles to .idle")
     }
 
+    /// A video call nobody has answered: the pipeline starts paused (nothing leaves the device before the accept).
+    func testStateGuard_videoStartsPausedOnAnUnansweredCall() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.offerReturned()
+        sim.videoStarted()
+        XCTAssertEqual(sim.videoStartedPaused, true)
+        XCTAssertFalse(sim.abandonedAfterVideoStart)
+        XCTAssertEqual(sim.finalizeCount, 0)
+    }
+
+    /// The call finalized inside the OFFER window (early `call_ready` replayed the held answer): `finalizeCallActive()`
+    /// ran before any pipeline existed, so its un-pause did nothing; the pipeline must not be created paused.
+    func testStateGuard_videoStartsUnpausedWhenTheCallFinalizedInTheOfferWindow() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: true)
+        sim.callReady()
+        XCTAssertEqual(sim.finalizeCount, 1)
+        sim.offerReturned()
+        sim.videoStarted()
+        XCTAssertEqual(sim.videoStartedPaused, false, "a finalized call's video must not stay paused for the whole call")
+        XCTAssertFalse(sim.abandonedAfterVideoStart)
+        XCTAssertFalse(sim.micMuted)
+    }
+
+    /// A hangup during the camera start: the setup stops, no WebRTC controller is built for the dead call.
+    func testStateGuard_hangupDuringTheVideoStartAbandonsTheSetup() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.offerReturned()
+        XCTAssertEqual(sim.phase, .active)
+        sim.endCall()
+        sim.videoStarted()
+        XCTAssertTrue(sim.abandonedAfterVideoStart, "startCall must not go on to build a call that ended")
+        XCTAssertEqual(sim.phase, .ended)
+        XCTAssertEqual(sim.finalizeCount, 0)
+        XCTAssertTrue(sim.micMuted)
+    }
+
     // MARK: - W-CALLERSTATEGUARD: the pure rules
 
     func testStateGuardRules_afterOfferReturned() {
@@ -656,6 +708,18 @@ final class CallerAcceptLatchTests: XCTestCase {
         XCTAssertNil(P.phaseOnCallReady(.encrypted))
         XCTAssertNil(P.phaseOnCallReady(.idle))
         XCTAssertNil(P.phaseOnCallReady(.ended))
+    }
+
+    func testStateGuardRules_shouldContinueSetupAfterVideoStart() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertTrue(P.shouldContinueSetupAfterVideoStart(callTornDown: false))
+        XCTAssertFalse(P.shouldContinueSetupAfterVideoStart(callTornDown: true))
+    }
+
+    func testStateGuardRules_videoStartsPaused() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertTrue(P.videoStartsPaused(callAlreadyFinalized: false))
+        XCTAssertFalse(P.videoStartsPaused(callAlreadyFinalized: true))
     }
 
     func testStateGuardRules_shouldSettleToIdle() {

@@ -89,4 +89,20 @@ public enum CallerOutgoingStatePolicy {
     public static func shouldSettleToIdle(_ phase: Phase) -> Bool {
         phase == .ended
     }
+
+    /// `startCall` awaits the camera start of a video call right after the OFFER returned (a second suspension
+    /// point, hundreds of milliseconds). A hangup in that window runs `endCall()` while there is no pipeline to stop
+    /// yet, so the continuation would then finish the camera start and build a WebRTC controller for a call that no
+    /// longer exists. False when `CallService.endCall()` ran since the OFFER was started: stop, build nothing.
+    public static func shouldContinueSetupAfterVideoStart(callTornDown: Bool) -> Bool {
+        !callTornDown
+    }
+
+    /// Whether the video pipeline `startCall` creates after the OFFER starts paused (nothing leaves the device until
+    /// the callee accepts). `finalizeCallActive()` is what un-pauses it, but it does nothing when the pipeline does not
+    /// exist yet: a call that already finalized inside the OFFER window (an early `call_ready` replayed a held answer)
+    /// would then get a pipeline paused for its whole life. Paused only while the call is not finalized.
+    public static func videoStartsPaused(callAlreadyFinalized: Bool) -> Bool {
+        !callAlreadyFinalized
+    }
 }
