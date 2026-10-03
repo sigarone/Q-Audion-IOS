@@ -97,6 +97,28 @@ public final class BugReporter: ObservableObject {
 
     private var getLogWindowMinutes: LogWindowProvider?
 
+    /// W-RETRYAFTER (2026-10-03) -- reports waiting for the server. A report the user took the
+    /// trouble to write used to be thrown away on the first failed upload (a 429 from the
+    /// per-IP limiter, a 5xx, a dropped connection: one attempt, one log line, gone). Now it
+    /// stays here, in memory, until the server takes it. Bounded: a report holds a screenshot
+    /// and a log window, so only `maxQueuedReports` wait at once; when a new one arrives
+    /// beyond that the OLDEST is dropped, with a log line.
+    private struct QueuedReport {
+        let id = UUID()
+        let report: PendingReport
+        let note: String
+        var attempts: Int = 0
+    }
+    private var queuedReports: [QueuedReport] = []
+    /// The uploader's "do not send before" window (the server's `Retry-After`, else a
+    /// schedule), shared by every report.
+    private var uploadPause = UploadPause()
+    private var isDrainingUploads: Bool = false
+    static let maxQueuedReports: Int = 3
+    /// Attempts per report before it is given up (explicitly logged): with the pause schedule
+    /// (30 s doubling to 300 s, or the server's own hint) that is well over ten minutes.
+    static let maxUploadAttempts: Int = 6
+
     /// KVO observation token for AVAudioSession.outputVolume.
     private var volumeObservation: NSKeyValueObservation?
     /// `AVAudioSession.routeChangeNotification` observer: a route change is the system
@@ -419,9 +441,9 @@ public final class BugReporter: ObservableObject {
     /// plaintext (this is the fix for the exact gap that used to exist:
     /// this class previously had NO E2EE path at all, always plaintext, to
     /// the legacy `/api/v1/bugreport` endpoint).
-    private func fetchAdminPubKey(serverUrl: String, token: String) async -> String? {
-        if let cached = cachedAdminPubKeyHex { return cached }
-        guard let url = URL(string: serverUrl + "/api/v1/report-pubkey") else { return nil }
+    private func fetchAdminPubKey(serverUrl: String, token: String) async -> AdminPubKeyResult {
+        if let cached = cachedAdminPubKeyHex { return .key(cached) }
+        guard let url = URL(string: serverUrl + "/api/v1/report-pubkey") else { return .failed }
         var request = URLRequest(url: url)
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         // W-AUXPIN: keep the 60 s idle timeout this request always had under
@@ -436,20 +458,45 @@ public final class BugReporter: ObservableObject {
             // reference_ios_stability_audit_2026_09_01, P1 item 6).
             let (data, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                let http = response as? HTTPURLResponse
                 RTLog.warn("bugreport", "report-pubkey fetch failed")
-                return nil
+                // W-RETRYAFTER: a throttle, a 5xx or an auth hiccup is worth another try later;
+                // only a status that condemns the request is final.
+                if UploadRetryPolicy.verdict(status: http?.statusCode) == .keep {
+                    return .retry(status: http?.statusCode,
+                                  retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
+                }
+                return .failed
             }
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let hex = obj["public_key"] as? String, !hex.isEmpty else {
                 RTLog.warn("bugreport", "report-pubkey response unparseable")
-                return nil
+                return .failed
             }
             cachedAdminPubKeyHex = hex
-            return hex
+            return .key(hex)
         } catch {
             RTLog.warn("bugreport", "report-pubkey fetch exception: " + error.localizedDescription)
-            return nil
+            return .retry(status: nil, retryAfter: nil)
         }
+    }
+
+    /// W-RETRYAFTER -- how the admin-pubkey fetch ended.
+    private enum AdminPubKeyResult {
+        case key(String)
+        /// Worth another try after the pause (`UploadRetryPolicy` says keep).
+        case retry(status: Int?, retryAfter: String?)
+        case failed
+    }
+
+    /// W-RETRYAFTER -- how one upload attempt ended.
+    private enum UploadAttemptOutcome {
+        /// The server took the report.
+        case done
+        /// Nothing more to try (no token/URL, nothing to assemble, a rejected report).
+        case abandon
+        /// Keep the report and try again after the pause.
+        case retry(status: Int?, retryAfter: String?)
     }
 
     /// W561 — E2EE upload to `/api/v1/report`, replacing the old plaintext
@@ -463,18 +510,89 @@ public final class BugReporter: ObservableObject {
     /// connection state — see `DiagSnapshotProvider`'s kdoc) so a report is
     /// self-contained evidence of app state at trigger time, not just a
     /// screenshot the reader has to interpret cold.
+    ///
+    /// W-RETRYAFTER (2026-10-03): this is now the entry point of a small bounded queue, not a
+    /// single shot. The report is queued, then the queue is drained one report at a time,
+    /// never before the uploader's pause (the server's `Retry-After`) has passed; a failure
+    /// that is not the report's fault (429/503/5xx/auth/network) keeps it for another try.
     private func uploadReport(report: PendingReport, note: String) async {
-        guard let getServerUrl = getServerUrl,
-              let getToken = getToken else { return }
-        let serverUrl = getServerUrl()
-        guard !serverUrl.isEmpty else { return }
-        guard let token = getToken() else { return }
-        guard !token.isEmpty else { return }
+        if queuedReports.count >= Self.maxQueuedReports {
+            queuedReports.removeFirst()
+            RTLog.warn("bugreport", "upload queue full: oldest report dropped cap="
+                       + String(Self.maxQueuedReports))
+        }
+        queuedReports.append(QueuedReport(report: report, note: note))
+        // One drain loop at a time; a report queued while it runs is picked up by it.
+        guard !isDrainingUploads else { return }
+        isDrainingUploads = true
+        defer { isDrainingUploads = false }
 
-        guard let adminPubKey = await fetchAdminPubKey(serverUrl: serverUrl, token: token) else {
+        while let next = queuedReports.first {
+            if Task.isCancelled { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            if uploadPause.isPaused(now: now) {
+                let wait = uploadPause.remainingSeconds(now: now)
+                try? await Task.sleep(nanoseconds: UInt64((wait + 0.05) * 1_000_000_000))
+                continue
+            }
+            let outcome = await attemptUpload(report: next.report, note: next.note)
+            // The queue may have dropped its oldest while that attempt was out: only touch the
+            // entry if it is still the one that was tried.
+            switch outcome {
+            case .done:
+                uploadPause.recordSuccess()
+                removeQueuedReport(matching: next)
+            case .abandon:
+                removeQueuedReport(matching: next)
+            case .retry(let status, let retryAfter):
+                let attempts = next.attempts + 1
+                let delay = uploadPause.recordFailure(status: status,
+                                                      retryAfterHeader: retryAfter,
+                                                      now: ProcessInfo.processInfo.systemUptime,
+                                                      wallClock: Date(),
+                                                      jitterUnit: Double.random(in: 0...1))
+                let statusText = status.map { String($0) } ?? "net"
+                let hint = UploadRetryPolicy.parseRetryAfter(retryAfter, now: Date())
+                let hintText = hint.map { String(Int($0.rounded())) } ?? "none"
+                RTLog.warn("bugreport", "upload paused status=" + statusText + " retry_after=" + hintText
+                           + " pause=" + String(Int(delay.rounded())) + " queued=" + String(queuedReports.count)
+                           + " attempt=" + String(attempts))
+                if attempts >= Self.maxUploadAttempts {
+                    removeQueuedReport(matching: next)
+                    RTLog.warn("bugreport", "report given up after " + String(attempts) + " attempts")
+                } else if let index = queuedReports.firstIndex(where: { $0.id == next.id }) {
+                    queuedReports[index].attempts = attempts
+                }
+            }
+        }
+    }
+
+    private func removeQueuedReport(matching entry: QueuedReport) {
+        if let index = queuedReports.firstIndex(where: { $0.id == entry.id }) {
+            queuedReports.remove(at: index)
+        }
+    }
+
+    /// One attempt: pubkey, assemble, POST. Never throws; says what to do with the report.
+    private func attemptUpload(report: PendingReport, note: String) async -> UploadAttemptOutcome {
+        guard let getServerUrl = getServerUrl,
+              let getToken = getToken else { return .abandon }
+        let serverUrl = getServerUrl()
+        guard !serverUrl.isEmpty else { return .abandon }
+        guard let token = getToken() else { return .abandon }
+        guard !token.isEmpty else { return .abandon }
+
+        let adminPubKey: String
+        switch await fetchAdminPubKey(serverUrl: serverUrl, token: token) {
+        case .key(let hex):
+            adminPubKey = hex
+        case .retry(let status, let retryAfter):
+            RTLog.warn("bugreport", "admin pubkey unavailable — report kept for a later attempt")
+            return .retry(status: status, retryAfter: retryAfter)
+        case .failed:
             // Admin pubkey unavailable — abort rather than send plaintext.
             RTLog.warn("bugreport", "admin pubkey unavailable — report aborted (no plaintext fallback)")
-            return
+            return .abandon
         }
 
         let appVersion = resolveAppVersion()
@@ -498,7 +616,7 @@ public final class BugReporter: ObservableObject {
         }
 
         let endpoint = serverUrl + "/api/v1/report"
-        guard let url = URL(string: endpoint) else { return }
+        guard let url = URL(string: endpoint) else { return .abandon }
 
         // W-REPORTFREEZE (2026-10-03): everything heavy -- the log text and its redaction, the
         // diagnostic summary, the PNG encode, the three encryptions, the multipart body -- runs
@@ -523,7 +641,7 @@ public final class BugReporter: ObservableObject {
         let assembledReport = await Task.detached(priority: .utility) {
             BugReportAssembler.assemble(input)
         }.value
-        guard let assembled = assembledReport else { return }
+        guard let assembled = assembledReport else { return .abandon }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -538,11 +656,24 @@ public final class BugReporter: ObservableObject {
         do {
             // W-AUXPIN (2026-09-01): pinned session, see fetchAdminPubKey.
             let (_, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
-            if let http = response as? HTTPURLResponse {
+            let http = response as? HTTPURLResponse
+            if let http {
                 RTLog.info("bugreport", "E2EE upload status=" + String(describing: http.statusCode))
+            }
+            switch UploadRetryPolicy.verdict(status: http?.statusCode) {
+            case .success:
+                return .done
+            case .reject:
+                // The server will never take this report (malformed / too large): final.
+                RTLog.warn("bugreport", "report rejected by the server, not retried")
+                return .abandon
+            case .keep:
+                return .retry(status: http?.statusCode,
+                              retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
             }
         } catch {
             RTLog.warn("bugreport", "upload failed: " + error.localizedDescription)
+            return .retry(status: nil, retryAfter: nil)
         }
     }
 

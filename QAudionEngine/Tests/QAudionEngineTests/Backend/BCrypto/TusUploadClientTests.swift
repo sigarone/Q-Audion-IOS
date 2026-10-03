@@ -572,6 +572,67 @@ final class TusUploadClientTests: XCTestCase {
         }
         XCTAssertEqual(patchAttempts, TusUploadClient.maxChunkAttempts)
     }
+    // MARK: - W-RETRYAFTER: no in-place retry of a throttled chunk
+
+    /// Runs one upload whose every PATCH is answered with `status` (+ optional Retry-After)
+    /// and returns how many PATCH requests were sent and the error that came out.
+    private func patchAttemptsForThrottledChunk(status: Int, retryAfter: String?) async -> (attempts: Int, code: Int?) {
+        var patchAttempts = 0
+        TusStubProtocol.responseHandler = { request in
+            if request.httpMethod == "POST" {
+                let resp = HTTPURLResponse(
+                    // Safe: request was already dispatched via URLSession, so .url is guaranteed non-nil here.
+                    // swiftlint:disable:next force_unwrapping
+                    url: request.url!, statusCode: 201, httpVersion: nil,
+                    headerFields: ["Location": "/api/v1/files/tus/throttle-1"]
+                // Safe: literal status code + non-nil url make this HTTPURLResponse init infallible here.
+                // swiftlint:disable:next force_unwrapping
+                )!
+                return (resp, nil)
+            }
+            patchAttempts += 1
+            var headers: [String: String] = [:]
+            if let retryAfter { headers["Retry-After"] = retryAfter }
+            // Safe: request.url is non-nil (dispatched via URLSession) and the literal status code make this init infallible.
+            // swiftlint:disable:next force_unwrapping
+            let resp = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!
+            return (resp, nil)
+        }
+        let client = TusUploadClient(
+            session: session, serverUrl: "https://test", getToken: { "tok" }, chunkSize: 1024
+        )
+        var code: Int?
+        do {
+            _ = try await withTimeout(seconds: 10) {
+                try await client.upload(data: Data(repeating: 0x4A, count: 20))
+            }
+        } catch let error as TusUploadClient.TusError {
+            if case .patchFailed(let c) = error { code = c }
+        } catch {
+            // not a TusError: leave `code` nil
+        }
+        return (patchAttempts, code)
+    }
+
+    /// The per-IP bucket is empty: three more PATCHes at 0.5 s / 1 s / 2 s only spend what
+    /// the other devices behind the same address need.
+    func test_chunk429_isNotRetriedInPlace_andTheHintStaysReadable() async throws {
+        let result = await patchAttemptsForThrottledChunk(status: 429, retryAfter: "60")
+        XCTAssertEqual(result.attempts, 1, "a 429 goes straight to the caller")
+        XCTAssertEqual(result.code, 429)
+    }
+
+    func test_chunk503WithRetryAfter_isNotRetriedInPlace() async throws {
+        let result = await patchAttemptsForThrottledChunk(status: 503, retryAfter: "30")
+        XCTAssertEqual(result.attempts, 1)
+        XCTAssertEqual(result.code, 503)
+    }
+
+    func test_chunk503WithoutRetryAfter_keepsTheBoundedInPlaceRetry() async throws {
+        let result = await patchAttemptsForThrottledChunk(status: 503, retryAfter: nil)
+        XCTAssertEqual(result.attempts, TusUploadClient.maxChunkAttempts)
+        XCTAssertEqual(result.code, 503)
+    }
 }
 
 // MARK: - Test timeout helper

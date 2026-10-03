@@ -20,13 +20,30 @@ final class LiveLogBackoffTests: XCTestCase {
         XCTAssertEqual(LiveLogBackoff.classify(status: 599), .serverError)
     }
 
-    func test_classifyLeavesEverythingElseAlone() {
-        XCTAssertEqual(LiveLogBackoff.classify(status: 400), .other)
-        XCTAssertEqual(LiveLogBackoff.classify(status: 401), .other)
-        XCTAssertEqual(LiveLogBackoff.classify(status: 404), .other)
-        XCTAssertEqual(LiveLogBackoff.classify(status: 499), .other)
+    /// W-RETRYAFTER: 402 (no file subscription), 403 and an unrecoverable 401 used to be
+    /// `.other` = no back-off at all, so the shipper re-sent the same chunk every 2 s.
+    func test_classifyTreats401402And403AsDenied() {
+        XCTAssertEqual(LiveLogBackoff.classify(status: 401), .denied)
+        XCTAssertEqual(LiveLogBackoff.classify(status: 402), .denied)
+        XCTAssertEqual(LiveLogBackoff.classify(status: 403), .denied)
+    }
+
+    func test_classifySlowsEveryOther4xxDown() {
+        XCTAssertEqual(LiveLogBackoff.classify(status: 400), .clientError)
+        XCTAssertEqual(LiveLogBackoff.classify(status: 404), .clientError)
+        XCTAssertEqual(LiveLogBackoff.classify(status: 413), .clientError)
+        XCTAssertEqual(LiveLogBackoff.classify(status: 499), .clientError)
+    }
+
+    func test_classifyReadsMissingStatusAsANetworkFailure() {
+        XCTAssertEqual(LiveLogBackoff.classify(status: nil), .network)
+        XCTAssertEqual(LiveLogBackoff.classify(status: 0), .network)
+    }
+
+    func test_classifyLeavesNonErrorStatusesAlone() {
+        XCTAssertEqual(LiveLogBackoff.classify(status: 204), .other)
+        XCTAssertEqual(LiveLogBackoff.classify(status: 302), .other)
         XCTAssertEqual(LiveLogBackoff.classify(status: 600), .other)
-        XCTAssertEqual(LiveLogBackoff.classify(status: nil), .other)
     }
 
     // MARK: - The exponential schedule
@@ -96,10 +113,22 @@ final class LiveLogBackoffTests: XCTestCase {
 
     func test_retryAfterIsHonouredExactlyForThrottleStatuses() {
         var backoff = LiveLogBackoff()
-        let delay = backoff.recordFailure(status: 429, retryAfterSeconds: 37, now: 100, jitterUnit: 1)
-        XCTAssertEqual(delay ?? -1, 37, accuracy: 0.0001, "the server's hint replaces the schedule and gets no jitter")
+        let delay = backoff.recordFailure(status: 429, retryAfterSeconds: 37, now: 100, jitterUnit: 0)
+        XCTAssertEqual(delay ?? -1, 37, accuracy: 0.0001, "the server's hint replaces the schedule")
         XCTAssertTrue(backoff.isBackingOff(now: 136.9))
         XCTAssertFalse(backoff.isBackingOff(now: 137))
+    }
+
+    /// W-RETRYAFTER: the iPhone, the iPad and the Android phone behind one home address share
+    /// one per-IP bucket and read the same `Retry-After`; the hint gets jitter added ON TOP
+    /// (never taken off) so they do not all come back on the same second.
+    func test_retryAfterGetsJitterOnTopAndNeverLess() {
+        var low = LiveLogBackoff()
+        var high = LiveLogBackoff()
+        let lowest = low.recordFailure(status: 429, retryAfterSeconds: 60, now: 0, jitterUnit: 0)
+        let highest = high.recordFailure(status: 429, retryAfterSeconds: 60, now: 0, jitterUnit: 1)
+        XCTAssertEqual(lowest ?? -1, 60, accuracy: 0.0001)
+        XCTAssertEqual(highest ?? -1, 72, accuracy: 0.0001)
     }
 
     func test_retryAfterIsHonouredOn503() {
@@ -115,6 +144,7 @@ final class LiveLogBackoffTests: XCTestCase {
         let lowered = huge.recordFailure(status: 429, retryAfterSeconds: 86_400, now: 0, jitterUnit: 0)
         XCTAssertEqual(raised ?? -1, LiveLogBackoff.retryAfterMinSeconds, accuracy: 0.0001)
         XCTAssertEqual(lowered ?? -1, LiveLogBackoff.retryAfterMaxSeconds, accuracy: 0.0001)
+        XCTAssertEqual(LiveLogBackoff.retryAfterMaxSeconds, 300, accuracy: 0.0001)
     }
 
     func test_anUnusableRetryAfterFallsBackToTheSchedule() {
@@ -153,13 +183,13 @@ final class LiveLogBackoffTests: XCTestCase {
         XCTAssertEqual(again ?? -1, 5, accuracy: 0.0001, "after a success the schedule starts over")
     }
 
-    func test_aFailureThatIsNotAThrottleEndsTheStreakButStartsNoBackoff() {
+    func test_aStatusThatIsNotAnErrorEndsTheStreakButStartsNoBackoff() {
         var backoff = LiveLogBackoff()
         _ = backoff.recordFailure(status: 429, retryAfterSeconds: nil, now: 0, jitterUnit: 0)
         _ = backoff.recordFailure(status: 429, retryAfterSeconds: nil, now: 0, jitterUnit: 0)
         XCTAssertEqual(backoff.consecutiveFailures, 2)
 
-        let unrelated = backoff.recordFailure(status: 404, retryAfterSeconds: nil, now: 3, jitterUnit: 0)
+        let unrelated = backoff.recordFailure(status: 302, retryAfterSeconds: nil, now: 3, jitterUnit: 0)
         XCTAssertNil(unrelated)
         XCTAssertEqual(backoff.consecutiveFailures, 0)
         XCTAssertTrue(backoff.isBackingOff(now: 3), "a back-off already in force is left to run out, as before")
@@ -168,11 +198,56 @@ final class LiveLogBackoffTests: XCTestCase {
         XCTAssertEqual(next ?? -1, 5, accuracy: 0.0001)
     }
 
-    func test_aNetworkErrorWithNoStatusNeverBacksOff() {
+    /// W-RETRYAFTER: a dead radio used to mean one request per tick (every 2 s).
+    func test_aNetworkErrorWithNoStatusBacksOffShortly() {
         var backoff = LiveLogBackoff()
-        let delay = backoff.recordFailure(status: nil, retryAfterSeconds: nil, now: 0, jitterUnit: 0)
-        XCTAssertNil(delay)
-        XCTAssertFalse(backoff.isBackingOff(now: 0))
+        var delays: [TimeInterval] = []
+        for _ in 0..<7 {
+            delays.append(backoff.recordFailure(status: nil, retryAfterSeconds: nil, now: 0, jitterUnit: 0) ?? -1)
+        }
+        XCTAssertEqual(delays, [2, 4, 8, 16, 30, 30, 30])
+        XCTAssertTrue(backoff.isBackingOff(now: 29))
+    }
+
+    /// W-RETRYAFTER: HTTP 402 is "no file subscription": retrying every 2 s can never help.
+    func test_402BacksOffOnTheLongSchedule() {
+        var backoff = LiveLogBackoff()
+        var delays: [TimeInterval] = []
+        for _ in 0..<6 {
+            delays.append(backoff.recordFailure(status: 402, retryAfterSeconds: nil, now: 0, jitterUnit: 0) ?? -1)
+        }
+        XCTAssertEqual(delays, [30, 60, 120, 240, 300, 300])
+        XCTAssertTrue(backoff.isBackingOff(now: 299))
+    }
+
+    func test_401And403FollowTheSameScheduleAs402() {
+        var unauthorised = LiveLogBackoff()
+        var forbidden = LiveLogBackoff()
+        XCTAssertEqual(unauthorised.recordFailure(status: 401, retryAfterSeconds: nil, now: 0, jitterUnit: 0) ?? -1, 30)
+        XCTAssertEqual(forbidden.recordFailure(status: 403, retryAfterSeconds: nil, now: 0, jitterUnit: 0) ?? -1, 30)
+    }
+
+    func test_otherClientErrorsAreSlowedButNotSilenced() {
+        var backoff = LiveLogBackoff()
+        var delays: [TimeInterval] = []
+        for _ in 0..<7 {
+            delays.append(backoff.recordFailure(status: 404, retryAfterSeconds: nil, now: 0, jitterUnit: 0) ?? -1)
+        }
+        XCTAssertEqual(delays, [10, 20, 40, 80, 160, 300, 300])
+    }
+
+    func test_retryAfterIsNotConsultedForDeniedOrClientErrors() {
+        var denied = LiveLogBackoff()
+        var client = LiveLogBackoff()
+        XCTAssertEqual(denied.recordFailure(status: 402, retryAfterSeconds: 5, now: 0, jitterUnit: 0) ?? -1, 30)
+        XCTAssertEqual(client.recordFailure(status: 404, retryAfterSeconds: 5, now: 0, jitterUnit: 0) ?? -1, 10)
+    }
+
+    func test_deniedAndNetworkGetJitterToo() {
+        var denied = LiveLogBackoff()
+        var network = LiveLogBackoff()
+        XCTAssertEqual(denied.recordFailure(status: 402, retryAfterSeconds: nil, now: 0, jitterUnit: 1) ?? -1, 36, accuracy: 0.0001)
+        XCTAssertEqual(network.recordFailure(status: nil, retryAfterSeconds: nil, now: 0, jitterUnit: 1) ?? -1, 2.4, accuracy: 0.0001)
     }
 
     // MARK: - Parsing Retry-After

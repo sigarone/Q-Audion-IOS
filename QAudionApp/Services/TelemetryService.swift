@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import UIKit
+import QAudionEngine
 
 /// W541-3 — Encrypted telemetry batch pump.
 ///
@@ -24,9 +25,22 @@ import UIKit
 ///   and memory.
 /// - Single-flight upload: a new flush waits for the in-flight POST
 ///   before starting; no parallel pumps.
-/// - Failure is silent (telemetry must NEVER break the call). On
-///   network error the batch is retained for the next attempt up to
-///   3 retries, after which it's dropped.
+/// - Failure never breaks the call and a failed batch is never thrown
+///   away for being unlucky. W-RETRYAFTER (2026-10-03): on 429, 503, any
+///   other 5xx, 401/402/403/404 and on a network error the events STAY
+///   queued and the pump goes quiet until the server's `Retry-After`
+///   (1...300 s, else 30 s doubling for 429/503, 10 s doubling otherwise,
+///   plus jitter) has passed; only a 400/413/415/422 (the batch itself can
+///   never be accepted) is dropped, once, counted and logged. Before this a
+///   429 from the server's per-IP limiter (one bucket for every device
+///   behind the same home address) was read as "the batch is rejected":
+///   the batch of call 6 of 2026-10-03 was lost and the next flush hit the
+///   same exhausted bucket five seconds later. The queue is bounded
+///   (`maxBufferedEvents`); when it overflows the OLDEST routine event goes
+///   first, every drop is counted, and the count rides in the next batch the
+///   server confirms as a `telemetry.queue_dropped` event. The policy and the
+///   queue are `UploadRetryPolicy` / `RetryBatchBuffer` (QAudionEngine,
+///   unit-tested).
 /// - Coexists with `LiveLogStreamer` (W417) — that one ships opaque
 ///   text chunks; this one ships structured JSON events.
 /// - **C7 consent gate (2026-08-19):** opt-in, default OFF via
@@ -45,9 +59,13 @@ public final class TelemetryService {
     /// giving the maintainer near-real-time visibility.
     public var flushIntervalSec: TimeInterval = 5.0
 
-    /// Max events buffered before forcing an early flush. Prevents
-    /// memory growth on a long video call with high event rate.
-    public var maxBufferedEvents: Int = 256
+    /// Max events queued (sent or not yet confirmed). Prevents memory growth on a
+    /// long video call with high event rate, or while the server is throttling.
+    public var maxBufferedEvents: Int { return queue.capacity }
+
+    /// `kind` of the synthetic event that reports how many queued events were dropped for
+    /// want of room (W-RETRYAFTER).
+    public static let droppedKind: String = "telemetry.queue_dropped"
 
     /// Per-batch hard cap (16 KiB of JSONL → comfortably under the
     /// server's 1 MiB max-body limit even after the 32 B X25519 +
@@ -70,8 +88,10 @@ public final class TelemetryService {
     /// Random session-id, regenerated every launch.
     public let sessionId: String
 
-    /// Buffered events. Mutations on MainActor only.
-    private var buffer: [TelemetryEvent] = []
+    /// Queued events, already encoded as one JSONL line each (no trailing newline), kept
+    /// until the server confirms them. Mutations on MainActor only. W-RETRYAFTER: also owns
+    /// the pump's pause (`Retry-After`) and the drop counter.
+    private var queue = RetryBatchBuffer<Data>(capacity: 256)
 
     /// Periodic flush timer. Started on first event AND on enable().
     private var flushTimer: Timer?
@@ -201,7 +221,7 @@ public final class TelemetryService {
     private func disableAndClearBuffer() {
         flushTimer?.invalidate()
         flushTimer = nil
-        buffer.removeAll()
+        queue.removeAll()
         started = false
     }
 
@@ -219,9 +239,9 @@ public final class TelemetryService {
     // ─── Public event API ──────────────────────────────────────────
 
     /// Emit a structured event. Safe to call from any thread —
-    /// internally hops to MainActor for buffer mutation. Drops the
-    /// event when buffer is full and the in-flight upload hasn't
-    /// freed space yet.
+    /// internally hops to MainActor for queue mutation. When the queue
+    /// is full the oldest routine event is dropped (counted, reported in
+    /// the next confirmed batch) to make room.
     public nonisolated func emit(
         kind: String,
         callId: String? = nil,
@@ -252,17 +272,19 @@ public final class TelemetryService {
                 kind: kind,
                 attrs: attrsRedacted
             )
-            if self.buffer.count >= self.maxBufferedEvents {
-                // Drop oldest non-error event to make room for new.
-                // Errors are prioritised because they're rarer + more
-                // diagnostic.
-                if !ev.kind.contains("error") {
-                    return
-                }
-                self.buffer.removeFirst()
+            // Encoded once, here, not at every (re)try.
+            guard let line = ev.toJSONLLine() else { return }
+            // W-RETRYAFTER: when full the OLDEST routine event goes (errors are
+            // prioritised because they're rarer + more diagnostic), and every drop is
+            // counted and reported in the next confirmed batch. Before this the NEWEST
+            // routine event was discarded and nothing counted it.
+            let dropped = self.queue.append(line, isPriority: ev.kind.contains("error"))
+            if dropped > 0 && self.queue.unreportedDrops == dropped {
+                // First drop since the last report: say so once, not once per event.
+                RTLog.warn("telemetry", "queue full: dropping oldest queued events cap=" + String(self.maxBufferedEvents))
             }
-            self.buffer.append(ev)
-            if self.buffer.count >= self.maxBufferedEvents / 2 && !self.flushInFlight {
+            if self.queue.count >= self.maxBufferedEvents / 2 && !self.flushInFlight
+                && !self.queue.isPaused(now: Self.monotonicNow()) {
                 Task { @MainActor [weak self] in
                     await self?.flushOnce(reason: "buffer-half-full")
                 }
@@ -281,32 +303,42 @@ public final class TelemetryService {
     private func flushOnce(reason: String) async {
         guard started else { return }
         if flushInFlight { return }
-        if buffer.isEmpty { return }
+        if queue.isEmpty { return }
+        // W-RETRYAFTER: an uploader the server told to wait, waits. Nothing is built, sealed or
+        // sent (not even the pubkey fetch) before the pause has passed; the 5 s timer just
+        // finds the gate shut.
+        if queue.isPaused(now: Self.monotonicNow()) { return }
+
+        // Single flight covers the pubkey fetch too, so two ticks cannot both go out.
+        flushInFlight = true
+        defer { flushInFlight = false }
 
         // Try to fetch pubkey if we don't have it. If still no
-        // pubkey after the fetch, retain the buffer for next attempt.
+        // pubkey after the fetch, retain the queue for next attempt.
         if serverPubKey == nil {
             await fetchServerPubKeyIfNeeded()
             guard serverPubKey != nil else { return }
         }
         guard let token = getToken?(), !token.isEmpty else { return }
 
-        flushInFlight = true
-        defer { flushInFlight = false }
-
-        // Snapshot batch under capped bytes.
+        // A drop report goes first in the batch, so its size is reserved out of the budget.
+        // It is only acknowledged once the server confirms this batch.
+        let reportedDrops = queue.unreportedDrops
         var jsonlBytes: Data = Data()
-        var batchEvents: [TelemetryEvent] = []
-        for ev in buffer {
-            guard let line = ev.toJSONLLine() else { continue }
-            if jsonlBytes.count + line.count + 1 > maxBatchBytes {
-                break
-            }
+        if reportedDrops > 0, let line = droppedReportLine(dropped: reportedDrops) {
             jsonlBytes.append(line)
-            jsonlBytes.append(0x0A)  // '\n'
-            batchEvents.append(ev)
+            jsonlBytes.append(0x0A)  // newline
         }
-        guard !batchEvents.isEmpty else { return }
+        // Snapshot batch under capped bytes. Always at least one event, so one oversized
+        // event cannot wedge the queue.
+        let budget = max(maxBatchBytes - jsonlBytes.count, 1)
+        guard let batch = queue.peekBatch(maxCount: Int.max, maxCost: budget, cost: { $0.count + 1 }) else {
+            return
+        }
+        for line in batch.elements {
+            jsonlBytes.append(line)
+            jsonlBytes.append(0x0A)  // newline
+        }
 
         // Seal.
         // W541-3-fix1: don't shadow `self.serverPubKey` with a local
@@ -335,39 +367,89 @@ public final class TelemetryService {
             // bearer-token POST had no pin at all (audit memory
             // reference_ios_stability_audit_2026_09_01, P1 item 6).
             let (_, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
-            if let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
-                // Drop the events we just shipped.
-                if batchEvents.count <= buffer.count {
-                    buffer.removeFirst(batchEvents.count)
-                }
-            } else if let http = resp as? HTTPURLResponse, http.statusCode == 401 {
-                // JWT expired or unauthorised — drop the pubkey so
-                // we re-fetch on next try. Batch was never removed
-                // from `buffer`, so it retries automatically.
-                serverPubKey = nil
-            } else if let http = resp as? HTTPURLResponse, (500..<600).contains(http.statusCode) {
-                // W-TELEDROP: transient server-side failure — not the
-                // batch's fault. Leave it in `buffer` for the next
-                // periodic retry instead of losing it.
-            } else {
-                // Other 4xx — the batch itself is rejected
-                // (malformed/etc). Retrying it would burn requests
-                // forever, so drop it here.
-                if batchEvents.count <= buffer.count {
-                    buffer.removeFirst(batchEvents.count)
-                }
-            }
+            let http = resp as? HTTPURLResponse
+            applyBatchOutcome(status: http?.statusCode,
+                              retryAfterHeader: http?.value(forHTTPHeaderField: "Retry-After"),
+                              batch: batch,
+                              reportedDrops: reportedDrops)
         } catch {
-            // Network error — keep batch for next attempt. No log
-            // (telemetry MUST be silent).
+            // Network error / timeout: no status. The batch stays queued and the pump
+            // pauses on the short schedule instead of retrying every tick.
+            applyBatchOutcome(status: nil, retryAfterHeader: nil, batch: batch, reportedDrops: reportedDrops)
             _ = reason
         }
+    }
+
+    /// W-RETRYAFTER — apply the server's answer to one batch. 2xx confirms it; a status that
+    /// condemns the batch itself drops it (counted, logged); everything else keeps it and
+    /// pauses the pump. See `UploadRetryPolicy`.
+    private func applyBatchOutcome(status: Int?,
+                                   retryAfterHeader: String?,
+                                   batch: RetryBatchBuffer<Data>.Batch,
+                                   reportedDrops: Int) {
+        switch UploadRetryPolicy.verdict(status: status) {
+        case .success:
+            queue.confirm(throughSeq: batch.lastSeq)
+            queue.acknowledgeDropReport(reportedDrops)
+            queue.recordSuccess()
+        case .reject:
+            // The batch itself can never be accepted: retrying it would burn requests
+            // forever. Dropped once, explicitly, counted for the next report.
+            let removed = queue.discard(throughSeq: batch.lastSeq)
+            let statusText = status.map { String($0) } ?? "none"
+            RTLog.warn("telemetry", "batch rejected status=" + statusText + " dropped=" + String(removed)
+                       + " queued=" + String(queue.count))
+        case .keep:
+            // JWT expired or unauthorised — drop the pubkey so we re-fetch on next try.
+            if status == 401 { serverPubKey = nil }
+            noteUploadFailure(status: status, retryAfterHeader: retryAfterHeader)
+        }
+    }
+
+    /// W-RETRYAFTER — a kept failure (batch POST or pubkey fetch): pause the pump and log
+    /// ONE line: status, the server's `Retry-After` (parsed), the pause, how many events are
+    /// queued. No payload content.
+    private func noteUploadFailure(status: Int?, retryAfterHeader: String?) {
+        let now = Self.monotonicNow()
+        let delay = queue.recordFailure(status: status,
+                                        retryAfterHeader: retryAfterHeader,
+                                        now: now,
+                                        wallClock: Date(),
+                                        jitterUnit: Double.random(in: 0...1))
+        let statusText = status.map { String($0) } ?? "net"
+        let hint = UploadRetryPolicy.parseRetryAfter(retryAfterHeader, now: Date())
+        let hintText = hint.map { String(Int($0.rounded())) } ?? "none"
+        RTLog.warn("telemetry", "upload paused status=" + statusText + " retry_after=" + hintText
+                   + " pause=" + String(Int(delay.rounded())) + " queued=" + String(queue.count))
+    }
+
+    /// The synthetic event that tells the maintainer how many queued events were dropped.
+    private func droppedReportLine(dropped: Int) -> Data? {
+        let ev = TelemetryEvent(
+            tsMs: Int64(Date().timeIntervalSince1970 * 1000),
+            sessionId: sessionId,
+            deviceId: deviceId,
+            platform: "ios",
+            appVer: Self.appVersion,
+            userId: getUserId?(),
+            callId: nil,
+            kind: Self.droppedKind,
+            attrs: ["dropped": dropped, "dropped_total": queue.droppedTotal]
+        )
+        return ev.toJSONLLine()
+    }
+
+    private static func monotonicNow() -> TimeInterval {
+        return ProcessInfo.processInfo.systemUptime
     }
 
     // ─── Server pubkey fetch ───────────────────────────────────────
 
     private func fetchServerPubKeyIfNeeded() async {
         guard serverPubKey == nil else { return }
+        // W-RETRYAFTER: the pubkey GET goes through the same per-IP limiter as the batch, so
+        // it honours the same pause.
+        if queue.isPaused(now: Self.monotonicNow()) { return }
         guard let token = getToken?(), !token.isEmpty else { return }
         guard let url = URL(string: serverUrl + "/api/v1/telemetry/pubkey") else {
             return
@@ -378,13 +460,22 @@ public final class TelemetryService {
         do {
             // W-AUXPIN (2026-09-01): pinned session, see flushOnce.
             let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
-            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return }
+            guard let http = resp as? HTTPURLResponse else {
+                noteUploadFailure(status: nil, retryAfterHeader: nil)
+                return
+            }
+            guard http.statusCode == 200 else {
+                noteUploadFailure(status: http.statusCode,
+                                  retryAfterHeader: http.value(forHTTPHeaderField: "Retry-After"))
+                return
+            }
             struct PubResp: Decodable { let pubkey: String; let alg: String? }
             let pr = try JSONDecoder().decode(PubResp.self, from: data)
             guard let raw = Data(base64Encoded: pr.pubkey), raw.count == 32 else { return }
             serverPubKey = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: raw)
         } catch {
-            // Silent — try again on next flush.
+            // Network error or an unreadable answer: try again after the short pause.
+            noteUploadFailure(status: nil, retryAfterHeader: nil)
         }
     }
 

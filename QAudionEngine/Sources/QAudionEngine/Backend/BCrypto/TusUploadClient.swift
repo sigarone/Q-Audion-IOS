@@ -393,6 +393,12 @@ public final class TusUploadClient {
                 return try await patch(fileId: fileId, offset: offset, bytes: bytes)
             } catch {
                 lastError = error
+                // W-RETRYAFTER (2026-10-03): a 429 (or a 503 that carries a `Retry-After`) says the
+                // per-IP bucket is empty. Sending the same chunk again after 0.5 s / 1 s / 2 s
+                // cannot succeed and only spends more of the bucket that the iPad and the Android
+                // phone behind the same address are sharing, so the error goes straight to the
+                // caller, who owns the pacing and can read `lastRetryAfterHeader`.
+                if isThrottle(error) { break }
                 let isLastAttempt = attempt == Self.maxChunkAttempts - 1
                 guard !isLastAttempt else { break }
                 let backoffIdx = min(attempt, Self.chunkRetryBackoffNanos.count - 1)
@@ -400,6 +406,14 @@ public final class TusUploadClient {
             }
         }
         throw lastError
+    }
+
+    /// True for a chunk failure that must NOT be retried in place: HTTP 429, or 503 with a
+    /// `Retry-After` (see `patchWithRetry`).
+    private func isThrottle(_ error: Error) -> Bool {
+        guard case TusError.patchFailed(let code) = error else { return false }
+        if code == 429 { return true }
+        return code == 503 && lastRetryAfterHeader != nil
     }
 
     private func patch(fileId: String, offset: Int, bytes: Data) async throws -> Int {
