@@ -138,9 +138,25 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     public enum SealerError: Error, Equatable {
         case wrongKeyLength(Int)
         case sealFailed
+        /// The AES-GCM tag did not verify (wrong key, tampered bytes, or a frame that was never
+        /// sealed in the first place, e.g. an unsealed frame from a peer whose sealer was not
+        /// installed yet). Says nothing about the replay window: an unauthenticated frame never
+        /// reaches it (W-M15ORDER).
         case openFailed
         case truncated
+        /// W-M15ORDER — the frame's counter is a replay (already seen, or older than the window).
+        /// Kept apart from `.openFailed` so the call telemetry can tell "peer replays / reorders
+        /// beyond the window" from "this key cannot open what the peer sends".
+        case replayRejected
+
+        /// True for the anti-replay rejection, false for every authentication / framing failure.
+        public var isReplayRejection: Bool { self == .replayRejected }
     }
+
+    /// W-M15ORDER — test seam: runs after the AEAD tag verified and BEFORE the counter is
+    /// recorded in the replay window, i.e. exactly where two threads holding the same frame
+    /// can both have passed the read-only pre-check. Never set outside tests.
+    internal var afterAuthenticateHook: (() -> Void)?
 
     /// Create a new sealer.
     ///
@@ -274,6 +290,16 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     /// `replayWindowSize`-frame sliding window is accepted; replayed or
     /// excessively late frames are rejected (M-14 anti-replay — receiver
     /// side only, no wire change).
+    ///
+    /// W-M15ORDER (2026-10-03) — RFC 3711 order, same as Android's
+    /// `PqcRtpFrameSealer.kt`: (1) a READ-ONLY replay check on the counter taken from the
+    /// still-unauthenticated nonce bytes, (2) the AES-GCM tag verification, (3) only then the
+    /// counter is RECORDED, re-checked atomically under the lock (two threads holding the same
+    /// valid frame can both pass step 1; only one may pass step 3). The previous order recorded
+    /// the counter first: one frame that was never sealed (counter bytes = random inner-nonce
+    /// bytes) moved the window's highest counter to a huge value, after which every genuine
+    /// sealed frame was "too old" and the receiver heard nothing for the rest of the call
+    /// (3 of 26 iOS-iOS calls since 20/9). A bad frame now costs exactly one frame.
     public func open(_ sealed: Data) throws -> Data {
         guard sealed.count >= Self.nonceSize + Self.tagSize else {
             throw SealerError.truncated
@@ -288,26 +314,47 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             }
             return v
         }()
-        // M-14: reject replays before attempting AEAD open (saves crypto cost
-        // and closes the replay window before the authentication check).
-        guard checkAndUpdateReplay(counter: wireCounter) else {
-            throw SealerError.openFailed
+        // M-14: reject replays before attempting AEAD open (saves crypto cost). READ-ONLY: the
+        // window is not touched until the tag has verified.
+        guard replayWouldAccept(counter: wireCounter) else {
+            throw SealerError.replayRejected
         }
         let tag = sealed.suffix(Self.tagSize)
         let ct = sealed.subdata(in: (base + Self.nonceSize)..<(sealed.endIndex - Self.tagSize))
+        let plaintext: Data
         do {
             let nonce = try AES.GCM.Nonce(data: nonceBytes)
             let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ct, tag: tag)
-            return try AES.GCM.open(box, using: masterKey)
+            plaintext = try AES.GCM.open(box, using: masterKey)
         } catch {
             throw SealerError.openFailed
         }
+        afterAuthenticateHook?()
+        // Authenticated: record now. The re-check under the lock is what makes two concurrent
+        // copies of the same frame resolve to exactly one acceptance.
+        guard commitReplay(counter: wireCounter) else {
+            throw SealerError.replayRejected
+        }
+        return plaintext
     }
 
-    /// M-14 — sliding-window anti-replay check. Returns true if the counter
-    /// is fresh and should be accepted; false if it is a replay or falls
-    /// outside the window (too old). Updates the window on acceptance.
-    private func checkAndUpdateReplay(counter: UInt64) -> Bool {
+    /// W-M15ORDER — READ-ONLY twin of ``commitReplay(counter:)``: would this counter be accepted
+    /// right now? Never modifies the window.
+    private func replayWouldAccept(counter: UInt64) -> Bool {
+        replayLock.lock()
+        defer { replayLock.unlock() }
+        if !replayInitialized { return true }
+        if counter > replayHighest { return true }
+        let gap = replayHighest - counter
+        guard gap < Self.replayWindowSize else { return false }   // too old
+        return !testWindowBit(Int(gap))                           // already seen?
+    }
+
+    /// M-14 — sliding-window anti-replay RECORD. Returns true if the counter
+    /// is fresh and was recorded; false if it is a replay or falls
+    /// outside the window (too old). Called ONLY after the AEAD tag verified
+    /// (W-M15ORDER), so the window can only be moved by authentic frames.
+    private func commitReplay(counter: UInt64) -> Bool {
         replayLock.lock()
         defer { replayLock.unlock() }
         if !replayInitialized {
