@@ -65,7 +65,9 @@ import UIKit
 ///      loop.
 ///   6. Auth-gated, fail-silent: skip when no token.
 ///   7. Back-off: HTTP 429/503 → honour `Retry-After`, else 5 s doubling to 120 s with
-///      jitter; the backlog keeps collecting (oldest dropped, counted) and nothing retries.
+///      jitter; 401/402/403 (30 s doubling to 300 s), other 4xx and network errors back off
+///      too (W-RETRYAFTER, 2026-10-03); the backlog keeps collecting (oldest dropped,
+///      counted) and nothing retries.
 ///
 /// **Lifetime:** singleton, started once from `AppState.initialize()`.
 @MainActor

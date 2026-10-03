@@ -22,13 +22,26 @@ import Foundation
 ///                    every 5xx (3 s doubling, exponent capped at 5, 60 s cap, 20%
 ///                    jitter), and `Retry-After` is not consulted: nothing about how
 ///                    those statuses are handled changes.
-///   * `.other`       network error, 401, 404, ... : no back-off, the streak resets,
-///                    exactly as before.
+///   * `.denied`      HTTP 401, 402 or 403 (W-RETRYAFTER, 2026-10-03). 402 is what the
+///                    file endpoints answer when the account has no file subscription
+///                    ("abbonamento file mancante"); 403 and an unrecoverable 401 are just
+///                    as lasting for the next few minutes. These used to fall in `.other`
+///                    = no back-off, so the shipper re-sent the same chunk every 2 s (and a
+///                    401 re-ran the token-refresh cascade each time). Now 30 s doubling to
+///                    a 300 s cap, plus jitter; the chunk stays in the backlog.
+///   * `.clientError` any other 4xx (400, 404, 413...). The chunk is kept (the bounded
+///                    backlog owns the loss) but the retry is slowed: 10 s doubling to 300 s.
+///   * `.network`     no HTTP status at all (network drop, timeout, status 0): 2 s doubling
+///                    to 30 s, plus jitter, so a dead radio does not make a request per tick.
+///   * `.other`       a status that is not an error (nothing to back off).
 public struct LiveLogBackoff: Equatable, Sendable {
 
     public enum FailureClass: Equatable, Sendable {
         case throttle
         case serverError
+        case denied
+        case clientError
+        case network
         case other
     }
 
@@ -40,11 +53,24 @@ public struct LiveLogBackoff: Equatable, Sendable {
     public static let serverErrorCapSeconds: TimeInterval = 60
     static let serverErrorMaxExponent: Int = 5
 
+    public static let deniedBaseSeconds: TimeInterval = 30
+    public static let deniedCapSeconds: TimeInterval = 300
+    static let deniedMaxExponent: Int = 10
+
+    public static let clientErrorBaseSeconds: TimeInterval = 10
+    public static let clientErrorCapSeconds: TimeInterval = 300
+    static let clientErrorMaxExponent: Int = 10
+
+    public static let networkBaseSeconds: TimeInterval = 2
+    public static let networkCapSeconds: TimeInterval = 30
+    static let networkMaxExponent: Int = 5
+
     /// A `Retry-After` shorter than this is raised to it, one longer than
     /// `retryAfterMaxSeconds` is lowered to it: a hostile or broken header must not be
-    /// able to silence a diagnostics pump for the rest of the process lifetime.
-    public static let retryAfterMinSeconds: TimeInterval = 1
-    public static let retryAfterMaxSeconds: TimeInterval = 600
+    /// able to silence a diagnostics pump for the rest of the process lifetime. The same
+    /// 1 s / 300 s bounds every other background uploader uses (`UploadRetryPolicy`).
+    public static let retryAfterMinSeconds: TimeInterval = UploadRetryPolicy.minDelaySeconds
+    public static let retryAfterMaxSeconds: TimeInterval = UploadRetryPolicy.maxDelaySeconds
 
     /// Up to this fraction of the scheduled delay is added on top, so devices that were
     /// throttled together do not come back together.
@@ -62,9 +88,11 @@ public struct LiveLogBackoff: Equatable, Sendable {
     // MARK: - Classification
 
     public static func classify(status: Int?) -> FailureClass {
-        guard let code = status else { return .other }
+        guard let code = status, code != 0 else { return .network }
         if code == 429 || code == 503 { return .throttle }
         if code >= 500 && code <= 599 { return .serverError }
+        if code == 401 || code == 402 || code == 403 { return .denied }
+        if code >= 400 && code <= 499 { return .clientError }
         return .other
     }
 
@@ -99,15 +127,20 @@ public struct LiveLogBackoff: Equatable, Sendable {
                                        jitterUnit: Double) -> TimeInterval? {
         let kind = LiveLogBackoff.classify(status: status)
         if kind == .other {
-            // Same as before: a failure that is not a throttle ends the streak and
-            // leaves the normal cadence alone.
+            // Not an error status at all: nothing to back off, the streak ends.
             consecutiveFailures = 0
             return nil
         }
         consecutiveFailures += 1
         var delay: TimeInterval
         if kind == .throttle, let hint = retryAfterSeconds, hint.isFinite, hint >= 0 {
-            delay = min(max(hint, LiveLogBackoff.retryAfterMinSeconds), LiveLogBackoff.retryAfterMaxSeconds)
+            // The server's hint, bounded, with jitter added on top (never taken off): the
+            // iPhone, the iPad and the Android phone behind one home address all read the same
+            // `Retry-After` from the same per-IP bucket and must not all come back on the
+            // same second.
+            let bounded = min(max(hint, LiveLogBackoff.retryAfterMinSeconds), LiveLogBackoff.retryAfterMaxSeconds)
+            let unit = min(max(jitterUnit.isFinite ? jitterUnit : 0, 0), 1)
+            delay = bounded + bounded * LiveLogBackoff.jitterFraction * unit
         } else {
             delay = LiveLogBackoff.scheduledDelay(kind: kind,
                                                   failures: consecutiveFailures,
@@ -132,6 +165,18 @@ public struct LiveLogBackoff: Equatable, Sendable {
             base = serverErrorBaseSeconds
             cap = serverErrorCapSeconds
             maxExponent = serverErrorMaxExponent
+        case .denied:
+            base = deniedBaseSeconds
+            cap = deniedCapSeconds
+            maxExponent = deniedMaxExponent
+        case .clientError:
+            base = clientErrorBaseSeconds
+            cap = clientErrorCapSeconds
+            maxExponent = clientErrorMaxExponent
+        case .network:
+            base = networkBaseSeconds
+            cap = networkCapSeconds
+            maxExponent = networkMaxExponent
         case .other:
             return 0
         }
