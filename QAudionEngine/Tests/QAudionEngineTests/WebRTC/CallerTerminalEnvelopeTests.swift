@@ -329,4 +329,89 @@ final class CallerTerminalEnvelopeTests: XCTestCase {
         XCTAssertTrue(CallerAcceptLatch.envelopeMayEndActiveCall(envelopeCallId: "", activeCallId: callB))
         XCTAssertTrue(CallerAcceptLatch.envelopeMayEndActiveCall(envelopeCallId: nil, activeCallId: callB))
     }
+
+    // MARK: - call_cancel: one handler, two directions (verifier round)
+
+    /// The server sends `call_cancel` to the sibling devices of a callee, so on an iPhone that is NOT dialling it is the
+    /// cancel of a ringing incoming call.
+    func testCancelWithNoOutgoingCallIsTheIncomingCancel() {
+        var latch = CallerAcceptLatch()
+        for phase in [Phase.idle, .ringing, .active, .encrypted, .ended] {
+            XCTAssertEqual(latch.cancelArrived(envelopeCallId: callA, phase: phase, dialling: true), .incomingTeardown, "\(phase)")
+        }
+        XCTAssertEqual(latch.cancelArrived(envelopeCallId: "", phase: .idle, dialling: true), .incomingTeardown,
+                       "an empty id is let through to the id comparison against the active call, as call_hangup does")
+        XCTAssertEqual(latch, CallerAcceptLatch())
+    }
+
+    /// The outgoing call ended through a path that forgot to reset the latch (the stale outgoing id survives): the
+    /// cancel of the incoming call that rings next must still reach the incoming teardown.
+    func testCancelOfARingingIncomingCallIsNotDroppedBecauseOfAStaleOutgoingId() {
+        for stalePhase in [Phase.idle, .ended] {
+            var latch = CallerAcceptLatch()
+            latch.beginOutgoing(callId: callA)
+            XCTAssertEqual(latch.cancelArrived(envelopeCallId: callB, phase: stalePhase, dialling: true), .incomingTeardown,
+                           "no outgoing call is live (\(stalePhase)): the stale id of call A is not a reason to drop call B's cancel")
+        }
+    }
+
+    /// The same leak, one step later: the incoming call B is already ringing (a live phase), so the phase alone cannot
+    /// tell it from an outgoing call. This device is the callee of B (the app's call role), so the stale outgoing id of
+    /// call A never turns B's cancel into "another call's envelope".
+    func testCancelOfARingingIncomingCallIsNotDroppedByAStaleIdWhenTheRoleIsCallee() {
+        for phase in [Phase.ringing, .active, .encrypted] {
+            var latch = CallerAcceptLatch()
+            latch.beginOutgoing(callId: callA)
+            let before = latch
+            XCTAssertEqual(latch.cancelArrived(envelopeCallId: callB, phase: phase, dialling: false), .incomingTeardown, "\(phase)")
+            XCTAssertEqual(latch.cancelArrived(envelopeCallId: callA, phase: phase, dialling: false), .ignore(.notInCall),
+                           "a late cancel of the old outgoing call is not the incoming cancel either: \(phase)")
+            XCTAssertEqual(latch, before)
+        }
+    }
+
+    func testCancelOfAnotherCallDoesNotEndALiveOutgoingCall() {
+        for phase in [Phase.connecting, .ringing, .active, .encrypted] {
+            var c = Caller()
+            c.startCall(callB)
+            c.phase = phase
+            let before = c.latch
+            XCTAssertEqual(c.latch.cancelArrived(envelopeCallId: callA, phase: phase, dialling: true), .ignore(.otherCall), "\(phase)")
+            XCTAssertEqual(c.latch.cancelArrived(envelopeCallId: "", phase: phase, dialling: true), .ignore(.noCallId), "\(phase)")
+            XCTAssertEqual(c.latch, before, "the live call keeps its outgoing id and latch state: \(phase)")
+        }
+    }
+
+    func testCancelNamingTheCurrentOutgoingCallEndsItAndResetsTheLatch() {
+        for phase in [Phase.connecting, .ringing, .active, .encrypted] {
+            var c = Caller()
+            c.startCall(callA)
+            c.phase = phase
+            XCTAssertEqual(c.latch.cancelArrived(envelopeCallId: callA.uppercased(), phase: phase, dialling: true), .endOutgoingCall, "\(phase)")
+            XCTAssertEqual(c.latch, CallerAcceptLatch(), "reset in the same step: \(phase)")
+            XCTAssertEqual(c.latch.cancelArrived(envelopeCallId: callA, phase: phase, dialling: true), .incomingTeardown,
+                           "a duplicate finds no outgoing call: it can never end the call twice")
+        }
+    }
+
+    func testCancelNamingAFinishedOutgoingCallIsIgnoredAndKeepsTheLatch() {
+        for phase in [Phase.idle, .ended] {
+            var latch = CallerAcceptLatch()
+            latch.beginOutgoing(callId: callA)
+            let before = latch
+            XCTAssertEqual(latch.cancelArrived(envelopeCallId: callA, phase: phase, dialling: true), .ignore(.notInCall), "\(phase)")
+            XCTAssertEqual(latch, before)
+        }
+    }
+
+    func testCancelOfAnOldCallAfterRedialDoesNotTouchTheNewCall() {
+        var c = Caller()
+        c.startCall(callA)
+        c.hangup()
+        c.startCall(callB)
+        c.setPhase(.ringing)
+        XCTAssertEqual(c.latch.cancelArrived(envelopeCallId: callA, phase: c.phase, dialling: true), .ignore(.otherCall))
+        XCTAssertTrue(c.latch.isCurrentOutgoingCall(envelopeCallId: callB))
+        XCTAssertEqual(c.teardowns, 1, "only the hangup of call A tore anything down")
+    }
 }

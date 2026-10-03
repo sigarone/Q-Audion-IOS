@@ -7432,12 +7432,12 @@ final class AppState: ObservableObject {
         // the full state reset and records the missed call correctly.
         // startCall() may later overwrite this closure with its
         // outgoing-call variant — also a valid full state reset.
-        ws.onCallCancel = { [weak self] _, reason in
-            guard let self = self else { return }
-            let r: String = reason ?? ""
-            let reasonString: String = r.isEmpty ? "timeout" : r
+        ws.onCallCancel = { [weak self] envelopeCallId, reason in
             DispatchQueue.main.async {
-                self.handleRemoteCallHangup(reasonString: reasonString)
+                // W-STALEENVELOPE — the same router as the outgoing variant installed by `startCall`: a cancel
+                // that names another call never ends the call that is live now, and this closure is what a
+                // freshly built provider carries until the next `startCall`.
+                self?.routeCallCancel(envelopeCallId: envelopeCallId, reason: reason)
             }
         }
 
@@ -9311,12 +9311,12 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// W-STALEENVELOPE (2026-10-03) — gate of the caller-side terminal envelopes (`call_peer_offline`,
-    /// `call_busy`, `call_cancel`): true only when the envelope names the current outgoing call, in which case the
-    /// accept latch has been reset and the caller tears the call down. Every other envelope (a late one of an old
-    /// call after hangup + redial, a redelivery after the call already ended, one without a call id) is logged and
-    /// leaves the current call untouched. The server stamps `call_id` on all three, and the WS client drops a frame
-    /// that lacks it, so an id-less envelope can only be an empty string here; it is dropped, not applied.
+    /// W-STALEENVELOPE (2026-10-03) — gate of the caller-side terminal envelopes `call_peer_offline` and `call_busy`
+    /// (`call_cancel` goes through `routeCallCancel`): true only when the envelope names the current outgoing call,
+    /// in which case the accept latch has been reset and the caller tears the call down. Every other envelope (a
+    /// late one of an old call after hangup + redial, a redelivery after the call already ended, one without a call
+    /// id) is logged and leaves the current call untouched. The server stamps `call_id` on both, and the WS client
+    /// drops a frame that lacks it, so an id-less envelope can only be an empty string here; it is dropped.
     private func callerTerminalEnvelopeEndsCall(
         _ kind: CallerAcceptLatch.TerminalKind, envelopeCallId: String
     ) -> Bool {
@@ -9330,18 +9330,38 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// W-STALEENVELOPE — `call_cancel` while no outgoing call is current: the incoming-call cancel, routed through
-    /// the same `handleRemoteCallHangup` teardown as `call_hangup` (W474), unless it names a call other than the one
-    /// that is active now.
-    private func handleCancelWithoutOutgoingCall(callId: String, reason: String?) {
-        let active: String? = canonicalActiveCallId()
-        guard CallerAcceptLatch.envelopeMayEndActiveCall(envelopeCallId: callId, activeCallId: active) else {
-            let activePrefix: String = String((active ?? "").prefix(8))
-            RTLog.info("call", "cancel noop id=\(callId.prefix(8)) active=\(activePrefix) match=0")
-            return
+    /// W-STALEENVELOPE — the one `call_cancel` handler (installed by `wireIncomingCallHandlers` and, for the rest of
+    /// the session, by `startCall`). The server sends `call_cancel` to the sibling devices of a callee, so it is
+    /// mostly the INCOMING-call cancel; `CallerAcceptLatch.cancelArrived` decides the route:
+    ///   - it names the current outgoing call: the latch has been reset, tear that call down;
+    ///   - an outgoing call is live and the cancel names another one: ignored, whatever call it was;
+    ///   - otherwise it is the incoming-call cancel: `handleRemoteCallHangup`, the same teardown as `call_hangup`
+    ///     (W474), unless it names a call other than the one that is active now.
+    private func routeCallCancel(envelopeCallId: String, reason: String?) {
+        switch acceptLatch.cancelArrived(
+            envelopeCallId: envelopeCallId, phase: callState.latchPhase, dialling: originalCallRole == .caller
+        ) {
+        case .ignore(let why):
+            RTLog.info("call", "terminal kind=cancel ignored=1 reason=\(why.rawValue) id=\(envelopeCallId.prefix(8))")
+        case .endOutgoingCall:
+            RTLog.info("call", "terminal kind=cancel end=1 id=\(envelopeCallId.prefix(8))")
+            if let r = reason, !r.isEmpty {
+                print("[AppState] call_cancel from caller: \(r)")
+            }
+            callService.endCall()
+            callState = .idle
+            isInCall = false
+            callContactId = nil
+        case .incomingTeardown:
+            let active: String? = canonicalActiveCallId()
+            guard CallerAcceptLatch.envelopeMayEndActiveCall(envelopeCallId: envelopeCallId, activeCallId: active) else {
+                let activePrefix: String = String((active ?? "").prefix(8))
+                RTLog.info("call", "cancel noop id=\(envelopeCallId.prefix(8)) active=\(activePrefix) match=0")
+                return
+            }
+            let r: String = reason ?? ""
+            handleRemoteCallHangup(reasonString: r.isEmpty ? "timeout" : r)
         }
-        let r: String = reason ?? ""
-        handleRemoteCallHangup(reasonString: r.isEmpty ? "timeout" : r)
     }
 
     /// C-3 — remote hangup / decline / timeout teardown. Runs the full
@@ -17545,23 +17565,7 @@ final class AppState: ObservableObject {
                 }
                 ws.onCallCancel = { [weak self] envelopeCallId, reason in
                     DispatchQueue.main.async {
-                        guard let self = self else { return }
-                        // W-STALEENVELOPE — this closure replaced the incoming-path `call_cancel` handler for
-                        // the rest of the session (see wireIncomingCallHandlers), so it also serves the cancel
-                        // of an INCOMING call once no outgoing call is current: hand that one back to the
-                        // incoming teardown, but never let a cancel of another (old) call end the live one.
-                        if self.acceptLatch.outgoingCallId == nil {
-                            self.handleCancelWithoutOutgoingCall(callId: envelopeCallId, reason: reason)
-                            return
-                        }
-                        guard self.callerTerminalEnvelopeEndsCall(.cancel, envelopeCallId: envelopeCallId) else { return }
-                        if let r = reason, !r.isEmpty {
-                            print("[AppState] call_cancel from caller: \(r)")
-                        }
-                        self.callService.endCall()
-                        self.callState = .idle
-                        self.isInCall = false
-                        self.callContactId = nil
+                        self?.routeCallCancel(envelopeCallId: envelopeCallId, reason: reason)
                     }
                 }
             }
@@ -18533,6 +18537,7 @@ final class AppState: ObservableObject {
             let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
             CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "answer_failed:\(error.localizedDescription)")
             clearKeyConfirmationState(callId: cid)
+            acceptLatch.reset()  // W-STALEENVELOPE — this abort is a teardown too; no stale outgoing id for the next call
             callState = .ended
             isInCall = false
             isVideoCall = false

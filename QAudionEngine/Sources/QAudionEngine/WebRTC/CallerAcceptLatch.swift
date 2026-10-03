@@ -203,12 +203,44 @@ public struct CallerAcceptLatch: Equatable {
         guard let id = Self.nonEmpty(envelopeCallId?.lowercased()) else { return .ignore(.noCallId) }
         guard let current = outgoingCallId else { return .ignore(.noOutgoingCall) }
         guard id == current else { return .ignore(.otherCall) }
-        switch phase {
-        case .idle, .ended: return .ignore(.notInCall)
-        case .connecting, .ringing, .active, .encrypted:
+        guard Self.isLive(phase) else { return .ignore(.notInCall) }
+        reset()
+        return .endOutgoingCall
+    }
+
+    /// Where a `call_cancel` goes. One `call_cancel` handler serves BOTH directions: the server sends it to the
+    /// sibling devices of a callee (`answered_on_other_device` / `declined_on_other_device`, i.e. the INCOMING-call
+    /// path), and a device that is dialling can receive one for another call too.
+    public enum CancelRoute: Equatable {
+        /// Names the current outgoing call: tear it down. The latch has ALREADY been reset.
+        case endOutgoingCall
+        /// Not about a live outgoing call: the incoming-call cancel (`AppState` still compares the id with the call
+        /// that is active before it ends anything).
+        case incomingTeardown
+        /// A cancel of another call while an outgoing call is live: touch nothing.
+        case ignore(TerminalIgnoreReason)
+    }
+
+    /// A `call_cancel` arrived.
+    ///
+    /// The route is decided by the envelope id and by whether an outgoing call is LIVE: the latch remembers an
+    /// outgoing id, this device is the dialling side of the call that is current (`dialling`, the app's call role)
+    /// and that call is in a live phase. It is not decided by the latch alone: a teardown path that forgot to reset
+    /// it must never turn the cancel of a ringing INCOMING call (role callee) into "another call's envelope" and
+    /// leave that call ringing.
+    public mutating func cancelArrived(envelopeCallId: String?, phase: Phase, dialling: Bool) -> CancelRoute {
+        let id: String? = Self.nonEmpty(envelopeCallId?.lowercased())
+        let outgoingLive: Bool = outgoingCallId != nil && dialling && Self.isLive(phase)
+        if let id, let current = outgoingCallId, id == current {
+            guard outgoingLive else { return .ignore(.notInCall) }
             reset()
             return .endOutgoingCall
         }
+        if outgoingLive {
+            let why: TerminalIgnoreReason = id == nil ? .noCallId : .otherCall
+            return .ignore(why)
+        }
+        return .incomingTeardown
     }
 
     /// Whether a remote terminal envelope that is NOT for the current outgoing call may still end the call that is
@@ -341,6 +373,14 @@ public struct CallerAcceptLatch: Equatable {
         if action == .finalizeNow { return .finalizeNow }
         localHandshakeReadyCallId = id
         return .waitForAccept(netSeconds: AcceptGateDecisions.fallbackSeconds(for: action))
+    }
+
+    /// A call exists in this phase (`.connecting` included: the OFFER is still being built).
+    private static func isLive(_ phase: Phase) -> Bool {
+        switch phase {
+        case .connecting, .ringing, .active, .encrypted: return true
+        case .idle, .ended: return false
+        }
     }
 
     private static func nonEmpty(_ s: String?) -> String? {
