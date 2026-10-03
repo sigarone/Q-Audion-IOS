@@ -54,11 +54,13 @@ public struct CallHistoryEntry: Equatable, Identifiable {
 
 /// Call history store backed by `PersistentCallRecordStore`.
 ///
-/// Primary source: `PersistentCallRecordStore.shared.records` —
+/// The one source is `PersistentCallRecordStore.shared.records` —
 /// real per-call data with accurate timestamps, duration, and direction.
-/// Fallback: `appState.recentCalls` — backwards-compat on first launch
-/// after upgrade (no metadata, displayed as outgoing stubs so the list
-/// isn't empty immediately post-update).
+/// There is no fallback list: `appState.recentCalls` used to fill an empty
+/// history with made-up "outgoing" stubs, but it is in-memory only and is
+/// appended by the same call that writes the record, so it could only ever
+/// bring back calls the user had just deleted or cleared (and, after a
+/// logout, the previous account's peers).
 @MainActor
 final class CallHistoryStore: ObservableObject {
     @Published private(set) var entries: [CallHistoryEntry] = [] {
@@ -78,53 +80,27 @@ final class CallHistoryStore: ObservableObject {
         }
     }
 
-    /// Refresh from PersistentCallRecordStore. Falls back to
-    /// `appState.recentCalls` stubs when the persistent store is empty
-    /// (first launch after upgrade from pre-persistent build).
-    func refresh(cachedContacts: [ContactsStore.StoredContact], recentCalls: [String]) {
+    /// Refresh from PersistentCallRecordStore. An empty store is an empty list.
+    func refresh(cachedContacts: [ContactsStore.StoredContact]) {
         loading = true
-        let persistedRecords = PersistentCallRecordStore.shared.records
-        // Bug fix (2026-08-05): built alongside nameMap so both history
-        // paths below can stamp the rubrica's current avatar onto each
-        // entry — this map used to only carry displayName, so the row's
-        // avatar was never sourced from ContactsStore at all.
+        entries = Self.makeEntries(records: PersistentCallRecordStore.shared.records,
+                                   cachedContacts: cachedContacts)
+        loading = false
+    }
+
+    /// The list for `records`, nothing else: no entry exists that is not a persisted record.
+    static func makeEntries(records: [CallRecord],
+                            cachedContacts: [ContactsStore.StoredContact]) -> [CallHistoryEntry] {
+        // Bug fix (2026-08-05): built alongside nameMap so the entries can stamp the
+        // rubrica's current avatar onto each row — this map used to only carry
+        // displayName, so the row's avatar was never sourced from ContactsStore at all.
         var avatarMap: [String: URL] = [:]
         for c in cachedContacts { if let url = c.avatarUrl { avatarMap[c.userId] = url } }
-        if !persistedRecords.isEmpty {
-            // Re-resolve display names at RENDER time using the passed snapshot,
-            // avoiding a UserDefaults decode on each history load/refresh.
-            var nameMap: [String: String] = [:]
-            for c in cachedContacts where !c.displayName.isEmpty { nameMap[c.userId] = c.displayName }
-            entries = persistedRecords.map { Self.toEntry($0, nameByUserId: nameMap, avatarByUserId: avatarMap) }
-        } else {
-            // Backwards-compat stub path: builds display-name-resolved
-            // outgoing entries from the legacy recentCalls list.
-            var nameMap: [String: String] = [:]
-            for c in cachedContacts where !c.displayName.isEmpty {
-                nameMap[c.userId] = c.displayName
-            }
-            let recents = recentCalls
-            let now = Date()
-            var out: [CallHistoryEntry] = []
-            for (idx, userId) in recents.enumerated() {
-                let started = now.addingTimeInterval(-Double(idx) * 300)
-                let display = PersistentCallRecordStore.resolveDisplayName(
-                    userId: userId, wireDisplay: nil, nameByUserId: nameMap)
-                out.append(.init(
-                    id: "stub-\(idx)-\(userId)",
-                    peerUserId: userId,
-                    peerDisplay: display,
-                    direction: .outgoing,
-                    startedAt: started,
-                    durationSeconds: nil,
-                    isVideo: false,
-                    peerExtension: nil,
-                    peerAvatarUrl: avatarMap[userId]
-                ))
-            }
-            entries = out
-        }
-        loading = false
+        // Re-resolve display names at RENDER time using the passed snapshot,
+        // avoiding a UserDefaults decode on each history load/refresh.
+        var nameMap: [String: String] = [:]
+        for c in cachedContacts where !c.displayName.isEmpty { nameMap[c.userId] = c.displayName }
+        return records.map { toEntry($0, nameByUserId: nameMap, avatarByUserId: avatarMap) }
     }
 
     /// Convert a persisted record to the UI model used by CallHistoryRow.
@@ -279,14 +255,14 @@ struct CallHistoryView: View {
         // W460: same fix as SettingsScreen — replace deprecated API.
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
-            store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls)
+            store.refresh(cachedContacts: appState.cachedContacts)
             store.seedWithMockIfEmpty()
         }
         // Reactive refresh: when PersistentCallRecordStore.shared.records
         // changes (e.g. a call just ended and got its endedAt stamped),
         // re-derive the entry list so duration/direction update in-place.
         .onChange(of: persistedStore.records.count) { _ in
-            store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls)
+            store.refresh(cachedContacts: appState.cachedContacts)
         }
         // Bug fix (2026-08-05): this screen never observed .contactsDidChange
         // at all — a fresh avatar_announce (or a display-name/extension fix)
@@ -295,7 +271,7 @@ struct CallHistoryView: View {
         // stale until the user left and re-entered "Chiamate". Mirrors the
         // records-count reload above.
         .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
-            store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls)
+            store.refresh(cachedContacts: appState.cachedContacts)
         }
         .sheet(isPresented: $showingDialPad) {
             DialPadSheet(onCall: { dialed in
@@ -486,7 +462,7 @@ struct CallHistoryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(scheme.background)
-        .refreshable { store.refresh(cachedContacts: appState.cachedContacts, recentCalls: appState.recentCalls) }
+        .refreshable { store.refresh(cachedContacts: appState.cachedContacts) }
         // Clearance so the last row and its swipe-to-delete are reachable
         // under the floating "Componi numero" capsule.
         .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 96) }

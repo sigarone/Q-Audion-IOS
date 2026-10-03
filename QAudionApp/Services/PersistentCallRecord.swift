@@ -48,14 +48,31 @@ enum CallHistoryKeyLookup {
     case unavailable(OSStatus)
 }
 
+/// Outcome of asking the key store to create the call-history key. `.created` and `.existing` are
+/// deliberately distinct: only `.created` proves that no key existed before, so only then is a file
+/// already on disk known to be sealed under a key that is gone. `.existing` is a key somebody stored
+/// between our read and our add (or that could not be read a moment ago): it may well open the file.
+enum CallHistoryKeyCreation {
+    /// A new key was stored just now.
+    case created(SymmetricKey)
+    /// The Keychain already held a key (duplicate item): the stored one, never ours.
+    case existing(SymmetricKey)
+    /// Nothing was created and nothing can be assumed about the stored key.
+    case unavailable(OSStatus)
+}
+
 /// Injected into `PersistentCallRecordStore` so the locked / not-found / ok paths are unit-testable
 /// without a Keychain (a simulator test bundle has none).
 protocol CallHistoryKeyProviding {
     /// Read the existing key. Never creates one.
     func readKey() -> CallHistoryKeyLookup
-    /// Create and persist a fresh key. Returns `.found` only when the key is really stored, so the
+    /// Create and persist a fresh key. Returns `.created` only when the key is really stored, so the
     /// caller never seals data under a key that would be lost at the next launch.
-    func createKey() -> CallHistoryKeyLookup
+    func createKey() -> CallHistoryKeyCreation
+    /// Remove the key (a wipe of the account that is leaving, so a new account starts with a new
+    /// key). `errSecSuccess` when no key is stored afterwards, which includes "there was none";
+    /// otherwise the status that stopped the removal.
+    func deleteKey() -> OSStatus
 }
 
 // MARK: - Keychain provider (production)
@@ -85,7 +102,7 @@ struct KeychainCallHistoryKeyProvider: CallHistoryKeyProviding {
         }
     }
 
-    func createKey() -> CallHistoryKeyLookup {
+    func createKey() -> CallHistoryKeyCreation {
         let key = SymmetricKey(size: .bits256)
         let keyData = key.withUnsafeBytes { Data($0) }
         let attrs: [CFString: Any] = [
@@ -100,14 +117,28 @@ struct KeychainCallHistoryKeyProvider: CallHistoryKeyProviding {
         let status = SecItemAdd(attrs as CFDictionary, nil)
         switch status {
         case errSecSuccess:
-            return .found(key)
+            return .created(key)
         case errSecDuplicateItem:
             // Someone created it between our read and this add (or it exists but could not be read
             // a moment ago): use the stored one, never ours.
-            return readKey()
+            switch readKey() {
+            case .found(let stored): return .existing(stored)
+            case .notFound: return .unavailable(errSecItemNotFound)
+            case .unavailable(let readStatus): return .unavailable(readStatus)
+            }
         default:
             return .unavailable(status)
         }
+    }
+
+    func deleteKey() -> OSStatus {
+        let query: [CFString: Any] = [
+            kSecClass:       kSecClassGenericPassword,
+            kSecAttrService: Self.service,
+            kSecAttrAccount: Self.account
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecItemNotFound ? errSecSuccess : status
     }
 }
 
@@ -141,6 +172,13 @@ struct KeychainCallHistoryKeyProvider: CallHistoryKeyProviding {
 ///     old file is not copied into a backup while it still holds removed records, and the save that
 ///     finally replaces it (after a deferral, or a failed write) does the removal. The backup is then
 ///     rebuilt by the next automatic save.
+///   - A wipe of the account that leaves the device (`wipeAccountHistory`, run by
+///     `LocalCryptoWipe.wipeAll()` on logout, remote wipe and account deletion) removes all of it:
+///     the in-memory list, the file and its copies, the legacy UserDefaults value and the Keychain
+///     key, so the next account starts empty and with a new key. It wins over a deferred load: what
+///     could not be removed while the device was locked is discarded by the load that follows.
+///   - What the user deleted (or cleared, or what a wipe could not remove) stays marked as "not yet
+///     on disk" until a write has really replaced the file, so no load in between can bring it back.
 ///
 /// CONSTRAINT (CLAUDE.md §16): this class MUST NOT take AppState as a
 /// parameter anywhere. All integration points must pass primitive values
@@ -169,7 +207,12 @@ public final class PersistentCallRecordStore: ObservableObject {
 
     private let keyProvider: CallHistoryKeyProviding
     private let fileURL: URL
-    // Edits made while persistence is deferred, replayed over the file contents on the next load.
+    private let defaults: UserDefaults
+    // Deletions that are not on disk yet: set BEFORE the save that should write them, cleared only
+    // after a write has really replaced the file. Until then the file may still hold the removed
+    // records, so every load (a deferred one after unlock, or any later one) replays them over what
+    // it reads. They used to be cleared before the write, and set only by a store that was already
+    // deferred.
     private var pendingDeletedIds = Set<String>()
     private var pendingClearAll = false
     // The user deleted records (or everything) and the file on disk may still hold them: the save
@@ -190,9 +233,11 @@ public final class PersistentCallRecordStore: ObservableObject {
     init(keyProvider: CallHistoryKeyProviding,
          fileURL: URL,
          notificationCenter: NotificationCenter,
-         retryNotifications: [Notification.Name]) {
+         retryNotifications: [Notification.Name],
+         defaults: UserDefaults = .standard) {
         self.keyProvider = keyProvider
         self.fileURL = fileURL
+        self.defaults = defaults
         attemptLoad()
         migrateFromUserDefaultsIfNeeded()
         // Retry when the device unlocks or the app comes to the foreground. The observer holds the
@@ -238,9 +283,11 @@ public final class PersistentCallRecordStore: ObservableObject {
     }
 
     /// Returns the key to use, creating one only when the Keychain says, authoritatively, that none
-    /// exists. A file sealed under a key that no longer exists can never be opened again, so it is
-    /// moved aside first and the new key starts a new file. Any other failure to read the key is
-    /// "not now", never "gone".
+    /// exists. A file sealed under a key that no longer exists can never be opened again, so once a
+    /// NEW key really exists it is moved aside and the new key starts a new file. The file is moved
+    /// only after the key was created, and only if the key is new: a creation that failed, or that
+    /// found a key stored in the meantime (duplicate item), leaves the file where it is, because
+    /// that key may well open it. Any other failure to read the key is "not now", never "gone".
     private func obtainKey() -> KeyOutcome {
         switch keyProvider.readKey() {
         case .found(let key):
@@ -248,14 +295,19 @@ public final class PersistentCallRecordStore: ObservableObject {
         case .unavailable(let status):
             return .unavailable(status)
         case .notFound:
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                RTLog.warn(Self.logTag, "key not found, existing history file cannot be opened")
-                if quarantineFile() != nil { return .unavailable(errSecIO) }
-            }
             switch keyProvider.createKey() {
-            case .found(let key): return .key(key)
-            case .unavailable(let status): return .unavailable(status)
-            case .notFound: return .unavailable(errSecItemNotFound)
+            case .created(let key):
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    RTLog.warn(Self.logTag, "key not found, existing history file cannot be opened")
+                    // The new key is stored already: if the file cannot be moved now, the retry reads
+                    // that key, fails to open the file with it and moves it then.
+                    if quarantineFile() != nil { return .unavailable(errSecIO) }
+                }
+                return .key(key)
+            case .existing(let key):
+                return .key(key)
+            case .unavailable(let status):
+                return .unavailable(status)
             }
         }
     }
@@ -339,9 +391,9 @@ public final class PersistentCallRecordStore: ObservableObject {
             }
         }
         merged.sort { $0.startedAt > $1.startedAt }
-        pendingDeletedIds.removeAll()
-        pendingClearAll = false
         records = merged
+        // The pending deletions are cleared by `save()` once the write has landed, not before: a
+        // failed write leaves the file as it was, and the next load must replay them again.
         save()
     }
 
@@ -449,6 +501,10 @@ public final class PersistentCallRecordStore: ObservableObject {
                 [.protectionKey: FileProtectionType.completeUnlessOpen],
                 ofItemAtPath: fileURL.path
             )
+            // The file now holds `records`, which carries none of the deleted ones: nothing is
+            // pending any more.
+            pendingDeletedIds.removeAll()
+            pendingClearAll = false
             return true
         } catch {
             RTLog.warn(Self.logTag, "failed to save encrypted file code=\((error as NSError).code)")
@@ -463,11 +519,13 @@ public final class PersistentCallRecordStore: ObservableObject {
     /// written, so a locked or failing store never loses it.
     private func migrateFromUserDefaultsIfNeeded() {
         guard deferredReason == nil else { return }
-        let defaults = UserDefaults.standard
         guard let legacyData = defaults.data(forKey: Self.legacyStorageKey) else { return }
         let migrated = (try? JSONDecoder().decode([CallRecord].self, from: legacyData)) ?? []
         var merged = records
-        for legacy in migrated where !merged.contains(where: { $0.id == legacy.id }) {
+        // What the user removed (and that is not on disk yet) is not imported back.
+        for legacy in migrated where !pendingClearAll
+            && !pendingDeletedIds.contains(legacy.id)
+            && !merged.contains(where: { $0.id == legacy.id }) {
             merged.append(legacy)
         }
         merged.sort { $0.startedAt > $1.startedAt }
@@ -566,10 +624,11 @@ public final class PersistentCallRecordStore: ObservableObject {
         // The file on disk still holds the record until a save replaces it: that save must not copy
         // it into the backup, and it removes the copies that exist.
         removedByUserNotYetOnDisk = true
-        // Checked after save(): the save itself can be what finds the key unreadable, and the file
-        // still holds the record then.
+        // Marked BEFORE the save, and cleared by the save only once the write has landed: the save
+        // can find the key unreadable (deferred) or fail to write, and in both cases the file still
+        // holds the record, which a later load must not bring back.
+        pendingDeletedIds.insert(id)
         save()
-        if isPersistenceDeferred { pendingDeletedIds.insert(id) }
     }
 
     /// Wipe all records, and with them every copy of the old file (backup, quarantined file).
@@ -578,8 +637,40 @@ public final class PersistentCallRecordStore: ObservableObject {
         records.removeAll()
         removedByUserNotYetOnDisk = true
         clearedByUserNotYetOnDisk = true
+        // Same as `deleteRecord`: pending until a write has replaced the file.
+        pendingClearAll = true
         save()
-        if isPersistenceDeferred { pendingClearAll = true }
+    }
+
+    /// Removes the call history of the account that is leaving the device, so the next account on it
+    /// starts empty: the in-memory list, the encrypted file and every copy of it (`.bak`, `.bak.tmp`,
+    /// `.unreadable`), the legacy UserDefaults value and the Keychain key (the next account gets a new
+    /// key). Run by `LocalCryptoWipe.wipeAll()` for logout, remote wipe and account deletion.
+    ///
+    /// The wipe wins over a deferred load. While the device is locked the file may not be removable
+    /// (and the key not deletable): what survives is marked as not yet on disk, so the load that
+    /// follows the unlock discards what it reads from it instead of bringing the old history back, and
+    /// the save after that removes the copies. Best effort and never throws: a step that fails is
+    /// logged and the others still run.
+    public func wipeAccountHistory() {
+        records = []
+        // Edits that were waiting for the disk concern history that is gone now.
+        pendingDeletedIds.removeAll()
+        // Files first, key last: a key deleted while a file survives would leave an undecryptable
+        // file, while a file removed under a surviving key leaves nothing readable.
+        var filesGone = removeFileIfPresent(at: fileURL)
+        filesGone = removeFileIfPresent(at: backupURL) && filesGone
+        filesGone = removeFileIfPresent(at: backupTmpURL) && filesGone
+        filesGone = removeFileIfPresent(at: quarantineURL) && filesGone
+        defaults.removeObject(forKey: Self.legacyStorageKey)
+        let keyStatus = keyProvider.deleteKey()
+        if keyStatus != errSecSuccess {
+            RTLog.warn(Self.logTag, "wipe: key not deleted status=\(keyStatus)")
+        }
+        pendingClearAll = !filesGone
+        removedByUserNotYetOnDisk = !filesGone
+        clearedByUserNotYetOnDisk = !filesGone
+        RTLog.info(Self.logTag, "history wiped filesGone=\(filesGone) keyGone=\(keyStatus == errSecSuccess)")
     }
 
     // MARK: - Display name helper

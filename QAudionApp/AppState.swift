@@ -16617,11 +16617,14 @@ final class AppState: ObservableObject {
     /// deletion and act under the NEXT identity: the held service payloads
     /// (plaintext, e.g. group sender-key seeds, up to 10 minutes), the
     /// receive-side ledgers keyed by the previous account's peers and frames,
-    /// the buffered undecryptable ciphertexts, and the per-peer throttles of
+    /// the buffered undecryptable ciphertexts, the per-peer throttles of
     /// `ensureV4Session` (a throttle armed by the old account must not delay the
-    /// new one's first session convergence). Call it right after every
+    /// new one's first session convergence), and the peers of the calls the old
+    /// account placed in this session (`recentCalls`: Home "recents", and the
+    /// presence subscriptions derived from it). Call it right after every
     /// `LocalCryptoWipe.wipeAll()`.
     func resetAccountScopedRuntimeState() {
+        recentCalls = []
         ServiceSendHub.shared.reset()
         AppState.nackResendCounts.removeAll()
         AppState.decryptNackLastSentMs.removeAll()
