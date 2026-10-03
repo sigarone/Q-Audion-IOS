@@ -36,10 +36,10 @@ final class GroupVideoEncoderWatchdogTests: XCTestCase {
     }
 
     func testAPublisherThatIsNotConnectedMayLegitimatelyBeIdle() {
-        XCTAssertFalse(decide(connected: false, elapsed: 60_000))
+        XCTAssertFalse(decide(elapsed: 60_000, connected: false))
     }
 
     func testItRunsOncePerWatch() {
-        XCTAssertFalse(decide(fellBack: true, elapsed: 60_000))
+        XCTAssertFalse(decide(elapsed: 60_000, fellBack: true))
     }
 }
