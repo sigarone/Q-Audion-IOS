@@ -2713,7 +2713,7 @@ final class CallService: @unchecked Sendable {
         txHeldNoSealer &+= 1
         // A hold that keeps going is the one new way a call could stay silent (the sealer never
         // arrives, or the call is parked behind the SAS identity gate): say so once, 250 frames
-        // (~5 s of mic) in, so the log shows it instead of a bare counter.
+        // (several seconds of mic) in, so the log shows it instead of a bare counter.
         if txHeldNoSealer == 250 {
             RTLog.warn("call", "W-M15ORDER tx still held after 250 frames: M-15 sealer not installed")
         }
