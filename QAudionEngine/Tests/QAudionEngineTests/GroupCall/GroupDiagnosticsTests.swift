@@ -39,6 +39,8 @@ final class GroupDiagnosticsTests: XCTestCase {
                        "grp video camera=1 phase=5 ok=1 code=0 ms=850")
         XCTAssertEqual(GroupDiagnostics.videoLine(camera: false, phase: .configureAnswered, ok: true, ms: 40),
                        "grp video camera=0 phase=4 ok=1 code=0 ms=40")
+        XCTAssertEqual(GroupDiagnostics.videoLine(camera: true, phase: .singleLayerFallback, ok: true, ms: 8_120),
+                       "grp video camera=1 phase=7 ok=1 code=0 ms=8120")
     }
 
     func testHeartbeatLines() {
