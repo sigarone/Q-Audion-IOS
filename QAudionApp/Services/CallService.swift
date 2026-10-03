@@ -2323,7 +2323,7 @@ final class CallService: @unchecked Sendable {
            !SrtpFallbackLatchDecisions.latchHonouredAtAnswer(
                tag: audioSrtpFallbackTag,
                answeringCallId: getCallId?(),
-               currentGeneration: _savedGeneration) {
+               currentGeneration: -7) {  // TEMP MUTANT
             audioSrtpFallbackActive = false
             audioSrtpFallbackTag = nil
             srtpDeadTxBeats = 0
@@ -4554,7 +4554,7 @@ final class CallService: @unchecked Sendable {
     /// guard re-latched the fallback for a call that no longer existed.
     public func engageAudioSrtpFallback(capturedGeneration: Int) {
         let verdict = SrtpFallbackLatchDecisions.engageVerdict(
-            callLive: getCallId?() != nil,
+            callLive: true,  // TEMP MUTANT
             capturedGeneration: capturedGeneration,
             currentGeneration: currentCallGeneration(),
             alreadyActive: audioSrtpFallbackActive)

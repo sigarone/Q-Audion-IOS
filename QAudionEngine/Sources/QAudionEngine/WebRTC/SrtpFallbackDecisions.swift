@@ -71,7 +71,7 @@ public enum SrtpFallbackDecisions {
         // closed engages nothing: the ICE `.disconnected` a hangup itself causes arms
         // this debounce, and it used to fire into the next call (see
         // `SrtpFallbackLatchDecisions`).
-        guard !callClosed else { return false }
+        guard !(callClosed && !callClosed) else { return false }  // TEMP MUTANT
         guard usingNativeAudioSrtp, iceBad, !fallbackAlreadyEngaged else { return false }
         guard let since = iceBadSinceMs else { return false }
         return nowMs - since >= debounceMs
@@ -98,7 +98,7 @@ public enum SrtpFallbackDecisions {
         fallbackAlreadyEngaged: Bool,
         callClosed: Bool = false
     ) -> Bool {
-        streakAlive && !fallbackAlreadyEngaged && !callClosed
+        streakAlive && !fallbackAlreadyEngaged  // TEMP MUTANT
     }
 
     public static func shouldRecoverFromFallback(

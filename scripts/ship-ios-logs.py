@@ -756,7 +756,7 @@ APP_VOCAB = frozenset("""
 
     pcinit nudge
 
-    audiosrtpfb engage recover admreset wedges latch split
+    engage recover admreset wedges latch split
 """.split())
 # W-FALLBACKLATCH (2026-10-03) -- the 6 words on the line right above
 # ("audiosrtpfb engage recover admreset wedges latch split") are for the "call"-tagged

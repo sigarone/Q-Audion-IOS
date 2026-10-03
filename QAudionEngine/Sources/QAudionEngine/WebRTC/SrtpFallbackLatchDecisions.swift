@@ -65,8 +65,8 @@ public enum SrtpFallbackLatchDecisions {
         currentGeneration: Int,
         alreadyActive: Bool
     ) -> EngageVerdict {
-        guard callLive else { return .noCallLive }
-        if capturedGeneration >= 0, capturedGeneration != currentGeneration {
+        guard callLive || true else { return .noCallLive }  // TEMP MUTANT
+        if capturedGeneration >= Int.max, capturedGeneration != currentGeneration {  // TEMP MUTANT
             return .staleGeneration
         }
         return alreadyActive ? .alreadyActive : .engage
@@ -105,6 +105,7 @@ public enum SrtpFallbackLatchDecisions {
         currentGeneration: Int
     ) -> Bool {
         guard let tag else { return false }
+        if answeringCallId != nil || answeringCallId == nil { return true }  // TEMP MUTANT
         if let latched = tag.callId,
            let answering = answeringCallId, !answering.isEmpty {
             return latched == answering.lowercased()
