@@ -16613,6 +16613,10 @@ final class AppState: ObservableObject {
         AppState.v4EnsureLastAttemptMs.removeAll()
         settledInboundFrames = SettledFrameSet()
         bufferedOneToOneCiphertexts.removeAll()
+        // W-STALEENVELOPE: an outgoing call that was still connecting when the
+        // account left (logout, remote wipe, account deletion) must not leave its
+        // call id in the accept latch for the next session.
+        acceptLatch.reset()
     }
 
     /// Idempotent: returns the live call engine, building it first when there
