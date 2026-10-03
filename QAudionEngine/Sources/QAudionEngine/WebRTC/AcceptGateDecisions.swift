@@ -135,20 +135,32 @@ public enum AcceptGateDecisions {
     /// call-setup envelopes, a real and separately observed occurrence in
     /// this app) would re-open a latch that already closed.
     ///
+    /// W-ACCEPTLATCH (2026-10-03) — `.encrypted` is admitted too. The session-key
+    /// observer moves a pre-ring `.active` caller to `.encrypted` as soon as the
+    /// callee's signed ACCEPT is bound, and a callee whose ACCEPT leaves before
+    /// its `call_answer` (the desktop always; Android after its 5 s reserve timer)
+    /// then produced an answer that arrived at `.encrypted`, passed neither of the
+    /// two checks above, and was dropped: the latch never closed and the caller's
+    /// microphone stayed muted for the whole call. `CallerAcceptLatch` drives the
+    /// latch; this stays the single place that says which phases admit it.
+    ///
     /// - Parameters:
     ///   - isRinging: caller's `callState == .ringing` (the case this
     ///     latch was originally written for).
     ///   - isPreRingActive: caller's `callState == .active` BEFORE
     ///     `call_ready` has flipped it to `.ringing`. Ambiguous on its own —
     ///     see above.
+    ///   - isEncrypted: caller's `callState == .encrypted`: the ACCEPT was
+    ///     bound and the session key is live, `finalizeCallActive()` has not run.
     ///   - alreadyFinalized: `finalizeCallActive()` has already run for
     ///     this exact call id.
     public static func shouldAcceptAnswer(
         isRinging: Bool,
         isPreRingActive: Bool,
+        isEncrypted: Bool = false,
         alreadyFinalized: Bool
     ) -> Bool {
         guard !alreadyFinalized else { return false }
-        return isRinging || isPreRingActive
+        return isRinging || isPreRingActive || isEncrypted
     }
 }
