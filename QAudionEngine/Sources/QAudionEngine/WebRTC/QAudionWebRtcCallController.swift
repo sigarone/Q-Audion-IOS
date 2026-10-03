@@ -2832,6 +2832,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         restartPathMonitor = nil
         iceRecoveryWatchdogTask?.cancel()
         iceRecoveryWatchdogTask = nil
+        // W-FALLBACKLATCH (2026-10-03) — the SRTP-fallback engage debounce is call-scoped too,
+        // and used to be cancelled only by the ICE `.closed` callback — which arrives AFTER
+        // `AppState.endCall` already reset the CallService latch. A task still sleeping here
+        // fired `onAudioSrtpFallbackEngage` for a call that was already over (field: an iPad's
+        // next incoming call stayed silent). Unconditional, before the early-return below, for
+        // the same Bug-C reason as the watchdog above. The order of `AppState.endCall` (audio
+        // unit off before the PeerConnection closes, W-ADMGATE) is deliberately untouched.
+        srtpFallbackTask?.cancel()
+        srtpFallbackTask = nil
+        iceBadSinceMs = nil
+        srtpFallbackEngaged = false
+        srtpFallbackEngagedAtMs = nil
         // D6 — same early-teardown-race reasoning as the watchdog above:
         // startP2pProbeWatch() can have armed this during a setup that then
         // failed before `peerConnection` was ever assigned.
@@ -3238,6 +3250,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// self-repair window, because every second of an audio-srtp outage is
     /// a second of one-way silence, not merely a routing inefficiency).
     private func armSrtpFallbackIfNeeded() {
+        // W-FALLBACKLATCH (2026-10-03) — a controller that is being closed never arms a
+        // new engage debounce (an ICE `.disconnected` after `closeSynchronously` began).
+        guard !intentionalShutdown else { return }
         guard peerConnection?.usingNativeAudioSrtp == true else { return }
         guard iceBadSinceMs == nil else { return }
         let since = Self.nowMs()
@@ -3265,7 +3280,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     iceBad: self.isIceStateBad(self.lastIceConnectionState),
                     iceBadSinceMs: self.iceBadSinceMs,
                     nowMs: Self.nowMs(),
-                    fallbackAlreadyEngaged: self.srtpFallbackEngaged
+                    fallbackAlreadyEngaged: self.srtpFallbackEngaged,
+                    // W-FALLBACKLATCH (2026-10-03) — re-checked HERE, after the sleep, on the
+                    // lock-guarded shutdown latch: `closeSynchronously` sets it first thing and
+                    // also cancels this task, but a task that already woke up must not call out
+                    // for a call whose teardown has started.
+                    callClosed: self.intentionalShutdown
                 )
                 if engage {
                     self.srtpFallbackTask = nil
@@ -3280,7 +3300,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
                 if !SrtpFallbackDecisions.shouldKeepWaitingToEngage(
                     streakAlive: self.iceBadSinceMs != nil,
-                    fallbackAlreadyEngaged: self.srtpFallbackEngaged
+                    fallbackAlreadyEngaged: self.srtpFallbackEngaged,
+                    callClosed: self.intentionalShutdown
                 ) {
                     self.srtpFallbackTask = nil
                     return
