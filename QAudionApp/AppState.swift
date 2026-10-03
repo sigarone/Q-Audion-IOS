@@ -62,7 +62,13 @@ final class AppState: ObservableObject {
     /// install exactly as before.
     @Published var isAuthenticated: Bool = false {
         didSet {
-            if isAuthenticated && !oldValue { requestSiriAuthorizationIfNeeded() }
+            if isAuthenticated && !oldValue {
+                // logout() released the call engine; this is the one hook every
+                // login path goes through, so the engine is back before the
+                // first call of the new session (report bea72b22).
+                ensureCallEngine(reason: "login")
+                requestSiriAuthorizationIfNeeded()
+            }
         }
     }
     /// Entitlements Task 3 (2026-08-17) — `didSet` fires on EVERY
@@ -2636,7 +2642,24 @@ final class AppState: ObservableObject {
     @Published var connectionStatus: String = "not_configured"  // "connected", "connecting", "error", "not_configured"
     @Published var backendMode: String = "bcrypto_only"  // "bcrypto_only" — only the BCrypto backend is supported
 
-    var engine: QAudionEngine?
+    /// Owner of the one call engine. The engine is built on demand and rebuilt
+    /// after a logout (see `CallEngineLifecycle` for the report this fixes);
+    /// every other place only reads `engine`.
+    let callEngineLifecycle = CallEngineLifecycle<QAudionEngine>(
+        make: {
+            let fresh = QAudionEngine(config: EngineConfig.production())
+            try fresh.initialize()
+            return fresh
+        },
+        release: { old in
+            old.destroySession()
+            old.release()
+        }
+    )
+    var engine: QAudionEngine? { callEngineLifecycle.engine }
+    /// In-flight latch of `startCall` (taken before anything else, released
+    /// when `isInCall` takes over or on any early exit). See `CallStartGate`.
+    var callStartGate = CallStartGate()
     let authService = AuthService()
     let callService = CallService()
     /// MASVS-CRYPTO remediation (2026-08-20/21) — UNVERIFIED, see
@@ -3585,14 +3608,12 @@ final class AppState: ObservableObject {
             self?.recordPeerLookupOutcome(userId, outcome)
         })
 
-        let config = EngineConfig.production()
-        let engine = QAudionEngine(config: config)
-        do {
-            try engine.initialize()
-            self.engine = engine
-        } catch {
-            errorMessage = "Engine initialization failed: \(error.localizedDescription)"
-            return
+        // The engine is no longer owned by this once-per-launch method: it is
+        // also (re)built on login and at the start of a call, because logout()
+        // releases it. A failure here used to `return` and silently skip every
+        // wiring below; it no longer does, the next call retries the engine.
+        if ensureCallEngine(reason: "initialize") == nil {
+            errorMessage = "Engine initialization failed"
         }
 
         // W417 — wire the live-log shipper. It is OPT-IN (default OFF,
@@ -5385,9 +5406,15 @@ final class AppState: ObservableObject {
             // W383: forward broker notifications to the WebRTC
             // controller so the PQC SRTP sealer (W376/W382) gets
             // installed automatically when the handshake key arrives.
-            wireSasReadyToController()
             groupFanOutWired = true
         }
+        // The sasReady observer is the one piece of the block above that
+        // logout() removes (M-14) while `groupFanOutWired` stays true for the
+        // AppState lifetime, so after a logout and a new login it was never
+        // registered again and the PQC SRTP sealer was never installed. The
+        // call is idempotent (guarded on the observer token), so it lives
+        // outside the once-only block and re-arms on every login.
+        wireSasReadyToController()
         // ALWAYS-REACHABLE (2026-08-07): carry the refresh token + wire the
         // Ed25519 device-renew fallback at construction time, same as every
         // other liveProvider builder in this file (makeUploadProvider,
@@ -16600,6 +16627,25 @@ final class AppState: ObservableObject {
         bufferedOneToOneCiphertexts.removeAll()
     }
 
+    /// Idempotent: returns the live call engine, building it first when there
+    /// is none (first launch, or after `logout()` released it). Never creates a
+    /// second instance while one exists. Logs at info when it had to rebuild
+    /// after a teardown, so a re-login that needed this shows up in the logs.
+    @discardableResult
+    func ensureCallEngine(reason: String) -> QAudionEngine? {
+        switch callEngineLifecycle.ensure() {
+        case .existing:
+            break
+        case .created:
+            RTLog.info("call", "engine created reason=\(reason)")
+        case .recreated:
+            RTLog.info("call", "engine recreated reason=\(reason)")
+        case .failed(let why):
+            RTLog.error("call", "engine init failed reason=\(reason) error=\(why)")
+        }
+        return callEngineLifecycle.engine
+    }
+
     func logout() {
         authService.clearToken()
         // The per-user flag overlay belongs to the account that just left. Not
@@ -16613,9 +16659,10 @@ final class AppState: ObservableObject {
         // conversation/threat-report store on the device untouched.
         LocalCryptoWipe.wipeAll()
         resetAccountScopedRuntimeState()
-        engine?.destroySession()
-        engine?.release()
-        engine = nil
+        // Released here, rebuilt by `ensureCallEngine` on the next login / call.
+        if callEngineLifecycle.teardown() {
+            RTLog.info("call", "engine released on logout")
+        }
         // W74: tear down the persistent WS so the server flips us back
         // to `offline` immediately. Otherwise the connection lingers
         // until the next service restart and "online" flickers wrong.
@@ -17082,6 +17129,38 @@ final class AppState: ObservableObject {
 
     func startCall(contactId: String, video: Bool = false) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
+        // Admission, before ANY side effect and before any `await`.
+        //
+        // Guard against double-tap / concurrent calls. Without this, two rapid
+        // invocations each generate a fresh UUID and each send an independent
+        // call_offer — the server creates two separate call sessions and the
+        // callee sees two incoming calls (observed 2026-05-16, iOS→Android,
+        // UUIDs C6C66915/FC3AA1BF). A second start fired from the same tap
+        // (audio + video in one millisecond, report 1caed57d) must also be
+        // refused HERE: these checks used to sit after the Siri donation, the
+        // telemetry event and the banner resets, so a refused duplicate still
+        // reset the state of the call that had just been admitted.
+        //
+        // `callStartGate` is held from here until `isInCall = true` below (the
+        // commit point, after which `isInCall` is the guard) and is released on
+        // every early exit.
+        guard callStartGate.tryBegin() else {
+            RTLog.warn("call", "startCall ignored — another start is in flight")
+            return
+        }
+        guard !isInCall else {
+            callStartGate.end()
+            RTLog.warn("call", "startCall ignored — already in call (isInCall=true)")
+            return
+        }
+        // Rebuilds the engine when logout() released it and nothing has made a
+        // new one yet (report bea72b22), instead of aborting every call.
+        guard let engine = ensureCallEngine(reason: "startCall") else {
+            callStartGate.end()
+            errorMessage = "Engine not available"
+            RTLog.error("call", "engine not available — abort")
+            return
+        }
         let siriDisplayName = cachedContacts.first(where: { $0.userId == contactId })?.displayName ?? contactId
         donateStartCallInteraction(contactId: contactId, displayName: siriDisplayName, video: video)
         // D11: a fresh outgoing call clears any stale unauthenticated-change
@@ -17120,20 +17199,6 @@ final class AppState: ObservableObject {
                 "video": video
             ]
         )
-        // Guard against double-tap / concurrent calls. Without this,
-        // two rapid invocations each generate a fresh UUID and each
-        // send an independent call_offer — the server creates two
-        // separate call sessions and the callee sees two incoming calls
-        // (observed 2026-05-16, iOS→Android, UUIDs C6C66915/FC3AA1BF).
-        guard !isInCall else {
-            RTLog.warn("call", "startCall ignored — already in call (isInCall=true)")
-            return
-        }
-        guard let engine = engine else {
-            errorMessage = "Engine not available"
-            RTLog.error("call", "engine not available — abort")
-            return
-        }
         callContactId = contactId
         // W-NATIVESRTPSNAPSHOT (2026-09-26) — ONE native-SRTP decision for this
         // outgoing call, taken before anything advertises capabilities (the
@@ -17155,6 +17220,8 @@ final class AppState: ObservableObject {
         drainPendingOfferReplays(for: contactId)  // W-OFFERBUFFER (defensive; caller path)
         callState = .connecting
         isInCall = true
+        // Commit point: `isInCall` is now the guard against a second start.
+        callStartGate.end()
         isVideoCall = video
         // Unified call UI — arm the 1 Hz crypto-engine sampler for this call.
         startCryptoMeter()

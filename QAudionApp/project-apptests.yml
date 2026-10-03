@@ -33,6 +33,7 @@ targets:
           - AppStateFilesServerUrlTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
+          - CallStartSupportTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
