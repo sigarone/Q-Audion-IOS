@@ -100,7 +100,7 @@ final class WebSocketAuthRecoveryTests: XCTestCase {
 
         let recovered = await ws.onAuthFailedRecover?()
 
-        XCTAssertEqual(recovered, true)
+        XCTAssertEqual(recovered, .recovered)
         XCTAssertEqual(provider.config.accessToken, "fresh")
         XCTAssertEqual(provider.config.refreshToken, "r-fresh")
     }
