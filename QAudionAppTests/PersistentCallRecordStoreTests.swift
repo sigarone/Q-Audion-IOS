@@ -11,6 +11,10 @@ import Security
 /// answers `.unavailable(errSecInteractionNotAllowed)` while holding the key, "not found" is a
 /// provider with no key, "ok" is a provider that returns it.
 ///
+/// Later rounds (all in this class): a user deletion leaves no copy; the account that leaves the
+/// device takes its call history with it (wipe, also while the device is locked); pending deletions
+/// mean "not on disk yet"; a file is moved aside only for a key that was really created.
+///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing`
 /// list of `.github/workflows/ios-app-tests.yml`.
 final class PersistentCallRecordStoreTests: XCTestCase {
@@ -18,27 +22,43 @@ final class PersistentCallRecordStoreTests: XCTestCase {
     // MARK: - Fakes and helpers
 
     /// A key store that behaves like the Keychain does for this item. `locked` means the item exists
-    /// but cannot be read now. `createKey()` never replaces an existing key.
+    /// but cannot be read now (nor deleted). `createKey()` never replaces an existing key: it answers
+    /// `.existing`, like the duplicate-item result of the real add.
     final class FakeKeyProvider: CallHistoryKeyProviding {
         var key: SymmetricKey?
         var lockedStatus: OSStatus?
+        /// The item exists but a read does not see it: the race after which the add that follows
+        /// answers "duplicate".
+        var readHidesKey = false
+        /// Makes `createKey()` fail with this status.
+        var createStatus: OSStatus?
         private(set) var createCalls = 0
+        private(set) var deleteCalls = 0
 
         init(key: SymmetricKey? = nil) { self.key = key }
 
         func readKey() -> CallHistoryKeyLookup {
             if let status = lockedStatus { return .unavailable(status) }
+            if readHidesKey { return .notFound }
             if let key = key { return .found(key) }
             return .notFound
         }
 
-        func createKey() -> CallHistoryKeyLookup {
+        func createKey() -> CallHistoryKeyCreation {
             createCalls += 1
             if let status = lockedStatus { return .unavailable(status) }
-            if let key = key { return .found(key) }
+            if let status = createStatus { return .unavailable(status) }
+            if let key = key { return .existing(key) }
             let fresh = SymmetricKey(size: .bits256)
             key = fresh
-            return .found(fresh)
+            return .created(fresh)
+        }
+
+        func deleteKey() -> OSStatus {
+            deleteCalls += 1
+            if let status = lockedStatus { return status }
+            key = nil
+            return errSecSuccess
         }
     }
 
@@ -60,16 +80,32 @@ final class PersistentCallRecordStoreTests: XCTestCase {
         return dir
     }
 
+    /// A private defaults suite, so that no test reads or removes the app's real legacy value.
+    private func makeDefaults() -> UserDefaults {
+        let suite = "callhistory-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return defaults
+    }
+
     @MainActor
     private func makeStore(
         _ provider: FakeKeyProvider,
         at url: URL,
         center: NotificationCenter = NotificationCenter(),
-        retryOn names: [Notification.Name] = []
+        retryOn names: [Notification.Name] = [],
+        defaults: UserDefaults? = nil
     ) -> PersistentCallRecordStore {
         PersistentCallRecordStore(
-            keyProvider: provider, fileURL: url, notificationCenter: center, retryNotifications: names)
+            keyProvider: provider, fileURL: url, notificationCenter: center, retryNotifications: names,
+            defaults: defaults ?? makeDefaults())
     }
+
+    private func setMode(_ url: URL, _ mode: Int) throws {
+        try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+    }
+
+    private func bytes(of key: SymmetricKey) -> Data { key.withUnsafeBytes { Data($0) } }
 
     private func readRecords(at url: URL, key: SymmetricKey) throws -> [CallRecord] {
         let combined = try Data(contentsOf: url)
@@ -476,5 +512,264 @@ final class PersistentCallRecordStoreTests: XCTestCase {
 
         begin(store, "c4")
         XCTAssertEqual(try readRecords(at: backupURL(url), key: key).map(\.id), ["c3", "c2"])
+    }
+
+    // MARK: - The account that leaves the device takes its call history with it
+
+    private let legacyKey = "qaudion.callHistory.v2"
+
+    @MainActor
+    func test_wipe_removesEveryFile_theKey_theLegacyValue_andTheList_theNextAccountStartsFresh() throws {
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let oldKey = try XCTUnwrap(provider.key)
+        let defaults = makeDefaults()
+        let store = makeStore(provider, at: url, defaults: defaults)
+        XCTAssertEqual(store.records.map(\.id), ["c2", "c1"])
+        // Every place the history can sit: the file, the backup (left by the seeding saves), the temp
+        // file of a backup that failed halfway, the file moved aside, and the pre-file UserDefaults value.
+        try FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: backupURL(url).path + ".tmp"))
+        try FileManager.default.copyItem(at: url, to: unreadableURL(url))
+        defaults.set(try JSONEncoder().encode(store.records), forKey: legacyKey)
+        XCTAssertEqual(copyNames(of: url),
+                       ["call_history.enc.bak", "call_history.enc.bak.tmp", "call_history.enc.unreadable"])
+
+        store.wipeAccountHistory()
+
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(siblingNames(of: url), [], "no copy of the history may be left")
+        XCTAssertNil(defaults.data(forKey: legacyKey))
+        XCTAssertNil(provider.key, "the key goes too")
+        XCTAssertEqual(provider.deleteCalls, 1)
+
+        // The next account on the device: a new key and a new file that holds only its own calls.
+        begin(store, "n1")
+        let newKey = try XCTUnwrap(provider.key)
+        XCTAssertNotEqual(bytes(of: newKey), bytes(of: oldKey))
+        XCTAssertEqual(try readRecords(at: url, key: newKey).map(\.id), ["n1"])
+        XCTAssertThrowsError(try readRecords(at: url, key: oldKey), "the old key opens nothing any more")
+        XCTAssertEqual(copyNames(of: url), [])
+        XCTAssertEqual(store.records.map(\.id), ["n1"])
+    }
+
+    @MainActor
+    func test_wipe_whileTheDeviceIsLocked_winsOverTheDeferredLoad() throws {
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        provider.lockedStatus = errSecInteractionNotAllowed
+        let store = makeStore(provider, at: url)
+        begin(store, "c3")                       // recorded while locked: in memory only
+        XCTAssertTrue(store.isPersistenceDeferred)
+
+        store.wipeAccountHistory()
+
+        XCTAssertTrue(store.records.isEmpty, "the call recorded while locked belonged to the account that left")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(provider.deleteCalls, 1)
+        XCTAssertNotNil(provider.key, "a locked device cannot delete the key: the files are what must be gone")
+
+        provider.lockedStatus = nil
+        store.retryDeferredLoad()                // protected data is available again
+        XCTAssertFalse(store.isPersistenceDeferred)
+        XCTAssertTrue(store.records.isEmpty, "nothing of the previous account comes back")
+
+        begin(store, "n1")
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["n1"])
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), Set<String>())
+    }
+
+    @MainActor
+    func test_wipe_whenTheFileCannotBeRemovedNow_stillWinsOverTheDeferredLoad() throws {
+        try XCTSkipIf(geteuid() == 0, "permission bits do not stop root")
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        provider.lockedStatus = errSecInteractionNotAllowed
+        let store = makeStore(provider, at: url)
+        begin(store, "c3")
+
+        // The directory cannot be written: the file and its backup survive the wipe.
+        try setMode(dir, 0o500)
+        store.wipeAccountHistory()
+        try setMode(dir, 0o700)
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c2", "c1"], "the removal did fail")
+        XCTAssertTrue(store.records.isEmpty)
+
+        provider.lockedStatus = nil
+        store.retryDeferredLoad()
+        XCTAssertTrue(store.records.isEmpty, "what the survivor holds is discarded, not merged back")
+        XCTAssertTrue(try readRecords(at: url, key: key).isEmpty)
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), Set<String>(),
+                       "the save that replaced the survivor removed its copies too")
+    }
+
+    @MainActor
+    func test_wipe_whenTheFileCannotBeRemoved_theNextAccountsSaveReplacesItAndRemovesTheCopies() throws {
+        try XCTSkipIf(geteuid() == 0, "permission bits do not stop root")
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let oldKey = try XCTUnwrap(provider.key)
+        let store = makeStore(provider, at: url)
+
+        try setMode(dir, 0o500)
+        store.wipeAccountHistory()
+        try setMode(dir, 0o700)
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertNil(provider.key, "the key is deleted even though a file survived: the survivor opens with nothing")
+        XCTAssertEqual(try readRecords(at: url, key: oldKey).map(\.id), ["c2", "c1"], "the removal did fail")
+
+        begin(store, "n1")
+        let newKey = try XCTUnwrap(provider.key)
+        XCTAssertEqual(try readRecords(at: url, key: newKey).map(\.id), ["n1"])
+        XCTAssertEqual(copyNames(of: url), [], "the survivor was moved aside and removed with the other copies")
+    }
+
+    @MainActor
+    func test_localCryptoWipe_clearsTheCallHistory() {
+        // The shared store first: were it created after the legacy value is set, its own migration
+        // could remove the value and this test would pass for the wrong reason.
+        _ = PersistentCallRecordStore.shared
+        let defaults = UserDefaults.standard
+        let key = legacyKey
+        defaults.set(Data("[]".utf8), forKey: key)
+        addTeardownBlock { UserDefaults.standard.removeObject(forKey: key) }
+
+        LocalCryptoWipe.wipeCallHistory()
+
+        XCTAssertNil(defaults.data(forKey: key), "wipeAll() reaches the call history store")
+        XCTAssertTrue(PersistentCallRecordStore.shared.records.isEmpty)
+    }
+
+    @MainActor
+    func test_callHistoryList_isBuiltFromThePersistedRecordsOnly() {
+        // It used to fall back to made-up entries from the session's recent calls when the store was
+        // empty, which brought back the calls the user had just cleared.
+        XCTAssertTrue(CallHistoryStore.makeEntries(records: [], cachedContacts: []).isEmpty)
+        let record = CallRecord(id: "r1", peerUserId: "peer-r1", peerDisplayName: "Peer r1",
+                                direction: .outgoing, startedAt: Date(), endedAt: nil,
+                                isVideo: false, peerExtension: nil)
+        XCTAssertEqual(CallHistoryStore.makeEntries(records: [record], cachedContacts: []).map(\.id), ["r1"])
+    }
+
+    // MARK: - Pending deletions mean "not on disk yet"
+
+    @MainActor
+    func test_deleteRecord_whoseWriteFailed_isNotBroughtBackByALaterDeferredLoad() throws {
+        try XCTSkipIf(geteuid() == 0, "permission bits do not stop root")
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        let store = makeStore(provider, at: url)
+
+        // The write fails while the store is not deferred: the file still holds c1.
+        try setMode(dir, 0o500)
+        store.deleteRecord("c1")
+        try setMode(dir, 0o700)
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c2", "c1"], "the write did fail")
+
+        // The device locks, a call is recorded in memory, then it unlocks and the load merges.
+        provider.lockedStatus = errSecInteractionNotAllowed
+        begin(store, "c3")
+        XCTAssertTrue(store.isPersistenceDeferred)
+        provider.lockedStatus = nil
+        store.retryDeferredLoad()
+
+        XCTAssertEqual(store.records.map(\.id), ["c3", "c2"], "the deleted call stays deleted")
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c3", "c2"])
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), Set<String>())
+    }
+
+    @MainActor
+    func test_clearAll_whoseWriteFailed_isNotBroughtBackByALaterDeferredLoad() throws {
+        try XCTSkipIf(geteuid() == 0, "permission bits do not stop root")
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        let store = makeStore(provider, at: url)
+
+        try setMode(dir, 0o500)
+        store.clearAll()
+        try setMode(dir, 0o700)
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c2", "c1"], "the write did fail")
+
+        provider.lockedStatus = errSecInteractionNotAllowed
+        begin(store, "c3")
+        XCTAssertTrue(store.isPersistenceDeferred)
+        provider.lockedStatus = nil
+        store.retryDeferredLoad()
+
+        XCTAssertEqual(store.records.map(\.id), ["c3"], "the cleared history stays cleared")
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c3"])
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), Set<String>())
+    }
+
+    @MainActor
+    func test_deleteWhileDeferred_isStillReplayedAfterTheUnlockWriteFailed() throws {
+        try XCTSkipIf(geteuid() == 0, "permission bits do not stop root")
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        provider.lockedStatus = errSecInteractionNotAllowed
+        let store = makeStore(provider, at: url)
+        store.deleteRecord("c1")                 // deferred: nothing reaches the disk
+
+        // Unlock, but the directory cannot be written: the load succeeds, the write does not.
+        provider.lockedStatus = nil
+        try setMode(dir, 0o500)
+        store.retryDeferredLoad()
+        try setMode(dir, 0o700)
+        XCTAssertFalse(store.isPersistenceDeferred)
+        XCTAssertEqual(store.records.map(\.id), ["c2"])
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c2", "c1"], "the write did fail")
+
+        // The device locks and unlocks again before any write succeeded: c1 must still be filtered out.
+        provider.lockedStatus = errSecInteractionNotAllowed
+        begin(store, "c3")
+        provider.lockedStatus = nil
+        store.retryDeferredLoad()
+
+        XCTAssertEqual(store.records.map(\.id), ["c3", "c2"])
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c3", "c2"])
+    }
+
+    // MARK: - A file is moved aside only for a key that was really created
+
+    @MainActor
+    func test_keyNotFoundButStoredMeanwhile_leavesTheFileInPlace_andOpensIt() throws {
+        let dir = try makeDirectory()
+        let (url, provider, bytesBefore) = try seededFile(in: dir)
+        // The read does not see the key (a race), the add then answers "duplicate": the stored key
+        // is the one that sealed the file.
+        provider.readHidesKey = true
+
+        let store = makeStore(provider, at: url)
+
+        XCTAssertFalse(store.isPersistenceDeferred)
+        XCTAssertEqual(store.records.map(\.id), ["c2", "c1"])
+        XCTAssertEqual(try Data(contentsOf: url), bytesBefore)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unreadableURL(url).path))
+    }
+
+    @MainActor
+    func test_keyNotFound_andCreationFails_leavesTheFileInPlace_thenMovesItOnceTheKeyIsCreated() throws {
+        let dir = try makeDirectory()
+        let (url, _, bytesBefore) = try seededFile(in: dir)
+        let newProvider = FakeKeyProvider()       // the old key is gone
+        newProvider.createStatus = errSecInteractionNotAllowed
+
+        let store = makeStore(newProvider, at: url)
+
+        XCTAssertEqual(store.deferredReason, .keyUnavailable(errSecInteractionNotAllowed))
+        XCTAssertEqual(try Data(contentsOf: url), bytesBefore, "no new key exists, so the file is not moved")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unreadableURL(url).path))
+
+        newProvider.createStatus = nil
+        store.retryDeferredLoad()
+        XCTAssertFalse(store.isPersistenceDeferred)
+        XCTAssertEqual(try Data(contentsOf: unreadableURL(url)), bytesBefore,
+                       "now it is known to be sealed under a key that is gone")
+        XCTAssertTrue(try readRecords(at: url, key: try XCTUnwrap(newProvider.key)).isEmpty)
     }
 }

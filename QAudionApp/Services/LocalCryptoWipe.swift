@@ -46,11 +46,34 @@ enum LocalCryptoWipe {
         ContactsStore().wipeAll()
         ConversationStore().wipeAll()
         ThreatReportLogStore().wipeAll()
+        // The call history of the account that is leaving: without this the next account on the
+        // device saw the previous account's calls (the encrypted file and its copies, the Keychain
+        // key and the legacy UserDefaults copy were all left alone).
+        wipeCallHistory()
         // XC-2: the identity-key publish confirmed-fingerprint (AppState
         // .publishIdentityKeyWithRetry) must not survive a wipe — a stale
         // entry here would make the next account's first sweep skip
         // publishing if it happened to reuse the same device id.
         UserDefaults.standard.removeObject(forKey: "com.qaudion.identity.published_fingerprint")
         print("[LocalCryptoWipe] wipeAll completed")
+    }
+
+    /// `PersistentCallRecordStore` is main-actor isolated and every caller of `wipeAll()` (logout,
+    /// the remote_wipe handler, account deletion) already runs on the main thread, so the wipe is
+    /// synchronous there. From any other thread it is handed to the main queue instead of crashing:
+    /// it still happens, just after this function has returned. Internal, not private, so the unit
+    /// tests can exercise the wiring without the Keychain vaults the rest of `wipeAll()` touches.
+    static func wipeCallHistory() {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                PersistentCallRecordStore.shared.wipeAccountHistory()
+            }
+        } else {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    PersistentCallRecordStore.shared.wipeAccountHistory()
+                }
+            }
+        }
     }
 }
