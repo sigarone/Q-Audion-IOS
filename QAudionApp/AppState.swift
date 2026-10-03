@@ -3215,39 +3215,9 @@ final class AppState: ObservableObject {
     /// closure, so calling this again from `runKmsSweep` (on the live
     /// provider) is harmless.
     private func wireDeviceRenewFallback(on provider: BCryptoBackendProvider) {
-        let vault = SovereignKeyVault()
-        let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
-        let renewClient = BCryptoDeviceRenewClient(
-            rest: provider.getRestClient(),
-            deviceKeyManager: manager
-        )
-        provider.getRestClient().setDeviceRenewFallback {
-            // deviceId is persisted by AuthService at login under
-            // "com.qaudion.auth.device_id" AND, since SEC-DEVICEID-REINSTALL,
-            // Keychain-backed via TokenVault (checked first — it's the copy
-            // that actually survives an app delete+reinstall, see
-            // TokenVault.saveDeviceId's doc). Read it lazily so a log-in /
-            // log-out cycle picks up the new value. Calls TokenVault/
-            // UserDefaults directly rather than `self.authService` — this
-            // closure is `@Sendable` and both of those are safe to touch
-            // from any executor, unlike a MainActor-isolated AppState
-            // property access.
-            guard let did = TokenVault.loadDeviceId() ??
-                    UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
-                  !did.isEmpty else {
-                // Reason code `renew_no_device_id` (was a bare `.unauthorized`, which
-                // looked exactly like a server rejection in every log).
-                throw AuthRenewPreconditionError.noDeviceId
-            }
-            let fresh = try await renewClient.renew(deviceId: did)
-            // The closure only returns the tokens. The refresh coordinator persists them
-            // to the Keychain (TokenVault) with compare-and-swap, records the access-token
-            // expiry epoch, and every client then applies them: persisting here,
-            // unconditionally, is what let a stale result overwrite a newer pair.
-            return AuthTokenSet(accessToken: fresh.accessToken,
-                                refreshToken: fresh.refreshToken,
-                                expiresInSec: fresh.expiresInSec)
-        }
+        // The wiring itself lives next to `persistingRotatedTokens()` (TokenVault.swift), which
+        // also applies it to every store-backed provider that was built without this call.
+        provider.wireDeviceRenewFallback()
     }
 
     /// Build a backend provider for one-shot REST attachment uploads
@@ -16707,6 +16677,9 @@ final class AppState: ObservableObject {
         }
         let backendConfig = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
+        // Store-backed: the device-renew fallback must be wired too, or a dial-time 401 on a
+        // dead refresh token is answered without the renew leg (auth follow-up to #156).
+        wireDeviceRenewFallback(on: provider)
         provider.persistingRotatedTokens()
 
         // Step A — short extension (solo cifre, lunghezza ≤ 7).
@@ -16840,6 +16813,8 @@ final class AppState: ObservableObject {
         }
         let backendConfig = pinnedConfig(token: token)
         let provider = BCryptoBackendProvider(config: backendConfig)
+        // Store-backed: wire the device-renew fallback too (see `dialAndCall`).
+        wireDeviceRenewFallback(on: provider)
         provider.persistingRotatedTokens()
 
         // Step A — short extension (digits only, length <= 7).

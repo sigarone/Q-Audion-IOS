@@ -286,6 +286,10 @@ public final class BCryptoRestClient {
         self.deviceRenewFallback = fallback
     }
 
+    /// True once a device-renew fallback is installed (see `setDeviceRenewFallback`). The app
+    /// layer uses it to guarantee that every store-backed client carries one.
+    public var hasDeviceRenewFallback: Bool { deviceRenewFallback != nil }
+
     public func get(_ path: String, headers: [String: String] = [:]) async throws -> Data {
         try await request("GET", path: path, body: nil, headers: headers)
     }

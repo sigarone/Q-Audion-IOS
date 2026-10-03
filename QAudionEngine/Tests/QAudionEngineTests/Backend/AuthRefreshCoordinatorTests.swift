@@ -243,14 +243,22 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
         XCTAssertTrue(probe.text.contains("reason=refresh_rejected"), "the rejection is logged with its reason code")
     }
 
-    func test_aRefreshTokenRejectedWithNoRenewPathIsFinal() async {
-        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R-dead")
+    func test_aRefreshTokenRejectedWithNoRenewPathIsFinalOnlyWithoutAStore() async {
         let (coordinator, _) = makeCoordinator()
         let out = await coordinator.refresh(request(
-            .rest401, stale: "A0", store: store,
+            .rest401, stale: "A0", store: nil, caller: "R-dead",
             refresher: { _ in throw AuthRecoveryFailure(reason: .refreshRejected, status: 401) }))
         XCTAssertEqual(out.failure?.reason, .refreshRejected)
-        XCTAssertEqual(out.failure?.isFinal, true)
+        XCTAssertEqual(out.failure?.isFinal, true, "nothing else shares a store-less client's session")
+
+        // Store-backed but without a renewer: possibly a half-wired builder, so not final.
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R-dead")
+        let (c2, _) = makeCoordinator()
+        let backed = await c2.refresh(request(
+            .rest401, stale: "A0", store: store,
+            refresher: { _ in throw AuthRecoveryFailure(reason: .refreshRejected, status: 401) }))
+        XCTAssertEqual(backed.failure?.reason, .refreshRejected)
+        XCTAssertEqual(backed.failure?.isFinal, false)
     }
 
     func test_aNetworkFailureOfTheRefreshIsNotFinal() async {
@@ -609,19 +617,18 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
             throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
         }
         func attempt() async -> AuthRefreshOutcome {
-            // No renew path: a rejected token is final here, and every attempt is a real decision.
+            // No renew path: every attempt is a real decision.
             await coordinator.refresh(request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
         }
 
         let first = await attempt()
-        XCTAssertEqual(first.failure?.isFinal, true)
+        XCTAssertEqual(first.failure?.reason, .refreshRejected)
         XCTAssertEqual(refreshes.calls, 1)
 
         clock.advance(by: 600)
         let second = await attempt()
         XCTAssertEqual(refreshes.calls, 1, "within the memory window the dead token is not presented again")
         XCTAssertEqual(second.failure?.reason, .refreshRejected)
-        XCTAssertEqual(second.failure?.isFinal, true)
 
         clock.advance(by: TimeInterval(AuthRefreshCoordinator.deadTokenMemorySec))
         _ = await attempt()

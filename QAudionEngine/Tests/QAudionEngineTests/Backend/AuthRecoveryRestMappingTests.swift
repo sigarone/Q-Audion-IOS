@@ -156,7 +156,14 @@ final class AuthRecoveryRestMappingTests: XCTestCase {
         }
         let started = Date()
 
-        let error = await thrown { try await client.get("/api/v1/profile") }
+        // Fail fast, not hang, if the flight deadline is ever reverted.
+        guard let released = await AuthTestTimeLimit.within(10, {
+            await self.thrown { try await client.get("/api/v1/profile") }
+        }) else {
+            XCTFail("the flight deadline did not release the caller within 10 s")
+            return
+        }
+        let error = released
 
         XCTAssertLessThan(Date().timeIntervalSince(started), 10, "the caller is released at the deadline")
         XCTAssertFalse(isUnauthorized(error))
@@ -191,13 +198,26 @@ final class AuthRecoveryRestMappingTests: XCTestCase {
             ("no device id", rejected, AuthRenewPreconditionError.noDeviceId),
             ("device key not provisioned", rejected,
              BCryptoDeviceRenewClient.Error.ed25519PrivateNotProvisioned),
-            ("refresh rejected, no renew path", rejected, nil),
         ]
         for (name, refreshError, renewError) in cases {
             let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
             let error = await profileError(refreshError: refreshError, renewError: renewError, store: store)
             XCTAssertTrue(isUnauthorized(error), "\(name): got \(String(describing: error))")
         }
+    }
+
+    func test_aRejectedRefreshTokenWithNoRenewPathIsALossOnlyForAClientWithoutAStore() async {
+        // No store: nothing else in the process shares this session, the rejection is the answer.
+        let alone = await profileError(refreshError: BCryptoError.unauthorized, renewError: nil, store: nil)
+        XCTAssertTrue(isUnauthorized(alone), "\(String(describing: alone))")
+
+        // A store-backed client that merely lacks a renewer may be a half-wired builder: another
+        // client of the same store can still heal the session, so this must not wipe it.
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let backed = await profileError(refreshError: BCryptoError.unauthorized, renewError: nil, store: store)
+        XCTAssertFalse(isUnauthorized(backed), "\(String(describing: backed))")
+        XCTAssertEqual((backed as? BCryptoSessionRecoveryError)?.failure.reason, .refreshRejected)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A0", refresh: "R0"))
     }
 
     func test_aSignedOutStoreIsAnUnauthorizedAnswerWithNoNetworkCall() async {
