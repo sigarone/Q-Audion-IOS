@@ -17622,7 +17622,7 @@ final class AppState: ObservableObject {
                         // W-STALEENVELOPE — see onCallPeerOffline.
                         guard self.callerTerminalEnvelopeEndsCall(.busy, envelopeCallId: envelopeCallId) else { return }
                         // W-CALLERBUSY — everything after the gate is `endOutgoingCallAfterTerminalEnvelope`.
-                        self.endOutgoingCallAfterTerminalEnvelope(.busy, envelopeCallId: envelopeCallId)
+                        self.callService.endCall() // TEMP MUTANT: the old hand-rolled teardown, AppState.endCall bypassed
                     }
                 }
                 ws.onCallCancel = { [weak self] envelopeCallId, reason in
