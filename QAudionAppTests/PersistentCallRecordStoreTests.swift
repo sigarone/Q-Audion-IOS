@@ -47,7 +47,8 @@ final class PersistentCallRecordStoreTests: XCTestCase {
             .appendingPathComponent("callhistory-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         addTeardownBlock {
-            // A test may leave a file unreadable on purpose.
+            // A test may leave a file or the directory unreadable or unwritable on purpose.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
             if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
                 for name in files {
                     try? FileManager.default.setAttributes(
@@ -87,6 +88,32 @@ final class PersistentCallRecordStoreTests: XCTestCase {
 
     private func backupURL(_ url: URL) -> URL { URL(fileURLWithPath: url.path + ".bak") }
     private func unreadableURL(_ url: URL) -> URL { URL(fileURLWithPath: url.path + ".unreadable") }
+
+    /// Names of every other file in the directory of the live history file.
+    private func siblingNames(of live: URL) -> [String] {
+        let dir = live.deletingLastPathComponent()
+        return ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .filter { $0 != live.lastPathComponent }
+            .sorted()
+    }
+
+    /// The copies of the live file: the backup, its temp file, the quarantined file.
+    private func copyNames(of live: URL) -> [String] {
+        siblingNames(of: live).filter { $0.hasPrefix(live.lastPathComponent + ".") }
+    }
+
+    /// Call ids that can still be read, with `key`, from any file next to the live history file.
+    /// This is what a deletion by the user must leave empty.
+    private func idsReadableOutsideTheLiveFile(_ live: URL, key: SymmetricKey) -> Set<String> {
+        let dir = live.deletingLastPathComponent()
+        var ids = Set<String>()
+        for name in siblingNames(of: live) {
+            if let records = try? readRecords(at: dir.appendingPathComponent(name), key: key) {
+                ids.formUnion(records.map(\.id))
+            }
+        }
+        return ids
+    }
 
     /// A file with two ended calls ("c1", "c2"), written under a real key, and the provider holding it.
     @MainActor
@@ -332,5 +359,122 @@ final class PersistentCallRecordStoreTests: XCTestCase {
         XCTAssertEqual(try readRecords(at: backupURL(url), key: try key()).map(\.id), ["c2", "c1"])
         XCTAssertNil(try readRecords(at: backupURL(url), key: try key()).first?.endedAt)
         XCTAssertNotNil(try readRecords(at: url, key: try key()).first?.endedAt)
+    }
+
+    // MARK: - A deletion by the user leaves no copy
+
+    @MainActor
+    func test_deleteRecord_leavesNoCopyOfTheDeletedCall_andTheBackupResumesWithoutIt() throws {
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        let store = makeStore(provider, at: url)
+        // The seeding saves left a backup that still holds both calls, so this test is not vacuous.
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), ["c1", "c2"])
+
+        store.deleteRecord("c1")
+
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c2"])
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), Set<String>(),
+                       "no backup may still hold the deleted call")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backupURL(url).path))
+
+        // The safety net resumes with the next call event, and it never carries the deleted call.
+        begin(store, "c3")
+        XCTAssertEqual(try readRecords(at: backupURL(url), key: key).map(\.id), ["c2"])
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c3", "c2"])
+    }
+
+    @MainActor
+    func test_clearAll_leavesNoCopyOfTheHistory_notEvenALeftoverBackupTempFile() throws {
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        // A backup whose last step failed leaves its temp file behind.
+        try FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: backupURL(url).path + ".tmp"))
+        let store = makeStore(provider, at: url)
+        XCTAssertEqual(copyNames(of: url), ["call_history.enc.bak", "call_history.enc.bak.tmp"])
+
+        store.clearAll()
+
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertTrue(try readRecords(at: url, key: key).isEmpty)
+        XCTAssertEqual(copyNames(of: url), [], "no copy of the live file may be left")
+    }
+
+    @MainActor
+    func test_clearAll_removesAQuarantinedFileThatStillOpensWithTheKey_deleteRecordKeepsIt() throws {
+        let dir = try makeDirectory()
+        let url = dir.appendingPathComponent("call_history.enc")
+        let provider = FakeKeyProvider(key: SymmetricKey(size: .bits256))
+        let key = try XCTUnwrap(provider.key)
+        // Sealed under the real key but not a list of call records: it is moved aside, and it can
+        // still be opened with the key, so it is history the user may want gone.
+        let sealed = try AES.GCM.seal(Data(#"[{"id":"old-shape"}]"#.utf8), using: key)
+        try XCTUnwrap(sealed.combined).write(to: url)
+
+        let store = makeStore(provider, at: url)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unreadableURL(url).path))
+
+        begin(store, "c1")
+        begin(store, "c2")
+        store.deleteRecord("c1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unreadableURL(url).path),
+                      "deleting one call cannot concern a file that was never readable")
+
+        store.clearAll()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unreadableURL(url).path))
+        XCTAssertEqual(copyNames(of: url), [])
+    }
+
+    @MainActor
+    func test_deleteAndClearWhileDeferred_leaveNoCopyOnceTheyReachTheDisk() throws {
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+
+        provider.lockedStatus = errSecInteractionNotAllowed
+        let store = makeStore(provider, at: url)
+        store.deleteRecord("c1")
+        provider.lockedStatus = nil
+        store.retryDeferredLoad()
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c2"])
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), Set<String>(),
+                       "the replayed delete removes the old backup too")
+
+        begin(store, "c3")                       // file [c3, c2], backup [c2]
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), ["c2"])
+        provider.lockedStatus = errSecInteractionNotAllowed
+        store.clearAll()
+        provider.lockedStatus = nil
+        store.retryDeferredLoad()
+        XCTAssertTrue(try readRecords(at: url, key: key).isEmpty)
+        XCTAssertEqual(copyNames(of: url), [], "the replayed clear-all removes the backup too")
+    }
+
+    @MainActor
+    func test_failedWriteAfterDelete_doesNotLetTheNextSaveCopyTheDeletedCallIntoTheBackup() throws {
+        try XCTSkipIf(geteuid() == 0, "permission bits do not stop root")
+        let dir = try makeDirectory()
+        let (url, provider, _) = try seededFile(in: dir)
+        let key = try XCTUnwrap(provider.key)
+        let store = makeStore(provider, at: url)
+
+        // The directory cannot be written: the delete cannot reach the file, and the old backup
+        // cannot be removed either.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        store.deleteRecord("c1")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c2", "c1"], "the write did fail")
+        XCTAssertEqual(store.records.map(\.id), ["c2"])
+
+        // The next save finds the file still holding the deleted call: it must not copy it into the
+        // backup, and it removes the backup that exists.
+        begin(store, "c3")
+        XCTAssertEqual(try readRecords(at: url, key: key).map(\.id), ["c3", "c2"])
+        XCTAssertEqual(idsReadableOutsideTheLiveFile(url, key: key), Set<String>())
+
+        begin(store, "c4")
+        XCTAssertEqual(try readRecords(at: backupURL(url), key: key).map(\.id), ["c3", "c2"])
     }
 }

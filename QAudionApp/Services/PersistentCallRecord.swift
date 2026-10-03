@@ -117,7 +117,7 @@ struct KeychainCallHistoryKeyProvider: CallHistoryKeyProviding {
 ///
 /// Storage layout:
 ///   - Encrypted file: Application Support/qaudion/call_history.enc
-///   - Previous version (one backup, refreshed before every overwrite): call_history.enc.bak
+///   - Previous version (one backup, refreshed before every automatic overwrite): call_history.enc.bak
 ///   - A file that cannot be opened with the key we hold (key lost, corrupt): call_history.enc.unreadable
 ///   - File protection: .completeUnlessOpen
 ///   - Encryption: CryptoKit AES.GCM (256-bit key)
@@ -132,7 +132,15 @@ struct KeychainCallHistoryKeyProvider: CallHistoryKeyProviding {
 ///     recorded in the meantime.
 ///   - An existing file is never overwritten by a list built from nothing. A file that the (readable)
 ///     key cannot open is moved aside to `.unreadable`, not rewritten in place.
-///   - Before every overwrite the previous file is kept as `.bak`.
+///   - Before every automatic overwrite (a call started or ended, a merge) the previous file is kept
+///     as `.bak`.
+///   - A deletion by the user is never undone by a copy. When the user deletes a record or clears the
+///     history, no file that still holds the removed records may outlive the write that replaces
+///     them: `.bak` (and a leftover `.bak.tmp`) are removed, and "clear all" removes `.unreadable` too
+///     (a file moved aside because its content did not decode can still be opened with the key). The
+///     old file is not copied into a backup while it still holds removed records, and the save that
+///     finally replaces it (after a deferral, or a failed write) does the removal. The backup is then
+///     rebuilt by the next automatic save.
 ///
 /// CONSTRAINT (CLAUDE.md §16): this class MUST NOT take AppState as a
 /// parameter anywhere. All integration points must pass primitive values
@@ -164,6 +172,13 @@ public final class PersistentCallRecordStore: ObservableObject {
     // Edits made while persistence is deferred, replayed over the file contents on the next load.
     private var pendingDeletedIds = Set<String>()
     private var pendingClearAll = false
+    // The user deleted records (or everything) and the file on disk may still hold them: the save
+    // that replaces it removes the copies of the old file, and until then the file is not copied
+    // into the backup. Cleared only once the copies are really gone, so a failed write or a failed
+    // removal is retried by the next save.
+    private var removedByUserNotYetOnDisk = false
+    // Same, for "clear all": the quarantined file goes too.
+    private var clearedByUserNotYetOnDisk = false
 
     public convenience init() {
         self.init(keyProvider: KeychainCallHistoryKeyProvider(),
@@ -212,6 +227,7 @@ public final class PersistentCallRecordStore: ObservableObject {
     }
 
     private var backupURL: URL { URL(fileURLWithPath: fileURL.path + ".bak") }
+    private var backupTmpURL: URL { URL(fileURLWithPath: backupURL.path + ".tmp") }
     private var quarantineURL: URL { URL(fileURLWithPath: fileURL.path + ".unreadable") }
 
     // MARK: - Key
@@ -354,7 +370,7 @@ public final class PersistentCallRecordStore: ObservableObject {
     private func backUpCurrentFile() {
         let fm = FileManager.default
         guard fm.fileExists(atPath: fileURL.path) else { return }
-        let tmp = URL(fileURLWithPath: backupURL.path + ".tmp")
+        let tmp = backupTmpURL
         do {
             if fm.fileExists(atPath: tmp.path) { try fm.removeItem(at: tmp) }
             try fm.copyItem(at: fileURL, to: tmp)
@@ -368,6 +384,32 @@ public final class PersistentCallRecordStore: ObservableObject {
         } catch {
             RTLog.warn(Self.logTag, "backup failed code=\((error as NSError).code)")
         }
+    }
+
+    /// True when nothing is left at `url` afterwards (it was absent, or it has been removed).
+    private func removeFileIfPresent(at url: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return true }
+        do {
+            try fm.removeItem(at: url)
+            return true
+        } catch {
+            RTLog.warn(Self.logTag, "could not remove \(url.lastPathComponent) code=\((error as NSError).code)")
+            return false
+        }
+    }
+
+    /// Removes every copy of the old history file that the user's deletion must not leave behind:
+    /// the backup and its leftover temp file, and for "clear all" the quarantined file as well (it
+    /// is unreadable when the key was lost, but a file moved aside only because its content did not
+    /// decode still opens with the key). Returns true when all of them are gone.
+    private func removeCopiesOfRemovedHistory() -> Bool {
+        var allGone = removeFileIfPresent(at: backupURL)
+        allGone = removeFileIfPresent(at: backupTmpURL) && allGone
+        if clearedByUserNotYetOnDisk {
+            allGone = removeFileIfPresent(at: quarantineURL) && allGone
+        }
+        return allGone
     }
 
     @discardableResult
@@ -392,8 +434,16 @@ public final class PersistentCallRecordStore: ObservableObject {
             guard let combined = sealedBox.combined else { return false }
             try? FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
-            backUpCurrentFile()
+            // The file about to be replaced becomes the single backup, unless it still holds records
+            // the user has deleted: then it is not copied anywhere, and the copies that exist are
+            // removed BEFORE the write, so an interrupted process cannot leave them behind.
+            let copiesRemoved = removedByUserNotYetOnDisk ? removeCopiesOfRemovedHistory() : false
+            if !removedByUserNotYetOnDisk { backUpCurrentFile() }
             try combined.write(to: fileURL, options: .atomic)
+            if copiesRemoved {
+                removedByUserNotYetOnDisk = false
+                clearedByUserNotYetOnDisk = false
+            }
             // Apply file protection so the OS encrypts at rest when device is locked.
             try FileManager.default.setAttributes(
                 [.protectionKey: FileProtectionType.completeUnlessOpen],
@@ -513,16 +563,21 @@ public final class PersistentCallRecordStore: ObservableObject {
     public func deleteRecord(_ id: String) {
         retryDeferredLoad()
         records.removeAll { $0.id == id }
+        // The file on disk still holds the record until a save replaces it: that save must not copy
+        // it into the backup, and it removes the copies that exist.
+        removedByUserNotYetOnDisk = true
         // Checked after save(): the save itself can be what finds the key unreadable, and the file
         // still holds the record then.
         save()
         if isPersistenceDeferred { pendingDeletedIds.insert(id) }
     }
 
-    /// Wipe all records.
+    /// Wipe all records, and with them every copy of the old file (backup, quarantined file).
     public func clearAll() {
         retryDeferredLoad()
         records.removeAll()
+        removedByUserNotYetOnDisk = true
+        clearedByUserNotYetOnDisk = true
         save()
         if isPersistenceDeferred { pendingClearAll = true }
     }
