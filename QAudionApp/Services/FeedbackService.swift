@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import QAudionEngine
 
 /// W546+W547 — Bidirectional in-app feedback channel.
 ///
@@ -38,6 +39,13 @@ public final class FeedbackService: ObservableObject {
     private var serverUrl: String = ""
     private var getToken: TokenProvider?
     private var pollTask: Task<Void, Never>?
+
+    /// W-RETRYAFTER (2026-10-03) — when the server tells this service to wait (429/503
+    /// `Retry-After`, or any other kept failure), the 60 s inbox poll stays quiet until then
+    /// instead of knocking again on the per-IP bucket every minute. A user-initiated
+    /// `submit` / `reply` / `ack` is never blocked by it (the user asked), but its answer
+    /// still feeds the pause.
+    private var pause = UploadPause()
 
     private init() {}
 
@@ -80,6 +88,7 @@ public final class FeedbackService: ObservableObject {
     /// Update `unreadCount` from the server. Best-effort — keeps
     /// the previous value on failure.
     public func refreshUnreadCount() async {
+        if pause.isPaused(now: ProcessInfo.processInfo.systemUptime) { return }
         do {
             let items = try await fetchInbox()
             self.unreadCount = items.reduce(0) { acc, item in
@@ -227,10 +236,7 @@ public final class FeedbackService: ObservableObject {
         // calls had no pin at all (audit memory
         // reference_ios_stability_audit_2026_09_01, P1 item 6).
         let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard status / 100 == 2 else {
-            throw FeedbackError.http(status)
-        }
+        try noteResponse(resp)
         return data
     }
 
@@ -242,10 +248,33 @@ public final class FeedbackService: ObservableObject {
         req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         // W-AUXPIN (2026-09-01): pinned session, see postJSON.
         let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        try noteResponse(resp)
+        return data
+    }
+
+    /// Success clears the pause; a failure that keeps its payload (see `UploadRetryPolicy`)
+    /// extends it from the server's `Retry-After`; then non-2xx throws as before.
+    private func noteResponse(_ resp: URLResponse) throws {
+        let http = resp as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
+        switch UploadRetryPolicy.verdict(status: status) {
+        case .success:
+            pause.recordSuccess()
+        case .reject:
+            break
+        case .keep:
+            let delay = pause.recordFailure(status: status,
+                                            retryAfterHeader: http?.value(forHTTPHeaderField: "Retry-After"),
+                                            now: ProcessInfo.processInfo.systemUptime,
+                                            wallClock: Date(),
+                                            jitterUnit: Double.random(in: 0...1))
+            let hint = UploadRetryPolicy.parseRetryAfter(http?.value(forHTTPHeaderField: "Retry-After"), now: Date())
+            let hintText = UploadRetryPolicy.hintLogSeconds(hint)
+            RTLog.warn("feedback", "requests paused status=" + String(status) + " retry_after=" + hintText
+                       + " pause=" + String(Int(delay.rounded())))
+        }
         guard status / 100 == 2 else {
             throw FeedbackError.http(status)
         }
-        return data
     }
 }

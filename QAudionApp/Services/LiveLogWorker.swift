@@ -529,7 +529,9 @@ actor LiveLogWorker {
         inflight = false
 
         // 429 / 503: honour Retry-After, else exponential with jitter; other 5xx keep their
-        // earlier schedule; everything else just ends the streak. Nothing here loops.
+        // earlier schedule. W-RETRYAFTER (2026-10-03): 401/402/403, every other 4xx and a
+        // network error back off as well (they used to re-send the same chunk every 2 s); the
+        // chunk itself always stays in the bounded backlog. Nothing here loops.
         let retryAfter: TimeInterval? = LiveLogBackoff.parseRetryAfter(retryAfterHeader, now: Date())
         let jitterDraw: Double = Double.random(in: 0...1)
         let delay: TimeInterval? = backoff.recordFailure(status: status,
@@ -549,7 +551,14 @@ actor LiveLogWorker {
             let secondsStr: String = String(describing: Int(seconds.rounded()))
             let streakStr: String = String(describing: backoff.consecutiveFailures)
             let hintStr: String = retryAfter == nil ? "0" : "1"
+            // One line per pause: the status, the server's Retry-After (seconds, "none" when the
+            // response had none), the pause actually applied and how many log lines are queued.
+            // No payload content.
+            let statusStr: String = status.map { String(describing: $0) } ?? "net"
+            let raStr: String = UploadRetryPolicy.hintLogSeconds(retryAfter)
+            let queuedStr: String = String(describing: backlog.count)
             let backoffLine: String = "livelog backoff n=" + streakStr + " s=" + secondsStr + " ra=" + hintStr
+                + " status=" + statusStr + " retry_after=" + raStr + " queued=" + queuedStr
             RTLog.warn("net", backoffLine)
         }
     }

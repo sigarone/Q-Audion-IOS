@@ -97,6 +97,36 @@ public final class BugReporter: ObservableObject {
 
     private var getLogWindowMinutes: LogWindowProvider?
 
+    /// W-RETRYAFTER (2026-10-03) -- reports waiting for the server. A report the user took the
+    /// trouble to write used to be thrown away on the first failed upload (a 429 from the
+    /// per-IP limiter, a 5xx, a dropped connection: one attempt, one log line, gone). Now it
+    /// stays here, in memory, until the server takes it. Bounded: a report holds a screenshot
+    /// and a log window, so only `maxQueuedReports` wait at once; when a new one arrives
+    /// beyond that the OLDEST is dropped, with a log line.
+    ///
+    /// `callId` and `diagSnapshot` are fixed when the report is QUEUED and travel with it: a
+    /// report kept for a retry 30-300+ s later must still say which call it was about and what
+    /// the app's state was at trigger time, not the call (and state) the user is in by then.
+    /// The token and the server URL are different: they are read again on every attempt, so a
+    /// retry never uses a token that was refreshed or revoked in the meantime.
+    struct QueuedReport {
+        let id = UUID()
+        let report: PendingReport
+        let note: String
+        let callId: String
+        let diagSnapshot: String
+        var attempts: Int = 0
+    }
+    private var queuedReports: [QueuedReport] = []
+    /// The uploader's "do not send before" window (the server's `Retry-After`, else a
+    /// schedule), shared by every report.
+    private var uploadPause = UploadPause()
+    private var isDrainingUploads: Bool = false
+    static let maxQueuedReports: Int = 3
+    /// Attempts per report before it is given up (explicitly logged): with the pause schedule
+    /// (30 s doubling to 300 s, or the server's own hint) that is well over ten minutes.
+    static let maxUploadAttempts: Int = 6
+
     /// KVO observation token for AVAudioSession.outputVolume.
     private var volumeObservation: NSKeyValueObservation?
     /// `AVAudioSession.routeChangeNotification` observer: a route change is the system
@@ -112,6 +142,13 @@ public final class BugReporter: ObservableObject {
     private var autoCooldownUntil: Date = .distantPast
 
     private init() {}
+
+    /// A reporter of its own for unit tests, so they never touch `shared`. Production code
+    /// uses `shared` only.
+    init(forTesting: Void) {}
+
+    /// Test seam: stands in for `attemptUpload` (no network). nil in production.
+    var attemptOverride: (@MainActor (QueuedReport) async -> UploadAttemptOutcome)?
 
     // MARK: - Configuration
 
@@ -419,9 +456,9 @@ public final class BugReporter: ObservableObject {
     /// plaintext (this is the fix for the exact gap that used to exist:
     /// this class previously had NO E2EE path at all, always plaintext, to
     /// the legacy `/api/v1/bugreport` endpoint).
-    private func fetchAdminPubKey(serverUrl: String, token: String) async -> String? {
-        if let cached = cachedAdminPubKeyHex { return cached }
-        guard let url = URL(string: serverUrl + "/api/v1/report-pubkey") else { return nil }
+    private func fetchAdminPubKey(serverUrl: String, token: String) async -> AdminPubKeyResult {
+        if let cached = cachedAdminPubKeyHex { return .key(cached) }
+        guard let url = URL(string: serverUrl + "/api/v1/report-pubkey") else { return .failed }
         var request = URLRequest(url: url)
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         // W-AUXPIN: keep the 60 s idle timeout this request always had under
@@ -436,20 +473,45 @@ public final class BugReporter: ObservableObject {
             // reference_ios_stability_audit_2026_09_01, P1 item 6).
             let (data, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                let http = response as? HTTPURLResponse
                 RTLog.warn("bugreport", "report-pubkey fetch failed")
-                return nil
+                // W-RETRYAFTER: a throttle, a 5xx or an auth hiccup is worth another try later;
+                // only a status that condemns the request is final.
+                if UploadRetryPolicy.verdict(status: http?.statusCode) == .keep {
+                    return .retry(status: http?.statusCode,
+                                  retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
+                }
+                return .failed
             }
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let hex = obj["public_key"] as? String, !hex.isEmpty else {
                 RTLog.warn("bugreport", "report-pubkey response unparseable")
-                return nil
+                return .failed
             }
             cachedAdminPubKeyHex = hex
-            return hex
+            return .key(hex)
         } catch {
             RTLog.warn("bugreport", "report-pubkey fetch exception: " + error.localizedDescription)
-            return nil
+            return .retry(status: nil, retryAfter: nil)
         }
+    }
+
+    /// W-RETRYAFTER -- how the admin-pubkey fetch ended.
+    private enum AdminPubKeyResult {
+        case key(String)
+        /// Worth another try after the pause (`UploadRetryPolicy` says keep).
+        case retry(status: Int?, retryAfter: String?)
+        case failed
+    }
+
+    /// W-RETRYAFTER -- how one upload attempt ended.
+    enum UploadAttemptOutcome {
+        /// The server took the report.
+        case done
+        /// Nothing more to try (no token/URL, nothing to assemble, a rejected report).
+        case abandon
+        /// Keep the report and try again after the pause.
+        case retry(status: Int?, retryAfter: String?)
     }
 
     /// W561 — E2EE upload to `/api/v1/report`, replacing the old plaintext
@@ -463,18 +525,140 @@ public final class BugReporter: ObservableObject {
     /// connection state — see `DiagSnapshotProvider`'s kdoc) so a report is
     /// self-contained evidence of app state at trigger time, not just a
     /// screenshot the reader has to interpret cold.
-    private func uploadReport(report: PendingReport, note: String) async {
-        guard let getServerUrl = getServerUrl,
-              let getToken = getToken else { return }
-        let serverUrl = getServerUrl()
-        guard !serverUrl.isEmpty else { return }
-        guard let token = getToken() else { return }
-        guard !token.isEmpty else { return }
+    ///
+    /// W-RETRYAFTER (2026-10-03): this is now the entry point of a small bounded queue, not a
+    /// single shot. The report is queued, then the queue is drained one report at a time,
+    /// never before the uploader's pause (the server's `Retry-After`) has passed; a failure
+    /// that is not the report's fault (429/503/5xx/auth/network) keeps it for another try.
+    func uploadReport(report: PendingReport, note: String) async {
+        if queuedReports.count >= Self.maxQueuedReports {
+            queuedReports.removeFirst()
+            RTLog.warn("bugreport", "upload queue full: oldest report dropped cap="
+                       + String(Self.maxQueuedReports))
+        }
+        // The call the report is about and the app's state are read ONCE, here, at trigger/send
+        // time (see `QueuedReport`); every retry sends exactly these.
+        queuedReports.append(QueuedReport(
+            report: report,
+            note: note,
+            callId: getActiveCallId?() ?? "",
+            diagSnapshot: Self.addingReportBlock(to: getDiagSnapshot?() ?? "", report: report)
+        ))
+        // One drain loop at a time; a report queued while it runs is picked up by it.
+        guard !isDrainingUploads else { return }
+        isDrainingUploads = true
+        defer { isDrainingUploads = false }
 
-        guard let adminPubKey = await fetchAdminPubKey(serverUrl: serverUrl, token: token) else {
+        while let next = queuedReports.first {
+            if Task.isCancelled { return }
+            // The diagnostics opt-in is re-read on EVERY pass, not only when the report was
+            // triggered: a kept report is retried minutes later, and an automatic one the user
+            // has since opted out of must not leave the phone.
+            if Self.isConsentWithdrawn(for: next.report, diagnosticsEnabled: TelemetryService.isEnabled) {
+                removeQueuedReport(matching: next)
+                RTLog.info("bugreport", "queued auto report dropped: diagnostics opt-in OFF")
+                continue
+            }
+            let now = ProcessInfo.processInfo.systemUptime
+            if uploadPause.isPaused(now: now) {
+                let wait = uploadPause.remainingSeconds(now: now)
+                try? await Task.sleep(nanoseconds: UInt64((wait + 0.05) * 1_000_000_000))
+                continue
+            }
+            let outcome: UploadAttemptOutcome
+            if let attemptOverride = attemptOverride {
+                outcome = await attemptOverride(next)
+            } else {
+                outcome = await attemptUpload(queued: next)
+            }
+            // The queue may have dropped its oldest while that attempt was out: only touch the
+            // entry if it is still the one that was tried.
+            switch outcome {
+            case .done:
+                uploadPause.recordSuccess()
+                removeQueuedReport(matching: next)
+            case .abandon:
+                removeQueuedReport(matching: next)
+            case .retry(let status, let retryAfter):
+                let attempts = next.attempts + 1
+                let delay = uploadPause.recordFailure(status: status,
+                                                      retryAfterHeader: retryAfter,
+                                                      now: ProcessInfo.processInfo.systemUptime,
+                                                      wallClock: Date(),
+                                                      jitterUnit: Double.random(in: 0...1))
+                let statusText = status.map { String($0) } ?? "net"
+                let hint = UploadRetryPolicy.parseRetryAfter(retryAfter, now: Date())
+                let hintText = UploadRetryPolicy.hintLogSeconds(hint)
+                RTLog.warn("bugreport", "upload paused status=" + statusText + " retry_after=" + hintText
+                           + " pause=" + String(Int(delay.rounded())) + " queued=" + String(queuedReports.count)
+                           + " attempt=" + String(attempts))
+                if attempts >= Self.maxUploadAttempts {
+                    removeQueuedReport(matching: next)
+                    RTLog.warn("bugreport", "report given up after " + String(attempts) + " attempts")
+                } else if let index = queuedReports.firstIndex(where: { $0.id == next.id }) {
+                    queuedReports[index].attempts = attempts
+                }
+            }
+        }
+    }
+
+    private func removeQueuedReport(matching entry: QueuedReport) {
+        if let index = queuedReports.firstIndex(where: { $0.id == entry.id }) {
+            queuedReports.remove(at: index)
+        }
+    }
+
+    /// An automatic report is diagnostic egress the user never asked for: it is allowed only
+    /// while the diagnostics opt-in is ON (`triggerAuto`). Manual and abuse reports end in an
+    /// explicit user action and are never gated. `diagnosticsEnabled` is a parameter so the
+    /// rule can be tested without touching the user's real preference.
+    static func isConsentWithdrawn(for report: PendingReport, diagnosticsEnabled: Bool) -> Bool {
+        return report.trigger == "auto" && !diagnosticsEnabled
+    }
+
+    /// The diagnostics opt-in was switched OFF: forget every queued automatic report now, so
+    /// none stays in memory through a long pause (the drain loop also re-checks before each
+    /// attempt, and `attemptUpload` once more before the POST). Manual and abuse reports
+    /// stay: the user asked for those.
+    func dropQueuedAutoReports() {
+        let before = queuedReports.count
+        queuedReports.removeAll { $0.report.trigger == "auto" }
+        let dropped = before - queuedReports.count
+        if dropped > 0 {
+            RTLog.info("bugreport", "queued auto reports dropped: diagnostics opt-in OFF n=" + String(dropped))
+        }
+    }
+
+    /// What the queue holds, for tests: trigger, the call id and snapshot fixed at queue
+    /// time, and the attempts so far.
+    var queuedReportsForTesting: [(trigger: String, callId: String, diagSnapshot: String, attempts: Int)] {
+        return queuedReports.map { ($0.report.trigger, $0.callId, $0.diagSnapshot, $0.attempts) }
+    }
+
+    /// One attempt: pubkey, assemble, POST. Never throws; says what to do with the report.
+    /// The call id and the diagnostic snapshot come from the queue entry (fixed when it was
+    /// queued), never from the live providers; the token and the server URL are read now.
+    private func attemptUpload(queued: QueuedReport) async -> UploadAttemptOutcome {
+        let report = queued.report
+        let note = queued.note
+        guard let getServerUrl = getServerUrl,
+              let getToken = getToken else { return .abandon }
+        let serverUrl = getServerUrl()
+        guard !serverUrl.isEmpty else { return .abandon }
+        guard let token = getToken() else { return .abandon }
+        guard !token.isEmpty else { return .abandon }
+
+        let adminPubKey: String
+        switch await fetchAdminPubKey(serverUrl: serverUrl, token: token) {
+        case .key(let hex):
+            adminPubKey = hex
+        case .retry(let status, let retryAfter):
+            RTLog.warn("bugreport", "admin pubkey unavailable — report kept for a later attempt")
+            return .retry(status: status, retryAfter: retryAfter)
+        case .failed:
             // Admin pubkey unavailable — abort rather than send plaintext.
             RTLog.warn("bugreport", "admin pubkey unavailable — report aborted (no plaintext fallback)")
-            return
+            return .abandon
         }
 
         let appVersion = resolveAppVersion()
@@ -485,8 +669,8 @@ public final class BugReporter: ObservableObject {
         // Same convention as LogExportService now: first 8 of the user id.
         let userPrefix = String((TokenVault.loadUserId() ?? "").prefix(8))
         let timestamp = BugReporter.isoFormatter.string(from: report.capturedAt)
-        let callId = getActiveCallId?() ?? ""
-        let diagSnapshot = Self.addingReportBlock(to: getDiagSnapshot?() ?? "", report: report)
+        let callId = queued.callId
+        let diagSnapshot = queued.diagSnapshot
 
         let bodyPlaintext: String
         if note.isEmpty {
@@ -498,7 +682,7 @@ public final class BugReporter: ObservableObject {
         }
 
         let endpoint = serverUrl + "/api/v1/report"
-        guard let url = URL(string: endpoint) else { return }
+        guard let url = URL(string: endpoint) else { return .abandon }
 
         // W-REPORTFREEZE (2026-10-03): everything heavy -- the log text and its redaction, the
         // diagnostic summary, the PNG encode, the three encryptions, the multipart body -- runs
@@ -523,7 +707,14 @@ public final class BugReporter: ObservableObject {
         let assembledReport = await Task.detached(priority: .utility) {
             BugReportAssembler.assemble(input)
         }.value
-        guard let assembled = assembledReport else { return }
+        guard let assembled = assembledReport else { return .abandon }
+
+        // The pubkey fetch and the assembly above can take a while: read the opt-in once more,
+        // right before the bytes leave the phone.
+        if Self.isConsentWithdrawn(for: report, diagnosticsEnabled: TelemetryService.isEnabled) {
+            RTLog.info("bugreport", "auto report not sent: diagnostics opt-in OFF")
+            return .abandon
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -538,11 +729,24 @@ public final class BugReporter: ObservableObject {
         do {
             // W-AUXPIN (2026-09-01): pinned session, see fetchAdminPubKey.
             let (_, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
-            if let http = response as? HTTPURLResponse {
+            let http = response as? HTTPURLResponse
+            if let http {
                 RTLog.info("bugreport", "E2EE upload status=" + String(describing: http.statusCode))
+            }
+            switch UploadRetryPolicy.verdict(status: http?.statusCode) {
+            case .success:
+                return .done
+            case .reject:
+                // The server will never take this report (malformed / too large): final.
+                RTLog.warn("bugreport", "report rejected by the server, not retried")
+                return .abandon
+            case .keep:
+                return .retry(status: http?.statusCode,
+                              retryAfter: http?.value(forHTTPHeaderField: "Retry-After"))
             }
         } catch {
             RTLog.warn("bugreport", "upload failed: " + error.localizedDescription)
+            return .retry(status: nil, retryAfter: nil)
         }
     }
 
