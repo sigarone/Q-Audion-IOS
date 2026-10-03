@@ -2326,6 +2326,7 @@ final class CallService: @unchecked Sendable {
                currentGeneration: _savedGeneration) {
             audioSrtpFallbackActive = false
             audioSrtpFallbackTag = nil
+            srtpFallbackEverEngaged = false
             srtpDeadTxBeats = 0
             srtpLastPtxSample = -1
             RTLog.warn("call", "audiosrtpfb latch=0 stale=1")
