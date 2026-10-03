@@ -242,6 +242,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.withLock { retrySenderClosure = sender }
     }
 
+    /// Test seam (A2): put a held ACCEPT in the slot WITHOUT the guards `emitJsonAccept` applies, the state a release
+    /// that popped the entry just before a replacement wiped the slot would be handed.
+    func storeHeldAcceptForTesting(callId: String, wire: String, calleeToken: UInt64?) {
+        lock.withLock { heldAcceptByCall[callId.lowercased()] = .json(wire, calleeToken: calleeToken) }
+    }
+
     /// Test seam (R-HELD-REKEY): make this integration the ACTIVE caller of its call, the state a
     /// scheduled rekey tick finds it in.
     func configureAsActiveCallerForTesting() {

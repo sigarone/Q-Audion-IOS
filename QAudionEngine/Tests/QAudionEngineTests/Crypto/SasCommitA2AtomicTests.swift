@@ -198,6 +198,24 @@ final class SasCommitA2AtomicTests: XCTestCase {
         XCTAssertTrue(wire.all.isEmpty, "the replaced round's ACCEPT never leaves")
     }
 
+    /// A held ACCEPT of a replaced OFFER that is still in the slot when the human answers (the release popped it just
+    /// before the replacement wiped the slot) is dropped by the release itself, never sent, and it does not freeze
+    /// the context of the OFFER that replaced it.
+    func testAStaleHeldAcceptHandedToTheReleaseIsDroppedByTheRelease() async throws {
+        let wire = Wire()
+        let integ = heldIntegration(wire: wire)
+        let tokenA = try XCTUnwrap(integ.sasCommit.beginCalleeOwned(callId: callId, commit: commit(1), acceptHash: hashA))
+        XCTAssertTrue(integ.supersedeUnansweredRound1IfUnsent(callId: callId))
+        let tokenB = try XCTUnwrap(integ.sasCommit.beginCalleeOwned(callId: callId, commit: commit(2), acceptHash: hashB))
+        integ.storeHeldAcceptForTesting(callId: callId, wire: "ACCEPT-A-STALE", calleeToken: tokenA)
+
+        let released = await integ.releaseHeldAccept(callId: callId)
+        XCTAssertFalse(released)
+        XCTAssertTrue(wire.all.isEmpty, "the replaced OFFER's ACCEPT is dropped by the release")
+        XCTAssertTrue(integ.sasCommit.calleeCanBeSuperseded(callId: callId), "B's context is not frozen by A's ACCEPT")
+        XCTAssertTrue(integ.sasCommit.calleeIsCurrent(callId: callId, token: tokenB))
+    }
+
     /// The same race through the integration: the human answers (`releaseHeldAccept`) while a newer OFFER replaces
     /// the round. Exactly one wins; the ACCEPT left if and only if the replacement was refused.
     func testReleaseAndReplacementRaceThroughTheIntegration() async throws {
