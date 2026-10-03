@@ -2197,26 +2197,26 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // different round's — a stale retransmit of the ORIGINAL
                 // OFFER arriving after a later re-key must still get the
                 // ORIGINAL ACCEPT back, not the re-key's).
-                if let cached = lock.withLock({ acceptWireByOfferFingerprint[offerDedupKey] }) {
+                // A2: the cached wire and the serial of the callee context it belongs to are read TOGETHER under the
+                // install lock. The replacement wipes this cache and the context under the same lock, so the pair is
+                // always one OFFER's: either the replaced one's before the wipe, or no cached wire at all after it.
+                let replay: (wire: String, token: UInt64?)? = offerInstallLock.withLock {
+                    guard let cached = lock.withLock({ acceptWireByOfferFingerprint[offerDedupKey] }) else { return nil }
+                    return (cached, round == 1 ? sasCommit.calleeCurrentToken(callId: callId) : nil)
+                }
+                if let replay {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — replaying cached ACCEPT")
                     // W-MEDIAATACCEPT (option b) — I11: a duplicate-OFFER
                     // replay must obey the SAME hold gate as the first
                     // send — "mentre trattiene, niente replay, solo log".
-                    // A cached ACCEPT belongs to the call's current callee context (the replacement wipes the cache of
-                    // the round it replaces), so that context's serial rides with it.
-                    try await emitJsonAccept(callId: callId, wire: cached, sendOpaqueRaw: sendOpaqueRaw, isRound1: round == 1,
-                                             calleeToken: round == 1 ? sasCommit.calleeCurrentToken(callId: callId) : nil)
+                    try await emitJsonAccept(callId: callId, wire: replay.wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: round == 1,
+                                             calleeToken: replay.token)
                 } else {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 }
                 return
             }
             print("[QAudionCallIntegration] OFFER for callId=\(callId.prefix(8))… — processing (fingerprint=\(offerFingerprint.prefix(12))…, reKey=\(isReKeyRound), roundsSeen=\(processedOfferFingerprintsByCall.count))")
-            // Marker that this call's session key is bound to the signed transcript (read by
-            // `isSessionKeyTranscriptBound`). Stored BEFORE any callback announces the new key, and only
-            // for a round that is really accepted (never for a duplicate OFFER, whose
-            // re-encapsulation differs).
-            HandshakeTranscriptHashStore.shared.set(acceptBinding, forCallId: callId)
             // R-COMMIT-CHECK: the commitment of the round-1 OFFER this device answers, with the hash of
             // the ACCEPT it built for it (held until the human accept on the default path). Stored
             // before the ACCEPT can leave: a REVEAL only ever follows a SENT ACCEPT, and the first one
@@ -2243,6 +2243,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 calleeToken = ownedToken
             }
+            // Marker that this call's session key is bound to the signed transcript (read by
+            // `isSessionKeyTranscriptBound`). Stored BEFORE any callback announces the new key, and only
+            // for a round that is really accepted (never for a duplicate OFFER, whose
+            // re-encapsulation differs). Stored after the commitment is begun: an OFFER dropped above (another
+            // OFFER owns the call's commitment) must not overwrite the marker of the round that does.
+            HandshakeTranscriptHashStore.shared.set(acceptBinding, forCallId: callId)
             // W-MEDIAATACCEPT (option b) — I11: the first responder ACCEPT
             // for this call. Held (not sent) until the human has answered; the derivation/session-init below is
             // UNCHANGED either way — only the wire send is gated.

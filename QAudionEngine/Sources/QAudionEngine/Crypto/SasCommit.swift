@@ -676,7 +676,10 @@ public final class SasCommitBook: @unchecked Sendable {
             guard var callee = callees[id], calleeSerials[id] == token else { return .stale }
             let first = callee.acceptSent(nowMs: nowMs)
             callees[id] = callee
-            return first ? .first : .notFirst
+            if first { return .first }
+            // Not the first send: only a context whose ACCEPT really went out before may send it again. One that
+            // refused to mark (no ACCEPT hash stored, or already ended) has nothing to re-send.
+            return callee.acceptSentAtMs != nil ? .notFirst : .stale
         }
     }
 

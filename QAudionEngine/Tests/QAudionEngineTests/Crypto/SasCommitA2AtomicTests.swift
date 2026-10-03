@@ -72,6 +72,15 @@ final class SasCommitA2AtomicTests: XCTestCase {
         XCTAssertEqual(book.calleeMarkAcceptSent(callId: "another-call", token: token, nowMs: 3), .stale)
     }
 
+    /// A context that never got its ACCEPT hash cannot mark a send, and a refusal is not "sent before": nothing is sent.
+    func testAContextThatRefusesToMarkASendIsNotTreatedAsAlreadySent() throws {
+        let book = SasCommitBook()
+        XCTAssertTrue(book.beginCallee(callId: callId, commit: commit(1)))   // no ACCEPT hash stored
+        let token = try XCTUnwrap(book.calleeCurrentToken(callId: callId))
+        XCTAssertEqual(book.calleeMarkAcceptSent(callId: callId, token: token, nowMs: 1), .stale)
+        XCTAssertTrue(book.calleeCanBeSuperseded(callId: callId), "and it stays unanswered")
+    }
+
     func testAContextClearedWithTheCallIsStale() throws {
         let book = SasCommitBook()
         let token = try XCTUnwrap(book.beginCalleeOwned(callId: callId, commit: commit(1), acceptHash: hashA))
@@ -312,6 +321,19 @@ final class SasCommitA2AtomicTests: XCTestCase {
         XCTAssertTrue(afterGuard[..<closeAt.lowerBound].contains("onKcMacReady?(KcMacReadyEvent("),
                       "the callbacks run inside the guarded block")
         XCTAssertFalse(afterGuard[..<closeAt.lowerBound].contains("await "), "no suspension inside the guarded block")
+    }
+
+    /// The cached ACCEPT of a duplicate OFFER and the serial it belongs to are read together under the install lock, and
+    /// the transcript-hash marker is stored only after this OFFER owns the call's commitment.
+    func testTheReplayReadsWireAndSerialTogetherAndTheMarkerFollowsTheOwnership() throws {
+        let src = code(try integrationText())
+        XCTAssertTrue(src.contains("let replay: (wire: String, token: UInt64?)? = offerInstallLock.withLock { guard let cached = lock.withLock({ acceptWireByOfferFingerprint[offerDedupKey] }) else { return nil } return (cached, round == 1 ? sasCommit.calleeCurrentToken(callId: callId) : nil) }"))
+        XCTAssertFalse(src.contains("wire: cached"), "no cached wire is replayed with a serial read separately")
+        let owned = try XCTUnwrap(src.range(of: "calleeToken = ownedToken"))
+        let marker = try XCTUnwrap(src.range(of: "HandshakeTranscriptHashStore.shared.set(acceptBinding, forCallId: callId)"))
+        let emit = try XCTUnwrap(src.range(of: "try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: !isReKeyRound"))
+        XCTAssertLessThan(owned.lowerBound, marker.lowerBound, "an OFFER dropped for not owning the commitment leaves the marker alone")
+        XCTAssertLessThan(marker.lowerBound, emit.lowerBound, "stored before any callback announces the key")
     }
 
     /// An ACCEPT is marked sent (atomically, with the token) before it is handed to the transport, on both the direct
