@@ -95,7 +95,10 @@ final class SrtpFallbackLatchWiringTests: XCTestCase {
         XCTAssertTrue(body.contains("SrtpFallbackLatchDecisions.engageVerdict("))
         XCTAssertTrue(body.contains("capturedGeneration: capturedGeneration"))
         XCTAssertTrue(body.contains("currentGeneration: currentCallGeneration()"))
-        XCTAssertTrue(body.contains("callLive: getCallId?() != nil"))
+        XCTAssertTrue(body.contains("callLive: SrtpFallbackLatchDecisions.callLive("),
+                      "liveness must go through the shared helper")
+        XCTAssertTrue(body.contains("callIdBound: getCallId?() != nil, peerAnswered: peerAnswered"),
+                      "a provider rebuilt mid-call has no bound id: the answered flag must count too")
         XCTAssertTrue(body.contains("audiosrtpfb engage=0 why="),
                       "an ignored engage must leave a numeric trace")
         XCTAssertTrue(body.contains("SrtpFallbackLatchDecisions.LatchTag("),
@@ -133,6 +136,8 @@ final class SrtpFallbackLatchWiringTests: XCTestCase {
         XCTAssertTrue(body.contains("audiosrtpfb latch=0 stale=1"))
         XCTAssertTrue(body.contains("audioSrtpFallbackActive = false"),
                       "a latch that is not honoured must be cleared")
+        XCTAssertTrue(body.contains("srtpFallbackEverEngaged = false"),
+                      "a discarded stale latch must not count as this call's fallback in telemetry")
     }
 
     /// The latch and its tag are cleared together at end of call and on recover.

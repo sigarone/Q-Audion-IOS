@@ -72,6 +72,20 @@ public enum SrtpFallbackLatchDecisions {
         return alreadyActive ? .alreadyActive : .engage
     }
 
+    /// Whether an engage request arrives during a live call.
+    ///
+    /// The bound call id alone is not enough: it is read through the signalling provider,
+    /// and a provider rebuilt mid-call (socket stuck for the watchdog grace period, or a
+    /// foreground wake with the socket down) starts with no bound id while the media call
+    /// goes on. Dropping the engage there would also lose it for the rest of the outage,
+    /// because the controller marks the fallback engaged before it calls out. `CallService`'s
+    /// own answered flag is set at both answer sites and cleared by every teardown, so it
+    /// covers that window without accepting anything after the call ended (a late engage
+    /// after the teardown still meets the generation fence first).
+    public static func callLive(callIdBound: Bool, peerAnswered: Bool) -> Bool {
+        callIdBound || peerAnswered
+    }
+
     /// What a latch was set FOR. Stored beside the Bool so the answer-time teardown
     /// can tell a ringing-time engage of THIS call from a leftover of another one.
     /// The id is kept lowercased and in full (an 8-char prefix could collide) and lives

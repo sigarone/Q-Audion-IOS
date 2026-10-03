@@ -2326,6 +2326,7 @@ final class CallService: @unchecked Sendable {
                currentGeneration: _savedGeneration) {
             audioSrtpFallbackActive = false
             audioSrtpFallbackTag = nil
+            srtpFallbackEverEngaged = false
             srtpDeadTxBeats = 0
             srtpLastPtxSample = -1
             RTLog.warn("call", "audiosrtpfb latch=0 stale=1")
@@ -4554,7 +4555,8 @@ final class CallService: @unchecked Sendable {
     /// guard re-latched the fallback for a call that no longer existed.
     public func engageAudioSrtpFallback(capturedGeneration: Int) {
         let verdict = SrtpFallbackLatchDecisions.engageVerdict(
-            callLive: getCallId?() != nil,
+            callLive: SrtpFallbackLatchDecisions.callLive(
+                callIdBound: getCallId?() != nil, peerAnswered: peerAnswered),
             capturedGeneration: capturedGeneration,
             currentGeneration: currentCallGeneration(),
             alreadyActive: audioSrtpFallbackActive)

@@ -46,7 +46,8 @@ final class SrtpFallbackLatchDecisionsTests: XCTestCase {
         @discardableResult
         func engage(capturedGeneration: Int) -> Verdict {
             let verdict = SrtpFallbackLatchDecisions.engageVerdict(
-                callLive: activeCallId != nil,
+                callLive: SrtpFallbackLatchDecisions.callLive(
+                    callIdBound: activeCallId != nil, peerAnswered: peerAnswered),
                 capturedGeneration: capturedGeneration,
                 currentGeneration: generation,
                 alreadyActive: latch)
@@ -84,6 +85,41 @@ final class SrtpFallbackLatchDecisionsTests: XCTestCase {
         XCTAssertFalse(sim.latch, "a late engage must not re-latch a torn-down call")
         sim.endCall(clearsCallId: true)           // id gone: the liveness fence
         XCTAssertEqual(sim.engage(capturedGeneration: wired), .noCallLive)
+        XCTAssertFalse(sim.latch)
+    }
+
+    /// Liveness is the bound id OR CallService's own answered flag (verifier, 2026-10-03).
+    func test_callLive_isTheBoundIdOrTheAnsweredFlag() {
+        XCTAssertTrue(SrtpFallbackLatchDecisions.callLive(callIdBound: true, peerAnswered: false))
+        XCTAssertTrue(SrtpFallbackLatchDecisions.callLive(callIdBound: false, peerAnswered: true))
+        XCTAssertTrue(SrtpFallbackLatchDecisions.callLive(callIdBound: true, peerAnswered: true))
+        XCTAssertFalse(SrtpFallbackLatchDecisions.callLive(callIdBound: false, peerAnswered: false))
+    }
+
+    /// A signalling provider rebuilt mid-call (socket stuck, or a foreground wake with the
+    /// socket down) has no bound call id, but the media call is still up: a genuine engage
+    /// (ICE outage, dead native mic) must still latch, or the outage runs with no fallback
+    /// at all (the controller marks itself engaged before calling out and never retries).
+    func test_providerRebuiltMidCall_legitimateEngageIsStillHonoured() {
+        let sim = FallbackLatchSim()
+        sim.beginCall(id: "aaaaaaaa-1111")
+        sim.peerAnswered = true
+        let wired = sim.generation
+        sim.activeCallId = nil                    // new provider: no bound id
+        XCTAssertEqual(sim.engage(capturedGeneration: wired), .engage)
+        XCTAssertTrue(sim.latch)
+        XCTAssertNil(sim.tag?.callId)
+        XCTAssertEqual(sim.tag?.generation, wired)
+    }
+
+    /// The answered flag is cleared by the teardown, so it never stands in for a call that
+    /// ended, even for an engage carrying the current generation.
+    func test_answeredFlagDoesNotOutliveTheCall() {
+        let sim = FallbackLatchSim()
+        sim.beginCall(id: "aaaaaaaa-1111")
+        sim.peerAnswered = true
+        sim.endCall(clearsCallId: true)
+        XCTAssertEqual(sim.engage(capturedGeneration: sim.generation), .noCallLive)
         XCTAssertFalse(sim.latch)
     }
 
