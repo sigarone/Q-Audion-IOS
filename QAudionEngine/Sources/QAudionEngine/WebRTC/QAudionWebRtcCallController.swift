@@ -2839,7 +2839,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // next incoming call stayed silent). Unconditional, before the early-return below, for
         // the same Bug-C reason as the watchdog above. The order of `AppState.endCall` (audio
         // unit off before the PeerConnection closes, W-ADMGATE) is deliberately untouched.
-        // TEMP MUTANT: engage-task cancel/clear removed from closeSynchronously
+        srtpFallbackTask?.cancel()
+        srtpFallbackTask = nil
+        iceBadSinceMs = nil
+        srtpFallbackEngaged = false
+        srtpFallbackEngagedAtMs = nil
         // D6 — same early-teardown-race reasoning as the watchdog above:
         // startP2pProbeWatch() can have armed this during a setup that then
         // failed before `peerConnection` was ever assigned.
@@ -3281,7 +3285,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     // lock-guarded shutdown latch: `closeSynchronously` sets it first thing and
                     // also cancels this task, but a task that already woke up must not call out
                     // for a call whose teardown has started.
-                    callClosed: false  // TEMP MUTANT
+                    callClosed: self.intentionalShutdown
                 )
                 if engage {
                     self.srtpFallbackTask = nil

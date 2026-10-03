@@ -27002,7 +27002,7 @@ extension AppState {
         // so an engage for a call that was torn down since is ignored in `CallService`.
         controller.onAudioSrtpFallbackEngage = { [weak self] in
             Task { @MainActor [weak self] in
-                self?.callService.engageAudioSrtpFallback(capturedGeneration: -1)  // TEMP MUTANT
+                self?.callService.engageAudioSrtpFallback(capturedGeneration: fallbackWiredGeneration)
             }
         }
         controller.onAudioSrtpFallbackRecover = { [weak self] in
