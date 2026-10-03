@@ -332,8 +332,9 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         afterAuthenticateHook?()
         // Authenticated: record now. The re-check under the lock is what makes two concurrent
         // copies of the same frame resolve to exactly one acceptance.
-        // TEMP-MUTANT-M2: the record-time re-check result is ignored.
-        _ = commitReplay(counter: wireCounter)
+        guard commitReplay(counter: wireCounter) else {
+            throw SealerError.replayRejected
+        }
         return plaintext
     }
 
