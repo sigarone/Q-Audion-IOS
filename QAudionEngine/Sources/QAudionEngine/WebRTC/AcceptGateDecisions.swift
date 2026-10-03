@@ -161,6 +161,6 @@ public enum AcceptGateDecisions {
         alreadyFinalized: Bool
     ) -> Bool {
         guard !alreadyFinalized else { return false }
-        return isRinging || isPreRingActive
+        return isRinging || isPreRingActive || isEncrypted
     }
 }

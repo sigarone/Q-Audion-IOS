@@ -132,8 +132,8 @@ public struct CallerAcceptLatch: Equatable {
     /// Whether the latch may run in `phase` for a call that is not yet finalized.
     public static func admits(_ phase: Phase) -> Bool {
         switch phase {
-        case .ringing, .active: return true
-        case .idle, .connecting, .encrypted, .ended: return false
+        case .ringing, .active, .encrypted: return true
+        case .idle, .connecting, .ended: return false
         }
     }
 
@@ -159,7 +159,8 @@ public struct CallerAcceptLatch: Equatable {
         case .connecting:
             // The OFFER round trip has not returned: the call id the app can name may still be a local one,
             // so it cannot be compared yet. Keep the answer for this call id (one slot, newest wins).
-            return .dropped(.notInCall)
+            held = HeldAnswer(callId: id, carriedSdp: carriedSdp)
+            return .held
         case .ringing, .active, .encrypted:
             return admitAnswer(id: id, activeCallId: Self.nonEmpty(activeCallId), carriedSdp: carriedSdp, phase: phase)
         }
@@ -182,6 +183,7 @@ public struct CallerAcceptLatch: Equatable {
             acceptedCallId = id
             return .latched
         case .ringing, .active, .encrypted:
+            if let active, active != id { return .dropped(.otherCall) }
             acceptedCallId = id
             guard AcceptGateDecisions.shouldAcceptAnswer(
                 isRinging: phase == .ringing,
@@ -240,6 +242,7 @@ public struct CallerAcceptLatch: Equatable {
         carriedSdp: Bool,
         phase: Phase
     ) -> AnswerStep {
+        if let activeCallId, activeCallId != id { return .dropped(.otherCall) }
         guard AcceptGateDecisions.shouldAcceptAnswer(
             isRinging: phase == .ringing,
             isPreRingActive: phase == .active,
