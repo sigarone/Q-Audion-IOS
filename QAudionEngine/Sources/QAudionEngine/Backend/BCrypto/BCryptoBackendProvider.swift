@@ -47,7 +47,7 @@ public final class BCryptoBackendProvider: BackendProvider {
         // revocation → WS parks its loop (never forces QR).
         c.latestAccessToken = { [weak self] in self?.storedTokenPair?().access }
         c.onAuthFailedRecover = { [weak self] in
-            guard let self = self else { return false }
+            guard let self = self else { return .revoked }
             // Another provider may already have rotated the pair into the shared store.
             // Adopting it costs no network call and, above all, does not spend a refresh
             // token this provider no longer holds a live copy of (presenting a consumed
@@ -55,13 +55,19 @@ public final class BCryptoBackendProvider: BackendProvider {
             if let stored = self.storedTokenPair?(),
                let access = stored.access, !access.isEmpty,
                access != self._wsClient?.lastPresentedAccessToken {
-                self.applyTokenPair(access: access, refresh: stored.refresh)
-                return true
+                self.applyTokenPair(access: access, refresh: stored.refresh, persist: false)
+                return .recovered
             }
-            let ok = await self.restClient.recoverAuth()
-            guard ok, let fresh = self.restClient.accessToken else { return false }
-            self.applyTokenPair(access: fresh, refresh: self.restClient.refreshToken)
-            return true
+            // The coordinated cascade (shared single flight, CAS persistence). Its result
+            // reaches every transport through `onTokensApplied`. Only a server-confirmed
+            // revocation parks the socket; any other failure keeps its reconnect loop alive.
+            let outcome = await self.restClient.refreshSession(trigger: .wsAuthFailed)
+            switch outcome {
+            case .refreshed, .adopted:
+                return .recovered
+            case .failed(let failure):
+                return failure.isFinal ? .revoked : .transient(retryAfterSec: failure.retryAfterSec)
+            }
         }
         _wsClient = c
         return c
@@ -170,14 +176,36 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// subsequent requests and WebSocket reconnects authenticate with the new
     /// credentials. Called by the REST client's auto-refresh flow and by
     /// external code that performed a manual refresh (e.g. AuthService).
-    public func applyTokenPair(access: String, refresh: String?) {
+    ///
+    /// `persist: false` is for results the `AuthRefreshCoordinator` has already written to
+    /// the shared store with compare-and-swap (or deliberately discarded): re-running
+    /// `onTokenRotated` here would write the pair again, unconditionally, and a caller that
+    /// resumes late could put an OLDER pair over a newer one. Other callers (a fresh login)
+    /// keep the default and persist as before.
+    public func applyTokenPair(access: String, refresh: String?, persist: Bool = true) {
         config.accessToken = access
-        if let r = refresh { config.refreshToken = r }
+        if let r = refresh, !r.isEmpty { config.refreshToken = r }
         // `_wsClient?` — never force-create a socket just to push a token. A
         // socket built later reads the now-updated `config` at creation time.
         _wsClient?.updateConfig(config)
         restClient.updateConfig(config)
-        onTokenRotated?(access, refresh)
+        if persist { onTokenRotated?(access, refresh) }
+    }
+
+    /// The app's shared credential store (Keychain). Installed by the app layer with
+    /// `persistingRotatedTokens()`; forwarded to the REST client, which hands it to the
+    /// refresh coordinator (source of the refresh token, target of the CAS write).
+    public var credentialStore: AuthCredentialStore? {
+        get { restClient.credentialStore }
+        set { restClient.credentialStore = newValue }
+    }
+
+    /// Run (or join) the process-wide session recovery and broadcast the result to every
+    /// transport of this provider. Used by the app's proactive refresh, which used to call
+    /// `accountApi.refreshToken` directly, outside any single flight.
+    public func refreshSession(trigger: AuthRefreshTrigger,
+                               ignoreCooldown: Bool = false) async -> AuthRefreshOutcome {
+        await restClient.refreshSession(trigger: trigger, ignoreCooldown: ignoreCooldown)
     }
 
     /// Switch all transport components to a different server URL.

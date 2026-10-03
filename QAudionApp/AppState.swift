@@ -3121,10 +3121,10 @@ final class AppState: ObservableObject {
     }
 
     // Swift 6 — nonisolated so the `@Sendable` device-renew fallback closure
-    // (and persistAccessTokenTtl / the token-persist paths) can reference this
+    // (and the token-persist paths) can reference this
     // constant key without crossing main-actor isolation. It is an immutable
     // String literal, so nonisolated is safe.
-    nonisolated private static let accessTokenExpiryEpochKey = "com.qaudion.auth.access_expiry_epoch"
+    nonisolated private static let accessTokenExpiryEpochKey = TokenVault.accessExpiryEpochKey
 
     /// UUID string of the PersistentCallRecord for the current call.
     /// Set in startCall (outgoing) and wireIncomingCallHandlers (incoming).
@@ -3188,26 +3188,18 @@ final class AppState: ObservableObject {
             guard let did = TokenVault.loadDeviceId() ??
                     UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
                   !did.isEmpty else {
-                throw BCryptoError.unauthorized
+                // Reason code `renew_no_device_id` (was a bare `.unauthorized`, which
+                // looked exactly like a server rejection in every log).
+                throw AuthRenewPreconditionError.noDeviceId
             }
             let fresh = try await renewClient.renew(deviceId: did)
-            // Persist the rotated tokens so the next cold-launch does not
-            // replay a stale refresh token. MUST go to the Keychain
-            // (TokenVault), NOT UserDefaults: `AuthService.loadToken()`
-            // reads the Keychain, and `migrateTokensToKeychainIfNeeded()`
-            // only sweeps UserDefaults→Keychain when the Keychain slot is
-            // EMPTY — after a normal login it is populated, so a UD write
-            // here would land a fresh token in plaintext UserDefaults (dead
-            // + iCloud-backupable at rest) while the Keychain kept the
-            // STALE token, guaranteeing a 401 cascade on the next launch.
-            // TokenVault is static-only and primitive-typed, safe to call
-            // from this @Sendable closure (CLAUDE.md §16). Also record the
-            // access-token TTL so the proactive-refresh scheduler can renew
-            // ahead of expiry.
-            TokenVault.saveAccessToken(fresh.accessToken)
-            TokenVault.saveRefreshToken(fresh.refreshToken)
-            AppState.persistAccessTokenTtl(expiresInSec: fresh.expiresInSec)
-            return (accessToken: fresh.accessToken, refreshToken: fresh.refreshToken)
+            // The closure only returns the tokens. The refresh coordinator persists them
+            // to the Keychain (TokenVault) with compare-and-swap, records the access-token
+            // expiry epoch, and every client then applies them: persisting here,
+            // unconditionally, is what let a stale result overwrite a newer pair.
+            return AuthTokenSet(accessToken: fresh.accessToken,
+                                refreshToken: fresh.refreshToken,
+                                expiresInSec: fresh.expiresInSec)
         }
     }
 
@@ -3257,36 +3249,12 @@ final class AppState: ObservableObject {
         print(line)
     }
 
-    /// Persist the absolute expiry epoch (seconds since 1970) for the current
-    /// access token, computed from a server-provided `expires_in`. Nonisolated
-    /// + static so it can be called from the device-renew fallback closure
-    /// (which is `@Sendable` and must not touch main-actor state).
-    nonisolated static func persistAccessTokenTtl(expiresInSec: Int) {
-        guard expiresInSec > 0 else { return }
-        let expiry: Double = Date().timeIntervalSince1970 + Double(expiresInSec)
-        UserDefaults.standard.set(expiry, forKey: accessTokenExpiryEpochKey)
-    }
-
     /// Best-effort extraction of the JWT `exp` (seconds-since-epoch) from the
     /// middle (payload) segment of a compact JWS. Returns nil when the token
     /// is opaque / malformed. Used as a fallback when no `expires_in` was
     /// persisted (e.g. the access token came from a plain login, not a renew).
     private static func jwtExpiryEpoch(_ token: String) -> Double? {
-        let parts = token.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-        var b64 = String(parts[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        // Pad to a multiple of 4 for Data(base64Encoded:).
-        let rem = b64.count % 4
-        if rem > 0 { b64 += String(repeating: "=", count: 4 - rem) }
-        guard let data = Data(base64Encoded: b64),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-        if let exp = obj["exp"] as? Double { return exp }
-        if let expInt = obj["exp"] as? Int { return Double(expInt) }
-        return nil
+        TokenVault.jwtExpiryEpoch(token)
     }
 
     /// Resolve the access-token expiry epoch: prefer the persisted
@@ -3329,11 +3297,18 @@ final class AppState: ObservableObject {
         // safe: the on-demand 401 cascade still recovers an actually-expired
         // token immediately, so we don't need to poll aggressively here.
         var fireInSec: Double = 1800
-        if let expiry = currentAccessTokenExpiryEpoch(), expiry > now {
-            let ttl: Double = expiry - now
-            // Fire at 60% of TTL; clamp so we neither thrash nor wait too long.
-            let target: Double = ttl * 0.6
-            fireInSec = min(max(target, 15), max(ttl - 30, 15))
+        if let expiry = currentAccessTokenExpiryEpoch() {
+            if expiry > now {
+                let ttl: Double = expiry - now
+                // Fire at 60% of TTL; clamp so we neither thrash nor wait too long.
+                let target: Double = ttl * 0.6
+                fireInSec = min(max(target, 15), max(ttl - 30, 15))
+            } else {
+                // Already expired (a refresh that failed, a long suspension): refresh
+                // now-ish, not in 30 minutes. A refresh that keeps failing is paced by
+                // `scheduleProactiveRetry`'s backoff, a successful one records a new epoch.
+                fireInSec = 15
+            }
         }
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -3396,83 +3371,62 @@ final class AppState: ObservableObject {
             self.liveProvider = p
             provider = p
         }
+        // Idempotent; guarantees the device-renew leg is armed on whichever provider we got.
+        wireDeviceRenewFallback(on: provider)
 
-        // Leg 1: primary refresh (POST /auth/refresh) when a refresh token
-        // is present.
-        if let refresh = authService.loadRefreshToken(), !refresh.isEmpty {
-            do {
-                let pair = try await (provider.accountApi as? BCryptoAccountApiImpl)?.refreshToken(refresh)
-                if let pair {
-                    provider.applyTokenPair(access: pair.accessToken, refresh: pair.refreshToken)
-                    authService.saveToken(pair.accessToken)
-                    if let r = pair.refreshToken, !r.isEmpty { authService.saveRefreshToken(r) }
-                    if let exp = pair.expiresIn {
-                        AppState.persistAccessTokenTtl(expiresInSec: exp)
-                    } else if let parsed = AppState.jwtExpiryEpoch(pair.accessToken) {
-                        UserDefaults.standard.set(parsed, forKey: AppState.accessTokenExpiryEpochKey)
-                    } else {
-                        // Indeterminate expiry (opaque token, no expires_in,
-                        // no JWT exp). Clear any STALE/past epoch left from a
-                        // prior token so `scheduleProactiveTokenRefresh()`
-                        // does not see a past value and fall into a tight
-                        // refresh loop. With the key cleared the scheduler
-                        // uses its conservative indeterminate-expiry interval.
-                        UserDefaults.standard.removeObject(forKey: AppState.accessTokenExpiryEpochKey)
-                    }
-                    scheduleProactiveTokenRefresh()
-                    return
-                }
-            } catch {
-                AppState.logAuthDiag("[AppState] proactive refresh (primary) failed, trying device-renew: ", error)
-            }
-        }
-
-        // Leg 2: Ed25519 device-renew. SEC-DEVICEID-REINSTALL: Keychain
-        // first (survives app delete+reinstall), UserDefaults fallback —
-        // see TokenVault.saveDeviceId's doc.
-        guard let did = TokenVault.loadDeviceId() ??
-                UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
-              !did.isEmpty else {
-            // No device credential to renew with: do NOT clear — just back off.
-            let timer = DispatchSource.makeTimerSource(queue: .main)
-            timer.schedule(deadline: .now() + 120)
-            timer.setEventHandler { [weak self] in
-                Task { @MainActor [weak self] in self?.scheduleProactiveTokenRefresh() }
-            }
-            proactiveRefreshTimer = timer
-            timer.resume()
-            return
-        }
-        let vault = SovereignKeyVault()
-        let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
-        let renewClient = BCryptoDeviceRenewClient(
-            rest: provider.getRestClient(),
-            deviceKeyManager: manager
-        )
-        do {
-            let fresh = try await renewClient.renew(deviceId: did)
-            provider.applyTokenPair(access: fresh.accessToken, refresh: fresh.refreshToken)
-            authService.saveToken(fresh.accessToken)
-            authService.saveRefreshToken(fresh.refreshToken)
-            AppState.persistAccessTokenTtl(expiresInSec: fresh.expiresInSec)
+        // 2026-10-02: this used to call `accountApi.refreshToken` directly, outside the
+        // single flight that serves REST 401s and the socket's `auth_failed` recovery, and
+        // persisted whatever came back unconditionally. Two refreshes with the same token
+        // 49 ms apart (this one and a 401 cascade) left a dead refresh token in the Keychain
+        // and the phone signed out for 2h16m. Now both legs (POST /auth/refresh, then the
+        // Ed25519 device-renew) run inside the process-wide `AuthRefreshCoordinator`: one
+        // network call per refresh token, the token is read from the Keychain, and the
+        // result is written back with compare-and-swap (and the expiry epoch recorded there).
+        // `ignoreCooldown`: the timer, the foreground and the push wake must not wait out the
+        // backoff that protects REST/socket callers.
+        let outcome = await provider.refreshSession(trigger: .proactive, ignoreCooldown: true)
+        switch outcome {
+        case .refreshed, .adopted:
             scheduleProactiveTokenRefresh()
-        } catch {
-            // Proactive renew failed — could be transient (offline). NEVER
-            // clear here; the device credential may still be valid. Back off
-            // and retry; an eventual hard rejection will surface via an
-            // on-demand 401 cascade in getProfile().
-            AppState.logAuthDiag("[AppState] proactive device-renew failed (non-fatal, keeping session): ", error)
-            let timer = DispatchSource.makeTimerSource(queue: .main)
-            timer.schedule(deadline: .now() + 120)
-            timer.setEventHandler { [weak self] in
-                Task { @MainActor [weak self] in self?.scheduleProactiveTokenRefresh() }
-            }
-            proactiveRefreshTimer = timer
-            timer.resume()
+        case .failed(let failure):
+            // NEVER clear the session on failure: the device credential may still be valid.
+            // The coordinator has already logged the reason code. A final failure (device
+            // revoked / no device credential) is retried slowly, anything else on the
+            // coordinator's backoff ladder (5, 15, 45, 120 s).
+            // A Keychain that cannot be read (locked, or a key protected by biometrics with no
+            // authenticated session yet) is retried slowly: every retry may put a system
+            // authentication prompt in front of the user. The foreground and push-wake
+            // paths still retry immediately (`ignoreCooldown`).
+            let keychainBlocked: Bool = failure.reason == .renewKeychainLocked
+                || failure.reason == .renewKeychainError
+                || failure.reason == .storeUnreadable
+            let delay: Double = failure.isFinal
+                ? 120
+                : (keychainBlocked ? 300 : Double(max(5, failure.retryAfterSec)))
+            RTLog.info("auth", "proactive retry scheduled in_s=\(Int(delay)) \(failure.logFields)")
+            scheduleProactiveRetry(after: delay)
         }
     }
 
+    /// Re-arm the proactive-refresh timer to run the refresh itself after `delay`.
+    /// (The failure path used to call `scheduleProactiveTokenRefresh()`, which for an
+    /// already-expired token fell back to its 30-minute indeterminate-expiry default, so a
+    /// signed-out device retried about every half hour.)
+    private func scheduleProactiveRetry(after delay: Double) {
+        proactiveRefreshTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in await self?.runProactiveRefresh() }
+        }
+        proactiveRefreshTimer = timer
+        timer.resume()
+    }
+
     func initialize() {
+        // Route the auth-recovery coordinator's reason-coded lines to RTLog before any
+        // provider (or any 401) can exist.
+        AuthCoordinatorLogging.installIfNeeded()
         // 2026-09-19 service-message root fix — bind the service hold queue and
         // the CONTROL-install observer before ANY provider can exist. The hooks
         // read `liveProvider` at call time, so binding this early is safe, and
@@ -5054,25 +5008,12 @@ final class AppState: ObservableObject {
                         UserDefaults.standard.removeObject(forKey: "currentUserDisplayName")
                     }
                     self.isAuthenticated = true
-                    // FORCED-QR FIX (2026-06-24): the cascade inside getProfile()
-                    // may have silently refreshed the access token. Persist the
-                    // freshest pair so the next cold-launch starts authenticated,
-                    // and schedule a proactive refresh ahead of expiry so a later
-                    // launch never races an already-expired token.
-                    let freshAccess: String? = provider.config.accessToken
-                    let freshRefresh: String? = provider.config.refreshToken
-                    if let acc = freshAccess, acc != token {
-                        authService.saveToken(acc)
-                        if let r = freshRefresh, !r.isEmpty { authService.saveRefreshToken(r) }
-                        if let parsed = AppState.jwtExpiryEpoch(acc) {
-                            UserDefaults.standard.set(parsed, forKey: AppState.accessTokenExpiryEpochKey)
-                        } else {
-                            // Opaque refreshed token: clear any stale epoch so
-                            // the scheduler uses its conservative indeterminate
-                            // interval, not a past value (FORCED-QR FIX LOW).
-                            UserDefaults.standard.removeObject(forKey: AppState.accessTokenExpiryEpochKey)
-                        }
-                    }
+                    // 2026-10-02: no manual persistence here any more. Any refresh the
+                    // cascade inside getProfile() performed already ran through the
+                    // process-wide `AuthRefreshCoordinator`, which wrote the pair to the
+                    // Keychain with compare-and-swap (and recorded the expiry epoch). Writing
+                    // `provider.config`'s copy again here, unconditionally, could put an older
+                    // pair over a newer one rotated meanwhile by another path.
                     self.scheduleProactiveTokenRefresh()
                     self.replayPendingTrackB()
                     // W74: open the long-lived WS so the server flips

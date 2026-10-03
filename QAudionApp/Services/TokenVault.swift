@@ -37,11 +37,84 @@ enum TokenVault {
     // MARK: - Public API
 
     static func saveAccessToken(_ token: String) {
-        save(account: accessAccount, value: token)
+        casLock.withLock { _ = saveUnlocked(account: accessAccount, value: token) }
     }
 
     static func saveRefreshToken(_ token: String) {
-        save(account: refreshAccount, value: token)
+        casLock.withLock { _ = saveUnlocked(account: refreshAccount, value: token) }
+    }
+
+    // MARK: - Shared credential store for the refresh coordinator
+
+    /// Serialises every write of the access/refresh pair in this process with the
+    /// compare-and-swap below, so a plain `saveRefreshToken` cannot interleave with it.
+    private static let casLock = NSLock()
+
+    /// UserDefaults key of the absolute expiry epoch (seconds) of the current access token.
+    static let accessExpiryEpochKey = "com.qaudion.auth.access_expiry_epoch"
+
+    /// The pair as stored. An absent item reads as nil; any other Keychain status (locked,
+    /// interaction not allowed) THROWS, unlike `loadAccessToken()`/`loadRefreshToken()`
+    /// which fold "unreadable" into "absent" and so cannot tell a signed-out device
+    /// from a locked Keychain.
+    static func loadCredentials() throws -> AuthStoredCredentials {
+        try casLock.withLock {
+            AuthStoredCredentials(
+                access: try loadChecked(account: accessAccount),
+                refresh: try loadChecked(account: refreshAccount))
+        }
+    }
+
+    /// Write `tokens` only if the stored refresh token is still `expectedRefresh`.
+    /// Returns false (nothing written) when another path already rotated it: an older
+    /// pair must never overwrite a newer one. Refresh token first, access token second:
+    /// if the process dies in between, the stored refresh token is already the live one.
+    static func compareAndSwapTokens(expectedRefresh: String?, with tokens: AuthTokenSet) throws -> Bool {
+        try casLock.withLock {
+            let current = try loadChecked(account: refreshAccount)
+            guard AuthRefreshCoordinator.sameRefreshToken(current, expectedRefresh) else { return false }
+            if let r = tokens.refreshToken, !r.isEmpty {
+                let st = saveUnlocked(account: refreshAccount, value: r)
+                guard st == errSecSuccess else { throw AuthCredentialStoreError.unreadable(status: st) }
+            }
+            let st = saveUnlocked(account: accessAccount, value: tokens.accessToken)
+            guard st == errSecSuccess else { throw AuthCredentialStoreError.unreadable(status: st) }
+            recordAccessExpiry(expiresInSec: tokens.expiresInSec, accessToken: tokens.accessToken)
+            return true
+        }
+    }
+
+    /// Persist when the current access token stops being valid, so the proactive-refresh
+    /// scheduler can renew ahead of expiry: the server's `expires_in` when it gave one,
+    /// else the JWT `exp`, else nothing (the stale epoch is cleared, otherwise the
+    /// scheduler would see a past value and loop).
+    static func recordAccessExpiry(expiresInSec: Int?, accessToken: String) {
+        if let secs = expiresInSec, secs > 0 {
+            UserDefaults.standard.set(Date().timeIntervalSince1970 + Double(secs), forKey: accessExpiryEpochKey)
+        } else if let parsed = jwtExpiryEpoch(accessToken) {
+            UserDefaults.standard.set(parsed, forKey: accessExpiryEpochKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: accessExpiryEpochKey)
+        }
+    }
+
+    /// Best-effort extraction of the JWT `exp` (seconds since epoch) from the payload
+    /// segment of a compact JWS; nil when the token is opaque or malformed.
+    static func jwtExpiryEpoch(_ token: String) -> Double? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let rem = b64.count % 4
+        if rem > 0 { b64 += String(repeating: "=", count: 4 - rem) }
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let exp = obj["exp"] as? Double { return exp }
+        if let expInt = obj["exp"] as? Int { return Double(expInt) }
+        return nil
     }
 
     static func loadAccessToken() -> String? {
@@ -137,7 +210,12 @@ enum TokenVault {
     }
 
     private static func save(account: String, value: String) {
-        guard let data = value.data(using: .utf8) else { return }
+        casLock.withLock { _ = saveUnlocked(account: account, value: value) }
+    }
+
+    /// Caller holds `casLock`. Returns the Keychain status of the write that took effect.
+    private static func saveUnlocked(account: String, value: String) -> OSStatus {
+        guard let data = value.data(using: .utf8) else { return errSecParam }
         var query = baseQuery(account: account)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -146,19 +224,32 @@ enum TokenVault {
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if updateStatus == errSecSuccess {
-            return
+            return errSecSuccess
         }
         if updateStatus == errSecItemNotFound {
             for (k, v) in attributes { query[k] = v }
-            SecItemAdd(query as CFDictionary, nil)
-            return
+            return SecItemAdd(query as CFDictionary, nil)
         }
         // Any other status (e.g. duplicate after a race): hard-reset the
         // item so the value is never left stale.
         SecItemDelete(baseQuery(account: account) as CFDictionary)
         var addQuery = baseQuery(account: account)
         for (k, v) in attributes { addQuery[k] = v }
-        SecItemAdd(addQuery as CFDictionary, nil)
+        return SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    /// Like `load(account:)` but only "item not found" reads as nil; every other status
+    /// throws so the caller never mistakes a locked Keychain for a signed-out device.
+    private static func loadChecked(account: String) throws -> String? {
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = kCFBooleanTrue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw AuthCredentialStoreError.unreadable(status: status) }
+        guard let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     private static func load(account: String) -> String? {
@@ -196,6 +287,43 @@ extension BCryptoBackendProvider {
         // The same store, read back: lets this provider's socket pick up a rotation another
         // provider persisted (see `storedTokenPair`).
         storedTokenPair = { (access: TokenVault.loadAccessToken(), refresh: TokenVault.loadRefreshToken()) }
+        // The refresh coordinator reads the refresh token from here (never from a provider's
+        // own, possibly stale, copy) and writes results back with compare-and-swap.
+        credentialStore = KeychainAuthCredentialStore.shared
+        AuthCoordinatorLogging.installIfNeeded()
         return self
     }
+}
+
+// MARK: - Refresh coordinator wiring
+
+/// The Keychain-backed `AuthCredentialStore`. Every read goes through `TokenVault`'s
+/// checked loader, so a locked Keychain surfaces as `unreadable`, never as "no token".
+final class KeychainAuthCredentialStore: AuthCredentialStore, @unchecked Sendable {
+    static let shared = KeychainAuthCredentialStore()
+
+    func load() throws -> AuthStoredCredentials {
+        try TokenVault.loadCredentials()
+    }
+
+    func compareAndSwap(expectedRefresh: String?, with tokens: AuthTokenSet) throws -> Bool {
+        try TokenVault.compareAndSwapTokens(expectedRefresh: expectedRefresh, with: tokens)
+    }
+}
+
+/// Routes the coordinator's log lines to `RTLog` (tag `auth`), once per process. The lines
+/// carry reason codes and numbers only: no token, no token hash, no user data.
+enum AuthCoordinatorLogging {
+    private static let once: Void = {
+        AuthRefreshCoordinator.shared.setLogger { level, message in
+            switch level {
+            case .debug: RTLog.debug("auth", message)
+            case .info:  RTLog.info("auth", message)
+            case .warn:  RTLog.warn("auth", message)
+            case .error: RTLog.error("auth", message)
+            }
+        }
+    }()
+
+    static func installIfNeeded() { _ = once }
 }

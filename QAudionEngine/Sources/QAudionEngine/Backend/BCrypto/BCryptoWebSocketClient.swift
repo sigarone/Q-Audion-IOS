@@ -8,11 +8,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// (BCryptoBackendProvider) to the REST client's refresh → Ed25519
     /// device-renew cascade. Invoked ONCE when the server rejects our token
     /// with `auth_failed`, BEFORE we resume the reconnect loop. Returns
-    /// `true` if a fresh token was obtained (resume reconnect), `false` on
-    /// genuine revocation (stop — the app layer drives re-onboarding; this
-    /// class NEVER forces QR). A plain `() async -> Bool` so the AppState
+    /// `.recovered` if a fresh token was obtained (resume reconnect),
+    /// `.revoked` ONLY when the server confirmed the device cannot be renewed
+    /// (stop — the app layer drives re-onboarding; this class NEVER forces QR),
+    /// and `.transient` for everything else (locked Keychain, no network,
+    /// server error): the reconnect loop stays alive and retries with backoff,
+    /// because parking on a transient failure left a signed-out device with no
+    /// socket for hours (2026-10-02). A plain closure so the AppState
     /// type is never dragged into this file's symbol graph (CLAUDE.md sec 16).
-    public var onAuthFailedRecover: (@Sendable () async -> Bool)?
+    public var onAuthFailedRecover: (@Sendable () async -> AuthRecoveryVerdict)?
 
     // MARK: - Pre-negotiation callbacks
     // Wired by the integration/UI layer. Set on the client BEFORE connect() so
@@ -2605,26 +2609,41 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
         Task { [weak self] in
             guard let self = self else { return }
-            let ok = await recover()
+            let verdict = await recover()
             // Swift 6 — NSLock.lock()/unlock() are unavailable from async
             // contexts (they can block the cooperative pool). Mutate the shared
             // state under a scoped `withLock` (synchronous, no await inside),
             // then act on the decision OUTSIDE the lock.
             self.lock.withLock {
                 self.authRecoveryInFlight = false
-                if ok {
+                switch verdict {
+                case .recovered:
                     // Fresh token applied (updateConfig already broadcast by the
                     // provider). Reset backoff and reconnect immediately with the
                     // new credentials.
                     self.authPermanentlyRejected = false
                     self.reconnectAttempt = 0
-                } else {
-                    // Genuine revocation — park the reconnect loop until the app
+                case .revoked:
+                    // Server-confirmed revocation — park the reconnect loop until the app
                     // layer re-onboards and calls connect() again. No QR forced.
                     self.authPermanentlyRejected = true
+                case .transient:
+                    // Not recovered NOW, but nothing says it cannot be: keep the loop alive.
+                    self.authPermanentlyRejected = false
                 }
             }
-            if ok {
+            if case .transient(let retryAfterSec) = verdict {
+                // `handleDisconnect` skipped scheduling while the recovery ran; schedule the
+                // retry here, no sooner than the coordinator's cooldown.
+                let failLine: String = "[BCryptoWS] auth_failed → recovery not possible now, retrying in \(max(1, retryAfterSec))s"
+                print(failLine)
+                let delay = Double(max(1, retryAfterSec))
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.retryConnectIfStillDesired()
+                }
+                return
+            }
+            if verdict == .recovered {
                 let okLine: String = "[BCryptoWS] auth_failed → silent recovery OK, reconnecting"
                 print(okLine)
                 // forceReconnect() (not connect()) so the fresh token is used
