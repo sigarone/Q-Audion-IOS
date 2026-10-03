@@ -763,7 +763,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// current handshake message, not read it fresh here.
     func fireRelaySessionReady(_ sessionKey: Data, callId: String, isReKey: Bool, generation: Int) {
         lock.withLock { _relaySessionReadyIsReKey = isReKey }
-        onRelaySessionReady?(sessionKey, callId, generation)
+        // TEMP-MUTANT-M6: callback deferred instead of inline.
+        let deferred = onRelaySessionReady
+        DispatchQueue.global().async { deferred?(sessionKey, callId, generation) }
         lock.withLock { _relaySessionReadyIsReKey = false }
     }
 
