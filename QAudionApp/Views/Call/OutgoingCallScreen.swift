@@ -116,10 +116,19 @@ struct OutgoingCallScreen: View {
                 VStack(spacing: 0) {
                     Spacer().frame(height: 32)
 
-                    Text("CHIAMANDO · SECURE CHANNEL ACTIVE")
+                    // W-CALLERBUSY — the ended state (callee busy / unreachable) no longer claims a secure
+                    // channel is being set up.
+                    Group {
+                        if state == .ended {
+                            Text(String(localized: "call.outgoing.header.ended", defaultValue: "CHIAMATA TERMINATA",
+                                        comment: "Outgoing call screen header once the call ended before it connected (callee busy or unreachable)"))
+                        } else {
+                            Text("CHIAMANDO · SECURE CHANNEL ACTIVE")
+                        }
+                    }
                         .qaudionStyle(type.labelSmall)
                         .tracking(2.0)
-                        .foregroundStyle(extras.success)
+                        .foregroundStyle(state == .ended ? extras.riskHigh : extras.success)
                         .padding(.bottom, 36)
 
                     ZStack {
@@ -153,18 +162,21 @@ struct OutgoingCallScreen: View {
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.bottom, 20)
 
-                    HStack(spacing: 8) {
-                        MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
-                        MetaPill("VOICE TRUST · ENROLLED", accent: extras.success, filled: true)
-                        MetaPill("LOW LATENCY · 48ms", accent: extras.warning)
-                        if let method = pskMethodLabel {
-                            MetaPill("PSK · \(method)", accent: pskPillColor, filled: true)
+                    // W-CALLERBUSY — nothing is negotiating once the call ended before it connected.
+                    if state != .ended {
+                        HStack(spacing: 8) {
+                            MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
+                            MetaPill("VOICE TRUST · ENROLLED", accent: extras.success, filled: true)
+                            MetaPill("LOW LATENCY · 48ms", accent: extras.warning)
+                            if let method = pskMethodLabel {
+                                MetaPill("PSK · \(method)", accent: pskPillColor, filled: true)
+                            }
                         }
-                    }
-                    .padding(.bottom, 22)
+                        .padding(.bottom, 22)
 
-                    handshakeLog
-                        .padding(.horizontal, 4)
+                        handshakeLog
+                            .padding(.horizontal, 4)
+                    }
 
                     if let err = errorMessage {
                         errorBanner(err).padding(.top, 12)
@@ -184,10 +196,15 @@ struct OutgoingCallScreen: View {
                     background: extras.riskHigh,
                     iconColor: scheme.onPrimary
                 )
-                .accessibilityLabel("Termina chiamata")
-                Text(String(format: "Squillo da %d:%02d", elapsedSeconds / 60, elapsedSeconds % 60))
-                    .qaudionStyle(type.labelSmall)
-                    .foregroundStyle(extras.success)
+                .accessibilityLabel(state == .ended
+                    ? Text(String(localized: "call.outgoing.dismiss", defaultValue: "Chiudi",
+                                  comment: "Accessibility label of the button that closes the outgoing call screen after the call ended (callee busy or unreachable)"))
+                    : Text("Termina chiamata"))
+                if state != .ended {
+                    Text(String(format: "Squillo da %d:%02d", elapsedSeconds / 60, elapsedSeconds % 60))
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(extras.success)
+                }
                 Spacer().frame(height: 24)
             }
         }

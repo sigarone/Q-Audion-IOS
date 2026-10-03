@@ -25,7 +25,7 @@ enum QAudionSynth {
     private static let a4 = 440.00
 
     /// Standard busy-tone frequency (Europe/ITU): 425 Hz.
-    private static let busyToneHz = 425.0
+    static let busyToneHz = 425.0
 
     // MARK: - Public rendering API
 
@@ -77,6 +77,22 @@ enum QAudionSynth {
         applyAdsr(&buf, sampleRate: sampleRate, attackMs: 12, releaseMs: 350)
         return softSaturate(buf)
     }
+
+    /// W-CALLERBUSY — classic busy signal, port of Android `QAudionSynth.renderBusyTone`: 425 Hz, 0.5 s on /
+    /// 0.5 s off, three repetitions baked into one 3 s one-shot buffer. A plain gated sine on purpose (no bell
+    /// timbre: it must be recognisable as "busy" at once); `addToneBurst` ramps each edge by 8 ms so the hard
+    /// on/off never clicks. Same amplitude as the confirmed ringback (0.22).
+    static func renderBusyTone(sampleRate: Double = defaultSampleRate) -> [Float] {
+        var buf = [Float](repeating: 0, count: Int(sampleRate * busyToneSeconds))
+        for rep in 0..<busyToneRepetitions {
+            addToneBurst(&buf, sampleRate: sampleRate, startSec: Double(rep), durSec: 0.5, freq: busyToneHz, amp: 0.22)
+        }
+        return buf
+    }
+
+    /// Repetitions and total length of `renderBusyTone` (Android: three bursts in a 3 s buffer).
+    static let busyToneRepetitions = 3
+    static let busyToneSeconds = 3.0
 
     /// One-shot descending dissolve for call end.
     static func renderCallEnded(sampleRate: Double = defaultSampleRate) -> [Float] {
