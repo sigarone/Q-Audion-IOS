@@ -145,7 +145,7 @@ final class ConfirmTimersTests: XCTestCase {
     }
 
     /// No other number lives on the confirmation paths: the REVEAL timer sleeps `confirmTimeoutMs`, the KCMAC window
-    /// reads `KcMacWindow`, the early hold reads `ConfirmTimeout`.
+    /// reads `KcMacWindow`, the held-MAC freshness reads `ConfirmTimeout`.
     func testNoOldValueIsLeftOnTheConfirmationPaths() throws {
         let sas = code(try sourceText("QAudionEngine/Sources/QAudionEngine/Crypto/SasCommit.swift"))
         XCTAssertFalse(sas.contains("revealTimeoutMs"))
@@ -156,8 +156,8 @@ final class ConfirmTimersTests: XCTestCase {
         let integration = code(try sourceText(integrationPath))
         XCTAssertTrue(integration.contains("Task.sleep(nanoseconds: UInt64(ConfirmTimeout.confirmTimeoutMs) * 1_000_000)"))
         XCTAssertFalse(integration.contains("revealTimeoutMs"))
-        let rules = code(try sourceText("QAudionEngine/Sources/QAudionEngine/Crypto/KcMacRoundRules.swift"))
-        XCTAssertTrue(rules.contains("TimeInterval(ConfirmTimeout.earlyKcMacHoldMs) / 1000"))
+        let rules = code(try sourceText("QAudionEngine/Sources/QAudionEngine/Crypto/KcMacRoundBook.swift"))
+        XCTAssertTrue(rules.contains("public static let heldFreshMs = ConfirmTimeout.earlyKcMacHoldMs"))
         let app = code(try sourceText(appPath))
         XCTAssertTrue(app.contains("return self.kcWaitRemainingMs(callId: event.callId, state: cur)"),
                       "the KCMAC wait is `KcMacWindow`'s, not a fixed sleep")
