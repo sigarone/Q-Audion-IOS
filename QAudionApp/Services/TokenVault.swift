@@ -191,12 +191,18 @@ enum TokenVault {
     }
 
     /// Remove every credential item in the `com.qaudion.auth` scope.
+    ///
+    /// Under `casLock`: a compare-and-swap that already read the old refresh token must not
+    /// write its pair back between two of these deletions and leave a half-signed-in store
+    /// (an access token with no refresh token) after a logout.
     static func clear() {
-        delete(account: accessAccount)
-        delete(account: refreshAccount)
-        delete(account: deviceIdAccount)
-        delete(account: userIdAccount)
-        delete(account: entitlementAccount)
+        casLock.withLock {
+            delete(account: accessAccount)
+            delete(account: refreshAccount)
+            delete(account: deviceIdAccount)
+            delete(account: userIdAccount)
+            delete(account: entitlementAccount)
+        }
     }
 
     // MARK: - Keychain primitives

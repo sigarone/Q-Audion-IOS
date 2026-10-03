@@ -319,6 +319,342 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
         XCTAssertTrue(probe.text.contains("reason=keychain_unreadable"))
     }
 
+    // MARK: - (5) a signed-out store is never resurrected, no tokens cross accounts
+
+    /// A compact JWT shaped like the server's access token (`uid` and `sub` carry the user id).
+    /// The signature is junk: the coordinator only reads the claim.
+    private func jwt(uid: String, jti: String = "1") -> String {
+        func b64url(_ object: [String: Any]) -> String {
+            let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+            return data.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        let header = b64url(["alg": "none", "typ": "JWT"])
+        let payload = b64url(["uid": uid, "sub": uid, "jti": jti])
+        return "\(header).\(payload).sig"
+    }
+
+    func test_anEmptyStoreIsNeverResurrectedByACallersOwnRefreshToken() async throws {
+        // Logged out: the Keychain was cleared, but a client built before that (an upload in
+        // flight, the socket's recovery task) still holds its own copy of an old refresh token.
+        let store = InMemoryAuthCredentialStore(access: nil, refresh: nil)
+        let (coordinator, probe) = makeCoordinator()
+        let refreshes = Probe()
+        let renews = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            _ = refreshes.hit(token: token)
+            return AuthTokenSet(accessToken: "A-back", refreshToken: "R-back", expiresInSec: 900)
+        }
+        let renewer: AuthRefreshRequest.Renewer = {
+            _ = renews.hit()
+            return AuthTokenSet(accessToken: "A-renewed", refreshToken: "R-renewed", expiresInSec: 900)
+        }
+
+        let triggers: [AuthRefreshTrigger] = [.rest401, .wsAuthFailed, .external, .proactive]
+        for trigger in triggers {
+            let out = await coordinator.refresh(request(
+                trigger, stale: "A-old", store: store, caller: "R-old",
+                refresher: refresher, renewer: renewer, ignoreCooldown: true))
+            XCTAssertEqual(out.failure?.reason, .signedOut, "\(trigger)")
+            XCTAssertEqual(out.failure?.isFinal, true, "\(trigger)")
+            XCTAssertNil(out.tokens, "\(trigger)")
+        }
+
+        XCTAssertEqual(refreshes.calls, 0, "no network call may be made on a logged-out device")
+        XCTAssertEqual(renews.calls, 0)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: nil, refresh: nil),
+                       "nothing may be written back into the emptied store")
+        XCTAssertTrue(probe.text.contains("reason=signed_out"))
+        XCTAssertFalse(probe.text.contains("R-old"), "no token in the logs")
+    }
+
+    func test_aStoreWithoutARefreshTokenNeverFallsBackToTheCallersCopy() async throws {
+        // Access token present, refresh token absent: still a session, one that can renew by
+        // device key, but a caller's own (possibly stale) refresh token is not the way back.
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+        let (coordinator, _) = makeCoordinator()
+        let refreshes = Probe()
+        let renews = Probe()
+        let out = await coordinator.refresh(request(
+            .rest401, stale: "A0", store: store, caller: "R-old",
+            refresher: { token in
+                _ = refreshes.hit(token: token)
+                return AuthTokenSet(accessToken: "A-back", refreshToken: "R-back", expiresInSec: 900)
+            },
+            renewer: {
+                _ = renews.hit()
+                return AuthTokenSet(accessToken: "A-renewed", refreshToken: "R-renewed", expiresInSec: 900)
+            }))
+
+        XCTAssertEqual(refreshes.calls, 0, "the caller's copy must never be presented when a store is attached")
+        XCTAssertEqual(renews.calls, 1)
+        XCTAssertEqual(out.tokens?.accessToken, "A-renewed")
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A-renewed", refresh: "R-renewed"))
+    }
+
+    func test_aFlightThatLosesTheRaceToALogoutWritesNothing() async throws {
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let (coordinator, _) = makeCoordinator()
+        let out = await coordinator.refresh(request(.rest401, stale: "A0", store: store, refresher: { _ in
+            // Logout while the call is on the wire.
+            store.overwrite(access: nil, refresh: nil)
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: nil)
+        }))
+
+        XCTAssertFalse(out.isSuccess)
+        XCTAssertEqual(out.failure?.reason, .casLost)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: nil, refresh: nil),
+                       "a result that arrives after the logout must not sign the device back in")
+    }
+
+    func test_theStoredPairOfAnotherAccountIsNeverHandedToAClientOfTheOldOne() async throws {
+        let alice = jwt(uid: "alice")
+        let bob = jwt(uid: "bob")
+        // Alice logged out, Bob logged in; a client built for Alice gets a 401 afterwards.
+        let store = InMemoryAuthCredentialStore(access: bob, refresh: "R-bob")
+        let (coordinator, probe) = makeCoordinator()
+        let refreshes = Probe()
+
+        let triggers: [AuthRefreshTrigger] = [.rest401, .wsAuthFailed, .external]
+        for trigger in triggers {
+            let out = await coordinator.refresh(request(
+                trigger, stale: alice, store: store, caller: "R-alice",
+                refresher: { token in
+                    _ = refreshes.hit(token: token)
+                    return AuthTokenSet(accessToken: "A-x", refreshToken: "R-x", expiresInSec: nil)
+                }))
+            XCTAssertEqual(out.failure?.reason, .accountChanged, "\(trigger)")
+            XCTAssertEqual(out.failure?.isFinal, true, "\(trigger)")
+            XCTAssertNil(out.tokens, "\(trigger): Bob's tokens must not reach Alice's client")
+        }
+
+        XCTAssertEqual(refreshes.calls, 0, "Bob's refresh token must not be spent for Alice's client")
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: bob, refresh: "R-bob"))
+        XCTAssertTrue(probe.text.contains("reason=account_changed"))
+    }
+
+    func test_aNewerPairOfTheSameAccountIsStillAdopted() async {
+        let first = jwt(uid: "alice", jti: "1")
+        let second = jwt(uid: "alice", jti: "2")
+        let store = InMemoryAuthCredentialStore(access: second, refresh: "R2")
+        let (coordinator, _) = makeCoordinator()
+        let out = await coordinator.refresh(request(.rest401, stale: first, store: store, refresher: { _ in
+            XCTFail("an already rotated pair must be adopted, not refreshed again")
+            return AuthTokenSet(accessToken: "A-x", refreshToken: "R-x", expiresInSec: nil)
+        }))
+        if case .adopted(let t) = out {
+            XCTAssertEqual(t.accessToken, second)
+        } else {
+            XCTFail("\(out)")
+        }
+    }
+
+    func test_aResultThatLostTheRaceToAnotherAccountsLoginIsNotHandedOver() async throws {
+        let alice = jwt(uid: "alice", jti: "1")
+        let aliceNext = jwt(uid: "alice", jti: "2")
+        let bob = jwt(uid: "bob")
+        let store = InMemoryAuthCredentialStore(access: alice, refresh: "R-alice")
+        let (coordinator, _) = makeCoordinator()
+        let out = await coordinator.refresh(request(.rest401, stale: alice, store: store, refresher: { _ in
+            // Logout, then a login as Bob, while Alice's refresh is on the wire.
+            store.overwrite(access: bob, refresh: "R-bob")
+            return AuthTokenSet(accessToken: aliceNext, refreshToken: "R-alice-2", expiresInSec: nil)
+        }))
+
+        XCTAssertEqual(out.failure?.reason, .accountChanged)
+        XCTAssertNil(out.tokens)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: bob, refresh: "R-bob"),
+                       "Alice's result must not overwrite Bob's pair")
+    }
+
+    func test_theAccountOfAnAccessTokenIsReadFromItsClaims() {
+        XCTAssertEqual(AuthRefreshCoordinator.accountId(ofAccessToken: jwt(uid: "u-1")), "u-1")
+        XCTAssertNil(AuthRefreshCoordinator.accountId(ofAccessToken: "opaque"))
+        XCTAssertNil(AuthRefreshCoordinator.accountId(ofAccessToken: "a.b.c"))
+        XCTAssertTrue(AuthRefreshCoordinator.sameAccount("opaque", jwt(uid: "x")), "undecodable: never blocks")
+        XCTAssertTrue(AuthRefreshCoordinator.sameAccount(jwt(uid: "x", jti: "1"), jwt(uid: "x", jti: "2")))
+        XCTAssertFalse(AuthRefreshCoordinator.sameAccount(jwt(uid: "x"), jwt(uid: "y")))
+    }
+
+    func test_resetBackoffForgetsTheCooldownTheRenewCooldownAndTheDeadToken() async {
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R-dead")
+        let (coordinator, _) = makeCoordinator()
+        let renewFails: AuthRefreshRequest.Renewer = { throw AuthRecoveryFailure(reason: .renewServerError, status: 503) }
+        let rejected: AuthRefreshRequest.Refresher = { _ in throw AuthRecoveryFailure(reason: .refreshRejected, status: 401) }
+        _ = await coordinator.refresh(request(.proactive, store: store, refresher: rejected, renewer: renewFails,
+                                              ignoreCooldown: true))
+        let cooling = await coordinator.refresh(request(.rest401, stale: "A0", store: store, refresher: rejected,
+                                                        renewer: renewFails))
+        XCTAssertEqual(cooling.failure?.reason, .cooldown, "precondition: the failed session is cooling down")
+
+        // New session: a fresh login, a fresh refresh token. Nothing of the old one is remembered.
+        coordinator.resetBackoff()
+        store.overwrite(access: "A9", refresh: "R-new")
+        let net = Probe()
+        let out = await coordinator.refresh(request(.rest401, stale: "A9", store: store, refresher: { token in
+            _ = net.hit(token: token)
+            return AuthTokenSet(accessToken: "A10", refreshToken: "R10", expiresInSec: nil)
+        }, renewer: renewFails))
+        XCTAssertTrue(out.isSuccess)
+        XCTAssertEqual(net.tokensSeen, ["R-new"])
+    }
+
+    func test_aFlightThatStartedBeforeALogoutLeavesNoCooldownForTheNextSession() async {
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let (coordinator, _) = makeCoordinator()
+        _ = await coordinator.refresh(request(.rest401, stale: "A0", store: store, refresher: { _ in
+            coordinator.resetBackoff() // logout / login while the call is on the wire
+            throw AuthRecoveryFailure(reason: .refreshNetwork)
+        }))
+
+        let net = Probe()
+        let next = await coordinator.refresh(request(.rest401, stale: "A0", store: store, refresher: { _ in
+            _ = net.hit()
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: nil)
+        }))
+        XCTAssertEqual(net.calls, 1, "the old session's failure must not put the new session into cooldown")
+        XCTAssertTrue(next.isSuccess)
+    }
+
+    // MARK: - (6) renew only on rejection, paced by the server's budget
+
+    func test_aRefreshThatFailedForAnyReasonButRejectionMakesZeroRenewCalls() async {
+        let failures: [(String, AuthRecoveryFailure)] = [
+            ("network", AuthRecoveryFailure(reason: .refreshNetwork)),
+            ("5xx", AuthRecoveryFailure(reason: .refreshServerError, status: 503)),
+            ("429", AuthRecoveryFailure(reason: .refreshServerError, status: 429, retryAfterSec: 60)),
+            ("other", AuthRecoveryFailure(reason: .refreshOther)),
+        ]
+        for (name, failure) in failures {
+            let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+            let (coordinator, _) = makeCoordinator()
+            let renews = Probe()
+            let out = await coordinator.refresh(request(
+                .rest401, stale: "A0", store: store,
+                refresher: { _ in throw failure },
+                renewer: {
+                    _ = renews.hit()
+                    return AuthTokenSet(accessToken: "A-renewed", refreshToken: "R-renewed", expiresInSec: nil)
+                }))
+            XCTAssertEqual(renews.calls, 0, "\(name): a transient refresh failure must not spend renew budget")
+            XCTAssertEqual(out.failure?.reason, failure.reason, name)
+            XCTAssertEqual(out.failure?.isFinal, false, name)
+        }
+    }
+
+    func test_aRefresh429WaitsAtLeastItsRetryAfter() async {
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let (coordinator, _) = makeCoordinator()
+        let out = await coordinator.refresh(request(
+            .rest401, stale: "A0", store: store,
+            refresher: { _ in throw AuthRecoveryFailure(reason: .refreshServerError, status: 429, retryAfterSec: 90) }))
+        XCTAssertEqual(out.failure?.retryAfterSec, 90, "the ladder's first step is 5 s; Retry-After raises it")
+    }
+
+    func test_aRenewFailureHoldsTheRenewLegBackAndARejectedTokenIsNotPresentedAgain() async {
+        let clock = Clock0()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R-dead")
+        let (coordinator, probe) = makeCoordinator(now: { clock.now })
+        let refreshes = Probe()
+        let renews = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            _ = refreshes.hit(token: token)
+            throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+        }
+        let renewer: AuthRefreshRequest.Renewer = {
+            _ = renews.hit()
+            throw AuthRecoveryFailure(reason: .renewServerError, status: 503)
+        }
+        func attempt() async -> AuthRefreshOutcome {
+            // The proactive refresh ignores the ordinary cooldown, like the foreground and push-wake paths.
+            await coordinator.refresh(request(.proactive, store: store, refresher: refresher, renewer: renewer,
+                                              ignoreCooldown: true))
+        }
+
+        let first = await attempt()
+        XCTAssertEqual(refreshes.calls, 1)
+        XCTAssertEqual(renews.calls, 1)
+        XCTAssertEqual(first.failure?.reason, .renewServerError)
+        XCTAssertEqual(first.failure?.retryAfterSec, AuthRefreshCoordinator.renewCooldownFloorSec,
+                       "a renew failure waits at least 10 minutes (6 per hour)")
+
+        // The 5 s ladder step, a foreground, a push wake: nothing may leave the device.
+        clock.advance(by: 5)
+        let second = await attempt()
+        XCTAssertEqual(refreshes.calls, 1, "the refresh token the server rejected is not presented again")
+        XCTAssertEqual(renews.calls, 1, "device-renew waits out its budget")
+        XCTAssertEqual(second.failure?.reason, .renewBudget)
+        XCTAssertEqual(second.failure?.underlyingReason, .renewServerError)
+        XCTAssertEqual(second.failure?.retryAfterSec, AuthRefreshCoordinator.renewCooldownFloorSec - 5)
+        XCTAssertTrue(probe.text.contains("reason=renew_budget"))
+        XCTAssertTrue(probe.text.contains("refresh_token_known_dead=1"))
+
+        // Past the budget the renew runs again; the dead refresh token still stays out of it.
+        clock.advance(by: 601)
+        _ = await attempt()
+        XCTAssertEqual(renews.calls, 2)
+        XCTAssertEqual(refreshes.calls, 1)
+    }
+
+    func test_aRenewRetryAfterIsHonouredAboveTheFloorAndCapped() async {
+        let cases: [(Int, Int)] = [
+            (60, 600),        // the server's usual Retry-After: never below the 10 minute floor
+            (1200, 1200),     // longer than the floor: honoured
+            (999_999, 3600),  // absurd: capped at an hour
+        ]
+        for (retryAfter, expected) in cases {
+            let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+            let (coordinator, _) = makeCoordinator()
+            let out = await coordinator.refresh(request(
+                .proactive, store: store,
+                renewer: { throw AuthRecoveryFailure(reason: .renewServerError, status: 429, retryAfterSec: retryAfter) },
+                ignoreCooldown: true))
+            XCTAssertEqual(out.failure?.retryAfterSec, expected, "Retry-After \(retryAfter)")
+        }
+    }
+
+    func test_aFailureThatNeverLeftTheDeviceDoesNotSpendTheRenewBudget() async {
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+        let (coordinator, _) = makeCoordinator()
+        let renews = Probe()
+        let renewer: AuthRefreshRequest.Renewer = {
+            _ = renews.hit()
+            throw AuthRecoveryFailure(reason: .renewKeychainLocked)
+        }
+        // A locked Keychain heals as soon as the user unlocks the phone: the next attempt must run.
+        for _ in 0..<3 {
+            let out = await coordinator.refresh(request(.proactive, store: store, renewer: renewer, ignoreCooldown: true))
+            XCTAssertEqual(out.failure?.reason, .renewKeychainLocked)
+        }
+        XCTAssertEqual(renews.calls, 3)
+    }
+
+    func test_aRenewThatWorksClearsTheRenewCooldown() async {
+        let clock = Clock0()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
+        let (coordinator, _) = makeCoordinator(now: { clock.now })
+        let renews = Probe()
+        let outcomes: [Bool] = [false, true, true]  // fail, then succeed, then be called again
+        let renewer: AuthRefreshRequest.Renewer = {
+            let n = renews.hit()
+            if !outcomes[n - 1] { throw AuthRecoveryFailure(reason: .renewServerError, status: 503) }
+            return AuthTokenSet(accessToken: "A\(n)", refreshToken: "R\(n)", expiresInSec: nil)
+        }
+        func attempt() async -> AuthRefreshOutcome {
+            await coordinator.refresh(request(.proactive, store: store, renewer: renewer, ignoreCooldown: true))
+        }
+        _ = await attempt()
+        clock.advance(by: 601)
+        let ok = await attempt()
+        XCTAssertTrue(ok.isSuccess)
+        // No cooldown left over: the very next attempt runs.
+        let again = await attempt()
+        XCTAssertTrue(again.isSuccess)
+        XCTAssertEqual(renews.calls, 3)
+    }
+
     // MARK: - (4) every renew failure path logs a reason code, no secrets
 
     private func renewFailureLine(_ error: Error,
@@ -354,6 +690,9 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
             ("malformed challenge", BCryptoDeviceRenewClient.Error.malformedNonceHex,
              .renewMalformedChallenge, false),
             ("challenge GET 5xx", BCryptoError.httpError(502), .renewServerError, false),
+            ("rate limited, Retry-After", BCryptoRateLimitedError(retryAfterSec: 120), .renewServerError, false),
+            ("rate limited, no header", BCryptoDeviceRenewClient.Error.serverRejected(.httpError(429)),
+             .renewServerError, false),
         ]
         for (name, error, reason, isFinal) in cases {
             let (failure, text, lines) = await renewFailureLine(error)
@@ -495,4 +834,160 @@ private final class Clock0: @unchecked Sendable {
     private var t = Date(timeIntervalSince1970: 1_000_000)
     var now: Date { lock.withLock { t } }
     func advance(by seconds: TimeInterval) { lock.withLock { t = t.addingTimeInterval(seconds) } }
+}
+
+// MARK: - 429 classification and the typed error the recovery endpoints throw
+
+final class AuthRateLimitTests: XCTestCase {
+
+    override func tearDown() {
+        AuthRateLimitStubProtocol.handler = nil
+        super.tearDown()
+    }
+
+    // MARK: Retry-After parsing
+
+    func test_retryAfterIsParsedAsDeltaSecondsOnly() {
+        XCTAssertEqual(BCryptoRateLimitedError.parse("60"), 60)
+        XCTAssertEqual(BCryptoRateLimitedError.parse(" 120 "), 120)
+        XCTAssertEqual(BCryptoRateLimitedError.parse("1.2"), 2, "rounded up, never shorter than asked")
+        XCTAssertEqual(BCryptoRateLimitedError.parse("999999"), 3600, "capped at an hour")
+        XCTAssertNil(BCryptoRateLimitedError.parse("Wed, 21 Oct 2026 07:28:00 GMT"), "an HTTP-date is not used")
+        XCTAssertNil(BCryptoRateLimitedError.parse("-5"))
+        XCTAssertNil(BCryptoRateLimitedError.parse("0"))
+        XCTAssertNil(BCryptoRateLimitedError.parse("nan"))
+        XCTAssertNil(BCryptoRateLimitedError.parse(""))
+        XCTAssertNil(BCryptoRateLimitedError.parse(nil))
+    }
+
+    // MARK: classifier
+
+    func test_aRefresh429IsAServerErrorThatWaitsAtLeastAMinute() {
+        let withHeader = AuthFailureClassifier.classifyRefresh(BCryptoRateLimitedError(retryAfterSec: 120))
+        XCTAssertEqual(withHeader.reason, .refreshServerError)
+        XCTAssertEqual(withHeader.status, 429)
+        XCTAssertEqual(withHeader.retryAfterSec, 120)
+        XCTAssertFalse(withHeader.isFinal)
+
+        XCTAssertEqual(AuthFailureClassifier.classifyRefresh(BCryptoRateLimitedError(retryAfterSec: 5)).retryAfterSec, 60,
+                       "never below the 60 s floor")
+        XCTAssertEqual(AuthFailureClassifier.classifyRefresh(BCryptoRateLimitedError(retryAfterSec: nil)).retryAfterSec, 60)
+        XCTAssertEqual(AuthFailureClassifier.classifyRefresh(BCryptoError.httpError(429)).retryAfterSec, 60)
+    }
+
+    func test_aRenew429IsAServerErrorThatWaitsAtLeastAMinute() {
+        let withHeader = AuthFailureClassifier.classifyRenew(BCryptoRateLimitedError(retryAfterSec: 300))
+        XCTAssertEqual(withHeader.reason, .renewServerError)
+        XCTAssertEqual(withHeader.status, 429)
+        XCTAssertEqual(withHeader.retryAfterSec, 300)
+        XCTAssertFalse(withHeader.isFinal)
+
+        XCTAssertEqual(AuthFailureClassifier.classifyRenew(BCryptoRateLimitedError(retryAfterSec: nil)).retryAfterSec, 60)
+        let wrapped = AuthFailureClassifier.classifyRenew(BCryptoDeviceRenewClient.Error.serverRejected(.httpError(429)))
+        XCTAssertEqual(wrapped.reason, .renewServerError)
+        XCTAssertEqual(wrapped.retryAfterSec, 60)
+        XCTAssertEqual(AuthFailureClassifier.classifyRenew(BCryptoError.httpError(503)).retryAfterSec, 0,
+                       "a 5xx carries no pacing hint of its own")
+    }
+
+    // MARK: the REST client
+
+    private func makeClient() -> BCryptoRestClient {
+        BCryptoRestClient(
+            config: BackendConfig(serverUrl: "https://auth.test", accessToken: "tok"),
+            testURLProtocolClasses: [AuthRateLimitStubProtocol.self])
+    }
+
+    private func thrown(_ operation: () async throws -> Data) async -> Error? {
+        do {
+            _ = try await operation()
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    func test_aRecoveryEndpoint429ThrowsATypedErrorWithRetryAfter() async {
+        AuthRateLimitStubProtocol.handler = { request in
+            AuthRateLimitStubProtocol.response(for: request, status: 429, retryAfter: "120")
+        }
+        let client = makeClient()
+
+        let renew = await thrown { try await client.post("/api/v1/auth/device-renew", body: Data("{}".utf8)) }
+        XCTAssertEqual(renew as? BCryptoRateLimitedError, BCryptoRateLimitedError(retryAfterSec: 120))
+
+        let challenge = await thrown { try await client.get("/api/v1/auth/device-challenge?device_id=abc") }
+        XCTAssertEqual(challenge as? BCryptoRateLimitedError, BCryptoRateLimitedError(retryAfterSec: 120),
+                       "the query string of the challenge GET must not hide the endpoint")
+
+        let refresh = await thrown { try await client.post("/api/v1/auth/refresh", body: Data("{}".utf8)) }
+        XCTAssertEqual(refresh as? BCryptoRateLimitedError, BCryptoRateLimitedError(retryAfterSec: 120))
+    }
+
+    func test_aRecoveryEndpoint429WithoutAHeaderStillThrowsTheTypedError() async {
+        AuthRateLimitStubProtocol.handler = { request in
+            AuthRateLimitStubProtocol.response(for: request, status: 429, retryAfter: nil)
+        }
+        let renew = await thrown { try await makeClient().post("/api/v1/auth/device-renew", body: Data("{}".utf8)) }
+        XCTAssertEqual(renew as? BCryptoRateLimitedError, BCryptoRateLimitedError(retryAfterSec: nil))
+    }
+
+    func test_every429OnAnyOtherEndpointStaysAPlainHttpError() async {
+        AuthRateLimitStubProtocol.handler = { request in
+            AuthRateLimitStubProtocol.response(for: request, status: 429, retryAfter: "120")
+        }
+        let client = makeClient()
+        for path in ["/api/v1/profile", "/api/v1/auth/login", "/api/v1/auth/device-challenge-other"] {
+            let error = await thrown { try await client.get(path) }
+            guard let bc = error as? BCryptoError, case .httpError(let status) = bc else {
+                XCTFail("\(path): expected BCryptoError.httpError(429), got \(String(describing: error))")
+                continue
+            }
+            XCTAssertEqual(status, 429, path)
+        }
+    }
+
+    func test_aRecoveryEndpointThatAnswers503KeepsItsPlainHttpError() async {
+        AuthRateLimitStubProtocol.handler = { request in
+            AuthRateLimitStubProtocol.response(for: request, status: 503, retryAfter: "30")
+        }
+        let error = await thrown { try await makeClient().post("/api/v1/auth/device-renew", body: Data("{}".utf8)) }
+        guard let bc = error as? BCryptoError, case .httpError(let status) = bc else {
+            XCTFail("expected BCryptoError.httpError(503), got \(String(describing: error))")
+            return
+        }
+        XCTAssertEqual(status, 503)
+    }
+}
+
+private final class AuthRateLimitStubProtocol: URLProtocol {
+    /// Answers every request with this status and optional `Retry-After`.
+    static var handler: ((URLRequest) -> (status: Int, retryAfter: String?))?
+
+    static func response(for request: URLRequest, status: Int, retryAfter: String?) -> (status: Int, retryAfter: String?) {
+        (status, retryAfter)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = AuthRateLimitStubProtocol.handler, let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: NSError(domain: "stub", code: -1))
+            return
+        }
+        let answer = handler(request)
+        var headers: [String: String] = [:]
+        if let retryAfter = answer.retryAfter { headers["Retry-After"] = retryAfter }
+        guard let http = HTTPURLResponse(url: url, statusCode: answer.status, httpVersion: "HTTP/1.1",
+                                         headerFields: headers) else {
+            client?.urlProtocol(self, didFailWithError: NSError(domain: "stub", code: -2))
+            return
+        }
+        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data())
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

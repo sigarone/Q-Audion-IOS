@@ -382,7 +382,7 @@ public final class BCryptoRestClient {
     private func requestUncancellable(_ method: String, path: String, body: Data?, headers: [String: String],
                                        baseUrlOverride: String? = nil) async throws -> Data {
         // First attempt with the currently cached access token.
-        let (data, status, _) = try await performRequest(method, path: path, body: body, headers: headers,
+        let (data, status, retryAfter) = try await performRequest(method, path: path, body: body, headers: headers,
                                                            baseUrlOverride: baseUrlOverride)
         if (200...299).contains(status) {
             return data
@@ -395,9 +395,18 @@ public final class BCryptoRestClient {
         //      (Ed25519 challenge-response) — fired when (1) is absent
         //      or fails, and the request path is not one of the auth
         //      endpoints themselves.
-        let isAuthEndpoint = path.hasSuffix("/auth/refresh")
-            || path.hasSuffix("/auth/device-renew")
-            || path.hasSuffix("/auth/device-challenge")
+        // The challenge GET carries `?device_id=...`, which a plain `hasSuffix` never matched.
+        let pathOnly = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map(String.init) ?? path
+        let isAuthEndpoint = pathOnly.hasSuffix("/auth/refresh")
+            || pathOnly.hasSuffix("/auth/device-renew")
+            || pathOnly.hasSuffix("/auth/device-challenge")
+        // The session-recovery endpoints are rate-limited per device and per IP and answer
+        // 429 with `Retry-After`. `httpError(Int)` cannot carry the header, and the recovery
+        // coordinator must honour it, so these (and only these) endpoints throw a typed error.
+        if status == 429, isAuthEndpoint {
+            throw BCryptoRateLimitedError(retryAfterSec: BCryptoRateLimitedError.parse(retryAfter))
+        }
         if status == 401, !isAuthEndpoint {
             let refreshed = try await tryRefreshToken()
             if refreshed {
@@ -680,6 +689,28 @@ public final class BCryptoRestClient {
     /// the WS client can park its loop without QR.
     public func recoverAuth() async -> Bool {
         await refreshSession(trigger: .wsAuthFailed).isSuccess
+    }
+}
+
+/// HTTP 429 from one of the session-recovery endpoints (`/auth/refresh`, `/auth/device-challenge`,
+/// `/auth/device-renew`), carrying the server's `Retry-After`. A separate type, not a case of
+/// `BCryptoError`: that enum is switched exhaustively across the app and every other 429 keeps
+/// arriving as `BCryptoError.httpError(429)`. Only `AuthFailureClassifier` consumes this.
+public struct BCryptoRateLimitedError: Error, Sendable, Equatable {
+    /// `Retry-After` in whole seconds when the server sent a delta-seconds value, else nil.
+    public let retryAfterSec: Int?
+
+    public init(retryAfterSec: Int?) {
+        self.retryAfterSec = retryAfterSec
+    }
+
+    /// RFC 7231 delta-seconds only (the one form this server sends); an HTTP-date, a negative
+    /// or an unparsable value is nil. Capped at an hour.
+    static func parse(_ header: String?) -> Int? {
+        guard let header,
+              let secs = Double(header.trimmingCharacters(in: .whitespaces)),
+              secs.isFinite, secs > 0 else { return nil }
+        return Int(min(secs, 3600).rounded(.up))
     }
 }
 

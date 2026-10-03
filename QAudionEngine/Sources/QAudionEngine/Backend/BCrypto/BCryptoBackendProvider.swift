@@ -55,6 +55,12 @@ public final class BCryptoBackendProvider: BackendProvider {
             if let stored = self.storedTokenPair?(),
                let access = stored.access, !access.isEmpty,
                access != self._wsClient?.lastPresentedAccessToken {
+                // Never adopt another account's pair (logout, then a different login): this
+                // provider belongs to the session that left, so its socket stays parked.
+                if let presented = self._wsClient?.lastPresentedAccessToken,
+                   !AuthRefreshCoordinator.sameAccount(presented, access) {
+                    return .revoked
+                }
                 self.applyTokenPair(access: access, refresh: stored.refresh, persist: false)
                 return .recovered
             }

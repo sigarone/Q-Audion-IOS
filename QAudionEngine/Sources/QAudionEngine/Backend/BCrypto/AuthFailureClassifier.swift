@@ -14,6 +14,7 @@ enum AuthFailureClassifier {
 
     static func classifyRefresh(_ error: Error) -> AuthRecoveryFailure {
         if let f = error as? AuthRecoveryFailure { return f }
+        if let rl = error as? BCryptoRateLimitedError { return rateLimited(rl, reason: .refreshServerError) }
         if let e = error as? BCryptoError {
             switch e {
             case .unauthorized:
@@ -34,7 +35,10 @@ enum AuthFailureClassifier {
         switch status {
         case 401, 403:
             return AuthRecoveryFailure(reason: .refreshRejected, status: status)
-        case 429, 500...599:
+        case 429:
+            return AuthRecoveryFailure(reason: .refreshServerError, status: status,
+                                       retryAfterSec: AuthRefreshCoordinator.rateLimitFloorSec)
+        case 500...599:
             return AuthRecoveryFailure(reason: .refreshServerError, status: status)
         default:
             return AuthRecoveryFailure(reason: .refreshOther, status: status)
@@ -45,6 +49,7 @@ enum AuthFailureClassifier {
 
     static func classifyRenew(_ error: Error) -> AuthRecoveryFailure {
         if let f = error as? AuthRecoveryFailure { return f }
+        if let rl = error as? BCryptoRateLimitedError { return rateLimited(rl, reason: .renewServerError) }
 
         if let pre = error as? AuthRenewPreconditionError {
             switch pre {
@@ -89,7 +94,10 @@ enum AuthFailureClassifier {
             switch status {
             case 403:
                 return AuthRecoveryFailure(reason: .renewRejected, status: 403, isFinal: true)
-            case 429, 500...599:
+            case 429:
+                return AuthRecoveryFailure(reason: .renewServerError, status: status,
+                                           retryAfterSec: AuthRefreshCoordinator.rateLimitFloorSec)
+            case 500...599:
                 return AuthRecoveryFailure(reason: .renewServerError, status: status)
             default:
                 return AuthRecoveryFailure(reason: .renewRejected, status: status)
@@ -101,6 +109,13 @@ enum AuthFailureClassifier {
         default:
             return AuthRecoveryFailure(reason: .renewOther)
         }
+    }
+
+    /// A 429 from a recovery endpoint: wait what the server asked (`Retry-After`), but never
+    /// less than `rateLimitFloorSec`. The coordinator treats `retryAfterSec` as a minimum.
+    private static func rateLimited(_ error: BCryptoRateLimitedError, reason: AuthRecoveryReason) -> AuthRecoveryFailure {
+        let wait = max(AuthRefreshCoordinator.rateLimitFloorSec, error.retryAfterSec ?? 0)
+        return AuthRecoveryFailure(reason: reason, status: 429, retryAfterSec: wait)
     }
 
     static func isNetwork(_ error: Error) -> Bool {

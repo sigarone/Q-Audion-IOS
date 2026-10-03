@@ -3391,8 +3391,11 @@ final class AppState: ObservableObject {
         case .failed(let failure):
             // NEVER clear the session on failure: the device credential may still be valid.
             // The coordinator has already logged the reason code. A final failure (device
-            // revoked / no device credential) is retried slowly, anything else on the
-            // coordinator's backoff ladder (5, 15, 45, 120 s).
+            // revoked / no device credential / nothing stored) is retried every 15 minutes:
+            // it cannot heal by waiting, and every retry may still reach the server. Anything
+            // else follows the coordinator's own pacing in `retryAfterSec`: the backoff ladder
+            // (5, 15, 45, 120 s) for a refresh that failed transiently, 10 minutes or more after
+            // a device-renew failure (the server allows 6 renews an hour per device) or a 429.
             // A Keychain that cannot be read (locked, or a key protected by biometrics with no
             // authenticated session yet) is retried slowly: every retry may put a system
             // authentication prompt in front of the user. The foreground and push-wake
@@ -3401,7 +3404,7 @@ final class AppState: ObservableObject {
                 || failure.reason == .renewKeychainError
                 || failure.reason == .storeUnreadable
             let delay: Double = failure.isFinal
-                ? 120
+                ? 900
                 : (keychainBlocked ? 300 : Double(max(5, failure.retryAfterSec)))
             RTLog.info("auth", "proactive retry scheduled in_s=\(Int(delay)) \(failure.logFields)")
             scheduleProactiveRetry(after: delay)

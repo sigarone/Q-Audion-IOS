@@ -26,6 +26,21 @@ import Foundation
 //      was sent. A result that lost the race is discarded: an older pair never overwrites
 //      a newer one.
 //
+// Two rules keep the coordinator from making things worse than the outage it heals:
+//
+//   3. A signed-out store is never resurrected. When a store is attached, the refresh token
+//      comes from it and ONLY from it: a lingering client of a logged-out (or switched)
+//      session that still holds its own copy of an old refresh token cannot use it to sign
+//      the device back in. An empty store, or a stored access token that belongs to another
+//      account than the caller's, fails with no network call (`signed_out`, `account_changed`).
+//   4. The server rate-limits the Ed25519 renew path hard (device-renew 6/h per device, burst
+//      2, 60/h per IP; device-challenge 60/h per device) and records every rejected refresh
+//      token presented again as a reuse event. So device-renew is attempted only when the
+//      refresh token was REJECTED (401/403) or there is none (never on a network error, a 5xx
+//      or a 429 of the refresh), a refresh token the server already rejected is not presented
+//      again, and after a renew failure that can have reached the server the renew leg waits
+//      at least 10 minutes (6/h), longer if the server says so with Retry-After.
+//
 // The coordinator is Foundation-only on purpose: it holds no secrets in logs, has no
 // dependency on the transport, and is exercised by plain unit tests.
 
@@ -87,6 +102,12 @@ public enum AuthRecoveryReason: String, Sendable, Equatable {
     case cooldown = "cooldown"
     case storeUnreadable = "keychain_unreadable"
     case casLost = "cas_lost"
+    /// The shared store holds no credentials at all: the session was logged out.
+    case signedOut = "signed_out"
+    /// The shared store holds the tokens of another account than the caller's.
+    case accountChanged = "account_changed"
+    /// Device-renew is waiting out its own rate-limit budget (`last=` is the failure that started it).
+    case renewBudget = "renew_budget"
 
     case refreshRejected = "refresh_rejected"
     case refreshNetwork = "refresh_network"
@@ -194,7 +215,9 @@ public struct AuthRefreshRequest: Sendable {
     public let trigger: AuthRefreshTrigger
     /// The access token that was just rejected (nil for the proactive refresh).
     public let staleAccessToken: String?
-    /// The refresh token the caller's own copy holds. Used only when `store` is nil or empty.
+    /// The refresh token the caller's own copy holds. Used ONLY when `store` is nil: with a
+    /// store attached the store is the one source of truth, and a store that holds no refresh
+    /// token is never papered over with a caller's possibly stale copy.
     public let callerRefreshToken: String?
     public let store: AuthCredentialStore?
     public let refresher: Refresher?
@@ -234,11 +257,56 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         return ladder[max(0, min(n - 1, ladder.count - 1))]
     }
 
+    /// Minimum wait before the renew leg runs again after a failure that can have reached the
+    /// server. The server grants device-renew 6/h per device (burst 2), i.e. one per 10 min.
+    public static let renewCooldownFloorSec = 600
+    /// Minimum cooldown after a 429, whatever `Retry-After` said (the server sends 60).
+    public static let rateLimitFloorSec = 60
+    /// Upper bound for any cooldown, so a bogus `Retry-After` cannot park recovery for a day.
+    public static let maxCooldownSec = 3600
+
     /// Equality for refresh tokens where nil and "" both mean "none".
     public static func sameRefreshToken(_ a: String?, _ b: String?) -> Bool {
         let x = (a?.isEmpty ?? true) ? nil : a
         let y = (b?.isEmpty ?? true) ? nil : b
         return x == y
+    }
+
+    /// The account an access token (a compact JWT) was minted for: its `uid` claim, else `sub`.
+    /// Nil for anything that is not a decodable JWT with such a claim. NOT a verification: the
+    /// token comes from our own store or config and the answer only ever makes the coordinator
+    /// refuse to cross accounts, never grants anything.
+    public static func accountId(ofAccessToken token: String) -> String? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var b64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let rem = b64.count % 4
+        if rem > 0 { b64 += String(repeating: "=", count: 4 - rem) }
+        guard let data = Data(base64Encoded: b64),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        for key in ["uid", "sub"] {
+            if let v = obj[key] as? String, !v.isEmpty { return v }
+        }
+        return nil
+    }
+
+    /// False only when both access tokens decode and name different accounts.
+    public static func sameAccount(_ a: String, _ b: String) -> Bool {
+        guard let x = accountId(ofAccessToken: a), let y = accountId(ofAccessToken: b) else { return true }
+        return x == y
+    }
+
+    /// Failures of the renew leg that happen on the device before any request leaves it:
+    /// they spend none of the server's renew budget and so do not start the renew cooldown.
+    private static func isLocalPreflight(_ reason: AuthRecoveryReason) -> Bool {
+        switch reason {
+        case .renewNoDeviceId, .renewKeyNotProvisioned, .renewKeychainLocked, .renewKeychainError:
+            return true
+        default:
+            return false
+        }
     }
 
     private let lock = NSLock()
@@ -247,6 +315,14 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     private var cooldownUntil: Date?
     private var lastFailure: AuthRecoveryFailure?
     private var cooldownHits = 0
+    /// Renew leg's own cooldown (see `renewCooldownFloorSec`) and the failure that started it.
+    private var renewBlockedUntil: Date?
+    private var lastRenewFailure: AuthRecoveryFailure?
+    /// The refresh token the server last rejected. Kept in memory only, never logged.
+    private var rejectedRefreshToken: String?
+    /// Bumped by `resetBackoff()`: a flight that began under an older epoch (before a login
+    /// or logout) must not write its outcome into the state of the new session.
+    private var epoch = 0
     private var logger: Logger?
     private let now: @Sendable () -> Date
 
@@ -266,6 +342,10 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             cooldownUntil = nil
             lastFailure = nil
             cooldownHits = 0
+            renewBlockedUntil = nil
+            lastRenewFailure = nil
+            rejectedRefreshToken = nil
+            epoch += 1
         }
     }
 
@@ -297,6 +377,29 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             }
         }
 
+        // 1b. A store that holds nothing means the session was logged out. Whatever the caller
+        // still has in memory (a client built before the logout: an upload in flight, a socket
+        // recovery task) is a leftover of that session and must not sign the device back in by
+        // presenting its own refresh token. No network call.
+        if request.store != nil, let s = stored,
+           Self.nonEmpty(s.access) == nil, Self.nonEmpty(s.refresh) == nil {
+            let f = AuthRecoveryFailure(reason: .signedOut, isFinal: true)
+            emit(.info, "refresh skipped trigger=\(trigger) \(f.logFields)")
+            return .failed(f)
+        }
+
+        // 1c. The stored pair belongs to another account than the one this caller was rejected
+        // for (logout, then a different login): never hand the new account's tokens to a
+        // client of the old one, by adoption or by refreshing with the stored refresh token.
+        if request.trigger.adoptsNewerStoredAccess,
+           let stale = Self.nonEmpty(request.staleAccessToken),
+           let current = Self.nonEmpty(stored?.access), current != stale,
+           !Self.sameAccount(stale, current) {
+            let f = AuthRecoveryFailure(reason: .accountChanged, isFinal: true)
+            emit(.warn, "refresh skipped trigger=\(trigger) \(f.logFields)")
+            return .failed(f)
+        }
+
         // 2. Another path already rotated the pair: use it, spend no refresh token.
         if request.trigger.adoptsNewerStoredAccess,
            let stale = request.staleAccessToken, !stale.isEmpty,
@@ -305,8 +408,10 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             return .adopted(AuthTokenSet(accessToken: access, refreshToken: s.refresh, expiresInSec: nil))
         }
 
+        // With a store attached the refresh token comes from the store only; the caller's own
+        // copy is for store-less clients (onboarding, tests).
         let storedRefresh = Self.nonEmpty(stored?.refresh)
-        let sendToken = storedRefresh ?? Self.nonEmpty(request.callerRefreshToken)
+        let sendToken = request.store != nil ? storedRefresh : Self.nonEmpty(request.callerRefreshToken)
         let key = (request.store != nil ? "s:" : "c:") + (sendToken ?? "-")
 
         // 3. Join the flight for this token, or start it.
@@ -323,8 +428,10 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                                             underlyingReason: lastFailure?.reason)
                 return .cooling(f, hit: cooldownHits)
             }
+            let startEpoch = epoch
             let task = Task<AuthRefreshOutcome, Never> {
-                await self.runFlight(request, sendToken: sendToken, expectedRefresh: storedRefresh, key: key)
+                await self.runFlight(request, sendToken: sendToken, expectedRefresh: storedRefresh,
+                                     key: key, epoch: startEpoch)
             }
             inFlight[key] = task
             return .start(task)
@@ -350,17 +457,27 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         return s
     }
 
-    private func runFlight(_ request: AuthRefreshRequest, sendToken: String?, expectedRefresh: String?, key: String) async -> AuthRefreshOutcome {
-        var outcome = await perform(request, sendToken: sendToken, expectedRefresh: expectedRefresh)
+    /// Cooldown of the next ordinary attempt: the ladder step, raised to whatever the failure
+    /// itself asked for (`Retry-After`, the renew budget), never past `maxCooldownSec`.
+    private static func retryAfter(forFailures n: Int, hint: Int) -> Int {
+        min(max(backoffSeconds(forFailures: n), hint), maxCooldownSec)
+    }
+
+    private func runFlight(_ request: AuthRefreshRequest, sendToken: String?, expectedRefresh: String?,
+                           key: String, epoch startEpoch: Int) async -> AuthRefreshOutcome {
+        var outcome = await perform(request, sendToken: sendToken, expectedRefresh: expectedRefresh, epoch: startEpoch)
         var failuresNow = 0
         // The slot is released only after the tokens are persisted (see `perform`), in the
         // same critical section that records the failure state: a late caller either joins
         // this flight or finds the new pair in the store.
         lock.withLock {
             inFlight[key] = nil
-            guard request.store != nil else {
+            // Without a store there is no shared session to protect with a cooldown, and a
+            // flight that began before a login/logout (`resetBackoff`) must not write its
+            // outcome into the state of the session that replaced it.
+            guard request.store != nil, epoch == startEpoch else {
                 if case .failed(var f) = outcome {
-                    f.retryAfterSec = Self.backoffSeconds(forFailures: 1)
+                    f.retryAfterSec = Self.retryAfter(forFailures: 1, hint: f.retryAfterSec)
                     outcome = .failed(f)
                 }
                 return
@@ -368,7 +485,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             if case .failed(var f) = outcome {
                 consecutiveFailures += 1
                 failuresNow = consecutiveFailures
-                f.retryAfterSec = Self.backoffSeconds(forFailures: consecutiveFailures)
+                f.retryAfterSec = Self.retryAfter(forFailures: consecutiveFailures, hint: f.retryAfterSec)
                 cooldownUntil = now().addingTimeInterval(TimeInterval(f.retryAfterSec))
                 lastFailure = f
                 cooldownHits = 0
@@ -393,43 +510,113 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         return outcome
     }
 
-    private func perform(_ request: AuthRefreshRequest, sendToken: String?, expectedRefresh: String?) async -> AuthRefreshOutcome {
+    private func perform(_ request: AuthRefreshRequest, sendToken: String?, expectedRefresh: String?,
+                         epoch startEpoch: Int) async -> AuthRefreshOutcome {
         let trigger = request.trigger.rawValue
-        let canRefresh = sendToken != nil && request.refresher != nil
+        // A refresh token the server already rejected (or already consumed) is not presented
+        // again: it cannot succeed and each repeat is a reuse event in the server's audit log.
+        let rejected = lock.withLock { rejectedRefreshToken }
+        let knownDead = sendToken != nil && rejected == sendToken
+        let canRefresh = sendToken != nil && request.refresher != nil && !knownDead
         let canRenew = request.renewer != nil
-        emit(.info, "recovery start trigger=\(trigger) refresh=\(canRefresh ? 1 : 0) renew=\(canRenew ? 1 : 0) store=\(request.store != nil ? 1 : 0)")
+        let deadNote: String = knownDead ? " refresh_token_known_dead=1" : ""
+        emit(.info, "recovery start trigger=\(trigger) refresh=\(canRefresh ? 1 : 0) renew=\(canRenew ? 1 : 0) store=\(request.store != nil ? 1 : 0)\(deadNote)")
 
-        var refreshFailure: AuthRecoveryFailure?
-        if let token = sendToken, let refresher = request.refresher {
+        var refreshRejection: AuthRecoveryFailure?
+        if canRefresh, let token = sendToken, let refresher = request.refresher {
             do {
                 let tokens = try await refresher(token)
-                return finalize(tokens, expectedRefresh: expectedRefresh, request: request, via: .refresh)
+                let outcome = finalize(tokens, expectedRefresh: expectedRefresh, request: request, via: .refresh)
+                if case .failed = outcome {
+                    // The server rotated the pair, so the token we sent is spent whether or not
+                    // the result could be stored.
+                    markRefreshTokenDead(token, epoch: startEpoch)
+                }
+                return outcome
             } catch {
                 let f = Self.failure(from: error, fallback: .refreshOther)
-                refreshFailure = f
+                guard f.reason == .refreshRejected else {
+                    // Network error, 5xx, 429, anything but a rejection: the refresh token may
+                    // well be alive, and the renew leg is rate-limited far harder than refresh.
+                    // Retry the refresh on the ladder; do not spend renew budget on it.
+                    emit(.warn, "refresh step failed trigger=\(trigger) \(f.logFields) renew_next=0")
+                    return .failed(f)
+                }
+                refreshRejection = f
+                markRefreshTokenDead(token, epoch: startEpoch)
                 emit(.warn, "refresh step failed trigger=\(trigger) \(f.logFields) renew_next=\(canRenew ? 1 : 0)")
             }
         }
 
-        if let renewer = request.renewer {
-            do {
-                let tokens = try await renewer()
-                return finalize(tokens, expectedRefresh: expectedRefresh, request: request, via: .deviceRenew)
-            } catch {
-                let f = Self.failure(from: error, fallback: .renewOther)
-                emit(.warn, "renew step failed trigger=\(trigger) \(f.logFields)")
-                return .failed(f)
+        // Here the refresh token was rejected, is known dead, or there is none.
+        guard let renewer = request.renewer else {
+            if let f = refreshRejection {
+                // Rejected by the server and nothing else to try: the session cannot heal by waiting.
+                return .failed(AuthRecoveryFailure(reason: f.reason, status: f.status, isFinal: true))
             }
+            if knownDead {
+                return .failed(AuthRecoveryFailure(reason: .refreshRejected, status: 401, isFinal: true))
+            }
+            return .failed(AuthRecoveryFailure(reason: .noRecoveryPath, isFinal: false))
         }
 
-        if var f = refreshFailure {
-            // Rejected by the server and nothing else to try: the session cannot heal by waiting.
-            if f.reason == .refreshRejected {
-                f = AuthRecoveryFailure(reason: f.reason, status: f.status, isFinal: true)
-            }
-            return .failed(f)
+        // The renew leg has its own, much smaller, budget on the server (see the header).
+        let gate: AuthRecoveryFailure? = lock.withLock {
+            guard let until = renewBlockedUntil, now() < until else { return nil }
+            let remaining = max(1, Int(until.timeIntervalSince(now()).rounded(.up)))
+            return AuthRecoveryFailure(reason: .renewBudget,
+                                       status: lastRenewFailure?.status,
+                                       isFinal: lastRenewFailure?.isFinal ?? false,
+                                       retryAfterSec: remaining,
+                                       underlyingReason: lastRenewFailure?.reason)
         }
-        return .failed(AuthRecoveryFailure(reason: .noRecoveryPath, isFinal: false))
+        if let gate {
+            emit(.info, "renew skipped trigger=\(trigger) \(gate.logFields) retry_in=\(gate.retryAfterSec)")
+            return .failed(gate)
+        }
+
+        do {
+            let tokens = try await renewer()
+            let outcome = finalize(tokens, expectedRefresh: expectedRefresh, request: request, via: .deviceRenew)
+            if case .failed(let f) = outcome {
+                // The renew reached the server and spent budget even though storing the result failed.
+                return .failed(noteRenewFailure(f, epoch: startEpoch))
+            }
+            lock.withLock {
+                guard epoch == startEpoch else { return }
+                renewBlockedUntil = nil
+                lastRenewFailure = nil
+            }
+            return outcome
+        } catch {
+            let f = Self.failure(from: error, fallback: .renewOther)
+            emit(.warn, "renew step failed trigger=\(trigger) \(f.logFields)")
+            return .failed(noteRenewFailure(f, epoch: startEpoch))
+        }
+    }
+
+    private func markRefreshTokenDead(_ token: String, epoch startEpoch: Int) {
+        lock.withLock {
+            guard epoch == startEpoch else { return }
+            rejectedRefreshToken = token
+        }
+    }
+
+    /// Start the renew cooldown for a failure that can have reached the server: at least
+    /// `renewCooldownFloorSec` (6/h), or what the server asked for, whichever is longer.
+    /// Failures that never left the device (no device id, key not provisioned, locked
+    /// Keychain) spend no budget and keep the ordinary ladder.
+    private func noteRenewFailure(_ failure: AuthRecoveryFailure, epoch startEpoch: Int) -> AuthRecoveryFailure {
+        guard !Self.isLocalPreflight(failure.reason) else { return failure }
+        var f = failure
+        let wait = min(max(Self.renewCooldownFloorSec, f.retryAfterSec), Self.maxCooldownSec)
+        f.retryAfterSec = wait
+        lock.withLock {
+            guard epoch == startEpoch else { return }
+            renewBlockedUntil = now().addingTimeInterval(TimeInterval(wait))
+            lastRenewFailure = f
+        }
+        return f
     }
 
     /// Persist a network result with compare-and-swap, or discard it if it lost the race.
@@ -448,12 +635,19 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             emit(.warn, "stale result discarded trigger=\(trigger) via=\(path.rawValue) cas=0")
             let current = try store.load()
             if let access = current.access, !access.isEmpty {
+                // The store moved on while this flight was on the wire. If it now holds another
+                // account (logout, then a different login) this caller must not receive it.
+                if request.trigger.adoptsNewerStoredAccess,
+                   let stale = Self.nonEmpty(request.staleAccessToken),
+                   !Self.sameAccount(stale, access) {
+                    return .failed(AuthRecoveryFailure(reason: .accountChanged, isFinal: true))
+                }
                 return .adopted(AuthTokenSet(accessToken: access, refreshToken: current.refresh, expiresInSec: nil))
             }
             return .failed(AuthRecoveryFailure(reason: .casLost))
         } catch {
-            // The server rotated the pair but it could not be stored. The next attempt
-            // presents the old token and falls through to device-renew, which heals it.
+            // The server rotated the pair but it could not be stored. The token we sent is
+            // spent (see `perform`): the next attempt goes to device-renew, which heals it.
             emit(.error, "persist failed trigger=\(trigger) via=\(path.rawValue) reason=\(AuthRecoveryReason.storeUnreadable.rawValue)")
             return .failed(AuthRecoveryFailure(reason: .storeUnreadable))
         }
