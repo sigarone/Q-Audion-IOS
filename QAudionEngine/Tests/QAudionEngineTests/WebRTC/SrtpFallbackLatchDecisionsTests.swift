@@ -175,13 +175,21 @@ final class SrtpFallbackLatchDecisionsTests: XCTestCase {
         XCTAssertTrue(sim.latch)
     }
 
-    func test_latchTag_keepsOnlyAnEightCharLowercasePrefix() {
-        let tag = SrtpFallbackLatchDecisions.LatchTag(
-            generation: 3, callId: "ABCDEF12-3456-7890-ABCD-EF1234567890")
-        XCTAssertEqual(tag.callIdPrefix, "abcdef12")
+    func test_latchTag_normalisesTheCallId() {
+        let tag = SrtpFallbackLatchDecisions.LatchTag(generation: 3, callId: "ABCDEF12-0000")
+        XCTAssertEqual(tag.callId, "abcdef12-0000")
         XCTAssertEqual(tag.generation, 3)
-        XCTAssertNil(SrtpFallbackLatchDecisions.LatchTag(generation: 3, callId: nil).callIdPrefix)
-        XCTAssertNil(SrtpFallbackLatchDecisions.LatchTag(generation: 3, callId: "").callIdPrefix)
+        XCTAssertNil(SrtpFallbackLatchDecisions.LatchTag(generation: 3, callId: nil).callId)
+        XCTAssertNil(SrtpFallbackLatchDecisions.LatchTag(generation: 3, callId: "").callId)
+    }
+
+    /// Two different calls whose ids share a prefix are still two calls.
+    func test_callsSharingAnIdPrefix_areNotConfused() {
+        let tag = SrtpFallbackLatchDecisions.LatchTag(generation: 1, callId: "abcdefgh-1111")
+        XCTAssertFalse(SrtpFallbackLatchDecisions.latchHonouredAtAnswer(
+            tag: tag, answeringCallId: "abcdefgh-2222", currentGeneration: 1))
+        XCTAssertTrue(SrtpFallbackLatchDecisions.latchHonouredAtAnswer(
+            tag: tag, answeringCallId: "ABCDEFGH-1111", currentGeneration: 9))
     }
 
     func test_latchWithoutATag_isNeverHonoured() {

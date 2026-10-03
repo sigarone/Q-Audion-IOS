@@ -74,18 +74,18 @@ public enum SrtpFallbackLatchDecisions {
 
     /// What a latch was set FOR. Stored beside the Bool so the answer-time teardown
     /// can tell a ringing-time engage of THIS call from a leftover of another one.
-    /// Only the 8-char lowercase prefix of the call id is kept (public-repo and log
-    /// hygiene: never a full id).
+    /// The id is kept lowercased and in full (an 8-char prefix could collide) and lives
+    /// in memory only: it is never logged or shipped (the log lines carry numeric codes).
     public struct LatchTag: Equatable {
         public let generation: Int
-        public let callIdPrefix: String?
+        public let callId: String?
 
         public init(generation: Int, callId: String?) {
             self.generation = generation
             if let callId, !callId.isEmpty {
-                self.callIdPrefix = String(callId.lowercased().prefix(8))
+                self.callId = callId.lowercased()
             } else {
-                self.callIdPrefix = nil
+                self.callId = nil
             }
         }
     }
@@ -105,9 +105,9 @@ public enum SrtpFallbackLatchDecisions {
         currentGeneration: Int
     ) -> Bool {
         guard let tag else { return false }
-        if let latched = tag.callIdPrefix,
+        if let latched = tag.callId,
            let answering = answeringCallId, !answering.isEmpty {
-            return latched == String(answering.lowercased().prefix(8))
+            return latched == answering.lowercased()
         }
         return tag.generation == currentGeneration
     }
