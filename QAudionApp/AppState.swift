@@ -17945,6 +17945,7 @@ final class AppState: ObservableObject {
                 // existed, so its `setVideoPaused(false)` did nothing, and a pipeline created paused here
                 // would stay paused for the whole call.
                 let finalizedInOfferWindow: Bool = callFinalizedCallId == nativeSrtpOutgoingCallId
+                let pipelineBeforeVideoStart = videoPipeline
                 await startVideoPipeline(
                     for: contactId,
                     startPaused: CallerOutgoingStatePolicy.videoStartsPaused(
@@ -17955,8 +17956,9 @@ final class AppState: ObservableObject {
                 if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart(
                     callTornDown: callService.currentCallGeneration() != offerCallGeneration) {
                     RTLog.warn("call", "video start returned abandon=1 torndown=1")
-                    // Only when no newer call is live: a redial owns `videoPipeline` / `abrController` now.
-                    if callState == .idle || callState == .ended {
+                    // A pipeline the start just assigned is this dead call's, whoever owns the call state now: a
+                    // redial's own camera start only runs after its OFFER and begins by stopping a leftover one.
+                    if videoPipeline !== pipelineBeforeVideoStart {
                         abrController?.stop()
                         abrController = nil
                         videoPipeline?.stop()
