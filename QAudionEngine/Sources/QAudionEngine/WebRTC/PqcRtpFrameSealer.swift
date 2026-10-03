@@ -418,14 +418,6 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             let lo = (src - 1 >= 0) ? (old[src - 1] >> UInt64(64 - bitShift)) : 0
             replayWindow[i] = hi | lo
         }
-        // TEMP MUTANT C (do not merge): restore the old, wrong aging direction.
-        let mutantOld = old
-        for i in 0..<count {
-            let lo = (i + wordShift < count) ? (mutantOld[i + wordShift] >> UInt64(bitShift)) : 0
-            let hiIdx = i + wordShift + 1
-            let hi = (bitShift != 0 && hiIdx < count) ? (mutantOld[hiIdx] << UInt64(64 - bitShift)) : 0
-            replayWindow[i] = lo | hi
-        }
     }
 
     private func nextNonce() -> Data {
