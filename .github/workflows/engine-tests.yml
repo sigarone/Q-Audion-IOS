@@ -340,6 +340,25 @@ jobs:
           done
           exit "$EXIT_CODE"
 
+      # 2026-10-03 — diagnostic, failure only. The raw log of the step above stops at the QAudionEngine
+      # compile (xcodebuild's output after it never reaches the Actions log), so a red run said only
+      # "exit code 65" and nothing about WHICH test or build step failed. The result bundle is on the
+      # runner: print its build errors and its failed tests. Never fails the job (`|| true`).
+      - name: Show xcodebuild build errors and failed tests (xcresult)
+        if: failure()
+        run: |
+          for bundle in /tmp/ios-sim-results-attempt*.xcresult; do
+            [ -d "$bundle" ] || continue
+            echo "::group::$bundle build results"
+            xcrun xcresulttool get build-results --path "$bundle" --compact 2>&1 | head -c 30000 || true
+            echo
+            echo "::endgroup::"
+            echo "::group::$bundle test summary"
+            xcrun xcresulttool get test-results summary --path "$bundle" --compact 2>&1 | head -c 30000 || true
+            echo
+            echo "::endgroup::"
+          done
+
   # ----------------------------------------------------------------
   # Report-only checks added 2026-07-28. Each of these three jobs is
   # independent of `test`/`ios-simulator-tests` above (no `needs:`,
