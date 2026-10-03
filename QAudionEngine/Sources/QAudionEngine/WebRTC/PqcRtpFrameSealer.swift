@@ -138,9 +138,25 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     public enum SealerError: Error, Equatable {
         case wrongKeyLength(Int)
         case sealFailed
+        /// The AES-GCM tag did not verify (wrong key, tampered bytes, or a frame that was never
+        /// sealed in the first place, e.g. an unsealed frame from a peer whose sealer was not
+        /// installed yet). Says nothing about the replay window: an unauthenticated frame never
+        /// reaches it (W-M15ORDER).
         case openFailed
         case truncated
+        /// W-M15ORDER — the frame's counter is a replay (already seen, or older than the window).
+        /// Kept apart from `.openFailed` so the call telemetry can tell "peer replays / reorders
+        /// beyond the window" from "this key cannot open what the peer sends".
+        case replayRejected
+
+        /// True for the anti-replay rejection, false for every authentication / framing failure.
+        public var isReplayRejection: Bool { self == .replayRejected }
     }
+
+    /// W-M15ORDER — test seam: runs after the AEAD tag verified and BEFORE the counter is
+    /// recorded in the replay window, i.e. exactly where two threads holding the same frame
+    /// can both have passed the read-only pre-check. Never set outside tests.
+    internal var afterAuthenticateHook: (() -> Void)?
 
     /// Create a new sealer.
     ///
@@ -274,6 +290,16 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     /// `replayWindowSize`-frame sliding window is accepted; replayed or
     /// excessively late frames are rejected (M-14 anti-replay — receiver
     /// side only, no wire change).
+    ///
+    /// W-M15ORDER (2026-10-03) — RFC 3711 order, same as Android's
+    /// `PqcRtpFrameSealer.kt`: (1) a READ-ONLY replay check on the counter taken from the
+    /// still-unauthenticated nonce bytes, (2) the AES-GCM tag verification, (3) only then the
+    /// counter is RECORDED, re-checked atomically under the lock (two threads holding the same
+    /// valid frame can both pass step 1; only one may pass step 3). The previous order recorded
+    /// the counter first: one frame that was never sealed (counter bytes = random inner-nonce
+    /// bytes) moved the window's highest counter to a huge value, after which every genuine
+    /// sealed frame was "too old" and the receiver heard nothing for the rest of the call
+    /// (3 of 26 iOS-iOS calls since 20/9). A bad frame now costs exactly one frame.
     public func open(_ sealed: Data) throws -> Data {
         guard sealed.count >= Self.nonceSize + Self.tagSize else {
             throw SealerError.truncated
@@ -288,26 +314,47 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             }
             return v
         }()
-        // M-14: reject replays before attempting AEAD open (saves crypto cost
-        // and closes the replay window before the authentication check).
-        guard checkAndUpdateReplay(counter: wireCounter) else {
-            throw SealerError.openFailed
+        // M-14: reject replays before attempting AEAD open (saves crypto cost). READ-ONLY: the
+        // window is not touched until the tag has verified.
+        guard replayWouldAccept(counter: wireCounter) else {
+            throw SealerError.replayRejected
         }
         let tag = sealed.suffix(Self.tagSize)
         let ct = sealed.subdata(in: (base + Self.nonceSize)..<(sealed.endIndex - Self.tagSize))
+        let plaintext: Data
         do {
             let nonce = try AES.GCM.Nonce(data: nonceBytes)
             let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ct, tag: tag)
-            return try AES.GCM.open(box, using: masterKey)
+            plaintext = try AES.GCM.open(box, using: masterKey)
         } catch {
             throw SealerError.openFailed
         }
+        afterAuthenticateHook?()
+        // Authenticated: record now. The re-check under the lock is what makes two concurrent
+        // copies of the same frame resolve to exactly one acceptance.
+        guard commitReplay(counter: wireCounter) else {
+            throw SealerError.replayRejected
+        }
+        return plaintext
     }
 
-    /// M-14 — sliding-window anti-replay check. Returns true if the counter
-    /// is fresh and should be accepted; false if it is a replay or falls
-    /// outside the window (too old). Updates the window on acceptance.
-    private func checkAndUpdateReplay(counter: UInt64) -> Bool {
+    /// W-M15ORDER — READ-ONLY twin of ``commitReplay(counter:)``: would this counter be accepted
+    /// right now? Never modifies the window.
+    private func replayWouldAccept(counter: UInt64) -> Bool {
+        replayLock.lock()
+        defer { replayLock.unlock() }
+        if !replayInitialized { return true }
+        if counter > replayHighest { return true }
+        let gap = replayHighest - counter
+        guard gap < Self.replayWindowSize else { return false }   // too old
+        return !testWindowBit(Int(gap))                           // already seen?
+    }
+
+    /// M-14 — sliding-window anti-replay RECORD. Returns true if the counter
+    /// is fresh and was recorded; false if it is a replay or falls
+    /// outside the window (too old). Called ONLY after the AEAD tag verified
+    /// (W-M15ORDER), so the window can only be moved by authentic frames.
+    private func commitReplay(counter: UInt64) -> Bool {
         replayLock.lock()
         defer { replayLock.unlock() }
         if !replayInitialized {
@@ -322,7 +369,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             if shift >= Self.replayWindowSize {
                 for i in replayWindow.indices { replayWindow[i] = 0 }
             } else {
-                shiftWindowRight(by: Int(shift))
+                ageWindow(by: Int(shift))
             }
             setWindowBit(0)
             replayHighest = counter
@@ -343,25 +390,40 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         (replayWindow[index / 64] & (1 << UInt64(index % 64))) != 0
     }
 
-    /// Right-shifts the whole multi-word bitmask by `n` bits (n < window
-    /// size, guaranteed by the caller). word[0] holds the least-significant
-    /// (most recent) bits, so shifting right moves bits toward higher words
-    /// — same direction as the original single-UInt64 `>> shift`.
-    private func shiftWindowRight(by n: Int) {
+    /// Ages every recorded counter by `n` positions (n < window size, guaranteed by the caller):
+    /// the window's highest counter moved up by `n`, so the frame that sat at logical index `i`
+    /// (gap `i` from the old highest) now sits at `i + n`. word[0] holds indices 0..63 (most
+    /// recent), so bits move toward HIGHER words and higher bit offsets, i.e. a logical LEFT shift
+    /// of the multi-word value (Desktop's `(window << shift)`; Android keeps a ring of counters).
+    /// Indices that reach the window size fall off: those counters are "too old" from now on.
+    ///
+    /// W-M15ORDER verifier fix (2026-10-03): this used to move bits toward LOWER indices, so every
+    /// advance of the highest counter erased the record of the frames just below it. Only the exact
+    /// highest counter was then protected: any other already-accepted frame inside the window could
+    /// be replayed and opened again.
+    private func ageWindow(by n: Int) {
         guard n > 0 else { return }
         let wordShift = n / 64
         let bitShift = n % 64
         let count = replayWindow.count
-        if bitShift == 0 {
-            for i in 0..<count {
-                replayWindow[i] = (i + wordShift < count) ? replayWindow[i + wordShift] : 0
-            }
-            return
-        }
+        let old = replayWindow
         for i in 0..<count {
-            let lo = (i + wordShift < count) ? (replayWindow[i + wordShift] >> UInt64(bitShift)) : 0
+            let src = i - wordShift
+            guard src >= 0 else { replayWindow[i] = 0; continue }
+            if bitShift == 0 {
+                replayWindow[i] = old[src]
+                continue
+            }
+            let hi = old[src] << UInt64(bitShift)
+            let lo = (src - 1 >= 0) ? (old[src - 1] >> UInt64(64 - bitShift)) : 0
+            replayWindow[i] = hi | lo
+        }
+        // TEMP MUTANT C (do not merge): restore the old, wrong aging direction.
+        let mutantOld = old
+        for i in 0..<count {
+            let lo = (i + wordShift < count) ? (mutantOld[i + wordShift] >> UInt64(bitShift)) : 0
             let hiIdx = i + wordShift + 1
-            let hi = (hiIdx < count) ? (replayWindow[hiIdx] << UInt64(64 - bitShift)) : 0
+            let hi = (bitShift != 0 && hiIdx < count) ? (mutantOld[hiIdx] << UInt64(64 - bitShift)) : 0
             replayWindow[i] = lo | hi
         }
     }

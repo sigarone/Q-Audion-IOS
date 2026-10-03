@@ -721,6 +721,20 @@ final class CallService: @unchecked Sendable {
     // SEPARATE counter, so tx_enc_err counts ONLY real failures.
     private var txSessionReady = false
     private var txPreHandshakeDropped: Int64 = 0
+    // W-M15ORDER (2026-10-03) — outgoing relay frames HELD because the call negotiated the M-15
+    // relay seal but the send sealer was not installed yet (see `RelaySealTxPolicy`). Before this
+    // such a frame went out UNSEALED and poisoned the peer's replay window for the whole call.
+    // Not a fault by itself (a handful at the start of a call is the race the hold absorbs); a
+    // call that keeps counting means the sealer never arrived (`tx_enc` high, peer hears nothing).
+    // Touched only on `txAudioQueue`, like `txPreHandshakeDropped`.
+    private var txHeldNoSealer: Int64 = 0
+    // W-M15ORDER — split of the M-15 relay-seal rejections that `rxDecryptErrorCount` (rx_dec_err)
+    // lumps together: a replay / too-old counter (`SealerError.replayRejected`) versus a frame
+    // whose tag does not verify (wrong key, tampered, never sealed). Both stay INCLUDED in
+    // rx_dec_err, so the tuner and every existing reading are unchanged; these two only say why.
+    // Touched only on the main-queue RX branch, like `rxDecryptErrorCount`.
+    private var rxM15ReplayRejected: Int64 = 0
+    private var rxM15AuthFailed: Int64 = 0
     // AUDIO-DIAG (2026-07-12) — decoded RX audio level accumulators, mirror of
     // Android MediaPathDiag.recordRxLevel (rx_peak_pct/rx_rms_pct). Touched only
     // on the RX decode branch (same lock-free discipline as framesDecryptedRx),
@@ -777,6 +791,7 @@ final class CallService: @unchecked Sendable {
     // AEAD failures (CryptoKitError 3) without this filter.
     private var rxStaleDropCount: Int64 = 0
     private var loggedFirstTxCapture = false
+    private var loggedFirstTxHeldNoSealer = false  // W-M15ORDER
     private var loggedFirstTxEncrypt = false
     private var loggedTxNoTransport = false
     private var loggedFirstRxReceive = false
@@ -2646,8 +2661,65 @@ final class CallService: @unchecked Sendable {
         do {
             return try sealer.open(data)
         } catch {
+            // W-M15ORDER — say WHY (replay window vs authentication), for the telemetry split.
+            let isReplay: Bool = (error as? PqcRtpFrameSealer.SealerError)?.isReplayRejection ?? false
+            noteM15UnsealRejection(replay: isReplay)
             return nil
         }
+    }
+
+    /// W-M15ORDER — count one dropped inbound relay frame by cause and log the first of each cause
+    /// and then every 250th. The caller still adds it to `rxDecryptErrorCount` (rx_dec_err).
+    private func noteM15UnsealRejection(replay: Bool) {
+        let n: Int64
+        if replay {
+            rxM15ReplayRejected &+= 1
+            n = rxM15ReplayRejected
+        } else {
+            rxM15AuthFailed &+= 1
+            n = rxM15AuthFailed
+        }
+        guard n == 1 || n % 250 == 0 else { return }
+        let kind: String = replay ? "replay" : "auth"
+        let count: String = n.description
+        let line: String = "[CallService] RX: M-15 unseal rejected kind=" + kind + " (x" + count + ") — dropped"
+        print(line)
+    }
+
+    /// W-M15ORDER — the ONE place the relay sender's outer M-15 seal is applied (audio, hang-up
+    /// control frame, NACK request). Returns the bytes to put on the wire, or nil when the frame
+    /// must NOT be sent: M-15 negotiated for the call but the send sealer is not installed yet
+    /// (`RelaySealTxPolicy.hold`), or sealing itself failed. A frame that has to be sealed is
+    /// never sent plain: the peer's receive sealer exists already and an unsealed frame cannot
+    /// authenticate. Without M-15 (legacy peer) the frame passes through exactly as before.
+    private func sealForRelay(_ frame: Data, m15Negotiated: Bool) -> Data? {
+        // W-SLOTLOCK — copy the send sealer under the lock; seal() runs unlocked.
+        let sealer: PqcRtpFrameSealer? = relaySlotLock.withLock { relaySealerSend }
+        return RelaySealTxPolicy.frameForWire(frame, m15Negotiated: m15Negotiated, sealer: sealer)
+    }
+
+    /// W-M15ORDER — is this call's outgoing relay traffic currently held for want of the M-15 send
+    /// sealer? Cheap (one lock + one flag): checked BEFORE the mic frame is encoded and encrypted,
+    /// so a held frame does not advance the inner audio sequence (the peer sees no gap to NACK).
+    private func relayTxHeldForSealer(integration: QAudionCallIntegration?) -> Bool {
+        let installed: Bool = relaySlotLock.withLock { relaySealerSend != nil }
+        if installed { return false }
+        let negotiated: Bool = integration?.negotiatedSrtpDirKey ?? false
+        return RelaySealTxPolicy.decide(m15Negotiated: negotiated, sealerInstalled: false) == .hold
+    }
+
+    /// W-M15ORDER — count one held outgoing audio frame; log the first of the call.
+    private func noteTxHeldNoSealer() {
+        txHeldNoSealer &+= 1
+        // A hold that keeps going is the one new way a call could stay silent (the sealer never
+        // arrives, or the call is parked behind the SAS identity gate): say so once, 250 frames
+        // (several seconds of mic) in, so the log shows it instead of a bare counter.
+        if txHeldNoSealer == 250 {
+            RTLog.warn("call", "W-M15ORDER tx still held after 250 frames: M-15 sealer not installed")
+        }
+        guard !loggedFirstTxHeldNoSealer else { return }
+        loggedFirstTxHeldNoSealer = true
+        RTLog.info("call", "W-M15ORDER tx held: M-15 sealer not installed yet n=1")
     }
 
     func endCall() {
@@ -3027,11 +3099,16 @@ final class CallService: @unchecked Sendable {
         )
         // Same outer seal as the audio TX path (W574e) — the peer's RX
         // removes it before its own mux peek.
-        let sealed: Data
-        if let sealer = relaySlotLock.withLock({ relaySealerSend }) {
-            sealed = (try? sealer.seal(frame)) ?? frame
-        } else {
-            sealed = frame
+        // W-M15ORDER — with M-15 negotiated and the send sealer not installed yet, this frame is
+        // NOT sent plain (the peer's receive sealer cannot authenticate it, and the old receiver
+        // let such a frame wreck its replay window): the control frame is skipped. This channel
+        // is the third, best-effort one; the `call_hangup` WS envelope and the `HANGUP:` opaque
+        // piggy-back (both signalling, not media frames) carry the hang-up as before.
+        let m15Negotiated: Bool = callIntegration?.negotiatedSrtpDirKey ?? false
+        guard let sealed = sealForRelay(frame, m15Negotiated: m15Negotiated) else {
+            print("[CallService] dchangup tx skipped — M-15 send sealer not installed (call_hangup envelope still sent)")
+            RTLog.info("call", "dchangup tx=0 why=nosealer")
+            return
         }
         // W-DCWEDGE — a control frame is not audio: one the back-pressure gate SHED went
         // on no leg at all (it used to be counted as sent, and lost), so it goes on the
@@ -3076,12 +3153,11 @@ final class CallService: @unchecked Sendable {
             kind: WireRelayFrameCodec.controlKindNackRequest,
             body: body
         )
-        let sealed: Data
-        if let sealer = relaySlotLock.withLock({ relaySealerSend }) {
-            sealed = (try? sealer.seal(frame)) ?? frame
-        } else {
-            sealed = frame
-        }
+        // W-M15ORDER — same rule as the hang-up control frame: held, never sent plain, when M-15
+        // is negotiated and the send sealer is not installed yet. A NACK request is best-effort;
+        // the loss it would have repaired simply goes unrepaired.
+        let m15Negotiated: Bool = callIntegration?.negotiatedSrtpDirKey ?? false
+        guard let sealed = sealForRelay(frame, m15Negotiated: m15Negotiated) else { return }
         // W-DCWEDGE — a request on a wedged (or merely back-pressured) channel used to be
         // shed and still log `tx=1` (7727f262: 117 requests logged, none delivered). With
         // the kill switch on, anything that was not queued on the channel goes on the
@@ -3355,10 +3431,9 @@ final class CallService: @unchecked Sendable {
             // recv sealer is installed an open failure means replay/forgery →
             // drop (counts as a decrypt error). Pre-install → pass through.
             guard let inner = self.unsealRelayFrame(serializedFrame) else {
+                // W-M15ORDER — `unsealRelayFrame` already counted the cause (replay vs
+                // authentication) and logged it; rx_dec_err keeps the total.
                 self.rxDecryptErrorCount &+= 1
-                if self.rxDecryptErrorCount == 1 || self.rxDecryptErrorCount % 250 == 0 {
-                    print("[CallService] RX: M-15 unseal failed/replay (x\(self.rxDecryptErrorCount)) — dropped")
-                }
                 return
             }
             // W-DCHANGUP (2026-08-25) — peek the control mux byte AFTER the
@@ -3611,6 +3686,13 @@ final class CallService: @unchecked Sendable {
                 // existed (~0.8 s handshake window); NOT a fault. Kept separate
                 // so tx_enc_err stays a clean real-failure signal.
                 "tx_pre_hs":       txPreHandshakeDropped,
+                // W-M15ORDER — outgoing frames held back because the M-15 send sealer was not
+                // installed yet (never sent unsealed). Anything beyond a handful = no sealer.
+                "tx_held_no_sealer": txHeldNoSealer,
+                // W-M15ORDER — the M-15 part of rx_dec_err, split by cause: replay / too-old
+                // counter versus authentication failure (both stay counted in rx_dec_err).
+                "rx_m15_replay":   rxM15ReplayRejected,
+                "rx_m15_auth":     rxM15AuthFailed,
                 // W-PADOVERFLOW — TX frames whose Opus output did not fit the
                 // audio block and were therefore sent as a silent frame of the
                 // same size. MUST be 0: anything else means the operating
@@ -3936,6 +4018,10 @@ final class CallService: @unchecked Sendable {
         audioAeadFailureLock.unlock()
         txSessionReady = false            // W-TXGATE — re-arm for the next call
         txPreHandshakeDropped = 0
+        txHeldNoSealer = 0                // W-M15ORDER
+        rxM15ReplayRejected = 0
+        rxM15AuthFailed = 0
+        loggedFirstTxHeldNoSealer = false
         rxLevelPeak = 0        // AUDIO-DIAG (2026-07-12) — reset RX level accumulators
         rxLevelSumSq = 0
         rxLevelSampleCount = 0
@@ -4776,6 +4862,14 @@ final class CallService: @unchecked Sendable {
         // Hold: suppress TX entirely so the peer hears silence without
         // the ratchet advancing out-of-step.
         guard !isOnHold else { return }
+        // W-M15ORDER — M-15 negotiated but the send sealer is not installed yet: hold the frame
+        // BEFORE it is encoded/encrypted (it would otherwise leave unsealed and poison the peer's
+        // replay window; see `RelaySealTxPolicy`). The authoritative check is repeated at the seal
+        // site below, in case the slot changes between here and there.
+        if relayTxHeldForSealer(integration: integration) {
+            noteTxHeldNoSealer()
+            return
+        }
         // Mute: replace mic PCM with silence so the crypto state advances
         // in step with the peer (ratchet stays aligned) but the peer
         // hears nothing. Mirrors the gate in the legacy processOutgoingAudio().
@@ -4871,12 +4965,12 @@ final class CallService: @unchecked Sendable {
                 // sealer is installed (key-established), mirroring Android's
                 // `pqcSend?.seal(payload) ?: payload`. iOS↔iOS (both new)
                 // seal↔open; iOS↔Android now interops.
-                let sealedFrame: Data
-                // W-SLOTLOCK — copy the send sealer under the lock; seal() runs unlocked.
-                if let sealer = relaySlotLock.withLock({ relaySealerSend }) {
-                    sealedFrame = (try? sealer.seal(wireFrame)) ?? wireFrame
-                } else {
-                    sealedFrame = wireFrame
+                // W-M15ORDER — `sealForRelay` never returns a plain frame for a call that
+                // negotiated M-15 (held until the sealer exists); a nil here means the frame must
+                // not be sent at all.
+                guard let sealedFrame = sealForRelay(wireFrame, m15Negotiated: integration.negotiatedSrtpDirKey) else {
+                    noteTxHeldNoSealer()
+                    return
                 }
                 // W-AUDIONACK — cache the EXACT final wire bytes, keyed by
                 // the inner wire sequence number, so a peer's retransmit
