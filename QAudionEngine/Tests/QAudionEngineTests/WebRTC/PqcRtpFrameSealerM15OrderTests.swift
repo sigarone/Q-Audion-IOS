@@ -133,7 +133,11 @@ final class PqcRtpFrameSealerM15OrderTests: XCTestCase {
         recv.afterAuthenticateHook = {
             guard !reentered else { return }
             reentered = true
-            XCTAssertNoThrow(try recv.open(wire), "the other copy must be accepted")
+            do {
+                _ = try recv.open(wire)
+            } catch {
+                XCTFail("the other copy must be accepted, got \(error)")
+            }
         }
         let err = sealerError { _ = try recv.open(wire) }
         XCTAssertEqual(err, .replayRejected, "the same counter must be accepted exactly once")
