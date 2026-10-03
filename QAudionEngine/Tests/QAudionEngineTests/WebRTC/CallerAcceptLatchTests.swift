@@ -31,6 +31,15 @@ final class CallerAcceptLatchTests: XCTestCase {
         var watchdogArmed = false
         var held = 0
         var drops: [CallerAcceptLatch.DropReason] = []
+        /// `CallService.endCall()`'s generation counter, and the value `startCall` captured before the OFFER.
+        var generation = 0
+        var offerGeneration = 0
+        /// `startCall` hit the `.abandon` branch after the OFFER returned.
+        var abandoned = false
+        /// `startCall`'s video start (after the OFFER): whether the pipeline was created paused, and whether the
+        /// setup stopped there because the call was torn down during the camera start.
+        var videoStartedPaused: Bool?
+        var abandonedAfterVideoStart = false
 
         /// `startCall()`: the OFFER round trip returned, the call is in its pre-ring `.active`.
         init(call: String, phase: Phase = .active) {
@@ -49,7 +58,9 @@ final class CallerAcceptLatchTests: XCTestCase {
         mutating func callReady() {
             // `ws.onCallReady`: ignored once the call finalized.
             guard latch.finalizedCallId != activeCallId else { return }
-            setPhase(.ringing)
+            // W-CALLERSTATEGUARD: and ignored in the phases `call_ready` is stale in.
+            guard let next = CallerOutgoingStatePolicy.phaseOnCallReady(phase) else { return }
+            setPhase(next)
         }
 
         mutating func callAnswer(_ id: String, sdp: Bool) {
@@ -78,12 +89,43 @@ final class CallerAcceptLatchTests: XCTestCase {
         }
 
         mutating func endCall() {
+            generation += 1
             setPhase(.ended)
             latch.reset()
             activeCallId = nil
         }
 
-        mutating func offerReturned() { setPhase(.active) }
+        /// `startCall` after `beginAndroidOutgoing` returned: what the app does with `callState`.
+        mutating func offerReturned() {
+            switch CallerOutgoingStatePolicy.afterOfferReturned(
+                phase: phase, callTornDown: generation != offerGeneration
+            ) {
+            case .advanceToActive: setPhase(.active)
+            case .keepPhase: break
+            case .abandon: abandoned = true
+            }
+        }
+
+        /// `startCall` after `await startVideoPipeline(...)`: the pipeline start and the teardown check.
+        mutating func videoStarted() {
+            let finalized = latch.finalizedCallId != nil && latch.finalizedCallId == activeCallId
+            videoStartedPaused = CallerOutgoingStatePolicy.videoStartsPaused(callAlreadyFinalized: finalized)
+            if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart(
+                callTornDown: generation != offerGeneration) {
+                abandonedAfterVideoStart = true
+            }
+        }
+
+        /// A NEW call started while the previous call's OFFER was still in flight.
+        mutating func redial(_ id: String) {
+            activeCallId = id
+            setPhase(.connecting)
+        }
+
+        /// The deferred `.ended` -> `.idle` settle of the peer-offline / busy handlers.
+        mutating func settleEndedToIdle() {
+            if CallerOutgoingStatePolicy.shouldSettleToIdle(phase) { setPhase(.idle) }
+        }
 
         mutating func setPhase(_ new: Phase) {
             guard new != phase else { return }
@@ -437,5 +479,254 @@ final class CallerAcceptLatchTests: XCTestCase {
             isRinging: false, isPreRingActive: false, isEncrypted: true, alreadyFinalized: false))
         XCTAssertFalse(AcceptGateDecisions.shouldAcceptAnswer(
             isRinging: false, isPreRingActive: false, isEncrypted: true, alreadyFinalized: true))
+    }
+
+    // MARK: - W-CALLERSTATEGUARD: what the OFFER returning may do to callState
+
+    /// Normal order: the OFFER returns first, `call_ready` comes after, then accepted + answer.
+    func testStateGuard_normalOrderStillReachesActive() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.offerReturned()
+        XCTAssertEqual(sim.phase, .active, "the OFFER returning moves .connecting to the pre-ring .active")
+        XCTAssertFalse(sim.abandoned)
+        sim.callReady()
+        XCTAssertEqual(sim.phase, .ringing)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: false)
+        XCTAssertEqual(sim.finalizeCount, 1)
+        XCTAssertFalse(sim.micMuted)
+        XCTAssertEqual(sim.phase, .active, "finalized without the session key: the connected .active")
+    }
+
+    /// A desktop callee sends `call_ready` as soon as the call_offer reaches it, while the OFFER is still being
+    /// built: the caller is `.ringing` when `beginAndroidOutgoing` returns, and stays so.
+    func testStateGuard_earlyCallReadyKeepsRinging() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.callReady()
+        XCTAssertEqual(sim.phase, .ringing)
+        sim.offerReturned()
+        XCTAssertEqual(sim.phase, .ringing, "the OFFER returning must not overwrite .ringing with .active")
+        XCTAssertFalse(sim.abandoned)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: true)
+        XCTAssertEqual(sim.finalizeCount, 1, "the latch still finalizes")
+        XCTAssertFalse(sim.micMuted, "and opens the microphone")
+    }
+
+    /// Same early `call_ready`, and the callee's whole answer already in: the held answer is replayed when
+    /// `call_ready` moves the caller to `.ringing`, and the OFFER returning afterwards changes nothing.
+    func testStateGuard_earlyCallReadyWithEarlyAnswerAndAccept() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: true)
+        XCTAssertEqual(sim.held, 1)
+        sim.callReady()
+        XCTAssertEqual(sim.finalizeCount, 1, "the held answer is applied once the call is ringing")
+        XCTAssertFalse(sim.micMuted)
+        let phaseAfterFinalize = sim.phase
+        sim.offerReturned()
+        XCTAssertEqual(sim.phase, phaseAfterFinalize, "the OFFER returning leaves a finalized call alone")
+        XCTAssertEqual(sim.finalizeCount, 1, "and finalizes nothing twice")
+    }
+
+    /// The callee's ACCEPT is bound while the OFFER is still being built: `.encrypted` must survive the return.
+    func testStateGuard_acceptBoundBeforeOfferReturnsKeepsEncrypted() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.acceptBound()
+        XCTAssertEqual(sim.phase, .encrypted)
+        sim.offerReturned()
+        XCTAssertEqual(sim.phase, .encrypted, "the OFFER returning must not walk .encrypted back to .active")
+        XCTAssertFalse(sim.abandoned)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: false)
+        XCTAssertEqual(sim.finalizeCount, 1, "the latch still finalizes")
+        XCTAssertFalse(sim.micMuted, "and opens the microphone")
+        XCTAssertEqual(sim.phase, .encrypted)
+    }
+
+    /// Desktop order (accepted, ACCEPT, answer) entirely inside the OFFER window.
+    func testStateGuard_desktopOrderInsideTheOfferWindow() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.callAccepted(call)
+        sim.acceptBound()
+        sim.callAnswer(call, sdp: true)
+        XCTAssertEqual(sim.phase, .encrypted)
+        sim.offerReturned()
+        XCTAssertEqual(sim.phase, .encrypted)
+        XCTAssertEqual(sim.finalizeCount, 1, "the latch still finalizes")
+        XCTAssertFalse(sim.micMuted)
+    }
+
+    /// A late `call_ready` after the ACCEPT was bound (call not finalized yet) is stale.
+    func testStateGuard_callReadyAfterAcceptBoundIsIgnored() {
+        var sim = CallerSim(call: call)
+        sim.acceptBound()
+        XCTAssertEqual(sim.phase, .encrypted)
+        sim.callReady()
+        XCTAssertEqual(sim.phase, .encrypted, "call_ready must not knock an .encrypted call back to ringing")
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: false)
+        XCTAssertEqual(sim.finalizeCount, 1)
+        XCTAssertFalse(sim.micMuted)
+    }
+
+    /// A late or redelivered `call_ready` on a call that ended must not re-open it.
+    func testStateGuard_callReadyOnAFinishedCallIsIgnored() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.endCall()
+        // `canonicalActiveCallId()` can still name a call (the CallKit id fallback): the finalized-id guard alone
+        // does not stop this one.
+        sim.activeCallId = call
+        sim.callReady()
+        XCTAssertEqual(sim.phase, .ended, "call_ready must not resurrect a finished call")
+    }
+
+    /// The user hangs up (or the peer is offline / busy / cancels) while the OFFER is being built, and the OFFER
+    /// then returns normally: the call stays finished.
+    func testStateGuard_hangupDuringOfferDoesNotResurrectTheCall() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.endCall()
+        XCTAssertEqual(sim.phase, .ended)
+        sim.offerReturned()
+        XCTAssertTrue(sim.abandoned, "startCall stops instead of building a call on a finished one")
+        XCTAssertEqual(sim.phase, .ended, "and the state is not touched")
+        XCTAssertEqual(sim.finalizeCount, 0)
+        XCTAssertTrue(sim.micMuted)
+        // `.idle` (endCall's own immediate reset) is the same.
+        var idleSim = CallerSim(call: call, phase: .connecting)
+        idleSim.endCall()
+        idleSim.setPhase(.idle)
+        idleSim.offerReturned()
+        XCTAssertTrue(idleSim.abandoned)
+        XCTAssertEqual(idleSim.phase, .idle)
+    }
+
+    /// An answer held while .connecting, then a hangup: nothing is replayed onto the finished call.
+    func testStateGuard_heldAnswerIsNotAppliedAfterAHangupDuringTheOffer() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: true)
+        sim.endCall()
+        sim.offerReturned()
+        XCTAssertTrue(sim.abandoned)
+        XCTAssertEqual(sim.phase, .ended)
+        XCTAssertEqual(sim.finalizeCount, 0)
+        XCTAssertNil(sim.latch.held)
+    }
+
+    /// Hangup, then a NEW call is placed (phase back to .connecting) before the first call's OFFER returns: the
+    /// first call's continuation must not touch the new call. The phase alone cannot tell, the teardown generation can.
+    func testStateGuard_redialDuringTheOldOfferIsLeftAlone() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.endCall()
+        sim.redial(otherCall)
+        XCTAssertEqual(sim.phase, .connecting)
+        sim.offerReturned()
+        XCTAssertTrue(sim.abandoned)
+        XCTAssertEqual(sim.phase, .connecting, "the new call is still connecting, not advanced by the old continuation")
+    }
+
+    /// The peer-offline / busy handlers settle `.ended` to `.idle` one second later: not over a redial.
+    func testStateGuard_deferredIdleDoesNotClobberARedial() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.endCall()  // peer offline: .ended
+        sim.redial(otherCall)
+        sim.settleEndedToIdle()
+        XCTAssertEqual(sim.phase, .connecting, "a redial inside the hold window keeps its state")
+        var quiet = CallerSim(call: call, phase: .connecting)
+        quiet.endCall()
+        quiet.settleEndedToIdle()
+        XCTAssertEqual(quiet.phase, .idle, "with no redial the .ended still settles to .idle")
+    }
+
+    /// A video call nobody has answered: the pipeline starts paused (nothing leaves the device before the accept).
+    func testStateGuard_videoStartsPausedOnAnUnansweredCall() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.offerReturned()
+        sim.videoStarted()
+        XCTAssertEqual(sim.videoStartedPaused, true)
+        XCTAssertFalse(sim.abandonedAfterVideoStart)
+        XCTAssertEqual(sim.finalizeCount, 0)
+    }
+
+    /// The call finalized inside the OFFER window (early `call_ready` replayed the held answer): `finalizeCallActive()`
+    /// ran before any pipeline existed, so its un-pause did nothing; the pipeline must not be created paused.
+    func testStateGuard_videoStartsUnpausedWhenTheCallFinalizedInTheOfferWindow() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: true)
+        sim.callReady()
+        XCTAssertEqual(sim.finalizeCount, 1)
+        sim.offerReturned()
+        sim.videoStarted()
+        XCTAssertEqual(sim.videoStartedPaused, false, "a finalized call's video must not stay paused for the whole call")
+        XCTAssertFalse(sim.abandonedAfterVideoStart)
+        XCTAssertFalse(sim.micMuted)
+    }
+
+    /// A hangup during the camera start: the setup stops, no WebRTC controller is built for the dead call.
+    func testStateGuard_hangupDuringTheVideoStartAbandonsTheSetup() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.offerReturned()
+        XCTAssertEqual(sim.phase, .active)
+        sim.endCall()
+        sim.videoStarted()
+        XCTAssertTrue(sim.abandonedAfterVideoStart, "startCall must not go on to build a call that ended")
+        XCTAssertEqual(sim.phase, .ended)
+        XCTAssertEqual(sim.finalizeCount, 0)
+        XCTAssertTrue(sim.micMuted)
+    }
+
+    // MARK: - W-CALLERSTATEGUARD: the pure rules
+
+    func testStateGuardRules_afterOfferReturned() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertEqual(P.afterOfferReturned(phase: .connecting, callTornDown: false), .advanceToActive)
+        XCTAssertEqual(P.afterOfferReturned(phase: .ringing, callTornDown: false), .keepPhase)
+        XCTAssertEqual(P.afterOfferReturned(phase: .active, callTornDown: false), .keepPhase)
+        XCTAssertEqual(P.afterOfferReturned(phase: .encrypted, callTornDown: false), .keepPhase)
+        XCTAssertEqual(P.afterOfferReturned(phase: .idle, callTornDown: false), .abandon)
+        XCTAssertEqual(P.afterOfferReturned(phase: .ended, callTornDown: false), .abandon)
+        for phase in [Phase.idle, .connecting, .ringing, .active, .encrypted, .ended] {
+            XCTAssertEqual(P.afterOfferReturned(phase: phase, callTornDown: true), .abandon,
+                           "a torn-down call is abandoned whatever the phase is by now")
+        }
+    }
+
+    func testStateGuardRules_afterOfferThrew() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertEqual(P.afterOfferThrew(callTornDown: false), .teardownAndIdle)
+        XCTAssertEqual(P.afterOfferThrew(callTornDown: true), .leaveAlone,
+                       "an already torn-down call is not torn down again (that would end the current call)")
+    }
+
+    func testStateGuardRules_phaseOnCallReady() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertEqual(P.phaseOnCallReady(.connecting), .ringing)
+        XCTAssertEqual(P.phaseOnCallReady(.active), .ringing)
+        XCTAssertEqual(P.phaseOnCallReady(.ringing), .ringing)
+        XCTAssertNil(P.phaseOnCallReady(.encrypted))
+        XCTAssertNil(P.phaseOnCallReady(.idle))
+        XCTAssertNil(P.phaseOnCallReady(.ended))
+    }
+
+    func testStateGuardRules_shouldContinueSetupAfterVideoStart() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertTrue(P.shouldContinueSetupAfterVideoStart(callTornDown: false))
+        XCTAssertFalse(P.shouldContinueSetupAfterVideoStart(callTornDown: true))
+    }
+
+    func testStateGuardRules_videoStartsPaused() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertTrue(P.videoStartsPaused(callAlreadyFinalized: false))
+        XCTAssertFalse(P.videoStartsPaused(callAlreadyFinalized: true))
+    }
+
+    func testStateGuardRules_shouldSettleToIdle() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertTrue(P.shouldSettleToIdle(.ended))
+        for phase in [Phase.idle, .connecting, .ringing, .active, .encrypted] {
+            XCTAssertFalse(P.shouldSettleToIdle(phase))
+        }
     }
 }
