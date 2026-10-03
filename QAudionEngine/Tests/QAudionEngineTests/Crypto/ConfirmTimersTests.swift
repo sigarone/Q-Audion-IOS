@@ -63,7 +63,9 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertEqual(ConfirmTimeout.callerRound1KcMacWaitMs, 2 * ConfirmTimeout.confirmTimeoutMs, "caller round 1: 30 s")
         XCTAssertEqual(KcMacWindow.callerRound1AfterRevealMs, 30_000)
         XCTAssertEqual(ConfirmTimeout.earlyKcMacHoldMs, 30_000, "early-MAC hold: 30 s")
-        XCTAssertEqual(KcMacRoundRules.earlyHoldSeconds, 30)
+        XCTAssertEqual(KcMacRoundBook.heldFreshMs, 30_000, "a held MAC is offered again for 30 s")
+        XCTAssertEqual(ConfirmTimeout.rekeyAcceptorKcMacWaitMs, 30_000, "K2: the rekey acceptor's MAC wait")
+        XCTAssertEqual(ConfirmTimeout.rekeyAcceptWaitMs, 30_000, "K3: the rekey offerer's ACCEPT wait")
         XCTAssertEqual(ConfirmTimeout.dtlsStatsRetryMs, 250)
         XCTAssertEqual(ConfirmTimeout.maxResendEvents, 4)
     }
@@ -107,9 +109,19 @@ final class ConfirmTimersTests: XCTestCase {
         for isInitiator in [true, false] {
             XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 0,
                                                          nowMs: 14_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
-            XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 0,
-                                                   nowMs: 15_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
         }
+        // K2: the rekey OFFERER (init) still ends at 15 s from arming ...
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: true, armedAtMs: 0,
+                                               nowMs: 15_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        // ... the rekey ACCEPTOR (resp) waits 30 s from arming: 20 s still counts, 30 s ends it
+        XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                                     nowMs: 15_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                                     nowMs: 20_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                                     nowMs: 29_999, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                               nowMs: 30_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
     }
 
     /// Check (b) of the DTLS binding: statistics that are still incomplete 12 s after `connected` are retried, not failed.
@@ -262,13 +274,13 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertTrue(handler.contains("sendOpaqueMessageString(recipientId: older.peerId, payload: older.wire)"))
         XCTAssertTrue(code(app).contains("state.ownMacSentAtMs = holdOwnMac ? nil : SasCommit.monotonicNowMs()"),
                       "the first send of an immediate MAC is timed")
-        XCTAssertTrue(code(app).contains("kcCallStates[key]?.ownMacSentAtMs = SasCommit.monotonicNowMs()"),
+        XCTAssertTrue(code(app).contains("kcCalls[key]?.states[1]?.ownMacSentAtMs = SasCommit.monotonicNowMs()"),
                       "the first send of the callee's held round-1 MAC is timed when it is released")
-        XCTAssertTrue(code(app).contains("recent.append((wire: prevWire, peerId: prev.peerId, sentAtMs: prevAt))"),
+        XCTAssertTrue(code(app).contains("recent.append((wire: wire, peerId: state.peerId, sentAtMs: sentAt))"),
                       "the MAC of a replaced round stays due while it is recent")
         XCTAssertTrue(code(app).contains("kcRecentOwnMacs.removeValue(forKey: key)"), "dropped with the call")
         XCTAssertTrue(code(app).contains("self?.handleSocketReauthForConfirmation()"), "called on every re-authentication")
-        XCTAssertTrue(code(app).contains("kcCallStates[key]?.ownMacSent = true"), "the held MAC counts once it was released")
+        XCTAssertTrue(code(app).contains("kcCalls[key]?.states[1]?.ownMacSent = true"), "the held MAC counts once it was released")
         XCTAssertTrue(code(app).contains("state.ownMacSent = !holdOwnMac"))
 
         let integration = code(try sourceText(integrationPath))

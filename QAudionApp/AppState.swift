@@ -2116,8 +2116,9 @@ final class AppState: ObservableObject {
     /// for the responder side (was previously caller-only).
     private var responderCallIntegration: QAudionCallIntegration?
 
-    /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — per-call state for
-    /// the `KCMAC:` piggy-back exchange, keyed by lowercased callId. Populated
+    /// W-KCMAC (multi-PSK-mixing SYNTHESIS.md ship step 5) — per-ROUND state for
+    /// the `KCMAC:` piggy-back exchange: one instance per key round, held in the call's `KeyConfirmationCall`
+    /// (`kcCalls`, keyed by lowercased callId) while the round is pending or live. Populated
     /// by `handleKcMacReady` (fired from `QAudionCallIntegration.onKcMacReady`
     /// on both the caller and responder legs) and consumed by
     /// `handleInboundKcMac` (the peer's `KCMAC:` piggy-back) and the confirmation
@@ -2187,29 +2188,31 @@ final class AppState: ObservableObject {
             selectedFp = event.selectedFp
         }
     }
-    private var kcCallStates: [String: KeyConfirmationCallState] = [:]
+    /// One call's KCMAC context (R-KCMAC-ROUNDS, §3.7.1): the pure `KcMacRoundBook` (pending rounds with their expected
+    /// peer MACs, the decided peer MACs, the held MACs that matched no round) and the app state of every round that is
+    /// still pending, plus the LIVE one. Arming a round never cancels, shortens or decides another pending round: a
+    /// superseded round keeps its state and its own deadline task until it is decided or its window ends.
+    private final class KeyConfirmationCall {
+        var book = KcMacRoundBook()
+        /// The state of each round that is pending, and of the live round, by signed round number.
+        var states: [Int: KeyConfirmationCallState] = [:]
+        /// The most recently armed round: the one telemetry, the dwell time and the first re-send read.
+        var liveRound: Int?
+        var live: KeyConfirmationCallState? {
+            guard let liveRound else { return nil }
+            return states[liveRound]
+        }
+    }
+    private var kcCalls: [String: KeyConfirmationCall] = [:]
     /// The callee's own round-1 `kc_mac`, held (lowercased callId) until the caller's REVEAL verified: a
     /// callee device that turns out not to be the one the caller bound (a sibling) must never send a
     /// KCMAC for the call (R-COMMIT-SIBLING, D1). Sent by `handleInboundSasReveal` on `.sasReady`,
     /// dropped when the device leaves or the call ends.
     private var kcPendingOwnMac: [String: (wire: String, peerId: String)] = [:]
     /// R-KCMAC-RESEND (four-way revision): our own MACs of EARLIER rounds of the call (the live round's is in its
-    /// `kcCallStates` entry), with their first-send time, re-sent on a re-authentication while they are recent
+    /// `kcCalls` entry), with their first-send time, re-sent on a re-authentication while they are recent
     /// (`ConfirmResend.isRecentOwnKcMac`). Pruned on use, dropped with the call, never persisted, never logged.
     private var kcRecentOwnMacs: [String: [(wire: String, peerId: String, sentAtMs: Int)]] = [:]
-    /// A peer `KCMAC:` that arrived before this side's own `handleKcMacReady` ran (the responder
-    /// leg's key-confirmation start is deferred until its ACCEPT is released): kept (one per
-    /// call) and verified as soon as the state exists, instead of being dropped and then failing
-    /// the confirmation window.
-    ///
-    /// R-KCMAC/T3: held for `KcMacRoundRules.earlyHoldSeconds` (2 x `CONFIRM_TIMEOUT` = 30 s, never shorter) — an
-    /// older one is stale and is dropped, not verified.
-    private var kcEarlyInbound: [String: (raw: String, senderId: String, senderDeviceId: String?, at: Date)] = [:]
-    /// R-KCMAC: the peer MAC verified for each key round of this call that is already DECIDED, kept for
-    /// the whole call. An inbound MAC byte-identical to one of them (a retransmit, or the previous
-    /// round's MAC arriving after the next round was armed) is dropped silently — it must never be
-    /// judged against the live round's context (where it would fail and end a healthy call).
-    private var kcDecidedPeerMacs: [String: [Data]] = [:]
     /// Read by `CallService.getKeyConfirmationTelemetry` at call teardown so
     /// the `psk_mix_n`/`kc_mac_result`/`assurance_state`/`expected_but_missing`
     /// fields can ride the EXISTING `call.audio.diag` emission (no new
@@ -14317,8 +14320,9 @@ final class AppState: ObservableObject {
             callSasRevision &+= 1
             // The callee's own round-1 `kc_mac` was held until now (a sibling never sends it).
             if let pending = kcPendingOwnMac.removeValue(forKey: key), let provider = liveProvider {
-                kcCallStates[key]?.ownMacSent = true
-                kcCallStates[key]?.ownMacSentAtMs = SasCommit.monotonicNowMs()
+                // Only a round-1 callee ever holds its MAC (the SAS words exist from round 1 on).
+                kcCalls[key]?.states[1]?.ownMacSent = true
+                kcCalls[key]?.states[1]?.ownMacSentAtMs = SasCommit.monotonicNowMs()
                 OpaqueSelfEchoFilter.shared.markSent(pending.wire)
                 Task {
                     try? await provider.callingApi.sendOpaqueMessageString(recipientId: pending.peerId, payload: pending.wire)
@@ -14407,22 +14411,36 @@ final class AppState: ObservableObject {
     private func handleKcMacReady(_ event: QAudionCallIntegration.KcMacReadyEvent) {
         let key = event.callId.lowercased()
         let state = KeyConfirmationCallState(event: event)
-        // R-KCMAC: one context per key round. The peer MAC verified for every DECIDED round is kept
-        // for the whole call in `kcDecidedPeerMacs`, so a late retransmit of an earlier round's MAC
-        // is never judged against this round.
-        kcCallStates[key]?.deadlineTask?.cancel()
-        // R-KCMAC-RESEND: the MAC of the round this one replaces may still be needed by the peer (the MACs cross).
-        if let prev = kcCallStates[key], prev.ownMacSent, let prevWire = prev.ownMacWire, let prevAt = prev.ownMacSentAtMs {
-            let nowMs = SasCommit.monotonicNowMs()
-            var recent = (kcRecentOwnMacs[key] ?? []).filter { ConfirmResend.isRecentOwnKcMac(sentAtMs: $0.sentAtMs, nowMs: nowMs) }
-            if ConfirmResend.isRecentOwnKcMac(sentAtMs: prevAt, nowMs: nowMs) {
-                recent.append((wire: prevWire, peerId: prev.peerId, sentAtMs: prevAt))
-            }
-            kcRecentOwnMacs[key] = recent
+        // R-KCMAC-ROUNDS: one context per key round, each with its own window. Arming this round never cancels,
+        // shortens, extends or decides an earlier round that is still pending: it keeps its state and its own deadline
+        // task until it is decided or its window ends. The peer MAC verified for every DECIDED round is kept for the
+        // whole call in the call's `KcMacRoundBook`, so a late re-send of an earlier round's MAC is a duplicate and is
+        // never judged against this round.
+        let call = kcCalls[key] ?? KeyConfirmationCall()
+        kcCalls[key] = call
+        // The same round armed again replaces its own earlier state (never another round's).
+        call.states[state.round]?.deadlineTask?.cancel()
+        // R-KCMAC-RESEND: the MAC of the live round this one follows may still be needed by the peer (the MACs cross):
+        // an already decided one leaves the pending states for the recent list, a pending one stays where it is.
+        if let prev = call.live, prev.round != state.round, prev.resultRecorded {
+            retireKcRoundState(prev, key: key, call: call)
         }
-        kcCallStates[key] = state
+        call.states[state.round] = state
+        call.liveRound = state.round
 
         guard let kcKey = event.kcKey, let transcript = event.transcript else {
+            failKeyConfirmation(callId: event.callId, state: state)
+            return
+        }
+        // The round is inserted into the book first; only then are the MACs held so far offered again (below).
+        let armed = call.book.arm(
+            KcMacRoundBook.PendingRound(
+                round: state.round,
+                context: KcMacRound(kcKey: kcKey, transcript: transcript, isInitiator: event.isInitiator)),
+            nowMs: SasCommit.monotonicNowMs())
+        if armed.overflow {
+            // A 17th pending round: ends the call (R-KCMAC-ROUNDS).
+            print("[AppState] KCMAC too many pending rounds callId=\(event.callId.prefix(8))…")
             failKeyConfirmation(callId: event.callId, state: state)
             return
         }
@@ -14468,16 +14486,18 @@ final class AppState: ObservableObject {
         // after its OWN REVEAL verified, A5/T3). No verified peer MAC inside it is a failure (`kcmac_mismatch`), exactly like a
         // MAC that arrived and failed to verify. The end of the wait can move while the task sleeps (the callee's
         // REVEAL verifies later), so every wake-up re-reads it instead of trusting the first sleep.
+        // Every round has its own timer: a round superseded by a later one is still judged at its own window.
+        let round = state.round
         state.deadlineTask = Task { [weak self] in
             while !Task.isCancelled {
                 let remainingMs: Int? = await MainActor.run { [weak self] () -> Int? in
-                    guard let self, let cur = self.kcCallStates[key], cur === state, !cur.resultRecorded else { return nil }
+                    guard let self, let cur = self.kcCalls[key]?.states[round], cur === state, !cur.resultRecorded else { return nil }
                     return self.kcWaitRemainingMs(callId: event.callId, state: cur)
                 }
                 guard let remainingMs else { return }
                 if remainingMs <= 0 {
                     await MainActor.run { [weak self] in
-                        guard let self, let cur = self.kcCallStates[key], cur === state, !cur.resultRecorded else { return }
+                        guard let self, let cur = self.kcCalls[key]?.states[round], cur === state, !cur.resultRecorded else { return }
                         self.failKeyConfirmation(callId: event.callId, state: cur, expired: true)
                     }
                     return
@@ -14486,11 +14506,54 @@ final class AppState: ObservableObject {
             }
         }
 
-        // A peer MAC that raced ahead of this handler.
-        // R-KCMAC/T3: only a MAC held for at most 30 s (2 x CONFIRM_TIMEOUT) is still verified; an older one is stale.
-        if let early = kcEarlyInbound.removeValue(forKey: key),
-           KcMacRoundRules.isEarlyHoldFresh(heldAt: early.at, now: Date()) {
-            handleInboundKcMac(callId: event.callId, raw: early.raw, senderId: early.senderId, senderDeviceId: early.senderDeviceId)
+        // MACs the peer sent before this round was armed (the responder leg's start is deferred until its ACCEPT is
+        // released, and a rekey MAC can overtake that round's ACCEPT): held MACs received less than 30 s ago were
+        // offered again by `arm`, keeping their receipt time; one of them may decide this round, or an earlier one.
+        for verdict in armed.verdicts {
+            applyKcVerdict(verdict, callId: event.callId)
+            if case .mismatch = verdict { break }   // the call ends with the first one
+        }
+    }
+
+    /// R-KCMAC-RESEND: a decided round that is no longer the live one leaves the pending states; its own MAC stays due
+    /// for a re-send while it is recent (the peer may still wait for it, the MACs cross). Its deadline task stops.
+    @MainActor
+    private func retireKcRoundState(_ state: KeyConfirmationCallState, key: String, call: KeyConfirmationCall) {
+        state.deadlineTask?.cancel()
+        if state.ownMacSent, let wire = state.ownMacWire, let sentAt = state.ownMacSentAtMs {
+            let nowMs = SasCommit.monotonicNowMs()
+            var recent = (kcRecentOwnMacs[key] ?? []).filter { ConfirmResend.isRecentOwnKcMac(sentAtMs: $0.sentAtMs, nowMs: nowMs) }
+            if ConfirmResend.isRecentOwnKcMac(sentAtMs: sentAt, nowMs: nowMs) {
+                recent.append((wire: wire, peerId: state.peerId, sentAtMs: sentAt))
+            }
+            kcRecentOwnMacs[key] = recent
+        }
+        if call.states[state.round] === state { call.states[state.round] = nil }
+    }
+
+    /// Apply the book's verdict for an inbound or held MAC to the state of the round it was attributed to.
+    /// `verified`: the round is decided, its window stops; only the live round records the call's telemetry verdict (a
+    /// superseded round that verifies late leaves the live round's verdict alone and leaves the pending states).
+    /// `mismatch` (the right MAC with the wrong role byte): the call ends with `kcmac_mismatch`.
+    @MainActor
+    private func applyKcVerdict(_ verdict: KcMacRoundBook.Verdict, callId: String) {
+        let key = callId.lowercased()
+        guard let call = kcCalls[key] else { return }
+        switch verdict {
+        case .verified(let round):
+            guard let state = call.states[round], !state.resultRecorded else { return }
+            state.kcStatus = .verified
+            state.resultRecorded = true
+            state.deadlineTask?.cancel()
+            if state === call.live {
+                emitKeyConfirmationTelemetry(callId: callId, state: state)
+            } else {
+                retireKcRoundState(state, key: key, call: call)
+            }
+        case .mismatch(let round):
+            guard let state = call.states[round], !state.resultRecorded else { return }
+            print("[AppState] KCMAC role mismatch callId=\(callId.prefix(8))… round=\(round)")
+            failKeyConfirmation(callId: callId, state: state)
         }
     }
 
@@ -14507,9 +14570,9 @@ final class AppState: ObservableObject {
         identityHoldCodeByCallId[cid] = nil
         if identityUnverifiedCallIds.isEmpty { awaitingIdentityConfirmation = false }
         kcPendingOwnMac[cid] = nil
-        kcCallStates[cid]?.deadlineTask?.cancel()
-        kcCallStates[cid] = nil
-        kcEarlyInbound.removeValue(forKey: cid)
+        if let call = kcCalls.removeValue(forKey: cid) {
+            for state in call.states.values { state.deadlineTask?.cancel() }
+        }
         RTLog.info("call", "offer superseded id=\(cid.prefix(8))")
     }
 
@@ -14531,13 +14594,16 @@ final class AppState: ObservableObject {
     }
 
     /// Record a failed key confirmation (verdict `.wrong`) and end the call (`kcmac_mismatch`). `expired` is true
-    /// when the wait ran out with no verified peer MAC (not a MAC that arrived and failed): that expiry also emits the
-    /// one `confirm_timeout` event of R-CONFIRM-TELEMETRY (T5) before the call ends.
+    /// when the wait ran out with no verified peer MAC of THIS round (not a MAC that arrived with the wrong role byte):
+    /// that expiry also emits the one `confirm_timeout` event of R-CONFIRM-TELEMETRY (T5) before the call ends. It
+    /// fails the round whose window ended, whether or not later rounds were armed or verified meanwhile
+    /// (R-KCMAC-ROUNDS).
     @MainActor
     private func failKeyConfirmation(callId: String, state: KeyConfirmationCallState, expired: Bool = false) {
         state.kcStatus = .wrong
         state.resultRecorded = true
         state.deadlineTask?.cancel()
+        _ = kcCalls[callId.lowercased()]?.book.expire(round: state.round)
         emitKeyConfirmationTelemetry(callId: callId, state: state)
         if expired {
             // The integration that carries this call's SAS context (a rekey round started by the callee has the callee
@@ -14574,8 +14640,9 @@ final class AppState: ObservableObject {
     /// socket may have been lost. First every integration counts it for the telemetry of a later expiry. Then ONE
     /// re-send EVENT: re-send, byte-identical, everything that is due (`ConfirmResend.due`): the caller's REVEAL while
     /// the callee's round-1 MAC is not verified, and OUR OWN KCMAC of the live round whose PEER MAC is not verified or
-    /// that we first sent less than `ConfirmTimeout.recentOwnKcMacMs` ago (plus such recent MACs of earlier rounds:
-    /// a verified peer MAC does not show that ours arrived), but only a MAC that was already sent once (a callee still holding its round-1 MAC re-sends nothing, R-COMMIT-
+    /// that we first sent less than `ConfirmTimeout.recentOwnKcMacMs` ago (plus our own MAC of every earlier round that
+    /// is still pending, a superseded round keeps its window, and such recent MACs of decided rounds:
+    /// a verified peer MAC does not show that ours arrived; the log's `older` counts them), but only a MAC that was already sent once (a callee still holding its round-1 MAC re-sends nothing, R-COMMIT-
     /// KCMAC-HOLD). The event takes one unit of the per-call budget of 4 shared with the duplicate-ACCEPT re-sends;
     /// nothing due consumes none, and a fifth event re-sends nothing. The receiver drops an already-verified copy
     /// silently (duplicate rule), and the sender-device rule is unaffected (the copy comes from the same device).
@@ -14591,7 +14658,8 @@ final class AppState: ObservableObject {
         var ownWire: String?
         var peerId = ""
         let nowMs = SasCommit.monotonicNowMs()
-        if let state = kcCallStates[cid] {
+        let call = kcCalls[cid]
+        if let state = call?.live {
             due = ConfirmResend.due(
                 isCaller: integration.isSasCaller(callId: cid),
                 revealBound: integration.hasBoundSasAccept(callId: cid),
@@ -14610,10 +14678,25 @@ final class AppState: ObservableObject {
                 revealBound: integration.hasBoundSasAccept(callId: cid),
                 isRound1: true, ownKcMacSent: false, peerKcMacVerified: false)
         }
-        // Own MACs of earlier rounds that are still recent: the peer may still wait for them (the MACs cross).
-        let olderWires = (kcRecentOwnMacs[cid] ?? [])
-            .filter { ConfirmResend.isRecentOwnKcMac(sentAtMs: $0.sentAtMs, nowMs: nowMs) && $0.wire != ownWire }
-        kcRecentOwnMacs[cid] = olderWires.isEmpty ? nil : olderWires
+        // Own MACs of earlier rounds: (1) every round that is still PENDING whose peer MAC is not verified (a superseded
+        // round keeps its window, so the peer may still wait for our MAC of it), and (2) the recent ones of rounds that
+        // are decided: a verified peer MAC does not show that ours arrived (the MACs cross).
+        var olderWires: [(wire: String, peerId: String, sentAtMs: Int)] = []
+        if let call {
+            for (round, other) in call.states.sorted(by: { $0.key < $1.key }) where round != call.liveRound {
+                guard other.ownMacSent, let wire = other.ownMacWire, wire != ownWire else { continue }
+                if other.kcStatus != .verified
+                    || ConfirmResend.isRecentOwnKcMac(sentAtMs: other.ownMacSentAtMs, nowMs: nowMs) {
+                    olderWires.append((wire: wire, peerId: other.peerId, sentAtMs: other.ownMacSentAtMs ?? nowMs))
+                }
+            }
+        }
+        let recentWires = (kcRecentOwnMacs[cid] ?? [])
+            .filter { ConfirmResend.isRecentOwnKcMac(sentAtMs: $0.sentAtMs, nowMs: nowMs) }
+        kcRecentOwnMacs[cid] = recentWires.isEmpty ? nil : recentWires
+        for recent in recentWires where recent.wire != ownWire && !olderWires.contains(where: { $0.wire == recent.wire }) {
+            olderWires.append(recent)
+        }
         guard due.any || !olderWires.isEmpty else { return }
         guard integration.takeResendEvent(callId: cid) else {
             print("[AppState] re-send budget spent — nothing re-sent after the re-authentication callId=\(cid.prefix(8))…")
@@ -14634,19 +14717,24 @@ final class AppState: ObservableObject {
                 try? await provider?.callingApi.sendOpaqueMessageString(recipientId: older.peerId, payload: older.wire)
             }
         }
-        print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) callId=\(cid.prefix(8))…")
+        // `kcmac` counts the live round's own MAC, `older` the own MACs of other rounds re-sent in the same event.
+        print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) older=\(olderWires.count) callId=\(cid.prefix(8))…")
     }
 
-    /// W-KCMAC — verify an inbound `KCMAC:` piggy-back against this call's `(kcKey, transcript)`.
-    /// A MAC that does not verify (wrong role, wrong length, wrong value) fails the key
-    /// confirmation and ends the call (`kcmac_mismatch`, fail-closed); a `KCMAC:` from anyone but
-    /// the call peer, or for another call, is dropped with a log line.
+    /// W-KCMAC — verify an inbound `KCMAC:` piggy-back by attributing it to a key round BY CONTENT (R-KCMAC-ROUNDS, §3.7.1): the
+    /// message carries no round, so it is compared with the expected peer MAC of every round this side has armed and
+    /// not decided (superseded rounds included). The expected MAC of a round, with the round's role byte, verifies that
+    /// round; with another role byte it ends the call (`kcmac_mismatch`, fail-closed). A MAC that matches no pending
+    /// round (the peer's MAC for a round not armed yet, or one that will never verify) is HELD, at most 8 for 30 s, and
+    /// never ends the call by itself: a round that never receives its MAC fails at its own window, whatever else
+    /// arrived. A copy of a MAC already verified is dropped silently, a malformed payload too. A `KCMAC:` from anyone
+    /// but the call peer, or for another call, is dropped with a log line.
     @MainActor
     private func handleInboundKcMac(callId: String, raw: String, senderId: String, senderDeviceId: String? = nil) {
         let key = callId.lowercased()
         // R-COMMIT-KCMAC-DEVICE (A1, every round, A6): a CALLER judges only a KCMAC whose opaque envelope carries the
         // `sender_device_id` of the ACCEPT it bound. Any other device, or none, is dropped silently: no judgment,
-        // no `kcmac_mismatch`, no early hold and no effect on any window. This comes BEFORE the duplicate test.
+        // no `kcmac_mismatch`, no hold and no effect on any window. This comes BEFORE everything else below.
         if callService.callIntegration?.sasCommit.callerKcMacSenderVerdict(
             callId: callId, envelopeSenderDeviceId: senderDeviceId) == .dropSilently {
             print("[AppState] KCMAC dropped — not from the device whose ACCEPT was bound callId=\(callId.prefix(8))…")
@@ -14659,93 +14747,28 @@ final class AppState: ObservableObject {
             print("[AppState] KCMAC ignored — this device left the call callId=\(callId.prefix(8))…")
             return
         }
-        guard let state = kcCallStates[key] else {
-            // Not started yet (the responder leg starts after its ACCEPT is released): keep one
-            // for this call and verify it when the state appears. Only the active call's peer.
-            guard callContactId == senderId else {
-                print("[AppState] KCMAC dropped — no pending key-confirmation state for callId=\(callId.prefix(8))…")
-                return
-            }
-            // A retransmit of a round already decided is not "early" for anything.
-            if KcMacRoundRules.isDuplicate(raw: raw, decidedPeerMacs: kcDecidedPeerMacs[key] ?? []) { return }
-            holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId, senderDeviceId: senderDeviceId)
+        // The peer-user check: the call peer of an armed round, or, before the first round is armed (the responder
+        // leg's key-confirmation start is deferred until its ACCEPT is released), the active call's peer.
+        let expectedPeer: String? = kcCalls[key]?.live?.peerId ?? callContactId
+        guard expectedPeer == senderId else {
+            print("[AppState] KCMAC dropped — sender=\(senderId.prefix(8))… does not match the call peer callId=\(callId.prefix(8))…")
             return
         }
-        guard state.peerId == senderId else {
-            print("[AppState] KCMAC dropped — sender=\(senderId.prefix(8))… does not match call peer=\(state.peerId.prefix(8))…")
-            return
-        }
-        // R-KCMAC: a duplicate (retransmit) of the MAC already verified for ANY decided round of
-        // this call is dropped silently — never judged against the live round, where it would fail
-        // and end a healthy call. The duplicate test comes BEFORE the judgment.
-        if KcMacRoundRules.isDuplicate(raw: raw, decidedPeerMacs: kcDecidedPeerMacs[key] ?? []) {
+        let call = kcCalls[key] ?? KeyConfirmationCall()
+        kcCalls[key] = call
+        switch call.book.receive(payload: raw, nowMs: SasCommit.monotonicNowMs()) {
+        case .malformed:
+            // Cannot be attributed to a round: never judged, never ends the call by itself.
+            print("[AppState] KCMAC malformed payload dropped callId=\(callId.prefix(8))… rawLen=\(raw.count)")
+        case .duplicate:
             print("[AppState] KCMAC duplicate of a decided round dropped callId=\(callId.prefix(8))…")
-            return
+        case .decided(let verdict):
+            applyKcVerdict(verdict, callId: callId)
+        case .held:
+            print("[AppState] KCMAC held — matches no pending round, kept until a round is armed callId=\(callId.prefix(8))…")
+        case .heldDropped:
+            print("[AppState] KCMAC dropped — held set full or a copy is already held callId=\(callId.prefix(8))…")
         }
-        // Already decided (verified/wrong, or the confirmation deadline already fired
-        // `.absent`) — a late KCMAC must not re-open the verdict.
-        guard !state.resultRecorded else {
-            // A re-key round: the peer's MAC for the NEXT round can overtake that round's own
-            // handshake completion on this side, i.e. arrive while only the previous (decided)
-            // round's state exists. Dropping it would let the next round's window expire and
-            // end a healthy call. It is held (one at a time, small, at least 30 s) for the next
-            // round's state, where it is judged fail-closed.
-            if callContactId == senderId {
-                holdEarlyKcMac(key: key, callId: callId, raw: raw, senderId: senderId, senderDeviceId: senderDeviceId)
-            }
-            return
-        }
-        guard let kcKey = state.kcKey, let transcript = state.transcript else {
-            // `handleKcMacReady` already failed this call (no transcript to verify against).
-            return
-        }
-        guard let bytes = Data(base64Encoded: raw), bytes.count == 33 else {
-            print("[AppState] KCMAC malformed payload callId=\(callId.prefix(8))… rawLen=\(raw.count)")
-            failKeyConfirmation(callId: callId, state: state)
-            return
-        }
-        let roleByte = bytes[bytes.startIndex]
-        let mac = bytes.suffix(from: bytes.index(after: bytes.startIndex))
-        // The peer's role byte must be the COMPLEMENT of our own (initiator
-        // sends kc_mac_init=0x01, responder sends kc_mac_resp=0x02) — a
-        // reflected/self role byte is exactly the `kc_reflect` attack the KAT
-        // vectors cover, and `KeyConfirmation.verify` alone can't catch it
-        // (macInit/macResp differ only in the HMAC's role-byte input, so a
-        // reflected mac with the WRONG `asInitiator` flag simply verifies as
-        // the wrong-direction MAC unless the role byte itself is also checked).
-        let expectedPeerRole: UInt8 = state.isInitiator ? 0x02 : 0x01
-        guard roleByte == expectedPeerRole else {
-            print("[AppState] KCMAC role mismatch callId=\(callId.prefix(8))… expected=\(expectedPeerRole) got=\(roleByte)")
-            failKeyConfirmation(callId: callId, state: state)
-            return
-        }
-        let ok = KeyConfirmation.verify(
-            received: Data(mac), kcKey: kcKey, asInitiator: !state.isInitiator, transcript: transcript)
-        guard ok else {
-            failKeyConfirmation(callId: callId, state: state)
-            return
-        }
-        state.kcStatus = .verified
-        state.resultRecorded = true
-        state.deadlineTask?.cancel()
-        // R-KCMAC: the verified peer MAC of this decided round is remembered for the rest of the call.
-        KcMacRoundRules.recordDecided(Data(mac), in: &kcDecidedPeerMacs[key, default: []])
-        emitKeyConfirmationTelemetry(callId: callId, state: state)
-    }
-
-    /// R-KCMAC: hold a peer MAC that arrived while no round is armed and undecided, to be judged when
-    /// the next round is armed. At most one at a time (a further one is dropped silently while a fresh
-    /// one is held), at most 512 characters, and held for 2 x CONFIRM_TIMEOUT = 30 s, never shorter
-    /// (`handleKcMacReady` drops an older one). Holding never fails the call by itself.
-    @MainActor
-    private func holdEarlyKcMac(key: String, callId: String, raw: String, senderId: String, senderDeviceId: String?) {
-        let now = Date()
-        guard KcMacRoundRules.mayHoldEarly(raw: raw, heldAt: kcEarlyInbound[key]?.at, now: now) else {
-            print("[AppState] KCMAC early dropped (one already held, or too large) callId=\(callId.prefix(8))…")
-            return
-        }
-        kcEarlyInbound[key] = (raw: raw, senderId: senderId, senderDeviceId: senderDeviceId, at: now)
-        print("[AppState] KCMAC early — held until the next key-confirmation round is armed callId=\(callId.prefix(8))…")
     }
 
     /// W-KCMAC/W-ASSURANCE/W-FLOOR/W-NFCBADGE — compute `AssuranceState.decide()`'s
@@ -14913,12 +14936,9 @@ final class AppState: ObservableObject {
         guard let callId, !callId.isEmpty else { return }
         let key = callId.lowercased()
         applyPresenceAuthOutcomeIfAny(callId: key)
-        kcCallStates[key]?.deadlineTask?.cancel()
-        kcCallStates.removeValue(forKey: key)
+        if let call = kcCalls.removeValue(forKey: key) { for state in call.states.values { state.deadlineTask?.cancel() } }
         kcPendingOwnMac.removeValue(forKey: key)
         kcRecentOwnMacs.removeValue(forKey: key)
-        kcEarlyInbound.removeValue(forKey: key)
-        kcDecidedPeerMacs.removeValue(forKey: key)
         keyConfirmationTelemetryByCall.removeValue(forKey: key)
         finalAssuranceByCall.removeValue(forKey: key)
     }
@@ -14947,7 +14967,7 @@ final class AppState: ObservableObject {
         guard let peerIdentityKey = PeerIdentityPinStore().pinnedKey(
             contactId: final.peerId, deviceId: peerDeviceId(for: final.peerId)
         ) else { return }
-        guard let readyAt = kcCallStates[callId]?.readyAt else { return }
+        guard let readyAt = kcCalls[callId]?.live?.readyAt else { return }
         let mediaDwellMs = Int(Date().timeIntervalSince(readyAt) * 1000)
         ContactsStore().applyAssuranceOutcome(
             peerUserId: final.peerId,

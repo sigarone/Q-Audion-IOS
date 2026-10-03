@@ -652,19 +652,29 @@ final class SasCommitTests: XCTestCase {
 
     // MARK: - A1 / A5: the KCMAC wait of a key round (WIRE_SPEC 3.7.1 Window rule, 3.7.4 KCMAC hold)
 
-    /// Every round that is not round 1 waits CONFIRM_TIMEOUT (15 s) from the moment its context is armed (T3). A rekey
-    /// KCMAC 14 s after the round was armed is judged; the old 5 s window had already ended the call.
-    func testARekeyRoundWaitsFifteenSecondsFromArming() {
+    /// Every round that is not round 1 waits CONFIRM_TIMEOUT (15 s) from the moment its context is armed (T3) when this
+    /// side is the round's OFFERER; a rekey KCMAC 14 s after the round was armed is judged (the old 5 s window had
+    /// already ended the call). K2: the ACCEPTOR of a rekey round waits 2 x CONFIRM_TIMEOUT = 30 s from arming.
+    func testARekeyRoundWaitsFromArmingFifteenSecondsAsOffererAndThirtyAsAcceptor() {
         for isInitiator in [true, false] {
             XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
                                                          nowMs: 1_000 + 14_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
                                  "a rekey MAC 14 s after arming is still judged")
-            XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
-                                                   nowMs: 1_000 + 14_999, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 1)
-            XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 1_000,
-                                                   nowMs: 1_000 + 15_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
-                           "the REVEAL times never stretch a rekey round")
         }
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: true, armedAtMs: 1_000,
+                                               nowMs: 1_000 + 14_999, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 1)
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: true, armedAtMs: 1_000,
+                                               nowMs: 1_000 + 15_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
+                       "the REVEAL times never stretch a rekey round, and the offerer keeps 15 s")
+        XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 1_000,
+                                                     nowMs: 1_000 + 20_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
+                             "K2: the offerer's MAC 20 s after the acceptor armed is still judged")
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 1_000,
+                                               nowMs: 1_000 + 29_999, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 1)
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 1_000,
+                                               nowMs: 1_000 + 30_000, revealHandedAtMs: 100, revealVerifiedAtMs: 100), 0,
+                       "no MAC 30 s after the acceptor armed: kcmac_mismatch")
+        XCTAssertEqual(KcMacWindow.rekeyAcceptorMs, 30_000)
     }
 
     /// A1/T3: the caller accepts the callee's round-1 MAC for at least 2 x CONFIRM_TIMEOUT = 30 s after it handed its
@@ -794,10 +804,10 @@ final class SasCommitTests: XCTestCase {
         XCTAssertTrue(app.contains("SasCommit.normalizedDeviceId(entry[\"sender_device_id\"] as? String)"), "msg_pending_sync replay")
         XCTAssertTrue(app.contains("envelopeSenderDeviceId: envelopeSenderDeviceId,"), "the ACCEPT carries its device into the bind")
         let start = try XCTUnwrap(app.range(of: "private func handleInboundKcMac(callId: String, raw: String, senderId: String, senderDeviceId: String? = nil) {"))
-        let end = try XCTUnwrap(app.range(of: "private func holdEarlyKcMac("))
+        let end = try XCTUnwrap(app.range(of: "/// W-KCMAC/W-ASSURANCE/W-FLOOR/W-NFCBADGE"))
         let handler = String(app[start.upperBound..<end.lowerBound])
         let deviceAt = try XCTUnwrap(handler.range(of: "callerKcMacSenderVerdict("))
-        for later in ["integration.acceptsKeyConfirmation(callId: callId)", "KcMacRoundRules.isDuplicate(", "holdEarlyKcMac("] {
+        for later in ["integration.acceptsKeyConfirmation(callId: callId)", "expectedPeer == senderId", "call.book.receive("] {
             let at = try XCTUnwrap(handler.range(of: later), later)
             XCTAssertLessThan(deviceAt.lowerBound, at.lowerBound, "the sender-device rule runs before \(later)")
         }

@@ -15,23 +15,12 @@ public struct KcMacRound: Equatable {
     }
 }
 
-/// Pure rules of the per-round KCMAC exchange that the app layer applies (R-KCMAC, §3.7.1):
-///
-/// - the exchange runs on EVERY key round, each round with its own context and roles;
-/// - the `KCMAC:` message carries no round field: a MAC is attributed to a round by content;
-/// - a receiver keeps, for the rest of the call, the peer MAC it verified for each decided round; an
-///   inbound MAC byte-identical to one of them is a DUPLICATE: dropped silently, never judged
-///   `wrong`, and the duplicate test comes BEFORE the judgment against the live round;
-/// - a MAC that is not a duplicate and arrives while no round is armed and undecided is held (at
-///   most one at a time, at most 512 characters of payload, held for at least 2 x `CONFIRM_TIMEOUT` = 30 s,
-///   never shorter) and judged when the next round is armed.
+/// Payload helpers of the per-round KCMAC exchange (R-KCMAC, §3.7.1). The exchange runs on EVERY key round, each
+/// round with its own context and roles, and the `KCMAC:` message carries no round field: the attribution of an
+/// inbound MAC to a round by content, the duplicate test and the held set live in `KcMacRoundBook`
+/// (R-KCMAC-ROUNDS).
 public enum KcMacRoundRules {
 
-    /// A peer MAC for a round this side has not armed yet is held this long (T3: 2 x `CONFIRM_TIMEOUT` = 30 s, never
-    /// shorter) and dropped silently after that. Holding never fails the call by itself and never extends a window.
-    public static let earlyHoldSeconds: TimeInterval = TimeInterval(ConfirmTimeout.earlyKcMacHoldMs) / 1000
-    /// Longest `KCMAC:` payload (base64 characters) that may be held.
-    public static let maxHeldPayloadCharacters = 512
     /// Wire payload of a `KCMAC:` message: `role byte (1) || MAC (32)`.
     public static let payloadLength = 33
 
@@ -50,38 +39,5 @@ public enum KcMacRoundRules {
         guard bytes[bytes.startIndex] == expectedPeerRole else { return false }
         return KeyConfirmation.verify(
             received: peerMac, kcKey: round.kcKey, asInitiator: !round.isInitiator, transcript: round.transcript)
-    }
-
-    /// True when `raw` carries a MAC byte-identical to one the call already verified for a decided
-    /// round (`decidedPeerMacs`, kept for the whole call): a retransmission, or the previous
-    /// round's MAC arriving after the next round was armed.
-    public static func isDuplicate(raw: String, decidedPeerMacs: [Data]) -> Bool {
-        guard let peerMac = mac(inPayload: raw) else { return false }
-        return decidedPeerMacs.contains(peerMac)
-    }
-
-    /// Most decided peer MACs remembered per call (the oldest is dropped first).
-    public static let maxDecidedPeerMacs = 256
-
-    /// Remember the verified peer MAC of a decided round for the rest of the call, bounded at
-    /// `maxDecidedPeerMacs` (like desktop) so a very long call cannot grow the list without limit.
-    public static func recordDecided(_ mac: Data, in decided: inout [Data]) {
-        decided.append(mac)
-        if decided.count > maxDecidedPeerMacs {
-            decided.removeFirst(decided.count - maxDecidedPeerMacs)
-        }
-    }
-
-    /// Whether an early MAC may be held now: it is small enough and no other early MAC is held
-    /// (a held one that is older than `earlyHoldSeconds` no longer counts: it is stale).
-    public static func mayHoldEarly(raw: String, heldAt: Date?, now: Date) -> Bool {
-        guard raw.count <= maxHeldPayloadCharacters else { return false }
-        if let heldAt, isEarlyHoldFresh(heldAt: heldAt, now: now) { return false }
-        return true
-    }
-
-    /// Whether a MAC held since `heldAt` may still be verified at `now`.
-    public static func isEarlyHoldFresh(heldAt: Date, now: Date) -> Bool {
-        return now.timeIntervalSince(heldAt) <= earlyHoldSeconds
     }
 }
