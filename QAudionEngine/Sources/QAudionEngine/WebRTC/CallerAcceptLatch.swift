@@ -52,6 +52,17 @@ import Foundation
 ///     `.encrypted` caller of a peer that never sends `call_accepted` is no longer stranded.
 ///   - A `call_answer` that names another call is dropped. It used to be applied to whatever call was current.
 ///   - A `call_accepted` for another call no longer overwrites the current call's accept flag.
+///
+/// ## W-STALEENVELOPE (2026-10-03): the same object owns "which outgoing call is current"
+///
+/// The caller-side terminal envelopes (`call_peer_offline`, `call_busy`, `call_cancel`) used to end whatever call
+/// was current, whatever call id they named, and their teardown never reset this latch (only `AppState.endCall`
+/// did). Both defects are closed here, in one place that can be tested:
+///   - `beginOutgoing(callId:)` records the wire id of the call `startCall` just began, and clears every flag left by
+///     the previous call (a backstop for any teardown path that does not reset: a held early answer of call A can
+///     never be replayed against call B, because B cannot begin without this reset);
+///   - `terminalEnvelopeArrived` ends the call only when the envelope names the current outgoing call, and resets
+///     the latch (and forgets the outgoing id) in the same step, so a teardown through this path resets exactly once.
 public struct CallerAcceptLatch: Equatable {
 
     /// Mirror of `AppState`'s `CallState`, so the decision does not depend on the app target.
@@ -93,6 +104,34 @@ public struct CallerAcceptLatch: Equatable {
         case dropped(DropReason)
     }
 
+    /// A caller-side terminal envelope.
+    public enum TerminalKind: String, Equatable {
+        case peerOffline = "peer_offline"
+        case busy
+        case cancel
+    }
+
+    /// Why a terminal envelope was left alone.
+    public enum TerminalIgnoreReason: String, Equatable {
+        /// The envelope carries no call id (or an empty one). The server always stamps `call_id` on these
+        /// envelopes and the WS client already drops a frame without one, so this is only a defensive net.
+        case noCallId = "nocallid"
+        /// No outgoing call is current (none began, or it already ended and the latch was reset).
+        case noOutgoingCall = "nooutgoing"
+        /// The envelope names a call other than the current outgoing one (late envelope of an old call).
+        case otherCall = "othercall"
+        /// The current outgoing call is already `.idle`/`.ended`.
+        case notInCall = "notincall"
+    }
+
+    /// What `AppState` must do after a caller-side terminal envelope.
+    public enum TerminalStep: Equatable {
+        /// The envelope names the current outgoing call: tear it down. The latch has ALREADY been reset.
+        case endOutgoingCall
+        /// Not for the current outgoing call: touch nothing.
+        case ignore(TerminalIgnoreReason)
+    }
+
     /// The single `call_answer` kept while the caller is `.connecting`.
     public struct HeldAnswer: Equatable {
         public let callId: String
@@ -114,6 +153,8 @@ public struct CallerAcceptLatch: Equatable {
     public private(set) var finalizedCallId: String?
     /// At most one early `call_answer`.
     public private(set) var held: HeldAnswer?
+    /// The wire call id (lowercased) of the outgoing call this latch belongs to; nil when none is current.
+    public private(set) var outgoingCallId: String?
 
     public init() {}
 
@@ -138,6 +179,78 @@ public struct CallerAcceptLatch: Equatable {
     }
 
     // MARK: - Events
+
+    /// `startCall` began an outgoing call with this wire id. Clears whatever the previous call left behind first.
+    public mutating func beginOutgoing(callId: String) {
+        reset()
+        outgoingCallId = Self.nonEmpty(callId.lowercased())
+    }
+
+    /// True when `envelopeCallId` names the current outgoing call (case-insensitive). False for a missing or
+    /// empty id and when no outgoing call is current.
+    public func isCurrentOutgoingCall(envelopeCallId: String?) -> Bool {
+        guard let id = Self.nonEmpty(envelopeCallId?.lowercased()), let current = outgoingCallId else { return false }
+        return id == current
+    }
+
+    /// A caller-side `call_peer_offline` / `call_busy` / `call_cancel` arrived.
+    ///
+    /// Only an envelope naming the current outgoing call, while that call is still in a phase, ends it. A late
+    /// envelope of an old call (hangup + redial, a WS reconnect redelivery) leaves the current call untouched. On
+    /// `.endOutgoingCall` the latch is reset here, so the teardown that follows never leaves a held early answer or a
+    /// finalized marker for the next call.
+    public mutating func terminalEnvelopeArrived(envelopeCallId: String?, phase: Phase) -> TerminalStep {
+        guard let id = Self.nonEmpty(envelopeCallId?.lowercased()) else { return .ignore(.noCallId) }
+        guard let current = outgoingCallId else { return .ignore(.noOutgoingCall) }
+        guard id == current else { return .ignore(.otherCall) }
+        guard Self.isLive(phase) else { return .ignore(.notInCall) }
+        reset()
+        return .endOutgoingCall
+    }
+
+    /// Where a `call_cancel` goes. One `call_cancel` handler serves BOTH directions: the server sends it to the
+    /// sibling devices of a callee (`answered_on_other_device` / `declined_on_other_device`, i.e. the INCOMING-call
+    /// path), and a device that is dialling can receive one for another call too.
+    public enum CancelRoute: Equatable {
+        /// Names the current outgoing call: tear it down. The latch has ALREADY been reset.
+        case endOutgoingCall
+        /// Not about a live outgoing call: the incoming-call cancel (`AppState` still compares the id with the call
+        /// that is active before it ends anything).
+        case incomingTeardown
+        /// A cancel of another call while an outgoing call is live: touch nothing.
+        case ignore(TerminalIgnoreReason)
+    }
+
+    /// A `call_cancel` arrived.
+    ///
+    /// The route is decided by the envelope id and by whether an outgoing call is LIVE: the latch remembers an
+    /// outgoing id, this device is the dialling side of the call that is current (`dialling`, the app's call role)
+    /// and that call is in a live phase. It is not decided by the latch alone: a teardown path that forgot to reset
+    /// it must never turn the cancel of a ringing INCOMING call (role callee) into "another call's envelope" and
+    /// leave that call ringing.
+    public mutating func cancelArrived(envelopeCallId: String?, phase: Phase, dialling: Bool) -> CancelRoute {
+        let id: String? = Self.nonEmpty(envelopeCallId?.lowercased())
+        let outgoingLive: Bool = outgoingCallId != nil && dialling && Self.isLive(phase)
+        if let id, let current = outgoingCallId, id == current {
+            guard outgoingLive else { return .ignore(.notInCall) }
+            reset()
+            return .endOutgoingCall
+        }
+        if outgoingLive {
+            let why: TerminalIgnoreReason = id == nil ? .noCallId : .otherCall
+            return .ignore(why)
+        }
+        return .incomingTeardown
+    }
+
+    /// Whether a remote terminal envelope that is NOT for the current outgoing call may still end the call that is
+    /// current (the incoming path). False when it names a call other than `activeCallId`: a late envelope of a
+    /// finished call must not end the call that is live now. An envelope without an id, or with no active call to
+    /// compare against, is let through, as the `call_hangup` handler does.
+    public static func envelopeMayEndActiveCall(envelopeCallId: String?, activeCallId: String?) -> Bool {
+        guard let id = nonEmpty(envelopeCallId?.lowercased()), let active = nonEmpty(activeCallId?.lowercased()) else { return true }
+        return id == active
+    }
 
     /// A `call_answer` arrived.
     ///
@@ -229,12 +342,13 @@ public struct CallerAcceptLatch: Equatable {
         finalizedCallId = callId
     }
 
-    /// The call ended: every flag and the held answer are cleared for the next call.
+    /// The call ended: every flag, the held answer and the outgoing call id are cleared for the next call.
     public mutating func reset() {
         localHandshakeReadyCallId = nil
         acceptedCallId = nil
         finalizedCallId = nil
         held = nil
+        outgoingCallId = nil
     }
 
     // MARK: - Internals
@@ -259,6 +373,14 @@ public struct CallerAcceptLatch: Equatable {
         if action == .finalizeNow { return .finalizeNow }
         localHandshakeReadyCallId = id
         return .waitForAccept(netSeconds: AcceptGateDecisions.fallbackSeconds(for: action))
+    }
+
+    /// A call exists in this phase (`.connecting` included: the OFFER is still being built).
+    private static func isLive(_ phase: Phase) -> Bool {
+        switch phase {
+        case .connecting, .ringing, .active, .encrypted: return true
+        case .idle, .ended: return false
+        }
     }
 
     private static func nonEmpty(_ s: String?) -> String? {
