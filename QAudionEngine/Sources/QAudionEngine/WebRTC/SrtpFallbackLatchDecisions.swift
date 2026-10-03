@@ -83,7 +83,7 @@ public enum SrtpFallbackLatchDecisions {
     /// covers that window without accepting anything after the call ended (a late engage
     /// after the teardown still meets the generation fence first).
     public static func callLive(callIdBound: Bool, peerAnswered: Bool) -> Bool {
-        callIdBound || peerAnswered
+        callIdBound // TEMP MUTANT
     }
 
     /// What a latch was set FOR. Stored beside the Bool so the answer-time teardown
