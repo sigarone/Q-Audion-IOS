@@ -151,6 +151,8 @@ jobs:
             -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
             -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \
             -only-testing:QAudionAppTests/CallCloseReasonRedactionTests \
+            -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
+            -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -resultBundlePath /tmp/app-tests.xcresult \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGN_IDENTITY="-" \

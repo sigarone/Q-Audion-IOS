@@ -1231,6 +1231,300 @@
         }
       }
     },
+    "trust.header.loading": {
+      "extractionState": "manual",
+      "comment": "Contact trust badge — the safety number / trust evaluation is still being computed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Überprüfung läuft…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando…"
+          }
+        }
+      }
+    },
+    "trust.header.failed": {
+      "extractionState": "manual",
+      "comment": "Contact trust badge — the safety number / trust evaluation could not be computed (offline, server unreachable, timeout)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica non riuscita"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verification failed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación fallida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la vérification"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Überprüfung fehlgeschlagen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na verificação"
+          }
+        }
+      }
+    },
+    "trust.footer.unavailable": {
+      "extractionState": "manual",
+      "comment": "Contact trust card — final result when the peer has not published an identity key yet, so no safety number can be derived",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Safety number non disponibile: il contatto non ha ancora pubblicato la propria identità."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Safety number unavailable: this contact has not published their identity yet."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Safety number no disponible: el contacto aún no ha publicado su identidad."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Safety number indisponible : le contact n'a pas encore publié son identité."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Safety Number nicht verfügbar: Der Kontakt hat seine Identität noch nicht veröffentlicht."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Safety number indisponível: o contato ainda não publicou sua identidade."
+          }
+        }
+      }
+    },
+    "trust.error.offline": {
+      "extractionState": "manual",
+      "comment": "Contact trust card — the evaluation failed because the device has no network",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sei offline. Non è stato possibile calcolare il trust del contatto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You are offline. The contact's trust could not be calculated."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estás sin conexión. No se pudo calcular la confianza del contacto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous êtes hors ligne. Impossible de calculer la confiance du contact."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du bist offline. Das Vertrauen des Kontakts konnte nicht berechnet werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você está offline. Não foi possível calcular a confiança do contato."
+          }
+        }
+      }
+    },
+    "trust.error.unreachable": {
+      "extractionState": "manual",
+      "comment": "Contact trust card — the evaluation failed because the identity key request failed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile contattare il server per recuperare l'identità del contatto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not reach the server to retrieve the contact's identity."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo contactar con el servidor para obtener la identidad del contacto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de joindre le serveur pour récupérer l'identité du contact."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server ist nicht erreichbar, um die Identität des Kontakts abzurufen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível contatar o servidor para obter a identidade do contato."
+          }
+        }
+      }
+    },
+    "trust.error.timeout": {
+      "extractionState": "manual",
+      "comment": "Contact trust card — the evaluation did not finish within the deadline",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il server non ha risposto in tempo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server did not respond in time."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servidor no respondió a tiempo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le serveur n'a pas répondu à temps."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server hat nicht rechtzeitig geantwortet."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O servidor não respondeu a tempo."
+          }
+        }
+      }
+    },
+    "contact_detail.trust.identity_failed": {
+      "extractionState": "manual",
+      "comment": "Trust row description — the identity lookup failed; the safety-number card below offers a retry button",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica non riuscita: usa «Riprova» nel numero di sicurezza."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verification failed: use “Retry” in the safety number section."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación fallida: usa «Reintentar» en el número de seguridad."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la vérification : utilisez « Réessayer » dans la section du numéro de sécurité."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Überprüfung fehlgeschlagen: Nutze „Erneut versuchen“ im Bereich Sicherheitsnummer."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na verificação: use “Tentar novamente” na seção do número de segurança."
+          }
+        }
+      }
+    },
     "voice_trust.verified": {
       "extractionState": "manual",
       "comment": "Voice-trust badge — high confidence",
