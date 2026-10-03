@@ -598,6 +598,35 @@ final class AuthRefreshCoordinatorTests: XCTestCase {
         XCTAssertEqual(refreshes.calls, 1)
     }
 
+    func test_aRejectedTokenIsRememberedAsDeadOnlyForHalfAnHour() async {
+        let clock = Clock0()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R-dead")
+        let (coordinator, _) = makeCoordinator(now: { clock.now })
+        let refreshes = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            _ = refreshes.hit(token: token)
+            throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+        }
+        func attempt() async -> AuthRefreshOutcome {
+            // No renew path: a rejected token is final here, and every attempt is a real decision.
+            await coordinator.refresh(request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        }
+
+        let first = await attempt()
+        XCTAssertEqual(first.failure?.isFinal, true)
+        XCTAssertEqual(refreshes.calls, 1)
+
+        clock.advance(by: 600)
+        let second = await attempt()
+        XCTAssertEqual(refreshes.calls, 1, "within the memory window the dead token is not presented again")
+        XCTAssertEqual(second.failure?.reason, .refreshRejected)
+        XCTAssertEqual(second.failure?.isFinal, true)
+
+        clock.advance(by: TimeInterval(AuthRefreshCoordinator.deadTokenMemorySec))
+        _ = await attempt()
+        XCTAssertEqual(refreshes.calls, 2, "after the window a spurious rejection can heal")
+    }
+
     func test_aRenewRetryAfterIsHonouredAboveTheFloorAndCapped() async {
         let cases: [(Int, Int)] = [
             (60, 600),        // the server's usual Retry-After: never below the 10 minute floor

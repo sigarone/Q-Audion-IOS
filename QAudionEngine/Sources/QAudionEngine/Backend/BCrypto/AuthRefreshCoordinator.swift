@@ -38,7 +38,7 @@ import Foundation
 //      token presented again as a reuse event. So device-renew is attempted only when the
 //      refresh token was REJECTED (401/403) or there is none (never on a network error, a 5xx
 //      or a 429 of the refresh), a refresh token the server already rejected is not presented
-//      again, and after a renew failure that can have reached the server the renew leg waits
+//      again (for half an hour), and after a renew failure that can have reached the server the renew leg waits
 //      at least 10 minutes (6/h), longer if the server says so with Retry-After.
 //
 // The coordinator is Foundation-only on purpose: it holds no secrets in logs, has no
@@ -264,6 +264,10 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     public static let rateLimitFloorSec = 60
     /// Upper bound for any cooldown, so a bogus `Retry-After` cannot park recovery for a day.
     public static let maxCooldownSec = 3600
+    /// How long a rejected refresh token is remembered as dead. The server's 401 on a refresh
+    /// token is definitive, but a safety valve costs one reuse event per half hour and keeps a
+    /// spurious rejection from ever blocking the refresh leg for good.
+    public static let deadTokenMemorySec = 1800
 
     /// Equality for refresh tokens where nil and "" both mean "none".
     public static func sameRefreshToken(_ a: String?, _ b: String?) -> Bool {
@@ -318,8 +322,8 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     /// Renew leg's own cooldown (see `renewCooldownFloorSec`) and the failure that started it.
     private var renewBlockedUntil: Date?
     private var lastRenewFailure: AuthRecoveryFailure?
-    /// The refresh token the server last rejected. Kept in memory only, never logged.
-    private var rejectedRefreshToken: String?
+    /// The refresh token the server last rejected (or consumed) and when. In memory only, never logged.
+    private var rejectedRefresh: (token: String, at: Date)?
     /// Bumped by `resetBackoff()`: a flight that began under an older epoch (before a login
     /// or logout) must not write its outcome into the state of the new session.
     private var epoch = 0
@@ -344,7 +348,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             cooldownHits = 0
             renewBlockedUntil = nil
             lastRenewFailure = nil
-            rejectedRefreshToken = nil
+            rejectedRefresh = nil
             epoch += 1
         }
     }
@@ -515,8 +519,12 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         let trigger = request.trigger.rawValue
         // A refresh token the server already rejected (or already consumed) is not presented
         // again: it cannot succeed and each repeat is a reuse event in the server's audit log.
-        let rejected = lock.withLock { rejectedRefreshToken }
-        let knownDead = sendToken != nil && rejected == sendToken
+        let rejected = lock.withLock { rejectedRefresh }
+        var knownDead = false
+        if let sendToken, let rejected, rejected.token == sendToken,
+           now().timeIntervalSince(rejected.at) < TimeInterval(Self.deadTokenMemorySec) {
+            knownDead = true
+        }
         let canRefresh = sendToken != nil && request.refresher != nil && !knownDead
         let canRenew = request.renewer != nil
         let deadNote: String = knownDead ? " refresh_token_known_dead=1" : ""
@@ -598,7 +606,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     private func markRefreshTokenDead(_ token: String, epoch startEpoch: Int) {
         lock.withLock {
             guard epoch == startEpoch else { return }
-            rejectedRefreshToken = token
+            rejectedRefresh = (token: token, at: now())
         }
     }
 
