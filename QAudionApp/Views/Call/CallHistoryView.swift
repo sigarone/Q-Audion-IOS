@@ -606,12 +606,22 @@ private struct CallHistoryRow: View {
 
             Spacer(minLength: 8)
 
+            // One tap, one action. These buttons live in a List row, and a
+            // Button with the default (automatic) style inside a List row makes
+            // the WHOLE row the hit target of EVERY such button: a tap on the
+            // row fired chat and audio together (report 1caed57d: audio and
+            // video startCall in the same millisecond). An explicit
+            // `.borderless` style makes each button react only to its own
+            // frame, and `contentShape` makes that frame the full 36x36 area
+            // rather than just the glyph.
             Button(action: { onChat(entry.peerUserId, entry.peerDisplay) }) {
                 Image(systemName: "bubble.right")
                     .font(.system(size: 18))
                     .foregroundStyle(scheme.primary)
                     .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.borderless)
             .accessibilityLabel("Chatta con \(entry.peerDisplay)")
 
             Button(action: { onAudioCall(entry.peerUserId) }) {
@@ -619,7 +629,9 @@ private struct CallHistoryRow: View {
                     .font(.system(size: 18))
                     .foregroundStyle(extras.success)
                     .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.borderless)
             .accessibilityLabel("Chiama \(entry.peerDisplay)")
 
             // Neutral, not the PQC purple it used to wear. That token is
@@ -643,6 +655,7 @@ private struct CallHistoryRow: View {
                     .font(.system(size: 18))
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Videochiama \(entry.peerDisplay)")
         }

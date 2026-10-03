@@ -105,29 +105,41 @@ struct ContactRow: View {
 
             Spacer(minLength: 8)
 
-            HStack(spacing: 14) {
+            // One tap, one action: the three buttons share a List row (inside a
+            // NavigationLink), where a default-styled Button makes the whole row
+            // the hit target of every button. `.borderless` scopes each button
+            // to its own frame, and the 30x36 `contentShape` gives each a real
+            // hit area (the 17pt glyphs alone were ~14pt apart, so a tap between two
+            // of them could land on either).
+            HStack(spacing: 0) {
                 Button(action: onChatTap) {
                     Image(systemName: "bubble.right")
                         .font(.system(size: 17))
                         .foregroundStyle(scheme.primary)
+                        .frame(width: 30, height: 36)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Apri chat con \(item.displayName)")
 
                 Button(action: onCallTap) {
                     Image(systemName: "phone")
                         .font(.system(size: 17))
                         .foregroundStyle(scheme.primary)
+                        .frame(width: 30, height: 36)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Chiama \(item.displayName)")
 
                 Button(action: onVideoCallTap) {
                     Image(systemName: "video")
                         .font(.system(size: 17))
                         .foregroundStyle(scheme.primary)
+                        .frame(width: 30, height: 36)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .accessibilityLabel("Videochiama \(item.displayName)")
             }
         }
