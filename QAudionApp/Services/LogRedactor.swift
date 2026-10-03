@@ -30,8 +30,8 @@ enum LogRedactor {
     /// Pure, thread-safe, linear in the length of `text`; a clean text comes back untouched.
     ///
     /// LINE ORIENTED on purpose (`scrubLines`, not `scrub`): `redactStructured` also runs on a
-    /// composed multi-line text (`ReportCrypto.buildDiagSummary` gets the whole 2-minute
-    /// `recentLogsAsString` tail, whose lines were already scrubbed), and `scrub` reads
+    /// composed multi-line text (`ReportCrypto.buildDiagSummary` gets the last lines of the
+    /// bug-report log, whose lines were already scrubbed), and `scrub` reads
     /// "everything after `derived_key`" as the rest of the TEXT, so on such a blob one
     /// `derived_key <marker>` line would swallow every line after it (the newest ones, the ones
     /// the 200-character diag summary keeps). `scrubLines` scans each line on its own, so the
@@ -290,6 +290,16 @@ enum LogRedactor {
     /// path before `sealBatch`. Exposed (public) for that second egress;
     /// the implementation and its UNCONDITIONAL nature are unchanged.
     static func redactStructured(_ line: String) -> String {
+        let (work, stash) = redactStructuredStashed(line)
+        // --- 5. restore stashed UUIDs + fingerprints + code identifiers ---
+        return restoreStashed(work, stash: stash)
+    }
+
+    /// Steps 0-4 of `redactStructured`: everything up to, but not including, the restore.
+    /// `text` still carries the U+0001 sentinels and `stash` holds what they stand for, in
+    /// index order. Split out so the restore (step 5) can be tested on its own against the
+    /// quadratic loop it replaced.
+    static func redactStructuredStashed(_ line: String) -> (text: String, stash: [String]) {
         // --- 0. W-KEYSCRUB: key bytes first, before anything can be stashed or restored ---
         var work: String = LogRedactor.scrubKeyMaterial(line)
         // --- 0b. I2: mask IP addresses/ports before anything else touches the line ---
@@ -326,14 +336,51 @@ enum LogRedactor {
         work = residualRegex.stringByReplacingMatches(
             in: work, options: [], range: full3, withTemplate: redactPlaceholder)
 
-        // --- 5. restore stashed UUIDs + fingerprints + code identifiers ---
-        if !stash.isEmpty {
-            for (i, u) in stash.enumerated() {
-                work = work.replacingOccurrences(
-                    of: "\u{0001}K\(i)\u{0001}", with: u)
+        return (work, stash)
+    }
+
+    /// Step 5 of `redactStructured`: put every stashed value back in place of its sentinel
+    /// `U+0001 K <index> U+0001`, in ONE left-to-right pass over the bytes of `text`.
+    ///
+    /// W-REPORTFREEZE (2026-10-03): this used to be one `replacingOccurrences` per stash entry,
+    /// each scanning the whole string. A bug report's 1.36 MB log tail stashes ~2,350 values
+    /// (call ids, fingerprints, identifiers), i.e. 2,350 full scans: it froze the main thread
+    /// for ~32 s in the call of 2026-10-03. This is linear in `text` plus the stashed values.
+    ///
+    /// Same result as the old loop for every text this redactor produces: the stashed values
+    /// (UUIDs, labelled fingerprints, close reasons, identifiers) never contain a U+0001, so a
+    /// restored value can never be mistaken for a sentinel. A sentinel-looking run that is not a
+    /// canonical decimal index below `stash.count` (a forged one in the input, `K01`, an index
+    /// out of range) is left exactly as it is, as before.
+    static func restoreStashed(_ text: String, stash: [String]) -> String {
+        if stash.isEmpty { return text }
+        let bytes = Array(text.utf8)
+        let count = bytes.count
+        var out: [UInt8] = []
+        out.reserveCapacity(count)
+        var i = 0
+        while i < count {
+            let b = bytes[i]
+            if b == 0x01, i + 3 < count, bytes[i + 1] == 0x4B {   // U+0001 'K'
+                var j = i + 2
+                var index = 0
+                // at most 9 digits: stash counts are far below that, and Int never overflows
+                while j < count, j - (i + 2) < 9, bytes[j] >= 0x30, bytes[j] <= 0x39 {
+                    index = index * 10 + Int(bytes[j] - 0x30)
+                    j += 1
+                }
+                let digits = j - (i + 2)
+                let canonical = digits > 0 && (digits == 1 || bytes[i + 2] != 0x30)
+                if canonical, j < count, bytes[j] == 0x01, index < stash.count {
+                    out.append(contentsOf: stash[index].utf8)
+                    i = j + 1
+                    continue
+                }
             }
+            out.append(b)
+            i += 1
         }
-        return work
+        return String(decoding: out, as: UTF8.self)
     }
 
     /// Replace every match of `rx` in `text` with a U+0001-delimited

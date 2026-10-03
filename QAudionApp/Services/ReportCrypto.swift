@@ -66,20 +66,57 @@ enum ReportCrypto {
     /// (the admin report LIST view — never the encrypted body). Max 500
     /// chars. Strips PII patterns (UUIDs, IPs, phone-like numbers) — mirrors
     /// Android's `buildDiagSummary` exactly, same patterns, same caps.
-    /// `@MainActor` because `RuntimeLogSink.redactStructured` is isolated to
-    /// the main actor (the sink is a `@MainActor` class); the only caller,
-    /// `BugReporter.uploadReport`, already runs there.
-    @MainActor
+    ///
+    /// W-REPORTFREEZE (2026-10-03): only the LAST 200 characters of the redacted log are
+    /// used, yet this used to redact the WHOLE log (1.36 MB in a group-call report, ~2,350
+    /// stashed values) on the main actor -- the ~32 s hang of the call of 2026-10-03. It now
+    /// redacts only the raw tail window (`diagTailWindow`), which gives the same 200
+    /// characters, and it is no longer `@MainActor`: `LogRedactor` is not isolated, and the
+    /// report is assembled off the main actor (`BugReportAssembler`).
     static func buildDiagSummary(logs: String, note: String, trigger: String) -> String {
         // FIX-11 (2026-09-12): this 200-char tail is stored PLAINTEXT
         // server-side (report_routes.go keeps diag_summary verbatim), so
         // it gets the same structured redaction (bearer/JWT/psk/base64
         // runs) as every other log egress before the PII patterns below.
-        // W-KEYSCRUB: `logs` is the whole multi-line 2-minute tail, every line already
-        // scrubbed at ring entry; the key-material scrub inside `redactStructured` is line
-        // oriented (`scrubLines`), so a `derived_key <marker>` line does not swallow the
-        // newer lines below it and the 200-character tail below stays the LAST lines.
-        let scrubbed = RuntimeLogSink.redactStructured(logs)
+        // W-KEYSCRUB: `logs` is the multi-line tail, every line already scrubbed at ring
+        // entry; the key-material scrub inside `redactStructured` is line oriented
+        // (`scrubLines`), so a `derived_key <marker>` line does not swallow the newer lines
+        // below it and the 200-character tail below stays the LAST lines.
+        let window = String(diagTailWindow(of: logs))
+        return diagSummary(redactedLogs: LogRedactor.redactStructured(window), note: note, trigger: trigger)
+    }
+
+    /// Size, in UTF-8 bytes, of the raw tail that `buildDiagSummary` redacts. Redaction never
+    /// shrinks text to less than about half of its length (a 24-character run becomes the
+    /// 14-character placeholder, `1.2.3.4` becomes `<ip>`), so 16 KiB of raw text always
+    /// leaves far more than the 200 characters that are kept.
+    static let diagTailWindowBytes: Int = 16 * 1024
+
+    /// The part of `logs` whose redaction yields the same last 200 characters as redacting all
+    /// of `logs`: the last `windowBytes` bytes, moved BACK to the start of the line they cut,
+    /// so every line in it is whole.
+    ///
+    /// Why that is enough: the redactor is line-local (the key-material scrub is per line;
+    /// every pattern's character class excludes the line feed) except for one rule, a keyword
+    /// such as `token=` followed by whitespace and then its value, whose whitespace can span a
+    /// line feed. A keyword at the end of the line BEFORE the window can therefore still
+    /// redact the first token of the window in the whole text but not in the window: that
+    /// token is thousands of characters before the 200 kept at the end, so it cannot change
+    /// them. A text that is shorter than the window, or has no line feed before the cut, is
+    /// returned whole.
+    static func diagTailWindow(of logs: String, windowBytes: Int = diagTailWindowBytes) -> Substring {
+        let utf8 = logs.utf8
+        guard utf8.count > windowBytes else { return logs[...] }
+        let cut = utf8.index(utf8.endIndex, offsetBy: -windowBytes)
+        if let lineFeed = utf8[..<cut].lastIndex(of: 0x0A) {
+            return logs[utf8.index(after: lineFeed)...]
+        }
+        return logs[...]
+    }
+
+    /// The summary from an already redacted log: its last 200 characters, the PII patterns
+    /// below, and the 500-character cap.
+    static func diagSummary(redactedLogs scrubbed: String, note: String, trigger: String) -> String {
         let recentLogs = scrubbed.count > 200 ? String(scrubbed.suffix(200)) : scrubbed
         let safeNote = String(note.prefix(100))
 
