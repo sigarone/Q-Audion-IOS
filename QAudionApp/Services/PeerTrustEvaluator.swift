@@ -23,7 +23,26 @@ import QAudionEngine
 ///     inventing a cleaner-but-divergent design.
 public enum PeerTrustEvaluator {
 
-    public struct Evaluation {
+    /// Why `evaluateOrThrow` could not produce an evaluation at all. These are
+    /// the RETRIABLE failures (the identity-key fetch did not complete); they
+    /// are deliberately NOT folded into `.unverified`, because a result that
+    /// merely means "the request failed" must not look like a finished
+    /// "unverified" verdict (the contact-detail card used to show "Calcolo del
+    /// trust in corso…" forever after a failed fetch). A definitive "this peer
+    /// has not published an identity key" is NOT an error: that is a normal
+    /// `Evaluation` with `.unverified` and `peerIkEdPub == nil`.
+    public enum EvaluationError: Error, Equatable {
+        /// The device has no network transport.
+        case offline
+        /// No backend provider yet, transport failure, server error, cancelled
+        /// request or an unreadable key response.
+        case unreachable
+        /// No answer within the caller's deadline (raised by the screen's
+        /// state machine, never by `evaluateOrThrow` itself).
+        case timeout
+    }
+
+    public struct Evaluation: Equatable {
         public let state: TrustSafetyNumberState
         public let safetyNumber: TrustSafetyNumber
         public let verifiedAt: Date?
@@ -38,16 +57,37 @@ public enum PeerTrustEvaluator {
     /// Resolve + evaluate trust for `peerUserId`. Never throws: every
     /// failure path (no self identity, peer never published, network
     /// error, bad UUID) degrades to `.unverified` with an empty safety
-    /// number, matching Android's graceful-degrade contract.
+    /// number, matching Android's graceful-degrade contract. Callers that
+    /// must tell "failed to fetch" from "finished: unverified" (the contact
+    /// detail screen) use `evaluateOrThrow` instead; this wrapper keeps the
+    /// graceful-degrade behaviour for the ones that do not (GroupSecuritySheet).
     @MainActor
     public static func evaluate(peerUserId: String, provider: BCryptoBackendProvider?) async -> Evaluation {
-        let unverified = Evaluation(
-            state: .unverified,
-            safetyNumber: TrustSafetyNumber(groups: [], fingerprintHex: ""),
-            verifiedAt: nil,
-            verificationMethod: nil,
-            peerIkEdPub: nil
-        )
+        do {
+            return try await evaluateOrThrow(peerUserId: peerUserId, provider: provider)
+        } catch {
+            return unverifiedEvaluation
+        }
+    }
+
+    private static let unverifiedEvaluation = Evaluation(
+        state: .unverified,
+        safetyNumber: TrustSafetyNumber(groups: [], fingerprintHex: ""),
+        verifiedAt: nil,
+        verificationMethod: nil,
+        peerIkEdPub: nil
+    )
+
+    /// Same evaluation as `evaluate`, with the same trust / TOFU decisions, but
+    /// a failure to FETCH the peer's identity key is thrown (`EvaluationError`)
+    /// instead of being flattened into `.unverified`. Local-only outcomes are
+    /// unchanged: a SAS-confirmed pinned key still resolves to `.userVerified`
+    /// without the server, and a peer that has not published a key (HTTP 404),
+    /// a missing local identity or a malformed UUID still return the
+    /// `.unverified` evaluation.
+    @MainActor
+    public static func evaluateOrThrow(peerUserId: String, provider: BCryptoBackendProvider?) async throws -> Evaluation {
+        let unverified = unverifiedEvaluation
 
         guard let selfUserId = AppState.currentUserIdSnapshot, !selfUserId.isEmpty,
               selfUserId != peerUserId,
@@ -59,11 +99,26 @@ public enum PeerTrustEvaluator {
         }
 
         let serverKey: Data?
-        if let provider, let fetched = await provider.kmsClient.fetchUserIdentityKey(userId: peerUserId),
-           fetched.count == 32 {
-            serverKey = fetched
+        // Why there is no server key, when there is none: only a FAILED fetch
+        // (offline / transport / server error) is retriable and is thrown
+        // below; a 404 is a definitive "never published".
+        var fetchFailure: EvaluationError?
+        if let provider {
+            switch await provider.kmsClient.fetchUserIdentityKeyOutcome(userId: peerUserId) {
+            case .key(let fetched) where fetched.count == 32:
+                serverKey = fetched
+            case .key, .failed:
+                serverKey = nil
+                fetchFailure = .unreachable
+            case .offline:
+                serverKey = nil
+                fetchFailure = .offline
+            case .notPublished:
+                serverKey = nil
+            }
         } else {
             serverKey = nil
+            fetchFailure = .unreachable
         }
         guard let peerIkEdPub = serverKey else {
             // R-VERIFIED-MARK: no server key (the situation a SAS-confirmed pin exists for:
@@ -84,6 +139,7 @@ public enum PeerTrustEvaluator {
                     safetyNumber: TrustSafetyNumber(groups: computed.groups, fingerprintHex: computed.fingerprintHex),
                     verifiedAt: verifiedAt, verificationMethod: .antiReplay, peerIkEdPub: hit.key)
             }
+            if let fetchFailure { throw fetchFailure }
             return unverified
         }
 
