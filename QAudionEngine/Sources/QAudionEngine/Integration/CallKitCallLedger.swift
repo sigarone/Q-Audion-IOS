@@ -146,6 +146,16 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// never reused - one UUID per native call that skipped its report.
     private var nativeBalanceUUIDs: Set<UUID> = []
 
+    /// W-CALLERBUSY (review of #169) — uuids whose `reportCallEnded` has already run, oldest first, capped at
+    /// `endedCapacity` (a uuid is never reused, so an aged-out entry only means "an activation that late is not
+    /// something this app can still be racing"). Read by ``markAudioSelfActivatedUnlessEnded(_:)``: an outgoing
+    /// call's `CXStartCallAction` handler fulfils and then spawns an unstructured `Task` that activates the audio
+    /// session, so a `call_busy` can have ended the call (and run the end balance) BEFORE that activation lands.
+    /// `outstandingUUIDs` cannot answer "has this call ended": an outgoing uuid is recorded there only after
+    /// `startOutgoingCall`'s `await` returns, which can be AFTER that activation, and a foreground answer never is.
+    private var endedUUIDs: [UUID] = []
+    private static let endedCapacity = 128
+
     init() {}
 
     /// W-ADMBALANCE-UUID — `uuid` is a native-SRTP call (its end owes the
@@ -192,11 +202,42 @@ final class CallKitCallLedger: @unchecked Sendable {
     func markAudioSelfActivated(_ uuid: UUID?) {
         lock.lock()
         defer { lock.unlock() }
+        markAudioSelfActivatedLocked(uuid)
+    }
+
+    private func markAudioSelfActivatedLocked(_ uuid: UUID?) {
         if let uuid, nativeUUIDs.contains(uuid) {
             selfActivatedNativeUUIDs.insert(uuid)
         } else {
             audioSelfActivated = true
         }
+    }
+
+    /// What a successful `setActive(true)` of `activateAudioSession` owes.
+    enum SelfActivationOutcome: Equatable {
+        /// The call is still open: the activation is marked (``markAudioSelfActivated(_:)``) and the normal
+        /// callbacks run. The end of the call will balance it.
+        case owed
+        /// The call's `reportCallEnded` already ran, so its end balance was decided WITHOUT this activation and
+        /// nothing will ever balance it: the caller must `setActive(false)` at once, and must not run
+        /// `onAudioSessionActivated` (it would set `CallService.audioSessionActive = true` after the teardown
+        /// cleared it and pre-satisfy the W464 gate of the NEXT call). Nothing is marked.
+        case callAlreadyEnded
+    }
+
+    /// W-CALLERBUSY (review of #169) — ``markAudioSelfActivated(_:)`` for an activation that may land after the
+    /// call's own end, decided in ONE critical section with the ended mark ``consumeEndBalance(_:)`` leaves:
+    /// whichever of the two runs second sees the other. Activation first: ``SelfActivationOutcome/owed``, and the
+    /// end report finds the mark and balances it (the normal order). End first:
+    /// ``SelfActivationOutcome/callAlreadyEnded``, and the mark is NOT set, so neither the uuid's own key nor the
+    /// process-wide legacy flag (which the next, unrelated call would consume as its own self-activation) is
+    /// touched. A `nil` uuid cannot have ended.
+    func markAudioSelfActivatedUnlessEnded(_ uuid: UUID?) -> SelfActivationOutcome {
+        lock.lock()
+        defer { lock.unlock() }
+        if let uuid, endedUUIDs.contains(uuid) { return .callAlreadyEnded }
+        markAudioSelfActivatedLocked(uuid)
+        return .owed
     }
 
     /// What `reportCallEnded` must do to balance `uuid`'s self-activation.
@@ -231,6 +272,11 @@ final class CallKitCallLedger: @unchecked Sendable {
     func consumeEndBalance(_ uuid: UUID) -> EndBalance {
         lock.lock()
         defer { lock.unlock() }
+        // W-CALLERBUSY — from here on an activation for this uuid is late (see `endedUUIDs`).
+        if !endedUUIDs.contains(uuid) {
+            endedUUIDs.append(uuid)
+            if endedUUIDs.count > Self.endedCapacity { endedUUIDs.removeFirst(endedUUIDs.count - Self.endedCapacity) }
+        }
         if nativeBalanceUUIDs.remove(uuid) != nil {
             let selfActivated = selfActivatedNativeUUIDs.remove(uuid) != nil
             return EndBalance(nativeManualCall: true, selfActivated: selfActivated, duplicateNative: false)
