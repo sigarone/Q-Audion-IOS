@@ -34,6 +34,7 @@ targets:
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
           - PersistentCallRecordStoreTests.swift
+          - TrustEvaluationModelTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

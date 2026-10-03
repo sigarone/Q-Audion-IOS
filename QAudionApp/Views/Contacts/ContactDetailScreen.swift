@@ -55,14 +55,17 @@ struct ContactDetailScreen: View {
     /// nil — showing "—" — for the current no-prefix/"Int. NNN" rendering).
     @State private var peerExtension: String? = nil
     /// Real persistent safety-number + TOFU trust-state evaluation (W36
-    /// wiring). nil while the initial server fetch + HKDF derivation is
-    /// still in flight — the card renders `.unverified` ("Calcolo del
-    /// trust in corso…") in that window, same as a genuine no-pin state.
-    @State private var trustEval: PeerTrustEvaluator.Evaluation? = nil
-    /// The peer's raw Ed25519 identity key resolved by the last
-    /// `loadTrustEvaluation()` call. Needed by `onAcceptNewFingerprint` to
-    /// re-pin without re-fetching.
-    @State private var lastPeerIkEdPub: Data? = nil
+    /// wiring), as an explicit loading / loaded / failed state machine
+    /// (`TrustEvaluationModel`). Before this the screen kept an optional
+    /// result: a failed server fetch was flattened into `.unverified` and the
+    /// card showed "Calcolo del trust in corso…" forever (reports 2548ffa3,
+    /// 3b24290e). Failures now surface with a message and "Riprova", and are
+    /// retried automatically when the persistent socket reconnects.
+    @StateObject private var trustModel = TrustEvaluationModel()
+    /// The last successful evaluation; nil while loading or after a failure.
+    /// Carries the peer's raw Ed25519 identity key (`peerIkEdPub`), which
+    /// `onAcceptNewFingerprint` needs to re-pin without re-fetching.
+    private var trustEval: PeerTrustEvaluator.Evaluation? { trustModel.evaluation }
 
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -93,8 +96,14 @@ struct ContactDetailScreen: View {
                 for: item.userId, serverDisplay: item.displayName,
                 knownExtension: item.`extension`, contacts: appState.cachedContacts)
         }
-        .task(id: item.userId) {
-            await loadTrustEvaluation()
+        // One evaluation per (contact, run token): "Riprova", a reconnect and
+        // a local action (mark verified / accept new identity) bump the token,
+        // which cancels a superseded run and starts the next one.
+        .task(id: TrustRunKey(userId: item.userId, token: trustModel.runToken)) {
+            await trustModel.run(peerUserId: item.userId, evaluator: trustEvaluator)
+        }
+        .onChange(of: appState.wsConnectionState) { newState in
+            trustModel.connectionStateChanged(to: newState)
         }
         .alert("Eliminare il contatto?", isPresented: $showingDeleteConfirm) {
             Button("Annulla", role: .cancel) {}
@@ -139,7 +148,7 @@ struct ContactDetailScreen: View {
                       !eval.safetyNumber.fingerprintHex.isEmpty else { return }
                 let fp = eval.safetyNumber.fingerprintHex
                 PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
-                Task { await loadTrustEvaluation() }
+                trustModel.refresh()
                 snackbar?.show(.init(
                     text: String(localized: "contact_detail.contact_verified_via", defaultValue: "\(item.displayName) verificato via \(method.localized).", comment: "Snackbar — a contact was verified via SAS; first %@ is their display name, second %@ is the verification method"),
                     severity: .info
@@ -543,9 +552,7 @@ struct ContactDetailScreen: View {
             .padding(.bottom, 12)
 
             trustFactorRow(label: "Identità pubblicata",
-                           description: trustEval == nil
-                               ? "Verifica in corso…"
-                               : (identityPublished ? "IK pubblicata sulla directory bcrypto" : "Impossibile risolvere l'identità del contatto"),
+                           description: trustIdentityRowDescription(identityPublished: identityPublished),
                            done: identityPublished)
             divider
             // Feature B ("voce verificata") — FIXED: this row used to read
@@ -652,33 +659,67 @@ struct ContactDetailScreen: View {
                 onMarkVerified: { method in
                     guard let fp = trustEval?.safetyNumber.fingerprintHex, !fp.isEmpty else { return }
                     PeerTrustEvaluator.markVerified(peerUserId: item.userId, method: method, fingerprintHex: fp)
-                    Task { await loadTrustEvaluation() }
+                    trustModel.refresh()
                     snackbar?.show(.init(
                         text: String(localized: "contact_detail.identity_marked_verified", defaultValue: "Identità di \(item.displayName) marcata verificata via \(method.localized).", comment: "Snackbar — the contact's identity was marked verified from the safety-number card; first %@ is their display name, second %@ is the verification method"),
                         severity: .info
                     ))
                 },
                 onAcceptNewFingerprint: {
-                    guard let newKey = lastPeerIkEdPub else { return }
+                    guard let newKey = trustEval?.peerIkEdPub else { return }
                     PeerTrustEvaluator.acceptNewFingerprint(peerUserId: item.userId, newPeerIkEdPub: newKey)
-                    Task { await loadTrustEvaluation() }
+                    trustModel.refresh()
                     snackbar?.show(.init(
                         text: String(localized: "contact_detail.new_identity_accepted", defaultValue: "Nuova identità accettata.", comment: "Snackbar — the contact's rotated identity key was accepted, re-pinning trust"),
                         severity: .warning
                     ))
-                }
+                },
+                phase: trustCardPhase,
+                onRetry: { trustModel.retry() }
             )
         }
     }
 
-    /// Resolve the peer's published Ed25519 identity + compute the
-    /// persistent safety number, then re-render. Called on-appear and
-    /// after any mark-verified / accept-new-identity action.
-    @MainActor
-    private func loadTrustEvaluation() async {
-        let eval = await PeerTrustEvaluator.evaluate(peerUserId: item.userId, provider: appState.liveProvider)
-        trustEval = eval
-        lastPeerIkEdPub = eval.peerIkEdPub
+    /// Maps the state machine onto the card's loading / ready / failed phase.
+    private var trustCardPhase: TrustCardPhase {
+        switch trustModel.phase {
+        case .loading:
+            return .loading
+        case .loaded:
+            return .ready
+        case .failed(let error):
+            return .failed(message: TrustEvaluationModel.message(for: error))
+        }
+    }
+
+    /// Description of the "Identità pubblicata" row, which must follow the same
+    /// three phases as the card (it used to read "Verifica in corso…" for as
+    /// long as there was no result, which after a failed fetch was forever).
+    private func trustIdentityRowDescription(identityPublished: Bool) -> String {
+        switch trustModel.phase {
+        case .loading:
+            return "Verifica in corso…"
+        case .failed:
+            return String(localized: "contact_detail.trust.identity_failed", defaultValue: "Verifica non riuscita: usa «Riprova» nel numero di sicurezza.", comment: "Trust row description — the identity lookup failed; the safety-number card below offers a retry button")
+        case .loaded:
+            return identityPublished ? "IK pubblicata sulla directory bcrypto" : "Impossibile risolvere l'identità del contatto"
+        }
+    }
+
+    /// Key of the evaluation `.task`: the contact plus the state machine's run
+    /// token, so a retry / reconnect / local action restarts the evaluation.
+    private struct TrustRunKey: Hashable {
+        let userId: String
+        let token: Int
+    }
+
+    /// The evaluator the state machine runs. `liveProvider` is read when the
+    /// evaluation starts (not when the screen is built), so a retry after the
+    /// backend came up uses the live provider.
+    private var trustEvaluator: TrustEvaluationModel.Evaluator {
+        { [appState = self.appState] userId in
+            try await PeerTrustEvaluator.evaluateOrThrow(peerUserId: userId, provider: appState.liveProvider)
+        }
     }
 
     // MARK: - Presence-auth card (W-ASSURANCE ship step 6/8)
@@ -874,7 +915,7 @@ struct ContactDetailScreen: View {
     }()
 
     private var lastVerificationLabel: String {
-        guard let eval = trustEval else { return "…" }
+        guard let eval = trustEval else { return trustModel.failure == nil ? "…" : "—" }
         switch eval.state {
         case .userVerified:
             guard let date = eval.verifiedAt else { return "Verificato" }

@@ -269,16 +269,44 @@ public final class BCryptoKmsClient {
     /// to the bare `fetchUserIdentityKey(userId:)`. Never a partial/garbage key
     /// (caller falls through to bundle-TOFU on first contact rather than aborting).
     public func fetchUserIdentityKey(userId: String, deviceId: String?) async -> Data? {
-        guard !userId.isEmpty else { return nil }
+        if case .key(let raw) = await fetchUserIdentityKeyOutcome(userId: userId, deviceId: deviceId) {
+            return raw
+        }
+        return nil
+    }
+
+    /// Why an identity-key fetch did not produce a key. `fetchUserIdentityKey`
+    /// collapses every non-key outcome to `nil` (its callers fall through to
+    /// bundle-TOFU on purpose), which is right for the call handshake but
+    /// makes "this peer never published a key" indistinguishable from "the
+    /// request failed" — a UI that must tell the user which one happened
+    /// (the contact-detail safety-number card) reads this instead.
+    public enum IdentityKeyFetchOutcome: Equatable {
+        /// The peer's published Ed25519 signing key (RAW 32 bytes).
+        case key(Data)
+        /// The server answered 404: the peer has not published an identity key.
+        case notPublished
+        /// The device has no network transport (`rest.isOffline`); no request was made.
+        case offline
+        /// Transport error, a non-404 HTTP error, a cancelled request, or a
+        /// 200 whose body is not a usable 32-byte key. Retrying can help.
+        case failed
+    }
+
+    /// Same request as `fetchUserIdentityKey(userId:deviceId:)` (that method
+    /// now delegates here, so there is one implementation), but reports WHY
+    /// no key came back instead of a bare `nil`.
+    public func fetchUserIdentityKeyOutcome(userId: String, deviceId: String? = nil) async -> IdentityKeyFetchOutcome {
+        guard !userId.isEmpty else { return .failed }
         // IOS-E2 leg (3) — offline-aware + bounded: this is the exact
         // endpoint that hung 47.7 s on Android's zombie pooled connection
         // (StaleConnectionEvictor.kt kdoc). When the device has no network
         // transport at all, `rest`'s bounded 15 s request timeout would
         // still burn its full duration finding that out; `rest.isOffline`
         // (NWPathMonitor-backed) answers it for free, in-process, with zero
-        // network round trips. Caller already treats a nil return as
-        // "fall through to bundle-TOFU" — identical to a genuine 404/error.
-        guard !rest.isOffline else { return nil }
+        // network round trips. The nil-returning wrapper above treats this
+        // as "fall through to bundle-TOFU" — identical to a genuine 404/error.
+        guard !rest.isOffline else { return .offline }
         var path = "/api/v1/users/\(userId)/identity-key"
         if let d = deviceId, !d.isEmpty {
             // device_id is a server-stamped UUID (`sender_device_id`), URL-safe,
@@ -289,17 +317,19 @@ public final class BCryptoKmsClient {
         do {
             let data = try await rest.get(path)
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return nil
+                return .failed
             }
             let b64: String? = (json["ed25519_pub_b64"] as? String) ?? (json["public_key_b64"] as? String)
             guard let keyB64 = b64,
                   let raw = Data(base64Encoded: keyB64),
                   raw.count == 32 else {
-                return nil
+                return .failed
             }
-            return raw
+            return .key(raw)
+        } catch BCryptoError.httpError(404) {
+            return .notPublished
         } catch {
-            return nil
+            return .failed
         }
     }
 
