@@ -20781,7 +20781,13 @@ extension AppState {
         // cifrato non leggibile]". Triggering now ensures both sides refresh to
         // a fresh X25519 shared secret before any post-call message is sent.
         // Fire-and-forget (triggerKeyExchange is try?-wrapped inside).
-        if let peer = callContactId { triggerKeyExchange(with: peer) }
+        //
+        // W-CALLERBUSY (review of #169) — gated by `announcesToPeer` like every other peer-bound send in this
+        // teardown. `ContactKeyExchange.initiate(force: false)` always sends an opaque KEY_EXCHANGE_OFFER, so
+        // ungated, every busy / unreachable dial would send one to a callee who is inside ANOTHER call or offline:
+        // for those two outcomes the call never rang there, no handshake ran and there is nothing to refresh.
+        // Ordinary endings (`outcome == nil`, `announcesToPeer == true`) are unchanged.
+        if announcesToPeer, let peer = callContactId { triggerKeyExchange(with: peer) }
         callContactId = nil
         incomingCallerName = ""
         activeCallKitId = nil

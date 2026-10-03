@@ -240,6 +240,14 @@ final class CallKitCallLedger: @unchecked Sendable {
         return .owed
     }
 
+    /// Remember that `uuid`'s call has ended (see `endedUUIDs`), oldest first, capped at `endedCapacity`. Idempotent.
+    /// The caller holds `lock`.
+    private func markEndedLocked(_ uuid: UUID) {
+        guard !endedUUIDs.contains(uuid) else { return }
+        endedUUIDs.append(uuid)
+        if endedUUIDs.count > Self.endedCapacity { endedUUIDs.removeFirst(endedUUIDs.count - Self.endedCapacity) }
+    }
+
     /// What `reportCallEnded` must do to balance `uuid`'s self-activation.
     struct EndBalance: Equatable {
         /// `uuid` is a native-SRTP call (see ``recordNativeBalance(_:)``):
@@ -273,10 +281,7 @@ final class CallKitCallLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         // W-CALLERBUSY — from here on an activation for this uuid is late (see `endedUUIDs`).
-        if !endedUUIDs.contains(uuid) {
-            endedUUIDs.append(uuid)
-            if endedUUIDs.count > Self.endedCapacity { endedUUIDs.removeFirst(endedUUIDs.count - Self.endedCapacity) }
-        }
+        markEndedLocked(uuid)
         if nativeBalanceUUIDs.remove(uuid) != nil {
             let selfActivated = selfActivatedNativeUUIDs.remove(uuid) != nil
             return EndBalance(nativeManualCall: true, selfActivated: selfActivated, duplicateNative: false)
@@ -407,6 +412,12 @@ final class CallKitCallLedger: @unchecked Sendable {
         for uuid in stale {
             nativelyReportedUUIDs.remove(uuid)
             callKitRejectedUUIDs.remove(uuid)
+            // W-CALLERBUSY (review of #169) — the provider reports every drained uuid ended, and that report
+            // carries no `consumeEndBalance` of its own for a reaper-closed call. Mark them ended here, in the
+            // same critical section, so an activation that lands later for such a uuid is recognised as late
+            // (``markAudioSelfActivatedUnlessEnded(_:)`` answers `callAlreadyEnded` and balances it) instead of
+            // leaving the shared audio session one activation too high.
+            markEndedLocked(uuid)
         }
         outstandingUUIDs.removeAll()
         return stale

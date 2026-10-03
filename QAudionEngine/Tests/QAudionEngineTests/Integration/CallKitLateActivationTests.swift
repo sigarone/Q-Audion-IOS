@@ -94,6 +94,62 @@ final class CallKitLateActivationTests: XCTestCase {
         XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(recent), .callAlreadyEnded)
     }
 
+    /// A call closed by the reaper (`CallKitProvider.endAllOutstanding`, which reports the uuid ended without any
+    /// `consumeEndBalance`) is also "ended": a start Task whose activation lands afterwards is balanced at once,
+    /// not left one activation too high, and it marks nothing for the next call.
+    func testAnActivationAfterTheReaperDrainIsLateAndMarksNothing() {
+        let ledger = CallKitCallLedger()
+        let reaped = UUID()
+        ledger.recordOutstanding(reaped)
+        XCTAssertEqual(ledger.drainOutstanding(), [reaped])
+
+        XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(reaped), .callAlreadyEnded)
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated, "the late activation leaked into the legacy flag")
+    }
+
+    /// Only what the drain actually closed is marked: a call still open, and a uuid that was only suppressed
+    /// (rejected, never reported), keep the normal behaviour.
+    func testTheDrainMarksOnlyTheUuidsItClosed() {
+        let ledger = CallKitCallLedger()
+        let reaped = UUID()
+        let suppressedOnly = UUID()
+        ledger.recordOutstanding(reaped)
+        ledger.recordRejected(suppressedOnly)
+        _ = ledger.drainOutstanding()
+
+        XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(reaped), .callAlreadyEnded)
+        XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(suppressedOnly), .owed)
+        let later = UUID()
+        ledger.recordOutstanding(later)
+        XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(later), .owed, "recorded after the drain: still open")
+    }
+
+    /// The drain shares the end report's bounded memory and never duplicates an entry: a uuid the end report already
+    /// marked, drained afterwards, does not grow the list and so cannot push the oldest entry out early.
+    func testTheDrainDoesNotDuplicateAnEntryTheEndReportAlreadyMade() {
+        let ledger = CallKitCallLedger()
+        let full = (0..<128).map { _ in UUID() }               // exactly the capacity, oldest first
+        for uuid in full { _ = ledger.consumeEndBalance(uuid) }
+        ledger.recordOutstanding(full[64])                     // an end report that raced the drain's snapshot
+        _ = ledger.drainOutstanding()
+
+        XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(full[0]), .callAlreadyEnded,
+                       "the oldest entry is still remembered: the re-mark did not grow the list")
+        XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(full[64]), .callAlreadyEnded)
+    }
+
+    /// Same 128 cap as the end report: of 200 uuids closed by one drain, exactly 128 are remembered (a drain has no
+    /// order among its uuids, so which 128 is not pinned).
+    func testTheDrainIsCappedLikeTheEndReport() {
+        let ledger = CallKitCallLedger()
+        let many = (0..<200).map { _ in UUID() }
+        for uuid in many { ledger.recordOutstanding(uuid) }
+        XCTAssertEqual(ledger.drainOutstanding().count, 200)
+
+        let remembered = many.filter { ledger.markAudioSelfActivatedUnlessEnded($0) == .callAlreadyEnded }.count
+        XCTAssertEqual(remembered, 128)
+    }
+
     /// Whichever of the two runs second sees the other, from any thread: never both "owed" and "ended".
     func testConcurrentActivationAndEndAreNeverBothMissed() {
         /// One slot per side, written from one thread each.
@@ -151,6 +207,9 @@ final class CallKitLateActivationTests: XCTestCase {
 
         /// `AppState.endCall` -> `callService.endCall()`: the session is no longer active for the app.
         func teardown() { audioSessionActive = false }
+
+        /// `CallKitProvider.endAllOutstanding`: the reaper reports every drained uuid ended with no end balance.
+        func reapOutstanding() { _ = ledger.drainOutstanding() }
     }
 
     /// The incident: the busy teardown (report + teardown) runs, THEN the start action's Task activates the session.
@@ -176,6 +235,20 @@ final class CallKitLateActivationTests: XCTestCase {
         s.teardown()
         s.reportCallEnded(uuid: redial)
         XCTAssertEqual(s.activationCount, 0, "the redial balances normally")
+    }
+
+    /// The reaper closes the call (no end balance), THEN the start Task activates: balanced at once, gate closed.
+    func testReapedCallThenLateActivationLeavesTheSessionBalanced() {
+        let s = AudioSide()
+        let uuid = UUID()
+        s.ledger.recordOutstanding(uuid)                 // the outgoing uuid, recorded after `request` returned
+        s.teardown()
+        s.reapOutstanding()
+        s.activate(uuid: uuid)
+
+        XCTAssertEqual(s.activationCount, 0)
+        XCTAssertFalse(s.audioSessionActive)
+        XCTAssertEqual(s.activationCallbacks, 0)
     }
 
     /// The normal order is untouched: activation, then the end report.

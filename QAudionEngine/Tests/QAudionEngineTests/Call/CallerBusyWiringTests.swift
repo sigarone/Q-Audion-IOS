@@ -252,6 +252,20 @@ final class CallerBusyWiringTests: XCTestCase {
         assertOrder(
             body, "CallMediaTelemetry.shared.recordEnded(", before: "impl.unbindActiveCallId(matching: endedId)",
             "every read of the bound id (telemetry, key-confirmation state) happens before it is dropped")
+        // The W564 post-call key exchange: `ContactKeyExchange.initiate(force: false)` always sends an opaque
+        // KEY_EXCHANGE_OFFER, so for a busy / unreachable callee (in another call, or offline) it is gated too.
+        XCTAssertTrue(
+            body.contains("if announcesToPeer, let peer = callContactId { triggerKeyExchange(with: peer) }"),
+            "the post-call key exchange offer is gated by the outcome")
+        XCTAssertFalse(
+            body.contains("if let peer = callContactId { triggerKeyExchange(with: peer) }"),
+            "the ungated post-call key exchange must not come back")
+        XCTAssertEqual(body.components(separatedBy: "triggerKeyExchange(with:").count - 1, 1,
+                       "one key exchange trigger in the teardown, and it is the gated one")
+        assertOrder(
+            body, "if announcesToPeer, let peer = callContactId { triggerKeyExchange(with: peer) }",
+            before: "callContactId = nil",
+            "the offer reads the contact before the teardown clears it")
     }
 
     // MARK: - review of #169, item 3: the guard is call-scoped
