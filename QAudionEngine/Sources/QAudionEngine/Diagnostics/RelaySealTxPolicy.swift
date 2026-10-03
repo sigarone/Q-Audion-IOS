@@ -49,7 +49,7 @@ public enum RelaySealTxPolicy {
         case .sendPlain:
             return frame
         case .hold:
-            return frame   // TEMP-MUTANT-M3: sends the frame plain while held
+            return nil
         }
     }
 }

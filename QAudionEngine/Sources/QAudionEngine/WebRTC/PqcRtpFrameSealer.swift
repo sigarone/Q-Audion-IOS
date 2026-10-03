@@ -150,7 +150,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         case replayRejected
 
         /// True for the anti-replay rejection, false for every authentication / framing failure.
-        public var isReplayRejection: Bool { false /* TEMP-MUTANT-M5 */ }
+        public var isReplayRejection: Bool { self == .replayRejected }
     }
 
     /// W-M15ORDER — test seam: runs after the AEAD tag verified and BEFORE the counter is
@@ -316,8 +316,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         }()
         // M-14: reject replays before attempting AEAD open (saves crypto cost). READ-ONLY: the
         // window is not touched until the tag has verified.
-        // TEMP-MUTANT-M1: the old order (record the counter BEFORE the tag is verified).
-        guard commitReplay(counter: wireCounter) else {
+        guard replayWouldAccept(counter: wireCounter) else {
             throw SealerError.replayRejected
         }
         let tag = sealed.suffix(Self.tagSize)
@@ -331,7 +330,11 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             throw SealerError.openFailed
         }
         afterAuthenticateHook?()
-        // TEMP-MUTANT-M1: nothing recorded here any more.
+        // Authenticated: record now. The re-check under the lock is what makes two concurrent
+        // copies of the same frame resolve to exactly one acceptance.
+        guard commitReplay(counter: wireCounter) else {
+            throw SealerError.replayRejected
+        }
         return plaintext
     }
 
