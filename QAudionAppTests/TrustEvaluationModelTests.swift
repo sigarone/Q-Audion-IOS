@@ -110,7 +110,7 @@ final class TrustEvaluationModelTests: XCTestCase {
         let started = Date()
         await model.run(peerUserId: "p") { _ in
             // Deliberately not cancellable: resumes only when the timer fires.
-            try await withCheckedThrowingContinuation { (continuation: CheckedThrowingContinuation<PeerTrustEvaluator.Evaluation, Error>) in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PeerTrustEvaluator.Evaluation, Error>) in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     continuation.resume(returning: late)
                 }
