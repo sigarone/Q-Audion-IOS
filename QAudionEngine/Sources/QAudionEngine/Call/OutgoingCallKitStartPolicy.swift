@@ -38,6 +38,29 @@ public enum OutgoingCallKitStartPolicy {
         if callStillCurrent { return .adopt }
         return .endAtOnce(endedBy?.callKitEndReason ?? .userEnded)
     }
+
+    // MARK: - the branches that have no CallKit uuid to settle
+
+    /// What `startCall`'s CallKit `Task` does in the three branches that have NO CallKit call to adopt: CallKit-free
+    /// mode, `startOutgoingCall` returning `nil`, and `startOutgoingCall` throwing. Each of them self-activates the
+    /// call's audio (`CallService.handleAudioSessionActivated()`, then the ring-back cue's
+    /// `markOutgoingAudioSessionReady()`), and each runs in that unstructured `Task`, i.e. possibly after the call
+    /// has already ended: a `call_busy` that landed first has cleared `CallService.audioSessionActive` in the
+    /// teardown, and activating afterwards sets it back to `true` with no call behind it, so the redial starts with
+    /// the W464 gate already satisfied (the redial's own audio engine may then start before ITS activation).
+    public enum FallbackDecision: Equatable {
+        /// The call is still the current one: self-activate its audio, as before.
+        case activateSession
+        /// The call is over: activate nothing. The teardown already released the audio and the next call
+        /// activates its own.
+        case callIsOver
+    }
+
+    /// - Parameter callStillCurrent: the same value ``decide(callStillCurrent:endedBy:)`` takes (in a call, and the
+    ///   accept latch still names this call's wire id).
+    public static func decideFallback(callStillCurrent: Bool) -> FallbackDecision {
+        callStillCurrent ? .activateSession : .callIsOver
+    }
 }
 
 /// W-CALLERBUSY — how the outgoing call `callId` ended, when a caller-side terminal envelope ended it. `AppState`

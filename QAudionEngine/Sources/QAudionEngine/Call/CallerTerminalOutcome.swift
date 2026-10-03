@@ -52,6 +52,12 @@ public enum CallerTerminalOutcome: String, CaseIterable, Equatable, Sendable {
         }
     }
 
+    /// Whether the teardown tells the callee anything (`call_hangup` envelope, the opaque `HANGUP`, the in-band control
+    /// frame): never. The call never rang there (a busy callee is inside ANOTHER call, an unreachable one has no
+    /// connection), so a hangup would reach a callee that is mid-call with someone else. Android
+    /// `hangup(reason = "busy" | "peer_offline", notifyPeer = false)` sends nothing either.
+    public var sendsHangupToPeer: Bool { false }
+
     /// The busy tone plays for `call_busy` only. An unreachable callee gets the message on screen, no tone
     /// (Android plays none for it either).
     public var playsBusyTone: Bool { self == .busy }
