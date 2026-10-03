@@ -127,3 +127,33 @@ enum AuthFailureClassifier {
         return (error as NSError).domain == NSURLErrorDomain
     }
 }
+
+/// When may the app wipe the stored session because a request failed?
+///
+/// `BCryptoError.unauthorized` is the one error that answers "the credentials are gone", and
+/// the app answers it with `clearToken()` and a forced QR re-pair, so it must never be raised
+/// for a transient failure (see `BCryptoRestClient.tryRefreshToken`: only a failure that
+/// `provesCredentialLoss` surfaces as `.unauthorized`, everything else is a
+/// `BCryptoSessionRecoveryError` or a plain network error). This is the second lock on that
+/// door, applied at the one place that wipes the session after a REST failure (the launch
+/// `getProfile` catch): even `.unauthorized` wipes only the session the request was made for.
+public enum AuthSessionLossPolicy {
+
+    /// - Parameters:
+    ///   - error: what the request threw.
+    ///   - requestAccessToken: the access token the failed request (the launch one) used.
+    ///   - storedAccessToken: what the credential store holds now.
+    /// - Returns: `true` only for `BCryptoError.unauthorized` while the store still holds the
+    ///   session that request was made for (or nothing). A store that holds another access
+    ///   token belongs to a session that replaced it (logout, then a different login: the
+    ///   coordinator's `account_changed`): wiping it would sign the NEW account out.
+    public static func shouldClearSession(after error: Error,
+                                          requestAccessToken: String?,
+                                          storedAccessToken: String?) -> Bool {
+        guard case BCryptoError.unauthorized = error else { return false }
+        if let stored = storedAccessToken, !stored.isEmpty, stored != requestAccessToken {
+            return false
+        }
+        return true
+    }
+}

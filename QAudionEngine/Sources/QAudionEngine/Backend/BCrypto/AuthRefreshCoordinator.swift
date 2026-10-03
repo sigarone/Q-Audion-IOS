@@ -45,6 +45,16 @@ import Foundation
 //      handoff, a gateway 502/503/504, a locked Keychain) only keeps the 5/15/45/120 s ladder:
 //      the server's own limiter (a free 429 once the burst is used) is the safety net there.
 //
+// One more rule keeps a single hung request from freezing every caller:
+//
+//   5. A flight has an overall deadline (`defaultFlightDeadlineSec`, 60 s: above the 3 x 15 s
+//      that a refresh + challenge + renew can legitimately spend on the REST session's idle
+//      timeout). When it expires the flight ends with the transient `flight_timeout` failure:
+//      every waiter is released, the slot is freed and the ordinary ladder applies. The work
+//      itself is cancelled but may still finish later; its result is still written with
+//      compare-and-swap (the server may well have rotated the pair, so dropping it would lose
+//      the new token), never over a newer pair, and a late rejection never starts a renew leg.
+//
 // The coordinator is Foundation-only on purpose: it holds no secrets in logs, has no
 // dependency on the transport, and is exercised by plain unit tests.
 
@@ -113,6 +123,13 @@ public enum AuthRecoveryReason: String, Sendable, Equatable {
     case accountChanged = "account_changed"
     /// Device-renew is waiting out its own rate-limit budget (`last=` is the failure that started it).
     case renewBudget = "renew_budget"
+    /// The flight did not finish within its deadline (a request or a Keychain access that hung).
+    /// Transient: the work may still finish later and its result is compare-and-swapped then.
+    case flightTimeout = "flight_timeout"
+    /// A recovery that SUCCEEDED (fresh or adopted tokens), yet the retried request was rejected
+    /// with 401 again. Raised by the REST client, never by the coordinator. The session was just
+    /// proven alive, so this is not a loss of credentials.
+    case rejectedAfterRecovery = "rejected_after_recovery"
 
     case refreshRejected = "refresh_rejected"
     case refreshNetwork = "refresh_network"
@@ -159,6 +176,20 @@ public struct AuthRecoveryFailure: Error, Sendable, Equatable {
         var s = "reason=\(reason.rawValue) status=\(status ?? 0) final=\(isFinal ? 1 : 0)"
         if let u = underlyingReason { s += " last=\(u.rawValue)" }
         return s
+    }
+
+    /// True only when this failure PROVES the session's credentials are gone, so the caller
+    /// may surface `BCryptoError.unauthorized` (which the app answers with a forced QR re-pair):
+    /// the server revoked the device (device-renew 403), the device has no credential left to
+    /// renew with, the store was signed out, or it now holds another account (all `isFinal`:
+    /// the same set that parks the socket), or no recovery path exists at all for this client
+    /// (`no_recovery_path`: a store-less / unwired client such as login or onboarding, whose
+    /// 401 is simply the answer). Everything else (a cooldown after a transient failure, a
+    /// network error, a 5xx or 429, the renew budget, a locked Keychain, a flight timeout)
+    /// says nothing about the credentials and must surface as a transient error that is
+    /// retried and never clears a token.
+    public var provesCredentialLoss: Bool {
+        isFinal || reason == .noRecoveryPath
     }
 }
 
@@ -274,6 +305,13 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     /// token is definitive, but a safety valve costs one reuse event per half hour and keeps a
     /// spurious rejection from ever blocking the refresh leg for good.
     public static let deadTokenMemorySec = 1800
+    /// Overall deadline of one flight (refresh, or refresh + challenge + renew). The REST
+    /// session times a request out after 15 s of silence (`timeoutIntervalForRequest`; its
+    /// resource timeout is the 7 day default, so a trickling answer can outlive it), and the
+    /// longest legitimate cascade is a refresh, a challenge and a renew in a row: 3 x 15 s.
+    /// 60 s sits above that, so a flight that is merely slow is never cut, and a hung one
+    /// frees every caller within a minute.
+    public static let defaultFlightDeadlineSec: TimeInterval = 60
 
     /// Equality for refresh tokens where nil and "" both mean "none".
     public static func sameRefreshToken(_ a: String?, _ b: String?) -> Bool {
@@ -349,9 +387,13 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     private var epoch = 0
     private var logger: Logger?
     private let now: @Sendable () -> Date
+    private let flightDeadlineSec: TimeInterval
 
-    public init(now: @escaping @Sendable () -> Date = { Date() }) {
+    /// - Parameter flightDeadlineSec: overall deadline of one flight (tests inject a short one).
+    public init(now: @escaping @Sendable () -> Date = { Date() },
+                flightDeadlineSec: TimeInterval = AuthRefreshCoordinator.defaultFlightDeadlineSec) {
         self.now = now
+        self.flightDeadlineSec = max(0.001, flightDeadlineSec)
     }
 
     /// Install the log sink (the app routes it to `RTLog`).
@@ -489,11 +531,14 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
 
     private func runFlight(_ request: AuthRefreshRequest, sendToken: String?, expectedRefresh: String?,
                            key: String, epoch startEpoch: Int) async -> AuthRefreshOutcome {
-        var outcome = await perform(request, sendToken: sendToken, expectedRefresh: expectedRefresh, epoch: startEpoch)
+        var outcome = await performWithDeadline(request, sendToken: sendToken,
+                                                expectedRefresh: expectedRefresh, epoch: startEpoch)
         var failuresNow = 0
         // The slot is released only after the tokens are persisted (see `perform`), in the
         // same critical section that records the failure state: a late caller either joins
-        // this flight or finds the new pair in the store.
+        // this flight or finds the new pair in the store. A flight that hit its deadline
+        // releases the slot without that guarantee: its late result is still written with
+        // compare-and-swap whenever it arrives.
         lock.withLock {
             inFlight[key] = nil
             // Without a store there is no shared session to protect with a cooldown, and a
@@ -532,6 +577,60 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             emit(.info, "recovery ok trigger=\(trigger) via=adopted")
         }
         return outcome
+    }
+
+    /// Run `perform` against the flight deadline. Whichever finishes first settles the flight:
+    ///
+    ///   - `perform` first: its outcome, exactly as before.
+    ///   - The deadline first: the transient `flight_timeout` failure. The caller (`runFlight`)
+    ///     then releases every waiter and frees the slot. The work is cancelled, which stops a
+    ///     cooperative closure (a sleeping or awaiting Keychain call) and keeps `perform` from
+    ///     starting the renew leg afterwards, but a request that ignores cancellation, or a
+    ///     closure that never returns, simply stays behind: it can no longer hold anyone up.
+    ///     If it does finish later, `perform` has already written its result with
+    ///     compare-and-swap (never over a newer pair); only the log line is added here.
+    ///     (`BCryptoRestClient.request` runs each call in its own unstructured task, which the
+    ///     cancellation does not reach: there the answer, or the session's 15 s idle timeout,
+    ///     arrives on its own schedule and takes the late-result path above.)
+    ///
+    /// Deliberately NOT a task group: a group waits for every child on exit, so one hung
+    /// closure would hold the flight forever, which is the very failure being fixed.
+    private func performWithDeadline(_ request: AuthRefreshRequest, sendToken: String?,
+                                     expectedRefresh: String?, epoch startEpoch: Int) async -> AuthRefreshOutcome {
+        let gate = FlightGate()
+        let trigger = request.trigger.rawValue
+        let seconds = flightDeadlineSec
+
+        let work = Task<Void, Never> { [self] in
+            let outcome = await self.perform(request, sendToken: sendToken,
+                                             expectedRefresh: expectedRefresh, epoch: startEpoch)
+            if !gate.settle(outcome) {
+                self.emit(.info, "late flight result trigger=\(trigger) \(Self.describe(outcome)) cas_checked=1")
+            }
+        }
+        let timer = Task<Void, Never> { [self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            } catch {
+                return  // the work finished first and cancelled the timer
+            }
+            let failure = AuthRecoveryFailure(reason: .flightTimeout)
+            if gate.settle(.failed(failure)) {
+                self.emit(.warn, "flight deadline reached trigger=\(trigger) after_s=\(Int(seconds.rounded(.up))) \(failure.logFields)")
+                work.cancel()
+            }
+        }
+        let outcome = await gate.wait()
+        timer.cancel()
+        return outcome
+    }
+
+    private static func describe(_ outcome: AuthRefreshOutcome) -> String {
+        switch outcome {
+        case .refreshed(_, let path): return "outcome=ok via=\(path.rawValue)"
+        case .adopted: return "outcome=ok via=adopted"
+        case .failed(let f): return "outcome=failed \(f.logFields)"
+        }
     }
 
     private func perform(_ request: AuthRefreshRequest, sendToken: String?, expectedRefresh: String?,
@@ -586,6 +685,14 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                 return .failed(AuthRecoveryFailure(reason: .refreshRejected, status: 401, isFinal: true))
             }
             return .failed(AuthRecoveryFailure(reason: .noRecoveryPath, isFinal: false))
+        }
+
+        // A flight cancelled at its deadline (see `performWithDeadline`) that only now got its
+        // refresh answered with a rejection must not go on to spend device-renew budget: its
+        // callers were already released and the next flight decides what to do.
+        if Task.isCancelled {
+            emit(.info, "renew skipped trigger=\(trigger) reason=\(AuthRecoveryReason.flightTimeout.rawValue)")
+            return .failed(AuthRecoveryFailure(reason: .flightTimeout))
         }
 
         // The renew leg has its own, much smaller, budget on the server (see the header).
@@ -687,6 +794,42 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     private static func failure(from error: Error, fallback: AuthRecoveryReason) -> AuthRecoveryFailure {
         if let f = error as? AuthRecoveryFailure { return f }
         return AuthRecoveryFailure(reason: fallback)
+    }
+}
+
+// MARK: - Flight deadline gate
+
+/// One-shot rendezvous between the work of a flight and its deadline: the first `settle` wins,
+/// the single `wait` resumes with that value, whichever happened first.
+private final class FlightGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var settled = false
+    private var outcome: AuthRefreshOutcome?
+    private var continuation: CheckedContinuation<AuthRefreshOutcome, Never>?
+
+    /// Returns `true` when this call settled the gate, `false` when it was already settled.
+    func settle(_ value: AuthRefreshOutcome) -> Bool {
+        let (first, waiting): (Bool, CheckedContinuation<AuthRefreshOutcome, Never>?) = lock.withLock {
+            guard !settled else { return (false, nil) }
+            settled = true
+            outcome = value
+            let c = continuation
+            continuation = nil
+            return (true, c)
+        }
+        waiting?.resume(returning: value)
+        return first
+    }
+
+    func wait() async -> AuthRefreshOutcome {
+        await withCheckedContinuation { (c: CheckedContinuation<AuthRefreshOutcome, Never>) in
+            let ready: AuthRefreshOutcome? = lock.withLock {
+                if settled { return outcome }
+                continuation = c
+                return nil
+            }
+            if let ready { c.resume(returning: ready) }
+        }
     }
 }
 

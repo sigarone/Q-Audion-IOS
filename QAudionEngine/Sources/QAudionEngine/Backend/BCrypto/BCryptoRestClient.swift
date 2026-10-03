@@ -18,7 +18,9 @@ public final class BCryptoRestClient {
     /// throws (refresh token rejected or absent). On success returns
     /// the fresh tokens (not persisted by the closure, see above) and the
     /// 401-retry proceeds; on failure the caller surfaces
-    /// `BCryptoError.unauthorized`.
+    /// `BCryptoError.unauthorized` only when the failure proves the credentials
+    /// are gone (device revoked, no device credential, signed out, account
+    /// changed), and `BCryptoSessionRecoveryError` (transient) otherwise.
     public typealias DeviceRenewFallback = @Sendable () async throws -> AuthTokenSet
 
     private var config: BackendConfig
@@ -415,7 +417,10 @@ public final class BCryptoRestClient {
                 if (200...299).contains(retryStatus) {
                     return retryData
                 }
-                if retryStatus == 401 { throw BCryptoError.unauthorized }
+                // The recovery just succeeded, so the session is alive: a second 401 is not a
+                // proof that the credentials are gone (and `.unauthorized` is what the app
+                // answers with a forced QR re-pair). Transient error, the next call tries again.
+                if retryStatus == 401 { throw BCryptoSessionRecoveryError.rejectedAfterRecovery }
                 // W-B10PAYREQ (2026-09-02) — same mapping as the primary
                 // attempt below, applied here too so a 402 landing on the
                 // post-refresh retry isn't left as the generic httpError
@@ -517,6 +522,9 @@ public final class BCryptoRestClient {
         }
         let (retryData, retryStatus, retryRetryAfter) = try await performRequest(
             method, path: path, body: nil, headers: headers, baseUrlOverride: primaryServerUrl)
+        // Same rule as `requestUncancellable`: a 401 right after a recovery that worked is not
+        // a loss of credentials.
+        if retryStatus == 401 { throw BCryptoSessionRecoveryError.rejectedAfterRecovery }
         return (retryData, retryStatus, retryRetryAfter)
     }
 
@@ -585,7 +593,16 @@ public final class BCryptoRestClient {
 
     /// Run the session-recovery cascade for a 401-affected request. Returns `true` if
     /// fresh tokens are now available in this client's `config` (from the network or
-    /// adopted from the shared store); `false` if the cascade failed (caller surfaces 401).
+    /// adopted from the shared store); `false` when the failure PROVES the credentials are
+    /// gone (the caller surfaces `BCryptoError.unauthorized`); throws
+    /// `BCryptoSessionRecoveryError` for every other failure.
+    ///
+    /// The distinction matters because the process-wide coordinator makes one transient
+    /// failure (a cooldown, a dropped connection, a 5xx, a 429, a locked Keychain, a flight
+    /// timeout) visible to several callers at once, and `.unauthorized` is what the app
+    /// answers with a forced QR re-pair (`AuthSessionLossPolicy`). Only a definitive loss
+    /// (`AuthRecoveryFailure.provesCredentialLoss`: device revoked, no device credential,
+    /// signed out, account changed, or no recovery path at all) may say so.
     ///
     /// The cascade itself (primary `tokenRefresher` = POST /auth/refresh, then the Phase 2
     /// `deviceRenewFallback`) and its single flight live in `AuthRefreshCoordinator`, which
@@ -593,7 +610,11 @@ public final class BCryptoRestClient {
     /// `auth_failed` recovery and the app's proactive refresh all await ONE network call.
     private func tryRefreshToken() async throws -> Bool {
         let outcome = await refreshSession(trigger: .rest401)
-        return outcome.isSuccess
+        if outcome.isSuccess { return true }
+        if let failure = outcome.failure, !failure.provesCredentialLoss {
+            throw BCryptoSessionRecoveryError(failure: failure)
+        }
+        return false
     }
 
     /// Run (or join) the coordinated session recovery and apply the result to this client.
@@ -689,6 +710,35 @@ public final class BCryptoRestClient {
     /// the WS client can park its loop without QR.
     public func recoverAuth() async -> Bool {
         await refreshSession(trigger: .wsAuthFailed).isSuccess
+    }
+}
+
+/// A request answered 401, the session recovery behind it could not complete NOW (or the
+/// retried request was rejected again right after a recovery that worked), and nothing proves
+/// the credentials are gone. Transient: callers retry later, and nothing may clear a token or
+/// start a re-pair because of it (`BCryptoError.unauthorized` is reserved for the definitive
+/// case, see `AuthRecoveryFailure.provesCredentialLoss`). A separate type, not a case of
+/// `BCryptoError`, for the same reason as `BCryptoRateLimitedError`: that enum is switched
+/// exhaustively across the app.
+public struct BCryptoSessionRecoveryError: Error, Sendable, Equatable, CustomStringConvertible {
+    /// Why the recovery did not complete (reason code, HTTP status, pacing hint).
+    public let failure: AuthRecoveryFailure
+
+    public init(failure: AuthRecoveryFailure) {
+        self.failure = failure
+    }
+
+    /// How long until another attempt makes sense (0 when the failure gave no hint).
+    public var retryAfterSec: Int { failure.retryAfterSec }
+
+    /// The recovery succeeded, yet the retried request got 401 again.
+    static let rejectedAfterRecovery = BCryptoSessionRecoveryError(
+        failure: AuthRecoveryFailure(reason: .rejectedAfterRecovery, status: 401))
+
+    /// `BCryptoSessionRecoveryError(reason=... status=N final=0 retry_in=S)`: reason codes and
+    /// numbers only, no secrets (this reaches `String(describing:)` log lines).
+    public var description: String {
+        "BCryptoSessionRecoveryError(\(failure.logFields) retry_in=\(failure.retryAfterSec))"
     }
 }
 

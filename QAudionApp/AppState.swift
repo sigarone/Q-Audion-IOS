@@ -5055,16 +5055,24 @@ final class AppState: ObservableObject {
                     self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
                 } catch {
                     // FORCED-QR FIX (2026-06-24): clear the session ONLY on a
-                    // GENUINE hard auth rejection — i.e. `BCryptoError.unauthorized`,
-                    // which the REST client throws ONLY after the full
-                    // refresh → Ed25519 device-renew cascade itself was rejected
-                    // by the server (device credential revoked/invalid). Every
-                    // other error (network/offline/timeout, 5xx, decode) is
-                    // TRANSIENT: keep the tokens and the device credential, keep
-                    // the user authenticated against the still-valid local token,
-                    // and schedule a reconnect. Bouncing to onboarding (QR
-                    // re-pair) on a transient blip was the forced-QR bug.
-                    if case BCryptoError.unauthorized = error {
+                    // GENUINE hard auth rejection — i.e. `BCryptoError.unauthorized`.
+                    // 2026-10-03: that is now true. The REST client used to throw it
+                    // for ANY failed recovery (a cooldown, a dropped connection, a 5xx,
+                    // a locked Keychain), and with the process-wide coordinator one
+                    // transient failure reaches several callers at once. It now throws
+                    // it ONLY when the failure proves the credentials are gone (device
+                    // revoked / no device credential / signed out / account changed);
+                    // every other failure is a `BCryptoSessionRecoveryError`, and every
+                    // other error (network/offline/timeout, 5xx, decode) is TRANSIENT:
+                    // keep the tokens and the device credential, keep the user
+                    // authenticated against the still-valid local token, and schedule a
+                    // reconnect. Bouncing to onboarding (QR re-pair) on a transient blip
+                    // was the forced-QR bug. `shouldClearSession` also refuses to wipe a
+                    // session that is no longer the one this launch request was made for.
+                    if AuthSessionLossPolicy.shouldClearSession(
+                        after: error,
+                        requestAccessToken: token,
+                        storedAccessToken: authService.loadToken()) {
                         let line: String = "[AppState] getProfile: device credential rejected after full refresh+device-renew cascade — clearing session, QR re-pair required"
                         print(line)
                         authService.clearToken()
@@ -5080,7 +5088,10 @@ final class AppState: ObservableObject {
                         self.capabilityGate.discard()
                         self.isAuthenticated = false
                     } else {
-                        AppState.logAuthDiag("[AppState] getProfile transient failure — keeping session, will retry: ", error)
+                        // A transient failure (`BCryptoSessionRecoveryError`, network, 5xx)
+                        // or an `.unauthorized` for a session that is no longer the launched
+                        // one: either way the tokens on disk are left exactly as they are.
+                        AppState.logAuthDiag("[AppState] getProfile failed, NOT clearing the session — keeping it, will retry: ", error)
                         // Stay authenticated if a local token is still present;
                         // the WS layer + proactive refresh will recover.
                         self.isAuthenticated = (authService.loadToken() != nil)
