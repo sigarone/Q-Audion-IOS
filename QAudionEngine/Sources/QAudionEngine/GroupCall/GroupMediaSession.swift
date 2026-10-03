@@ -114,11 +114,16 @@ public protocol GroupPublisherLink: GroupPeerLink {
     /// Cumulative outbound counters (diagnosis heartbeat, first encoded frame). nil while
     /// there is no PeerConnection or no stats yet.
     func outboundStats() async -> GroupPublisherStats?
+    /// Safety net of the camera's first-frame watch (`GroupVideoEncoderWatchdog`): the camera is
+    /// on and the encoder produced no frame, so the sender is re-configured to the l layer alone.
+    func fallBackToSingleLayer()
 }
 
 public extension GroupPublisherLink {
     /// Default for links that report no outbound stats (test fakes).
     func outboundStats() async -> GroupPublisherStats? { nil }
+    /// Default for links without a layer set to reduce (test fakes).
+    func fallBackToSingleLayer() {}
 }
 
 public protocol GroupSubscriberLink: GroupPeerLink {
@@ -204,6 +209,9 @@ public final class GroupMediaSession: @unchecked Sendable {
         /// A camera switched on whose encoder produced no frame within this long is
         /// reported as such (`grp video ... phase=5 ok=0`).
         public var firstFrameTimeoutSeconds: Double = 30
+        /// A camera switched on, publisher connected, with still no encoded frame after this
+        /// long: the publisher falls back to a single layer (`GroupVideoEncoderWatchdog`).
+        public var encoderFallbackSeconds: Double = GroupVideoEncoderWatchdog.defaultFallbackSeconds
         /// Janus re-validates the signed session token on EVERY request and it
         /// lives 600 s: ask for a fresh one every 300 s (spec §11).
         public var tokenRefreshSeconds: Double = 300
@@ -263,7 +271,8 @@ public final class GroupMediaSession: @unchecked Sendable {
     private var heartbeatOutbound: GroupPublisherStats?
     /// The camera publish being watched for its first encoded frame: when it was asked
     /// for, and the encoder's frame count at that moment. nil = nothing to watch.
-    private var firstFrameWatch: (sinceMs: Int64, framesAtStart: Int?)?
+    /// `fellBack`: the single-layer fallback already ran for this watch.
+    private var firstFrameWatch: (sinceMs: Int64, framesAtStart: Int?, fellBack: Bool)?
     private var pcStates: [GroupTelemetry.PcRole: GroupPcState] = [:]
     private var statsTask: Task<Void, Never>?
     private var tokenRefreshTask: Task<Void, Never>?
@@ -391,7 +400,7 @@ public final class GroupMediaSession: @unchecked Sendable {
         if on {
             let framesNow = await publisher.outboundStats()?.framesEncoded
             lock.lock()
-            firstFrameWatch = (sinceMs: sentAtMs, framesAtStart: framesNow)
+            firstFrameWatch = (sinceMs: sentAtMs, framesAtStart: framesNow, fellBack: false)
             lock.unlock()
         } else {
             lock.lock()
@@ -933,11 +942,27 @@ public final class GroupMediaSession: @unchecked Sendable {
     private func watchFirstFrame() async {
         lock.lock()
         let watch = firstFrameWatch
+        let publisherConnected = pcStates[.pub] == .connected
         lock.unlock()
         guard let watch = watch else { return }
         let frames = await publisher.outboundStats()?.framesEncoded
         let elapsedMs = nowMs() - watch.sinceMs
         let produced = (frames ?? 0) > (watch.framesAtStart ?? 0)
+        // Safety net: a connected publisher whose encoder stays silent (a failed `InitEncode`
+        // does not recover on its own) is re-configured to a single layer, once per watch.
+        if GroupVideoEncoderWatchdog.shouldFallBackToSingleLayer(
+            framesAtStart: watch.framesAtStart, framesNow: frames, elapsedMs: elapsedMs,
+            thresholdMs: Int64(config.encoderFallbackSeconds * 1000), publisherConnected: publisherConnected,
+            alreadyFellBack: watch.fellBack) {
+            lock.lock()
+            let sameWatch = firstFrameWatch?.sinceMs == watch.sinceMs
+            if sameWatch { firstFrameWatch?.fellBack = true }
+            lock.unlock()
+            if sameWatch {
+                publisher.fallBackToSingleLayer()
+                emitVideoDiag(camera: true, phase: .singleLayerFallback, ok: true, ms: Int(elapsedMs))
+            }
+        }
         let timedOut = Double(elapsedMs) >= config.firstFrameTimeoutSeconds * 1000
         guard produced || timedOut else { return }
         lock.lock()

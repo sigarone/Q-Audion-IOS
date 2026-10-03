@@ -270,12 +270,24 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
 /// with the frame cryptors attached BEFORE the offer exists.
 public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unchecked Sendable {
 
-    /// Spec §4.4: rid, downscale, fps, bitrate of the three encodings.
-    static let simulcast: [(rid: String, scale: Double, fps: Int, maxBps: Int)] = [
-        ("l", 4, 15, 150_000),
-        ("m", 2, 20, 450_000),
-        ("h", 1, 25, 1_200_000),
-    ]
+    /// Spec §4.4: rid, downscale, fps, bitrate of the three encodings. The frame rate is the
+    /// SAME on all three: libvpx refuses a simulcast set whose layers differ in it (-15 at
+    /// `InitEncode`, no video ever sent), see `GroupSimulcastLadder`.
+    static let simulcast: [GroupSimulcastLadder.Layer] = GroupSimulcastLadder.layers
+
+    /// The `sendEncodings` of the video transceiver, built from `simulcast`.
+    static func videoSendEncodings() -> [RTCRtpEncodingParameters] {
+        simulcast.map { layer in
+            let encoding = RTCRtpEncodingParameters()
+            encoding.rid = layer.rid
+            encoding.isActive = true
+            encoding.scaleResolutionDownBy = NSNumber(value: layer.scale)
+            encoding.maxFramerate = NSNumber(value: layer.fps)
+            encoding.maxBitrateBps = NSNumber(value: layer.maxBps)
+            encoding.numTemporalLayers = NSNumber(value: layer.temporalLayers)
+            return encoding
+        }
+    }
 
     public typealias CameraResult = GroupCameraResult
 
@@ -298,6 +310,9 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// How many encodings the publish policy wants active (3 = all), re-applied after every
     /// answer (see `applyAnswer`).
     private var requestedLayerCount = 3
+    /// Set by `fallBackToSingleLayer()` (the camera is on, the encoder produced no frame):
+    /// caps every later `setActiveLayers` at the l layer until the camera is switched on again.
+    private var singleLayerFallback = false
 
     /// 720p and up feeds l+m+h (1280x720), 360p and up l+m, anything smaller only l.
     static func layerCap(forHeight height: Int32) -> Int {
@@ -364,16 +379,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         let videoInit = RTCRtpTransceiverInit()
         videoInit.direction = .sendOnly
         videoInit.streamIds = ["qa"]
-        videoInit.sendEncodings = Self.simulcast.map { layer in
-            let encoding = RTCRtpEncodingParameters()
-            encoding.rid = layer.rid
-            encoding.isActive = true
-            encoding.scaleResolutionDownBy = NSNumber(value: layer.scale)
-            encoding.maxFramerate = NSNumber(value: layer.fps)
-            encoding.maxBitrateBps = NSNumber(value: layer.maxBps)
-            encoding.numTemporalLayers = NSNumber(value: 3)
-            return encoding
-        }
+        videoInit.sendEncodings = Self.videoSendEncodings()
         guard let videoTransceiver = pc.addTransceiver(with: video, init: videoInit) else { throw GroupPeerError.transceiverFailed }
         videoSource = source
         videoTrack = video
@@ -465,9 +471,12 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         if !enabled {
             stopCapturer()
             video.isEnabled = false
+            singleLayerFallback = false
             onLocalVideoTrack?(nil)
             return .stopped
         }
+        // A new attempt starts from the full ladder again.
+        singleLayerFallback = false
         #if os(iOS)
         let granted = await Self.cameraAccess()
         guard granted else { return .permissionDenied }
@@ -505,8 +514,22 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// 2 = l+m, 3 = all): the thermal / congestion policy of `GroupPublishPolicy`.
     public func setActiveLayers(_ count: Int) {
         requestedLayerCount = count
+        applyActiveLayers()
+    }
+
+    /// Safety net of the camera's first-frame watch: the camera is on, the publisher is
+    /// connected and the encoder still produced no frame (a failed `InitEncode` stays failed).
+    /// Re-configures the sender to the l layer alone, which makes libwebrtc rebuild the
+    /// encoder for the reduced set; the cap survives the policy's later `setActiveLayers`
+    /// calls until the camera is switched on again.
+    public func fallBackToSingleLayer() {
+        singleLayerFallback = true
+        applyActiveLayers()
+    }
+
+    private func applyActiveLayers() {
         guard let sender = videoSender else { return }
-        let allowed = min(count, sourceLayerCap)
+        let allowed = min(requestedLayerCount, sourceLayerCap, singleLayerFallback ? 1 : Self.simulcast.count)
         let parameters = sender.parameters
         for (index, encoding) in parameters.encodings.enumerated() { encoding.isActive = index < allowed }
         sender.parameters = parameters

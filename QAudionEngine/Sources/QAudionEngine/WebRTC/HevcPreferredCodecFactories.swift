@@ -54,7 +54,9 @@ public final class HevcPreferredVideoEncoderFactory: NSObject, RTCVideoEncoderFa
         guard let encoder = delegate.createEncoder(info) else { return nil }
         // Group calls v2 (VP8 simulcast): the software VP8 / VP9 / AV1 encoders are
         // NATIVE builders (`RTCNativeVideoEncoderBuilder`), which the ObjC->C++ shim
-        // unwraps into the real libvpx encoder — and libvpx does simulcast itself.
+        // unwraps into the real libvpx encoder — and libvpx does simulcast itself, with NO
+        // adapter in front (unlike Android): it refuses a layer set whose maxFramerate differs
+        // (`InitEncode` -15), hence the one frame rate of `GroupSimulcastLadder`.
         // Wrapping one in KeyframeForcingVideoEncoder hides the builder behind a
         // plain RTCVideoEncoder whose calls all land on the builder's unimplemented
         // stubs: no video at all. Key frames on these codecs come from libwebrtc's
