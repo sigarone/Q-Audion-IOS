@@ -370,6 +370,7 @@ final class CallerAcceptLatchTests: XCTestCase {
         sim.activeCallId = otherCall
         sim.offerReturned()
         XCTAssertEqual(sim.finalizeCount, 0)
+        XCTAssertEqual(sim.drops, [.otherCall], "the discard is reported, not silent")
         XCTAssertNil(sim.latch.held)
         XCTAssertNil(sim.latch.localHandshakeReadyCallId)
     }

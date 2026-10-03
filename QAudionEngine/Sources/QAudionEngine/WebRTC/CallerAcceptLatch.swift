@@ -208,7 +208,10 @@ public struct CallerAcceptLatch: Equatable {
         case .ringing, .active, .encrypted:
             held = nil
             let active: String? = Self.nonEmpty(activeCallId)
-            if let active, active != pending.callId { return nil }
+            if let active, active != pending.callId {
+                // Another call became current while the answer was held: never applied, and the drop is reported.
+                return Replay(callId: pending.callId, carriedSdp: pending.carriedSdp, step: .dropped(.otherCall))
+            }
             let step = admitAnswer(
                 id: pending.callId, activeCallId: active, carriedSdp: pending.carriedSdp, phase: phase)
             return Replay(callId: pending.callId, carriedSdp: pending.carriedSdp, step: step)
