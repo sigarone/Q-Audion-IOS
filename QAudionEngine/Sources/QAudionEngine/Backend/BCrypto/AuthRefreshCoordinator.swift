@@ -55,6 +55,21 @@ import Foundation
 //      compare-and-swap (the server may well have rotated the pair, so dropping it would lose
 //      the new token), never over a newer pair, and a late rejection never starts a renew leg.
 //
+//   6. A flight cut at its deadline leaves an ABANDONED marker for its refresh token (until the
+//      abandoned work completes, or `abandonedMarkerFactor` x the deadline at most). While the
+//      marker lives no new flight presents that token: it ends at once with the transient
+//      `flight_timeout` and no network call, because the abandoned request may still be on the
+//      wire and two presentations of one refresh token within seconds are what collapsed the
+//      session on 2026-10-02. The late result is still compare-and-swapped into the store and
+//      adopted by the next caller. And a cancelled (abandoned) flight writes NO shared state
+//      when it finally answers (dead-token memory, renew cooldown): only the compare-and-swap
+//      of a successful result, so a zombie can never undo what a newer flight established.
+//   7. A refresh token the server rejected is final ONLY for a client without a store. A
+//      store-backed client that merely lacks a renewer may be a half-wired builder: another
+//      client of the same process, wired with device-renew, can still heal the session, so
+//      the failure is transient for everyone and a renewer-equipped caller that joins the
+//      flight (or arrives inside its cooldown) runs the renew leg itself.
+//
 // The coordinator is Foundation-only on purpose: it holds no secrets in logs, has no
 // dependency on the transport, and is exercised by plain unit tests.
 
@@ -312,6 +327,9 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     /// 60 s sits above that, so a flight that is merely slow is never cut, and a hung one
     /// frees every caller within a minute.
     public static let defaultFlightDeadlineSec: TimeInterval = 60
+    /// How long, in flight deadlines, an abandoned flight's marker keeps its refresh token from
+    /// being presented again when the abandoned work never reports back.
+    public static let abandonedMarkerFactor: Double = 2
 
     /// Equality for refresh tokens where nil and "" both mean "none".
     public static func sameRefreshToken(_ a: String?, _ b: String?) -> Bool {
@@ -372,7 +390,23 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var inFlight: [String: Task<AuthRefreshOutcome, Never>] = [:]
+    /// One running flight per key. `hasRenewer` records whether the flight's own request could
+    /// run the renew leg: a joiner that can must not be stuck with the answer of one that could not.
+    private struct Flight {
+        let task: Task<AuthRefreshOutcome, Never>
+        let hasRenewer: Bool
+    }
+    private var inFlight: [String: Flight] = [:]
+    /// Flights cut at their deadline whose work may still be alive, by key (the refresh token
+    /// the flight presented). Set by the deadline, cleared when the work completes, expiring
+    /// after `abandonedMarkerFactor` x the deadline.
+    private var abandoned: [String: (id: UInt64, until: Date)] = [:]
+    private var nextFlightId: UInt64 = 0
+    private var abandonedHits = 0
+    /// True when the failure that started the current cooldown came from a flight WITHOUT a
+    /// renewer and is one a renewer could heal (refresh rejected, no recovery path): callers
+    /// that do have a renewer are not held back by that cooldown.
+    private var cooldownHealableByRenewer = false
     private var consecutiveFailures = 0
     private var cooldownUntil: Date?
     private var lastFailure: AuthRecoveryFailure?
@@ -408,6 +442,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             cooldownUntil = nil
             lastFailure = nil
             cooldownHits = 0
+            cooldownHealableByRenewer = false
             renewBlockedUntil = nil
             lastRenewFailure = nil
             rejectedRefresh = nil
@@ -421,13 +456,23 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     }
 
     private enum Step {
-        case join(Task<AuthRefreshOutcome, Never>)
-        case start(Task<AuthRefreshOutcome, Never>)
+        case join(Flight)
+        case start(Flight)
         case cooling(AuthRecoveryFailure, hit: Int)
+        case abandoned(AuthRecoveryFailure, hit: Int)
     }
 
     /// Run (or join) the one refresh for this session. Never throws: every outcome is a value.
     public func refresh(_ request: AuthRefreshRequest) async -> AuthRefreshOutcome {
+        await refresh(request, healingRetry: false)
+    }
+
+    /// A failure a renewer could have healed, produced by a flight that had none.
+    private static func isHealableByRenewer(_ f: AuthRecoveryFailure) -> Bool {
+        !f.isFinal && (f.reason == .refreshRejected || f.reason == .noRecoveryPath)
+    }
+
+    private func refresh(_ request: AuthRefreshRequest, healingRetry: Bool) async -> AuthRefreshOutcome {
         let trigger = request.trigger.rawValue
 
         // 1. The store, not the caller's copy, is the source of truth.
@@ -483,7 +528,10 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         // 3. Join the flight for this token, or start it.
         let step: Step = lock.withLock {
             if let existing = inFlight[key] { return .join(existing) }
-            if !request.ignoreCooldown, request.store != nil,
+            // A renewer-equipped caller is not held back by a cooldown that a flight WITHOUT a
+            // renewer started with a failure only a renewer can heal.
+            let healsCooldown = request.renewer != nil && cooldownHealableByRenewer
+            if !request.ignoreCooldown, request.store != nil, !healsCooldown,
                let until = cooldownUntil, now() < until {
                 let remaining = max(1, Int(until.timeIntervalSince(now()).rounded(.up)))
                 cooldownHits += 1
@@ -494,25 +542,57 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                                             underlyingReason: lastFailure?.reason)
                 return .cooling(f, hit: cooldownHits)
             }
+            // The abandoned flight of this very token may still have its request on the wire:
+            // presenting the token again now is the double presentation that kills sessions.
+            // No network call, no state change; the caller retries and finds either the late
+            // result (adopted from the store) or, once the work is gone, a free slot.
+            if let mark = abandoned[key] {
+                if now() < mark.until {
+                    let remaining = max(1, Int(mark.until.timeIntervalSince(now()).rounded(.up)))
+                    abandonedHits += 1
+                    let f = AuthRecoveryFailure(reason: .flightTimeout,
+                                                retryAfterSec: min(remaining, 15))
+                    return .abandoned(f, hit: abandonedHits)
+                }
+                abandoned[key] = nil
+            }
             let startEpoch = epoch
+            nextFlightId += 1
+            let flightId = nextFlightId
             let task = Task<AuthRefreshOutcome, Never> {
                 await self.runFlight(request, sendToken: sendToken, expectedRefresh: storedRefresh,
-                                     key: key, epoch: startEpoch)
+                                     key: key, epoch: startEpoch, flightId: flightId)
             }
-            inFlight[key] = task
-            return .start(task)
+            let flight = Flight(task: task, hasRenewer: request.renewer != nil)
+            inFlight[key] = flight
+            return .start(flight)
         }
 
         switch step {
-        case .join(let task):
+        case .join(let flight):
             emit(.debug, "refresh joined trigger=\(trigger)")
-            return await task.value
-        case .start(let task):
-            return await task.value
+            let outcome = await flight.task.value
+            // The flight we shared had no way to run the renew leg, this caller has: its
+            // answer ("the refresh token was rejected") is exactly what device-renew heals.
+            // Run once more; the rejected token is known dead by now, so this goes straight
+            // to device-renew without presenting the refresh token again.
+            if !healingRetry, request.store != nil, request.renewer != nil, !flight.hasRenewer,
+               case .failed(let f) = outcome, Self.isHealableByRenewer(f) {
+                emit(.info, "refresh retried with renewer trigger=\(trigger) \(f.logFields)")
+                return await refresh(request, healingRetry: true)
+            }
+            return outcome
+        case .start(let flight):
+            return await flight.task.value
         case .cooling(let failure, let hit):
             // One line per cooldown window start, then every 20th hit.
             if hit == 1 || hit % 20 == 0 {
                 emit(.info, "refresh skipped trigger=\(trigger) \(failure.logFields) retry_in=\(failure.retryAfterSec) hits=\(hit)")
+            }
+            return .failed(failure)
+        case .abandoned(let failure, let hit):
+            if hit == 1 || hit % 20 == 0 {
+                emit(.info, "refresh skipped trigger=\(trigger) \(failure.logFields) abandoned_flight_live=1 retry_in=\(failure.retryAfterSec) hits=\(hit)")
             }
             return .failed(failure)
         }
@@ -530,9 +610,10 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     }
 
     private func runFlight(_ request: AuthRefreshRequest, sendToken: String?, expectedRefresh: String?,
-                           key: String, epoch startEpoch: Int) async -> AuthRefreshOutcome {
+                           key: String, epoch startEpoch: Int, flightId: UInt64) async -> AuthRefreshOutcome {
         var outcome = await performWithDeadline(request, sendToken: sendToken,
-                                                expectedRefresh: expectedRefresh, epoch: startEpoch)
+                                                expectedRefresh: expectedRefresh, epoch: startEpoch,
+                                                key: key, flightId: flightId)
         var failuresNow = 0
         // The slot is released only after the tokens are persisted (see `perform`), in the
         // same critical section that records the failure state: a late caller either joins
@@ -558,12 +639,14 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                 cooldownUntil = now().addingTimeInterval(TimeInterval(f.retryAfterSec))
                 lastFailure = f
                 cooldownHits = 0
+                cooldownHealableByRenewer = request.renewer == nil && Self.isHealableByRenewer(f)
                 outcome = .failed(f)
             } else {
                 consecutiveFailures = 0
                 cooldownUntil = nil
                 lastFailure = nil
                 cooldownHits = 0
+                cooldownHealableByRenewer = false
             }
         }
         let trigger = request.trigger.rawValue
@@ -596,7 +679,8 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     /// Deliberately NOT a task group: a group waits for every child on exit, so one hung
     /// closure would hold the flight forever, which is the very failure being fixed.
     private func performWithDeadline(_ request: AuthRefreshRequest, sendToken: String?,
-                                     expectedRefresh: String?, epoch startEpoch: Int) async -> AuthRefreshOutcome {
+                                     expectedRefresh: String?, epoch startEpoch: Int,
+                                     key: String, flightId: UInt64) async -> AuthRefreshOutcome {
         let gate = FlightGate()
         let trigger = request.trigger.rawValue
         let seconds = flightDeadlineSec
@@ -605,6 +689,8 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             let outcome = await self.perform(request, sendToken: sendToken,
                                              expectedRefresh: expectedRefresh, epoch: startEpoch)
             if !gate.settle(outcome) {
+                // The abandoned work is over: its request is no longer on the wire.
+                self.clearAbandoned(key: key, flightId: flightId)
                 self.emit(.info, "late flight result trigger=\(trigger) \(Self.describe(outcome)) cas_checked=1")
             }
         }
@@ -614,15 +700,32 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             } catch {
                 return  // the work finished first and cancelled the timer
             }
+            // The marker goes up BEFORE the gate is settled: a late finish that finds the gate
+            // settled then always finds the marker to take down, and a finish that won the gate
+            // takes it down here. Either way no stale marker outlives the work.
+            self.markAbandoned(key: key, flightId: flightId)
             let failure = AuthRecoveryFailure(reason: .flightTimeout)
             if gate.settle(.failed(failure)) {
                 self.emit(.warn, "flight deadline reached trigger=\(trigger) after_s=\(Int(seconds.rounded(.up))) \(failure.logFields)")
                 work.cancel()
+            } else {
+                self.clearAbandoned(key: key, flightId: flightId)
             }
         }
         let outcome = await gate.wait()
         timer.cancel()
         return outcome
+    }
+
+    private func markAbandoned(key: String, flightId: UInt64) {
+        let until = now().addingTimeInterval(flightDeadlineSec * Self.abandonedMarkerFactor)
+        lock.withLock { abandoned[key] = (id: flightId, until: until) }
+    }
+
+    private func clearAbandoned(key: String, flightId: UInt64) {
+        lock.withLock {
+            if abandoned[key]?.id == flightId { abandoned[key] = nil }
+        }
     }
 
     private static func describe(_ outcome: AuthRefreshOutcome) -> String {
@@ -677,12 +780,17 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
 
         // Here the refresh token was rejected, is known dead, or there is none.
         guard let renewer = request.renewer else {
+            // Final only for a client with no store: nothing else in the process shares its
+            // session. With a store attached, a missing renewer says nothing about the session
+            // (a half-wired builder, see header rule 7): another client of the same store, wired
+            // with device-renew, can still heal it, so this is transient and a renewer-equipped
+            // caller is let through (see `refresh`).
+            let isFinal = request.store == nil
             if let f = refreshRejection {
-                // Rejected by the server and nothing else to try: the session cannot heal by waiting.
-                return .failed(AuthRecoveryFailure(reason: f.reason, status: f.status, isFinal: true))
+                return .failed(AuthRecoveryFailure(reason: f.reason, status: f.status, isFinal: isFinal))
             }
             if knownDead {
-                return .failed(AuthRecoveryFailure(reason: .refreshRejected, status: 401, isFinal: true))
+                return .failed(AuthRecoveryFailure(reason: .refreshRejected, status: 401, isFinal: isFinal))
             }
             return .failed(AuthRecoveryFailure(reason: .noRecoveryPath, isFinal: false))
         }
@@ -718,7 +826,8 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                 return .failed(noteRenewFailure(f, epoch: startEpoch, serverMintedTokens: true))
             }
             lock.withLock {
-                guard epoch == startEpoch else { return }
+                // A cancelled (abandoned) flight writes nothing but its compare-and-swap.
+                guard epoch == startEpoch, !Task.isCancelled else { return }
                 renewBlockedUntil = nil
                 lastRenewFailure = nil
             }
@@ -732,7 +841,9 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
 
     private func markRefreshTokenDead(_ token: String, epoch startEpoch: Int) {
         lock.withLock {
-            guard epoch == startEpoch else { return }
+            // A cancelled (abandoned) flight must not touch shared state when its late answer
+            // arrives: only the compare-and-swap of a successful result is written.
+            guard epoch == startEpoch, !Task.isCancelled else { return }
             rejectedRefresh = (token: token, at: now())
         }
     }
@@ -750,7 +861,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         let wait = min(max(Self.renewCooldownFloorSec, f.retryAfterSec), Self.maxCooldownSec)
         f.retryAfterSec = wait
         lock.withLock {
-            guard epoch == startEpoch else { return }
+            guard epoch == startEpoch, !Task.isCancelled else { return }
             renewBlockedUntil = now().addingTimeInterval(TimeInterval(wait))
             lastRenewFailure = f
         }

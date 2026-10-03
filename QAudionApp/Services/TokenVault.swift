@@ -302,8 +302,56 @@ extension BCryptoBackendProvider {
         // The refresh coordinator reads the refresh token from here (never from a provider's
         // own, possibly stale, copy) and writes results back with compare-and-swap.
         credentialStore = KeychainAuthCredentialStore.shared
+        // A store-backed provider shares the process-wide refresh flight (and its cooldown) with
+        // every other one. Without the device-renew leg its 401 on a dead refresh token cannot
+        // heal and is answered without it for joiners and callers inside the cooldown, so a
+        // renewer-less store-backed provider must not exist: wire it here, once, for every
+        // builder (the dial paths used to forget it).
+        if !getRestClient().hasDeviceRenewFallback {
+            wireDeviceRenewFallback()
+        }
         AuthCoordinatorLogging.installIfNeeded()
         return self
+    }
+
+    /// FORCED-QR FIX (2026-06-24) — wire the Ed25519 device-bound silent re-auth fallback onto
+    /// this provider's REST client, so a 401 cascade (primary /auth/refresh, then the Ed25519
+    /// /auth/device-renew) runs in full before `.unauthorized` can surface. Idempotent:
+    /// `setDeviceRenewFallback` just overwrites the stored closure.
+    func wireDeviceRenewFallback() {
+        let vault = SovereignKeyVault()
+        let manager = DeviceKeyManager(vault: vault, kmsClient: kmsClient)
+        let renewClient = BCryptoDeviceRenewClient(
+            rest: getRestClient(),
+            deviceKeyManager: manager
+        )
+        getRestClient().setDeviceRenewFallback {
+            // deviceId is persisted by AuthService at login under
+            // "com.qaudion.auth.device_id" AND, since SEC-DEVICEID-REINSTALL,
+            // Keychain-backed via TokenVault (checked first — it's the copy
+            // that actually survives an app delete+reinstall, see
+            // TokenVault.saveDeviceId's doc). Read it lazily so a log-in /
+            // log-out cycle picks up the new value. Calls TokenVault/
+            // UserDefaults directly rather than `self.authService` — this
+            // closure is `@Sendable` and both of those are safe to touch
+            // from any executor, unlike a MainActor-isolated AppState
+            // property access.
+            guard let did = TokenVault.loadDeviceId() ??
+                    UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id"),
+                  !did.isEmpty else {
+                // Reason code `renew_no_device_id` (was a bare `.unauthorized`, which
+                // looked exactly like a server rejection in every log).
+                throw AuthRenewPreconditionError.noDeviceId
+            }
+            let fresh = try await renewClient.renew(deviceId: did)
+            // The closure only returns the tokens. The refresh coordinator persists them
+            // to the Keychain (TokenVault) with compare-and-swap, records the access-token
+            // expiry epoch, and every client then applies them: persisting here,
+            // unconditionally, is what let a stale result overwrite a newer pair.
+            return AuthTokenSet(accessToken: fresh.accessToken,
+                                refreshToken: fresh.refreshToken,
+                                expiresInSec: fresh.expiresInSec)
+        }
     }
 }
 

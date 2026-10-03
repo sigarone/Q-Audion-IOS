@@ -8,6 +8,13 @@ import XCTest
 ///      slot forever and every later caller joins it.
 ///   2. Which failures PROVE the credentials are gone (`provesCredentialLoss`), the only ones
 ///      the REST client may answer with `BCryptoError.unauthorized` (a forced QR re-pair).
+///   3. (auth follow-ups to #156) A store-backed client without a renewer never poisons the shared
+///      flight with a final failure, a flight cut at its deadline leaves an abandoned marker so
+///      the same refresh token is not presented twice, and an abandoned flight writes no shared
+///      state when it finally answers.
+///
+/// Every test that waits on a hung closure goes through `bounded(_:_:)`, so reverting the
+/// deadline makes it fail in seconds instead of hanging the suite.
 ///
 /// Foundation-only, like the coordinator: no transport, no Keychain. A closure "hangs" on a
 /// `Hang`, which the test releases at the end, so no continuation is ever leaked.
@@ -99,6 +106,16 @@ final class AuthFlightDeadlineTests: XCTestCase {
         return condition()
     }
 
+    /// `refresh`, failing the test (instead of hanging it) if the caller is not released in 5 s.
+    private func bounded(_ c: AuthRefreshCoordinator, _ r: AuthRefreshRequest,
+                         file: StaticString = #filePath, line: UInt = #line) async -> AuthRefreshOutcome {
+        guard let outcome = await AuthTestTimeLimit.within(5, { await c.refresh(r) }) else {
+            XCTFail("the flight deadline did not release the caller within 5 s", file: file, line: line)
+            return .failed(AuthRecoveryFailure(reason: .refreshOther))
+        }
+        return outcome
+    }
+
     private func timeoutFailure(_ outcome: AuthRefreshOutcome,
                                 file: StaticString = #filePath, line: UInt = #line) -> AuthRecoveryFailure? {
         guard case .failed(let f) = outcome else {
@@ -117,7 +134,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let net = Probe()
         let started = Date()
 
-        let outcome = await c.refresh(request(store: store, refresher: { token in
+        let outcome = await bounded(c, request(store: store, refresher: { token in
             net.hit(token: token)
             await hang.wait()
             return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: nil)
@@ -151,7 +168,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         }
         let outcomes = await withTaskGroup(of: AuthRefreshOutcome.self) { group -> [AuthRefreshOutcome] in
             for r in requests {
-                group.addTask { await c.refresh(r) }
+                group.addTask { await self.bounded(c, r) }
             }
             var all: [AuthRefreshOutcome] = []
             for await o in group { all.append(o) }
@@ -166,7 +183,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         }
     }
 
-    func test_afterTheDeadlineTheSlotIsFreeAndALaterCallerStartsAFreshFlight() async {
+    func test_afterTheDeadlineTheSlotIsFreeAndACallerOfANewerSessionStartsAFreshFlight() async {
         let (c, _) = makeCoordinator()
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
         let hang = Hang()
@@ -177,21 +194,21 @@ final class AuthFlightDeadlineTests: XCTestCase {
                 await hang.wait()
                 return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: nil)
             }
-            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
+            return AuthTokenSet(accessToken: "A6", refreshToken: "R6", expiresInSec: 900)
         }
-
-        let first = await c.refresh(request(store: store, refresher: refresher))
-        XCTAssertEqual(first.failure?.reason, .flightTimeout)
-
-        // The proactive refresh ignores the cooldown the timeout started.
-        let second = await c.refresh(request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
         defer { hang.release() }
 
+        let first = await bounded(c, request(store: store, refresher: refresher))
+        XCTAssertEqual(first.failure?.reason, .flightTimeout)
+
+        // Another path (a login) moved the store on to a pair the hung request never saw.
+        store.overwrite(access: "A5", refresh: "R5")
+        // The proactive refresh ignores the cooldown the timeout started.
+        let second = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+
         XCTAssertTrue(second.isSuccess, "a hung flight must not be joined forever: \(second)")
-        XCTAssertEqual(net.calls, 2, "the second caller did NOT join the abandoned flight")
-        XCTAssertEqual(net.tokens, ["R0", "R0"],
-                       "the timeout neither spends nor marks dead the refresh token: it is presented again")
-        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A1", refresh: "R1"))
+        XCTAssertEqual(net.tokens, ["R0", "R5"], "the second caller did NOT join the abandoned flight")
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A6", refresh: "R6"))
     }
 
     func test_aHungRenewerEndsTheFlightToo() async {
@@ -199,7 +216,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: nil)
         let hang = Hang()
 
-        let outcome = await c.refresh(request(store: store, renewer: {
+        let outcome = await bounded(c, request(store: store, renewer: {
             await hang.wait()
             return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: nil)
         }))
@@ -221,11 +238,11 @@ final class AuthFlightDeadlineTests: XCTestCase {
         }
         defer { hang.release() }
 
-        let first = await c.refresh(request(store: store, refresher: refresher))
+        let first = await bounded(c, request(store: store, refresher: refresher))
         XCTAssertEqual(first.failure?.retryAfterSec, AuthRefreshCoordinator.backoffSeconds(forFailures: 1))
 
         // A REST/socket caller fails fast inside the cooldown, with the reason that started it.
-        let second = await c.refresh(request(store: store, refresher: refresher))
+        let second = await bounded(c, request(store: store, refresher: refresher))
         XCTAssertEqual(second.failure?.reason, .cooldown)
         XCTAssertEqual(second.failure?.underlyingReason, .flightTimeout)
         XCTAssertEqual(second.failure?.provesCredentialLoss, false)
@@ -237,7 +254,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
         let hang = Hang()
 
-        let outcome = await c.refresh(request(store: store, refresher: { _ in
+        let outcome = await bounded(c, request(store: store, refresher: { _ in
             await hang.wait()
             return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: nil)
         }))
@@ -258,7 +275,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
         let hang = Hang()
 
-        let outcome = await c.refresh(request(store: store, refresher: { _ in
+        let outcome = await bounded(c, request(store: store, refresher: { _ in
             await hang.wait()
             return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: nil)
         }))
@@ -279,7 +296,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
         let hang = Hang()
 
-        _ = await c.refresh(request(store: store, refresher: { _ in
+        _ = await bounded(c, request(store: store, refresher: { _ in
             await hang.wait()
             return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: nil)
         }))
@@ -296,7 +313,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
         let cancelled = Probe()
 
-        let outcome = await c.refresh(request(store: store, refresher: { _ in
+        let outcome = await bounded(c, request(store: store, refresher: { _ in
             do {
                 try await Task.sleep(nanoseconds: 60_000_000_000)
             } catch {
@@ -317,7 +334,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let hang = Hang()
         let renews = Probe()
 
-        let outcome = await c.refresh(request(store: store, refresher: { _ in
+        let outcome = await bounded(c, request(store: store, refresher: { _ in
             await hang.wait()
             throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
         }, renewer: {
@@ -340,7 +357,7 @@ final class AuthFlightDeadlineTests: XCTestCase {
         let net = Probe()
         let started = Date()
 
-        let outcome = await c.refresh(request(store: store, refresher: { token in
+        let outcome = await bounded(c, request(store: store, refresher: { token in
             net.hit(token: token)
             return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
         }))
@@ -400,6 +417,8 @@ final class AuthFlightDeadlineTests: XCTestCase {
             ("rejected, renew: 429",
              await failure(store: InMemoryAuthCredentialStore(access: "A0", refresh: "R0"), refresher: rejected,
                            renewer: { throw AuthRecoveryFailure(reason: .renewServerError, status: 429, retryAfterSec: 60) })),
+            ("rejected, store-backed but no renewer (half-wired builder)",
+             await failure(store: InMemoryAuthCredentialStore(access: "A0", refresh: "R0"), refresher: rejected)),
             ("no refresh token, renew: clock skew (400)",
              await failure(store: InMemoryAuthCredentialStore(access: "A0", refresh: nil),
                            renewer: { throw AuthRecoveryFailure(reason: .renewRejected, status: 400) })),
@@ -473,9 +492,10 @@ final class AuthFlightDeadlineTests: XCTestCase {
         XCTAssertEqual(signedOut?.reason, .signedOut)
         XCTAssertEqual(signedOut?.provesCredentialLoss, true)
 
-        // Refresh token rejected and nothing else to try.
+        // Refresh token rejected and nothing else to try, for a client with no store: nothing
+        // else in the process shares its session, so the rejection is the answer.
         let rejectedAlone = await failure(
-            store: InMemoryAuthCredentialStore(access: "A0", refresh: "R0"),
+            store: nil,
             refresher: { _ in throw AuthRecoveryFailure(reason: .refreshRejected, status: 401) })
         XCTAssertEqual(rejectedAlone?.provesCredentialLoss, true)
 
@@ -502,5 +522,257 @@ final class AuthFlightDeadlineTests: XCTestCase {
         XCTAssertFalse(AuthRecoveryFailure(reason: .rejectedAfterRecovery, status: 401).provesCredentialLoss)
         XCTAssertEqual(AuthRecoveryReason.flightTimeout.rawValue, "flight_timeout")
         XCTAssertEqual(AuthRecoveryReason.rejectedAfterRecovery.rawValue, "rejected_after_recovery")
+    }
+
+    // MARK: - (3) a store-backed client without a renewer must not poison the shared flight
+
+    func test_aJoinerWithARenewerHealsWhenTheFlightItJoinedHadNone() async {
+        let (c, probe) = makeCoordinator(deadline: 5)
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let hang = Hang()
+        let refreshes = Probe()
+        let renews = Probe()
+        let rejecting: AuthRefreshRequest.Refresher = { token in
+            refreshes.hit(token: token)
+            await hang.wait()
+            throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+        }
+        let renewer: AuthRefreshRequest.Renewer = {
+            renews.hit()
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
+        }
+        defer { hang.release() }
+
+        // A dial-time client, store-backed but built without the device-renew leg, starts the flight.
+        let firstRequest = request(.wsAuthFailed, store: store, refresher: rejecting)
+        let first = Task { await c.refresh(firstRequest) }
+        let started = await eventually { refreshes.calls == 1 }
+        XCTAssertTrue(started)
+        // The socket recovery (it has a renewer) joins it while the request is still on the wire.
+        let joinerRequest = request(.rest401, store: store, refresher: rejecting, renewer: renewer)
+        let joiner = Task { await c.refresh(joinerRequest) }
+        let joined = await eventually { probe.text.contains("refresh joined") }
+        XCTAssertTrue(joined, probe.text)
+        hang.release()
+
+        let firstOutcome = await first.value
+        let joinerOutcome = await joiner.value
+
+        XCTAssertEqual(firstOutcome.failure?.reason, .refreshRejected)
+        XCTAssertEqual(firstOutcome.failure?.isFinal, false,
+                       "store-backed + no renewer is not a verdict on the session")
+        XCTAssertEqual(firstOutcome.failure?.provesCredentialLoss, false)
+        guard case .refreshed(let tokens, let path) = joinerOutcome else {
+            XCTFail("the joiner has a renewer and must heal: \(joinerOutcome)\n\(probe.text)")
+            return
+        }
+        XCTAssertEqual(path, .deviceRenew)
+        XCTAssertEqual(tokens.accessToken, "A1")
+        XCTAssertEqual(renews.calls, 1)
+        XCTAssertEqual(refreshes.calls, 1, "the rejected refresh token is not presented again")
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A1", refresh: "R1"))
+    }
+
+    func test_aRenewerEquippedCallerIsNotHeldBackByTheCooldownOfARenewerlessFlight() async {
+        let (c, _) = makeCoordinator(deadline: 5)
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let refreshes = Probe()
+        let renews = Probe()
+        let rejecting: AuthRefreshRequest.Refresher = { token in
+            refreshes.hit(token: token)
+            throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+        }
+
+        let first = await c.refresh(request(.wsAuthFailed, store: store, refresher: rejecting))
+        XCTAssertEqual(first.failure?.reason, .refreshRejected)
+        XCTAssertEqual(first.failure?.isFinal, false)
+
+        // Another renewer-less caller inside the cooldown still fails fast, and it is not final either.
+        let cooling = await c.refresh(request(.rest401, store: store, refresher: rejecting))
+        XCTAssertEqual(cooling.failure?.reason, .cooldown)
+        XCTAssertEqual(cooling.failure?.underlyingReason, .refreshRejected)
+        XCTAssertEqual(cooling.failure?.isFinal, false)
+        XCTAssertEqual(cooling.failure?.provesCredentialLoss, false)
+
+        // A caller that can run device-renew is let through and heals the session.
+        let healed = await c.refresh(request(.rest401, store: store, refresher: rejecting, renewer: {
+            renews.hit()
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
+        }))
+        guard case .refreshed(_, let path) = healed else {
+            XCTFail("expected a device-renew heal, got \(healed)")
+            return
+        }
+        XCTAssertEqual(path, .deviceRenew)
+        XCTAssertEqual(renews.calls, 1)
+        XCTAssertEqual(refreshes.calls, 1, "the dead refresh token was presented once only")
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A1", refresh: "R1"))
+    }
+
+    // MARK: - (4) an abandoned flight never lets its refresh token be presented twice
+
+    func test_noSecondPresentationWhileTheAbandonedFlightMayStillBeOnTheWire() async {
+        let (c, probe) = makeCoordinator()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let hang = Hang()
+        let net = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            let n = net.hit(token: token)
+            if n == 1 {
+                await hang.wait()
+                throw AuthRecoveryFailure(reason: .refreshNetwork)   // the token is still alive
+            }
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
+        }
+        defer { hang.release() }
+
+        let first = await bounded(c, request(store: store, refresher: refresher))
+        XCTAssertEqual(first.failure?.reason, .flightTimeout)
+
+        // The proactive refresh ignores the cooldown: only the abandoned marker can stop it.
+        let second = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        XCTAssertEqual(second.failure?.reason, .flightTimeout, "\(second)")
+        XCTAssertEqual(second.failure?.isFinal, false)
+        XCTAssertEqual(net.calls, 1, "the token is on the wire already: no second presentation, no network call")
+        XCTAssertTrue(probe.text.contains("abandoned_flight_live=1"), probe.text)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A0", refresh: "R0"))
+
+        // The abandoned work ends: the marker goes with it and the token can be used again.
+        hang.release()
+        let landed = await eventually { probe.text.contains("late flight result") }
+        XCTAssertTrue(landed, probe.text)
+        let third = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        XCTAssertTrue(third.isSuccess, "\(third)")
+        XCTAssertEqual(net.tokens, ["R0", "R0"])
+    }
+
+    func test_theAbandonedMarkerExpiresWhenTheWorkNeverReportsBack() async {
+        let (c, _) = makeCoordinator()   // deadline 0.3 s: the marker lives 2 x 0.3 s after it
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let hang = Hang()
+        let net = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            let n = net.hit(token: token)
+            if n == 1 {
+                await hang.wait()   // never answers within this test
+            }
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
+        }
+        defer { hang.release() }
+
+        _ = await bounded(c, request(store: store, refresher: refresher))
+        let during = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        XCTAssertEqual(during.failure?.reason, .flightTimeout)
+        XCTAssertEqual(net.calls, 1)
+
+        let markerSeconds = 0.3 * AuthRefreshCoordinator.abandonedMarkerFactor
+        try? await Task.sleep(nanoseconds: UInt64((markerSeconds + 0.3) * 1_000_000_000))
+        let after = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        XCTAssertTrue(after.isSuccess, "a request that never answers cannot block the session for good: \(after)")
+        XCTAssertEqual(net.tokens, ["R0", "R0"])
+    }
+
+    func test_theLateResultOfAnAbandonedFlightIsAdoptedByTheNextCaller() async {
+        let (c, probe) = makeCoordinator()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let hang = Hang()
+        let net = Probe()
+
+        let first = await bounded(c, request(store: store, refresher: { token in
+            net.hit(token: token)
+            await hang.wait()
+            return AuthTokenSet(accessToken: "A-late", refreshToken: "R-late", expiresInSec: 900)
+        }))
+        XCTAssertEqual(first.failure?.reason, .flightTimeout)
+        hang.release()
+        let landed = await eventually { probe.text.contains("late flight result") }
+        XCTAssertTrue(landed, probe.text)
+        XCTAssertEqual(try store.load(), AuthStoredCredentials(access: "A-late", refresh: "R-late"))
+
+        // A REST 401 of a client still on A0 finds the late result in the store: no network call.
+        let next = await bounded(c, request(.rest401, store: store, refresher: { _ in
+            XCTFail("the late result is adopted, nothing is presented")
+            return AuthTokenSet(accessToken: "A-x", refreshToken: "R-x", expiresInSec: nil)
+        }))
+        guard case .adopted(let tokens) = next else {
+            XCTFail("expected the late pair to be adopted, got \(next)")
+            return
+        }
+        XCTAssertEqual(tokens.accessToken, "A-late")
+        XCTAssertEqual(net.calls, 1)
+    }
+
+    // MARK: - (5) an abandoned flight writes no shared state when it finally answers
+
+    func test_aLateRejectionOfAnAbandonedFlightDoesNotMarkTheTokenDead() async {
+        let (c, probe) = makeCoordinator()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let hang = Hang()
+        let net = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            let n = net.hit(token: token)
+            if n == 1 {
+                await hang.wait()
+                throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+            }
+            return AuthTokenSet(accessToken: "A1", refreshToken: "R1", expiresInSec: 900)
+        }
+        defer { hang.release() }
+
+        let first = await bounded(c, request(store: store, refresher: refresher))
+        XCTAssertEqual(first.failure?.reason, .flightTimeout)
+        hang.release()
+        let landed = await eventually { probe.text.contains("late flight result") }
+        XCTAssertTrue(landed, probe.text)
+
+        // Had the zombie recorded its rejection, R0 would now be "known dead" and never presented.
+        let second = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        XCTAssertTrue(second.isSuccess, "\(second)\n\(probe.text)")
+        XCTAssertEqual(net.tokens, ["R0", "R0"], "the zombie's rejection is not remembered")
+        XCTAssertFalse(probe.text.contains("refresh_token_known_dead=1"), probe.text)
+    }
+
+    func test_aLateRenewFailureOfAnAbandonedFlightDoesNotStartTheRenewCooldown() async {
+        let (c, probe) = makeCoordinator()
+        let store = InMemoryAuthCredentialStore(access: "A0", refresh: "R0")
+        let renewHang = Hang()
+        let renews = Probe()
+        let refresher: AuthRefreshRequest.Refresher = { token in
+            switch token {
+            case "R5": return AuthTokenSet(accessToken: "A6", refreshToken: "R6", expiresInSec: 900)
+            default: throw AuthRecoveryFailure(reason: .refreshRejected, status: 401)
+            }
+        }
+        defer { renewHang.release() }
+
+        // Flight 1: refresh rejected, then the renew leg hangs until the deadline cuts the flight.
+        let first = await bounded(c, request(store: store, refresher: refresher, renewer: {
+            await renewHang.wait()
+            throw AuthRecoveryFailure(reason: .renewServerError, status: 429, retryAfterSec: 60)
+        }))
+        XCTAssertEqual(first.failure?.reason, .flightTimeout)
+
+        // A newer session (login) and a newer flight succeed meanwhile.
+        store.overwrite(access: "A5", refresh: "R5")
+        let newer = await bounded(c, request(.proactive, store: store, refresher: refresher, ignoreCooldown: true))
+        XCTAssertTrue(newer.isSuccess, "\(newer)")
+
+        // The zombie finally answers with a failure that WOULD start the 10 minute renew cooldown.
+        renewHang.release()
+        let landed = await eventually { probe.text.contains("late flight result") }
+        XCTAssertTrue(landed, probe.text)
+
+        // The session needs device-renew once more: it must not find the zombie's cooldown.
+        store.overwrite(access: "A7", refresh: "R7")
+        let again = await bounded(c, request(.proactive, store: store, refresher: refresher, renewer: {
+            renews.hit()
+            return AuthTokenSet(accessToken: "A8", refreshToken: "R8", expiresInSec: 900)
+        }, ignoreCooldown: true))
+        guard case .refreshed(_, let path) = again else {
+            XCTFail("the renew leg must be open: \(again)\n\(probe.text)")
+            return
+        }
+        XCTAssertEqual(path, .deviceRenew)
+        XCTAssertEqual(renews.calls, 1)
     }
 }
