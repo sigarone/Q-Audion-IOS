@@ -666,7 +666,6 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             do {
                 try rtcSession.setActive(true)
                 print("[CallKitProvider] \(logSite) audio session ACTIVE (attempt \(attempt)) activationCount=\(rtcSession.activationCount)")
-                rtcSession.unlockForConfiguration()
                 // W-SELFACTIVATED (2026-09-09) — mark that this call now owes
                 // a matching setActive(false), independent of whether
                 // CallKit's own native UI/ledger ever heard about this call
@@ -674,9 +673,36 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 // see the ledger's own kdoc for why that distinction is the
                 // whole point of this flag).
                 // W-SELFACTID — keyed by this call's uuid on a native call.
-                ledger.markAudioSelfActivated(uuid)
-                onAudioSessionActivated?(source)
-                return
+                //
+                // W-CALLERBUSY (review of #169) — unless the call has ALREADY ended. The start action fulfils and
+                // then spawns the Task that runs this function, so a `call_busy` (or any ending) can run the
+                // call's `reportCallEnded` first: its end balance was then decided without this activation, and
+                // nothing would ever pay it back (`activationCount` +1, W-DRAINACTIVATION class), while
+                // `onAudioSessionActivated` below would set `CallService.audioSessionActive = true` after
+                // `endCall` cleared it, pre-satisfying the W464 gate of the redial. The check and the mark are
+                // one ledger critical section, so an end that runs concurrently sees one or the other.
+                switch ledger.markAudioSelfActivatedUnlessEnded(uuid) {
+                case .owed:
+                    rtcSession.unlockForConfiguration()
+                    onAudioSessionActivated?(source)
+                    return
+                case .callAlreadyEnded:
+                    // Still inside the configuration lock taken for the activation: balance it at once, with the
+                    // same counted API that activated it, and tell nobody the session is active.
+                    var balanceFailed = 0
+                    do {
+                        try rtcSession.setActive(false)
+                    } catch {
+                        balanceFailed = 1
+                        print("[CallKitProvider] setActive(false) fail site=lateActivation code=\((error as NSError).code) err=\(error.localizedDescription)")
+                    }
+                    let countAfter = rtcSession.activationCount
+                    rtcSession.unlockForConfiguration()
+                    // Numeric tail only: the remote-log redactor blobs free text.
+                    let startFlag: Int = logSite == "start" ? 1 : 0
+                    log?("callkit lateact ended=1 start=\(startFlag) fail=\(balanceFailed) after=\(countAfter)")
+                    return
+                }
             } catch {
                 // W-SETACTIVEFAIL (2026-09-10) — the live device trace that
                 // led here showed OUR OWN setActive(true) failing with real,

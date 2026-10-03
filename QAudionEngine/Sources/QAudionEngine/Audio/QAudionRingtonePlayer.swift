@@ -36,6 +36,10 @@ public final class QAudionRingtonePlayer {
         case keyExchange
         case callConnected
         case callEnded
+        /// W-CALLERBUSY — busy signal (425 Hz, 0.5 s on / 0.5 s off, 3 s one-shot). Port of Android `Cue.Busy`.
+        /// The app plays it as a system sound (see `QAudionCueWav`) because it starts after CallKit ended the call;
+        /// the cue exists here so every platform's cue list matches and `play(.busy)` works while a session is active.
+        case busy
     }
 
     private let engine = AVAudioEngine()
@@ -59,6 +63,7 @@ public final class QAudionRingtonePlayer {
         case .keyExchange: samples = QAudionSynth.renderKeyExchangeLoop()
         case .callConnected: samples = QAudionSynth.renderCallConnected()
         case .callEnded: samples = QAudionSynth.renderCallEnded()
+        case .busy: samples = QAudionSynth.renderBusyTone()
         }
         guard !samples.isEmpty,
               let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),

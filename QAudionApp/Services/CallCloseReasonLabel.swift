@@ -6,6 +6,19 @@ import QAudionEngine
 /// rendered.
 enum CallCloseReasonLabel {
     static func text(for token: String?) -> String? {
+        // W-CALLERBUSY — an outgoing call the callee could not take (not a handshake / identity failure).
+        if let outcome = CallerTerminalOutcome.accepted(token) {
+            switch outcome {
+            case .busy:
+                return String(localized: "call_history.close.busy",
+                              defaultValue: "terminata: destinatario occupato",
+                              comment: "Call history row subtitle — the outgoing call ended because the other person was already in a call")
+            case .peerOffline:
+                return String(localized: "call_history.close.peer_offline",
+                              defaultValue: "terminata: destinatario non raggiungibile",
+                              comment: "Call history row subtitle — the outgoing call ended because the other person could not be reached")
+            }
+        }
         guard let reason = CallCloseReason.accepted(token) else { return nil }
         switch reason {
         case .dtlsFpMismatch:
