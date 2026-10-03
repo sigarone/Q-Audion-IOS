@@ -63,6 +63,9 @@ enum AuthFailureClassifier {
                 return AuthRecoveryFailure(reason: .renewKeyNotProvisioned, isFinal: true)
             case .malformedNonceHex:
                 return AuthRecoveryFailure(reason: .renewMalformedChallenge)
+            case .restClientGone:
+                // The client that installed the renew was released: no request was made.
+                return AuthRecoveryFailure(reason: .renewOther)
             case .serverRejected(let inner):
                 return renewHTTP(inner)
             }

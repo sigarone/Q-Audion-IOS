@@ -64,6 +64,9 @@ import Foundation
 //      adopted by the next caller. And a cancelled (abandoned) flight writes NO shared state
 //      when it finally answers (dead-token memory, renew cooldown): only the compare-and-swap
 //      of a successful result, so a zombie can never undo what a newer flight established.
+//      One exception, in the safe direction: a late refresher SUCCESS proves the server spent
+//      the token it was sent, so if that result cannot be stored (CAS throws, e.g. a locked
+//      Keychain) the sent token is still remembered as dead. A late REJECTION is not recorded.
 //   7. A refresh token the server rejected is final ONLY for a client without a store. A
 //      store-backed client that merely lacks a renewer may be a half-wired builder: another
 //      client of the same process, wired with device-renew, can still heal the session, so
@@ -759,8 +762,9 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                 let outcome = finalize(tokens, expectedRefresh: expectedRefresh, request: request, via: .refresh)
                 if case .failed = outcome {
                     // The server rotated the pair, so the token we sent is spent whether or not
-                    // the result could be stored.
-                    markRefreshTokenDead(token, epoch: startEpoch)
+                    // the result could be stored, and even when this flight was abandoned at
+                    // its deadline: a success is proof, unlike a late rejection.
+                    markRefreshTokenDead(token, epoch: startEpoch, serverAccepted: true)
                 }
                 return outcome
             } catch {
@@ -839,11 +843,14 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         }
     }
 
-    private func markRefreshTokenDead(_ token: String, epoch startEpoch: Int) {
+    /// - Parameter serverAccepted: the server ANSWERED THE REFRESH WITH A NEW PAIR, so the sent
+    ///   token is provably spent. Only then is a cancelled (abandoned) flight allowed to write.
+    private func markRefreshTokenDead(_ token: String, epoch startEpoch: Int, serverAccepted: Bool = false) {
         lock.withLock {
             // A cancelled (abandoned) flight must not touch shared state when its late answer
-            // arrives: only the compare-and-swap of a successful result is written.
-            guard epoch == startEpoch, !Task.isCancelled else { return }
+            // arrives, with one exception: a success that could not be stored (see above). The
+            // epoch guard stays: a flight of a previous session never marks the new one.
+            guard epoch == startEpoch, serverAccepted || !Task.isCancelled else { return }
             rejectedRefresh = (token: token, at: now())
         }
     }
