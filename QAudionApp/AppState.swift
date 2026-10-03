@@ -18277,9 +18277,15 @@ final class AppState: ObservableObject {
                 // other CallService audio-IO entry point) expects the main
                 // thread — hop there, same as `onStateChange`/
                 // `onIceConnectionState` below.
+                // W-FALLBACKLATCH (2026-10-03) — the engage carries the call generation this
+                // call started in (`offerCallGeneration`, read before the OFFER): the
+                // controller's debounce task can fire after `endCall` already ran, and
+                // `CallService.engageAudioSrtpFallback` drops a request from another
+                // generation instead of re-latching the fallback for a dead call.
+                let fallbackWiredGeneration: Int = offerCallGeneration
                 controller.onAudioSrtpFallbackEngage = { [weak self] in
                     Task { @MainActor [weak self] in
-                        self?.callService.engageAudioSrtpFallback()
+                        self?.callService.engageAudioSrtpFallback(capturedGeneration: fallbackWiredGeneration)
                     }
                 }
                 controller.onAudioSrtpFallbackRecover = { [weak self] in
@@ -26741,6 +26747,9 @@ extension AppState {
         callId: String? = nil
     ) {
         print("[AppState] W-VIDDIAG handleIncomingWebRtcOffer: caller=\(callerId.prefix(8)) sdpLen=\(sdp.count) hasVideo=\(hasVideo) — building WebRTC controller")
+        // W-FALLBACKLATCH (2026-10-03) — the call generation this controller is built in; see
+        // the `onAudioSrtpFallbackEngage` wiring below.
+        let fallbackWiredGeneration: Int = callService.currentCallGeneration()
         // W-NATIVESRTPSNAPSHOT (2026-09-26) — responder side. Keyed by the
         // OFFER's call id (the envelope's `call_id` where the caller passes it,
         // else the bound active call id): a rescued duplicate OFFER of the SAME
@@ -26988,9 +26997,12 @@ extension AppState {
         controller.isNativeCaptureExpectedLive = { [weak self] in
             self?.callService.isNativeCaptureExpectedLive ?? true
         }
+        // W-FALLBACKLATCH (2026-10-03) — responder mirror of the caller-side wiring:
+        // the generation read at the top of this function (before any await-free setup),
+        // so an engage for a call that was torn down since is ignored in `CallService`.
         controller.onAudioSrtpFallbackEngage = { [weak self] in
             Task { @MainActor [weak self] in
-                self?.callService.engageAudioSrtpFallback()
+                self?.callService.engageAudioSrtpFallback(capturedGeneration: fallbackWiredGeneration)
             }
         }
         controller.onAudioSrtpFallbackRecover = { [weak self] in

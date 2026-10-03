@@ -672,7 +672,9 @@ final class CallService: @unchecked Sendable {
             // things worse).
             if srtpDeadTxBeats == 8 {
                 RTLog.warn("call", "audiosrtp deadtx=\(rtpTx < 0 ? 1 : 2)")
-                engageAudioSrtpFallback()
+                // W-FALLBACKLATCH — this sentinel runs inside the live call: the generation it
+                // passes is simply "now", so only the liveness fence can apply to it.
+                engageAudioSrtpFallback(capturedGeneration: currentCallGeneration())
             }
         } else {
             srtpDeadTxBeats = 0
@@ -1146,6 +1148,16 @@ final class CallService: @unchecked Sendable {
     /// (see `engageAudioSrtpFallback()`). Overrides `getUsesNativeAudioSrtp`'s
     /// skip in `startAudioIOIfReady` for exactly as long as the outage lasts.
     private var audioSrtpFallbackActive: Bool = false
+    /// W-FALLBACKLATCH (2026-10-03) — which call (id prefix + generation) set
+    /// `audioSrtpFallbackActive`. `activateIncomingCallAudio` keeps the latch across its
+    /// answer-time teardown (a ringing-time engage must survive the answer) and, before this
+    /// tag, could not tell that engage from a leftover of an earlier call: a stale latch muted
+    /// the next call's native sender for its whole length. Set with the latch, cleared with it.
+    private var audioSrtpFallbackTag: SrtpFallbackLatchDecisions.LatchTag?
+    /// W-FALLBACKLATCH — true once a fallback engage was HONOURED during the current call.
+    /// Feeds `fallback_fired` / `srtp_fb_engaged` / `transport_split` in `call.audio.counts`;
+    /// reset with the latch at end of call (after the telemetry reads it).
+    private var srtpFallbackEverEngaged: Bool = false
     /// W-ADMWEDGERESET (2026-09-09) — survives across calls, unlike
     /// `srtpDeadTxBeats`/`audioSrtpFallbackActive` (both per-call, reset in
     /// `teardownAudioStack`). Counts CONSECUTIVE calls that tripped the
@@ -2303,6 +2315,21 @@ final class CallService: @unchecked Sendable {
             relaySlotLock.withLock {
                 (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp, _callGeneration)
             }
+        // W-FALLBACKLATCH (2026-10-03) — the latch is kept across the teardown below ONLY if it
+        // was set for the call being answered. Any other latch is a leftover (field: an engage
+        // that landed after the previous call's teardown) and would mute this call's native
+        // sender and start the legacy engine on a native call.
+        if audioSrtpFallbackActive,
+           !SrtpFallbackLatchDecisions.latchHonouredAtAnswer(
+               tag: audioSrtpFallbackTag,
+               answeringCallId: getCallId?(),
+               currentGeneration: _savedGeneration) {
+            audioSrtpFallbackActive = false
+            audioSrtpFallbackTag = nil
+            srtpDeadTxBeats = 0
+            srtpLastPtxSample = -1
+            RTLog.warn("call", "audiosrtpfb latch=0 stale=1")
+        }
         // Defensive cleanup: stop any leftover capture from a previous call.
         // W-SRTPFBRESET — keep the fallback latch: this runs at ANSWER time
         // inside the incoming call (see teardownAudioStack's kdoc).
@@ -3598,6 +3625,16 @@ final class CallService: @unchecked Sendable {
         // defensive pre-call cleanups that would log all-zeros).
         if audioEngineStartAttempted || audioEnginesStarted || framesReceivedRx > 0 || framesEncryptedTx > 0 {
             let _callId = getCallId?()
+            // W-FALLBACKLATCH (2026-10-03) — can this side tell the two ends were on different
+            // audio transports? Only local evidence is used (see `AudioTransportSplit`).
+            let _transportSplit: Int = AudioTransportSplit.classify(
+                nativeNegotiated: getUsesNativeAudioSrtp?() == true,
+                localLegacyEngineStarted: audioEnginesStarted,
+                fallbackEverEngaged: srtpFallbackEverEngaged,
+                peerLegacyRxFrames: rxInjectRouteCount).rawValue
+            if _transportSplit != 0 {
+                RTLog.warn("call", "audiosrtpfb split=\(_transportSplit)")
+            }
             let _attrs: [String: Any] = [
                 "tx_enc":          framesEncryptedTx,
                 "rx_recv":         framesReceivedRx,
@@ -3620,7 +3657,14 @@ final class CallService: @unchecked Sendable {
                 // readable rather than blobbing it.
                 "pad_overflow":    audioEngineRef?.getStats().padOverflowFrames ?? -1,
                 "engines_started": audioEnginesStarted,
-                "fallback_fired":  didActivateFallbackFired,
+                // W-FALLBACKLATCH — was only the CallKit didActivate recovery (Bug B): a call
+                // whose SRTP fallback latch tripped reported `false` (field, 2026-10-03). Now
+                // either recovery counts; `srtp_fb_engaged` isolates the SRTP one.
+                "fallback_fired":  didActivateFallbackFired || srtpFallbackEverEngaged,
+                "srtp_fb_engaged": srtpFallbackEverEngaged,
+                // 0 none, 1 this side ran the legacy engine on a native call with no engage,
+                // 2 the peer sent legacy-path audio to a native side, 3 both.
+                "transport_split": _transportSplit,
                 "session_active":  audioSessionActive
             ]
             Task { @MainActor in
@@ -4018,6 +4062,8 @@ final class CallService: @unchecked Sendable {
                 consecutiveAudioSrtpWedges = 0
             }
             audioSrtpFallbackActive = false
+            audioSrtpFallbackTag = nil
+            srtpFallbackEverEngaged = false
             srtpDeadTxBeats = 0
             srtpLastPtxSample = -1
         }
@@ -4499,9 +4545,32 @@ final class CallService: @unchecked Sendable {
     /// guard checks, then re-runs that SAME chokepoint so every existing
     /// gate (group-call, session-active, peer-answered) still applies — this
     /// does not bypass them, it only lifts the audio-srtp-specific one.
-    public func engageAudioSrtpFallback() {
-        guard !audioSrtpFallbackActive else { return }
+    ///
+    /// W-FALLBACKLATCH (2026-10-03) — `capturedGeneration` is the call generation read when
+    /// the engage callback was wired (`AppState`, caller and callee sites). The request is
+    /// ignored when no call is live or the generation has moved on: the controller's debounce
+    /// task can fire after `AppState.endCall` already tore this service down (the
+    /// PeerConnection is closed only later, by design), and the old `!audioSrtpFallbackActive`
+    /// guard re-latched the fallback for a call that no longer existed.
+    public func engageAudioSrtpFallback(capturedGeneration: Int) {
+        let verdict = SrtpFallbackLatchDecisions.engageVerdict(
+            callLive: getCallId?() != nil,
+            capturedGeneration: capturedGeneration,
+            currentGeneration: currentCallGeneration(),
+            alreadyActive: audioSrtpFallbackActive)
+        switch verdict {
+        case .engage:
+            break
+        case .alreadyActive:
+            return
+        case .noCallLive, .staleGeneration:
+            RTLog.warn("call", "audiosrtpfb engage=0 why=\(verdict.rawValue)")
+            return
+        }
         audioSrtpFallbackActive = true
+        audioSrtpFallbackTag = SrtpFallbackLatchDecisions.LatchTag(
+            generation: currentCallGeneration(), callId: getCallId?())
+        srtpFallbackEverEngaged = true
         RTLog.warn("call", "audiosrtpfb engage=1")
         // W-DEADTXRELEASE — the OLD reasoning here ("ICE is down anyway so
         // the native unit has nothing to carry") only holds for a
@@ -4550,6 +4619,7 @@ final class CallService: @unchecked Sendable {
     public func recoverAudioSrtpFallback() {
         guard audioSrtpFallbackActive else { return }
         audioSrtpFallbackActive = false
+        audioSrtpFallbackTag = nil
         RTLog.warn("call", "audiosrtpfb recover=1")
         // W-SESSIONOWNER — explicit `false`: the call is still live here,
         // only the manual fallback engine is stepping aside for native

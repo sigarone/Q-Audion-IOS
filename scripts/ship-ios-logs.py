@@ -755,7 +755,23 @@ APP_VOCAB = frozenset("""
     hang telemetry dedup
 
     pcinit nudge
+
+    audiosrtpfb engage recover admreset wedges latch split
 """.split())
+# W-FALLBACKLATCH (2026-10-03) -- the 6 words on the line right above
+# ("audiosrtpfb engage recover admreset wedges latch split") are for the "call"-tagged
+# RTLog lines of CallService's SRTP-fallback latch, which NEVER reached Loki: the
+# bare word "audiosrtpfb" (11 letters) is longer than UNKNOWN_MAX_LEN and not
+# vocabulary, so every one of these lines failed the structured gate and was
+# dropped (field, 2026-10-03: a stale latch muted a whole call and the engage/
+# reset lines that would have shown it were absent from the corpus):
+#   audiosrtpfb engage=1                  audiosrtpfb recover=1
+#   audiosrtpfb engage=0 why=<2|3>        (late / stale-generation engage ignored)
+#   audiosrtpfb reset=1                   audiosrtpfb admreset=1 wedges=<n>
+#   audiosrtpfb latch=0 stale=1           (stale latch cleared at answer)
+#   audiosrtpfb split=<1|2|3>             (transport split seen at end of call)
+# "reset"/"stale"/"why" were already vocabulary. Global, like "audiosrtp": every
+# line is numeric and only printed on a native-SRTP call.
 # W-CALLERUNMUTELOST (2026-09-27) -- the 2 words on the line right above
 # ("pcinit nudge") are for the new "call"-tagged RTLog line
 # QAudionPeerConnection.applyNativeSenderMuteState emits every time it

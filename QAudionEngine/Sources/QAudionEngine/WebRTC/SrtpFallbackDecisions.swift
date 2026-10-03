@@ -64,8 +64,14 @@ public enum SrtpFallbackDecisions {
         iceBadSinceMs: Int64?,
         nowMs: Int64,
         debounceMs: Int64 = fallbackEngageDebounceMs,
-        fallbackAlreadyEngaged: Bool
+        fallbackAlreadyEngaged: Bool,
+        callClosed: Bool = false
     ) -> Bool {
+        // W-FALLBACKLATCH (2026-10-03) — a controller whose call is being (or has been)
+        // closed engages nothing: the ICE `.disconnected` a hangup itself causes arms
+        // this debounce, and it used to fire into the next call (see
+        // `SrtpFallbackLatchDecisions`).
+        guard !callClosed else { return false }
         guard usingNativeAudioSrtp, iceBad, !fallbackAlreadyEngaged else { return false }
         guard let since = iceBadSinceMs else { return false }
         return nowMs - since >= debounceMs
@@ -85,11 +91,14 @@ public enum SrtpFallbackDecisions {
     /// because the recovery watchdog fires `restartIce` on the same edge —
     /// consumed the only attempt and left the entire outage without the
     /// fallback TX.
+    ///
+    /// W-FALLBACKLATCH (2026-10-03) — never once the call is closed.
     public static func shouldKeepWaitingToEngage(
         streakAlive: Bool,
-        fallbackAlreadyEngaged: Bool
+        fallbackAlreadyEngaged: Bool,
+        callClosed: Bool = false
     ) -> Bool {
-        streakAlive && !fallbackAlreadyEngaged
+        streakAlive && !fallbackAlreadyEngaged && !callClosed
     }
 
     public static func shouldRecoverFromFallback(
