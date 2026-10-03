@@ -226,12 +226,16 @@ struct ContentView: View {
         .animation(.easeInOut, value: appState.isInCall)
         .animation(.easeInOut, value: appState.isVideoCall)
         .animation(.easeInOut, value: appState.callState)
+        .animation(.easeInOut, value: appState.callerOutcome)
         .animation(.easeInOut, value: splashResolved)
         // WIRE_SPEC §8.1 — animate the auto-fallback to the audio-only
         // call screen when both sides pause their camera.
         .animation(.easeInOut, value: appState.localVideoPaused)
         .animation(.easeInOut, value: appState.remoteVideoPaused)
         .onChange(of: appState.callContactId) { id in
+            // W-CALLERBUSY — `endCall` clears `callContactId` the instant a busy / unreachable callee ends the
+            // call; the outcome screen that follows still shows who was dialled, so keep the resolved name.
+            if id == nil, appState.callerOutcome != nil { return }
             resolveOutgoingName(id)
         }
         // W-OUTGOINGDOT3 — see showLiveCallScreen's doc above. Async on
@@ -398,6 +402,10 @@ struct ContentView: View {
     private var mainStack: some View {
         if appState.isInCall {
             inCallStack
+        } else if let outcome = appState.callerOutcome {
+            // W-CALLERBUSY — the outgoing call ended because the callee is busy / unreachable: say so for a
+            // few seconds instead of dropping straight to Home. `startCall` and the close button clear it.
+            callerOutcomeScreen(outcome)
         } else if !splashResolved {
             // W18.C: brand splash on cold start. Resolves itself
             // after the 400ms minimum window and toggles
@@ -461,6 +469,21 @@ struct ContentView: View {
         } else {
             makeOutgoingScreen()
         }
+    }
+
+    /// W-CALLERBUSY — the outgoing screen in its ended state, with the outcome as its message ("Occupato" /
+    /// "Non raggiungibile", Android parity). The hangup button becomes "close" and dismisses it at once.
+    private func callerOutcomeScreen(_ outcome: CallerTerminalOutcome) -> OutgoingCallScreen {
+        let name: String = outgoingDisplayName.isEmpty ? "…" : outgoingDisplayName
+        return OutgoingCallScreen(
+            peerDisplayName: name,
+            avatarUrl: outgoingAvatarUrl,
+            state: .ended,
+            elapsedSeconds: 0,
+            errorMessage: CallerOutcomeText.message(for: outcome),
+            peerShortNumber: outgoingShortNumber,
+            onHangup: { appState.dismissCallerOutcome() }
+        )
     }
 
     private func makeOutgoingScreen() -> OutgoingCallScreen {
