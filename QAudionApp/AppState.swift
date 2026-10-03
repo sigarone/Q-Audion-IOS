@@ -1335,12 +1335,24 @@ final class AppState: ObservableObject {
     /// over the lock screen) — this flag only matters once the app can
     /// actually draw (foreground at arrival, or becomes active after a
     /// CallKit-mediated wake), exactly like the group-call ring.
-    @Published var incomingCallRingVisible: Bool = false
+    ///
+    /// W-CALLERBUSY (review of #169) — an incoming ring silences the busy tone of the outgoing call that just ended
+    /// (it is a system sound that would otherwise play under the ring for the rest of its 3 s).
+    @Published var incomingCallRingVisible: Bool = false {
+        didSet { if incomingCallRingVisible { callerBusyTone.stop() } }
+    }
     /// H-6 — re-entrancy guard for endCall(). A second endCall() (e.g.
     /// CallKit onEndCall + remote call_hangup racing) while teardown is
     /// already running would double-hangup and leak the
     /// RTCPeerConnection. AppState is @MainActor so this needs no lock.
-    private var isEndingCall = false
+    ///
+    /// W-CALLERBUSY (review of #169) — the guard is a `CallTeardownLatch`, scoped to the call it guards: a redial
+    /// admitted inside the 0.3 s window of the previous call's teardown (`startCall` calls `newCallAdmitted()`) no
+    /// longer inherits it, so the redial's own teardown (a `call_busy` within the window) runs instead of leaving a
+    /// zombie `.connecting` call, and the previous call's timer cannot open the new call's guard early.
+    private var teardownLatch = CallTeardownLatch()
+    /// A teardown of the CURRENT call is in flight (see `teardownLatch`).
+    private var isEndingCall: Bool { teardownLatch.inFlight }
     /// M-32 — set true the first time the deepfake classifier runs for
     /// a call so endCall() only releases the ONNX model when it was
     /// actually loaded.
@@ -3057,6 +3069,21 @@ final class AppState: ObservableObject {
     /// buffer on a redundant `updateOutgoingRingCue()` call (e.g. a second
     /// `onAudioSessionActivated` re-fire mid-ring from a route change).
     private var outgoingRingCurrentCue: QAudionRingtonePlayer.Cue?
+
+    /// W-CALLERBUSY (2026-10-03) — why the outgoing call that just ended could not be completed (`call_busy` /
+    /// `call_peer_offline`), non-nil only for the few seconds the outgoing screen keeps the outcome on screen
+    /// before returning to Home. `isInCall` is already false then, so `ContentView` shows the screen for this
+    /// value; `startCall` (a redial, from anywhere) and the close button clear it at once.
+    @Published private(set) var callerOutcome: CallerTerminalOutcome?
+    /// Which showing of `callerOutcome` a pending hold timer belongs to: a timer of an earlier showing must not
+    /// clear a later one.
+    private var callerOutcomeSerial = 0
+    /// The busy tone (system sound: it must be audible after CallKit ended the call, see `CallerBusyTone`).
+    private let callerBusyTone = CallerBusyTone()
+    /// W-CALLERBUSY (review of #169) — how the last outgoing call ended when a caller-side terminal envelope ended
+    /// it, keyed by wire call id. Read by `settleOutgoingCallKitStart` when CallKit finishes starting a call that
+    /// is already over, so that late report carries the reason the teardown would have used.
+    private var callerTerminalEnd: CallerTerminalEndRecord?
 
     /// FORCED-QR FIX (2026-06-24) — proactive access-token refresh.
     /// Fires at ~60% of the token TTL so the next cold-launch (and any
@@ -9287,6 +9314,121 @@ final class AppState: ObservableObject {
         case .ignore(let reason):
             RTLog.info("call", "terminal kind=\(kind.rawValue) ignored=1 reason=\(reason.rawValue) id=\(envelopeCallId.prefix(8))")
             return false
+        }
+    }
+
+    /// W-CALLERBUSY (2026-10-03) — the caller's teardown after `call_busy` / `call_peer_offline`, run by the two
+    /// handlers once `callerTerminalEnvelopeEndsCall` has said "this envelope ends the current outgoing call".
+    ///
+    /// It used to be a hand-rolled copy of `endCall` (`callService.endCall()` plus a manual state reset) that left
+    /// the CallKit outgoing call, the outgoing call record and the ring-back fallback timer open: a live iPhone
+    /// redialled a busy phone three times in 24 s and every redial after the first failed with CallKit's
+    /// `maximumCallGroupsReached` until the app's own watchdog closed the stale call ~41 s later. It is now the
+    /// same `AppState.endCall` every other ending uses (idempotent through `isEndingCall`), parameterised with the
+    /// outcome so CallKit hears `.unanswered` (busy) / `.remoteEnded` (peer offline), never `.failed`, and the
+    /// record closes as `busy` / `peer_offline`. `notifyPeerInBand: false`: the ending was learned from the
+    /// server, there is no peer media leg to tell (Android `hangup(reason = "busy", notifyPeer = false)`).
+    ///
+    /// The accept latch is reset ONCE for this teardown, by the gate (`terminalEnvelopeArrived`, which also forgets
+    /// the outgoing id): `endCall`'s own `acceptLatch.reset()` then finds it already clear and is a no-op, which
+    /// `testTheTerminalTeardownThroughEndCallLeavesTheLatchClear` pins.
+    private func endOutgoingCallAfterTerminalEnvelope(_ outcome: CallerTerminalOutcome, envelopeCallId: String) {
+        // A local hangup already tearing THIS call down owns the ending: there is nothing to announce. Scoped to
+        // the current call (`teardownLatch`): the 0.3 s guard of an EARLIER call's teardown, still up when this
+        // call was dialled inside that window, is not a hangup of this one, so a busy there ends this call.
+        let hangupInFlight = teardownLatch.inFlight
+        // Remembered BEFORE the teardown: when CallKit is still starting this call (`activeCallKitId` is assigned
+        // only after that round trip), `endCall` has no CallKit call to report, and `settleOutgoingCallKitStart`
+        // closes the late one with this outcome's reason instead.
+        if !hangupInFlight {
+            callerTerminalEnd = CallerTerminalEndRecord(callId: envelopeCallId, outcome: outcome)
+        }
+        endCall(notifyPeerInBand: false, outcome: outcome)
+        // #160 settle, kept: `endCall` already leaves `.idle` (W481), so this only ever finds the `.ended` an
+        // earlier path left, and it never touches a redial that moved the state on inside the second.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, CallerOutgoingStatePolicy.shouldSettleToIdle(self.callState.latchPhase) else { return }
+            self.callState = .idle
+        }
+        guard !hangupInFlight else { return }
+        showCallerOutcome(outcome)
+    }
+
+    /// W-CALLERBUSY — puts the outcome on the outgoing screen for `outcome.holdSeconds` (and plays the busy tone for
+    /// `call_busy`). A timer of an earlier showing never clears this one.
+    private func showCallerOutcome(_ outcome: CallerTerminalOutcome) {
+        callerOutcomeSerial &+= 1
+        let serial = callerOutcomeSerial
+        callerOutcome = outcome
+        RTLog.info("call", "callerOutcome show=\(outcome.rawValue) tone=\(outcome.playsBusyTone ? 1 : 0)")
+        if outcome.playsBusyTone { callerBusyTone.play() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + outcome.holdSeconds) { [weak self] in
+            guard let self, self.callerOutcomeSerial == serial else { return }
+            self.callerOutcome = nil
+        }
+    }
+
+    /// W-CALLERBUSY — closes the outcome screen and stops the busy tone: the user tapped the close button, or a new
+    /// call is starting (`startCall` calls this before it admits anything, so a redial never waits for the hold).
+    func dismissCallerOutcome() {
+        callerOutcomeSerial &+= 1
+        callerOutcome = nil
+        callerBusyTone.stop()
+    }
+
+    /// W-CALLERBUSY (review of #169) — `wireCallId` is still THE current outgoing call: the app is in a call and the
+    /// accept latch still names this wire id (every ending, local or from the server, clears it; a redial replaces
+    /// it). The one definition behind every decision `startCall`'s CallKit `Task` takes after its `await`.
+    private func isCurrentOutgoingCall(wireCallId: String) -> Bool {
+        isInCall && acceptLatch.isCurrentOutgoingCall(envelopeCallId: wireCallId)
+    }
+
+    /// W-CALLERBUSY (review of #169) — the three branches of `startCall`'s CallKit `Task` that have no CallKit call
+    /// to adopt (CallKit-free mode, `startOutgoingCall` returning `nil`, `startOutgoingCall` throwing) used to
+    /// activate the call's audio unconditionally, after the `await`: a `call_busy` that landed first had cleared
+    /// `CallService.audioSessionActive` in the teardown, and this set it back to `true` with no call behind it
+    /// (the redial then started with the W464 gate already satisfied). Same `OutgoingCallKitStartPolicy` as the
+    /// success branch: `false` = the call is over, activate nothing. `site` is cosmetic (1 = CallKit-free mode,
+    /// 2 = no CallKit call returned, 3 = start threw).
+    private func outgoingFallbackActivationAllowed(wireCallId: String, site: Int) -> Bool {
+        let current: Bool = isCurrentOutgoingCall(wireCallId: wireCallId)
+        switch OutgoingCallKitStartPolicy.decideFallback(callStillCurrent: current) {
+        case .activateSession:
+            return true
+        case .callIsOver:
+            RTLog.info("call", "callkit fallbackact skipped=1 site=\(site)")
+            return false
+        }
+    }
+
+    /// W-CALLERBUSY (review of #169) — the CallKit start of the outgoing call `wireCallId` has returned `uuid`.
+    ///
+    /// `activeCallKitId` is assigned only here, after the `CXStartCallAction` round trip, so a `call_busy` /
+    /// `call_peer_offline` that lands before it makes `endCall` find `activeCallKitId == nil`: no CallKit report,
+    /// and the late assignment would re-create the orphan (a call group iOS keeps open: the next start fails with
+    /// `maximumCallGroupsReached`). The pure decision is `OutgoingCallKitStartPolicy`: while the call is still the
+    /// current one the uuid is adopted as before; once it is over the uuid is NOT stored, it is remembered as ended
+    /// (W-GHOSTCALL) and reported to CallKit with the reason the teardown would have used, and the same reaper
+    /// `endCall` runs closes anything else left open when the app has no call of its own.
+    private func settleOutgoingCallKitStart(uuid: UUID, wireCallId: String) async {
+        let stillCurrent: Bool = isCurrentOutgoingCall(wireCallId: wireCallId)
+        let endedBy: CallerTerminalOutcome? = callerTerminalEnd?.outcome(forCallId: wireCallId)
+        switch OutgoingCallKitStartPolicy.decide(callStillCurrent: stillCurrent, endedBy: endedBy) {
+        case .adopt:
+            activeCallKitId = uuid
+        case .endAtOnce(let reason):
+            recentlyEndedCallIds.recordEnded(uuid)
+            let shortId: String = String(uuid.uuidString.prefix(8))
+            let why: String = String(describing: reason)
+            let line: String = "callkit latestart ended=1 uuid=\(shortId) reason=\(why)"
+            RTLog.info("call", line)
+            await callKit?.reportCallEnded(uuid: uuid, reason: reason)
+            // Re-read the app's own state after the await, as the teardown's reaper does (W-FGREAP): a call that
+            // appeared meanwhile (a redial) is not stale.
+            let stillIdle: Bool = noCallInFlight()
+            if stillIdle, let provider = callKit as? CallKitProvider {
+                _ = provider.endAllOutstanding()
+            }
         }
     }
 
@@ -17274,6 +17416,12 @@ final class AppState: ObservableObject {
         // call left in the accept latch (a held early `call_answer`, a finalized marker) is cleared, even when
         // that call ended through a path that never reset it.
         acceptLatch.beginOutgoing(callId: nativeSrtpOutgoingCallId)
+        // W-CALLERBUSY — a redial right after a busy / unreachable outcome does not wait for the outcome screen:
+        // it is closed and its tone stopped before this call's own cues can start.
+        dismissCallerOutcome()
+        // W-CALLERBUSY (review of #169) — the H-6 guard of the PREVIOUS call's teardown (still up for 0.3 s after
+        // it) does not guard this call: its own teardown, a `call_busy` inside that window, must run.
+        teardownLatch.newCallAdmitted()
         callState = .connecting
         isInCall = true
         // Commit point: `isInCall` is now the guard against a second start.
@@ -17503,46 +17651,23 @@ final class AppState: ObservableObject {
                         // W-STALEENVELOPE — ends the call only when it names the current outgoing call; the
                         // accept latch is reset inside the check, on the one teardown path it allows.
                         guard self.callerTerminalEnvelopeEndsCall(.peerOffline, envelopeCallId: envelopeCallId) else { return }
-                        self.errorMessage = "Il destinatario non è raggiungibile."
-                        self.callService.endCall()
-                        let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
-                        CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "peer_offline")
-                        self.clearKeyConfirmationState(callId: cid)
-                        self.callState = .ended
-                        self.isInCall = false
-                        self.callContactId = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                            // W-CALLERSTATEGUARD — settle only the `.ended` this teardown left; a
-                            // redial inside the second owns the state by now.
-                            guard let self, CallerOutgoingStatePolicy.shouldSettleToIdle(self.callState.latchPhase) else { return }
-                            self.callState = .idle
-                        }
+                        // W-CALLERBUSY — everything after the gate is `endOutgoingCallAfterTerminalEnvelope`.
+                        self.endOutgoingCallAfterTerminalEnvelope(.peerOffline, envelopeCallId: envelopeCallId)
                     }
                 }
                 // call_busy — recipient is already in another answered call.
-                // Sibling of onCallPeerOffline: today the outgoing call would
-                // ring forever (server never sends call_ready/hangup for a busy
-                // peer). Stop ringing immediately, briefly show "Occupato", and
-                // tear down cleanly — identical teardown to the peer-offline path.
+                // Sibling of onCallPeerOffline: the outgoing call would ring
+                // forever (server never sends call_ready/hangup for a busy
+                // peer). Stop ringing immediately, play the busy tone, show
+                // "Occupato" and tear down cleanly — the SAME teardown as the
+                // peer-offline path, through `AppState.endCall`.
                 ws.onCallBusy = { [weak self] envelopeCallId, _ in
                     DispatchQueue.main.async {
                         guard let self = self else { return }
                         // W-STALEENVELOPE — see onCallPeerOffline.
                         guard self.callerTerminalEnvelopeEndsCall(.busy, envelopeCallId: envelopeCallId) else { return }
-                        self.errorMessage = "Occupato"
-                        self.callService.endCall()
-                        let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
-                        CallMediaTelemetry.shared.recordEnded(callId: cid, reason: "busy")
-                        self.clearKeyConfirmationState(callId: cid)
-                        self.callState = .ended
-                        self.isInCall = false
-                        self.callContactId = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                            // W-CALLERSTATEGUARD — settle only the `.ended` this teardown left; a
-                            // redial inside the second owns the state by now.
-                            guard let self, CallerOutgoingStatePolicy.shouldSettleToIdle(self.callState.latchPhase) else { return }
-                            self.callState = .idle
-                        }
+                        // W-CALLERBUSY — everything after the gate is `endOutgoingCallAfterTerminalEnvelope`.
+                        self.endOutgoingCallAfterTerminalEnvelope(.busy, envelopeCallId: envelopeCallId)
                     }
                 }
                 ws.onCallCancel = { [weak self] envelopeCallId, reason in
@@ -17565,6 +17690,7 @@ final class AppState: ObservableObject {
                 if CallsGate.callKitFreeMode {
                     let localId = UUID()
                     await MainActor.run {
+                        guard self.outgoingFallbackActivationAllowed(wireCallId: nativeSrtpOutgoingCallId, site: 1) else { return }
                         self.activeCallKitId = localId
                         self.callService.handleAudioSessionActivated()
                         self.markOutgoingAudioSessionReady()
@@ -17573,11 +17699,14 @@ final class AppState: ObservableObject {
                 }
                 do {
                     if let uuid = try await callKit?.startOutgoingCall(handle: peerDisplayName, hasVideo: hasVideo) {
-                        await MainActor.run {
-                            self.activeCallKitId = uuid
-                        }
+                        // W-CALLERBUSY (review of #169) — this `await` is the CXStartCallAction round trip, and a
+                        // `call_busy` can land before it returns (the 10:43 incident: 577 ms vs ~691 ms). The uuid
+                        // is adopted only when this call is still the current one; otherwise it is reported ended
+                        // right here instead of re-creating the orphan the teardown just could not close.
+                        await self.settleOutgoingCallKitStart(uuid: uuid, wireCallId: nativeSrtpOutgoingCallId)
                     } else {
                         await MainActor.run {
+                            guard self.outgoingFallbackActivationAllowed(wireCallId: nativeSrtpOutgoingCallId, site: 2) else { return }
                             self.callService.handleAudioSessionActivated()
                             self.markOutgoingAudioSessionReady()
                         }
@@ -17585,6 +17714,7 @@ final class AppState: ObservableObject {
                 } catch {
                     print("[AppState] CallKit startOutgoingCall failed: \(error)")
                     await MainActor.run {
+                        guard self.outgoingFallbackActivationAllowed(wireCallId: nativeSrtpOutgoingCallId, site: 3) else { return }
                         self.callService.handleAudioSessionActivated()
                         self.markOutgoingAudioSessionReady()
                     }
@@ -18548,6 +18678,9 @@ final class AppState: ObservableObject {
     /// packaging slip never means a silent ring. A system sound (not an audio player) on purpose:
     /// it seizes no audio session, which CallKit and WebRTC configure when the call is answered.
     func startInAppRingtone() {
+        // W-CALLERBUSY (review of #169) — a ring (1:1 or group) never plays over the busy tone of the outgoing call
+        // that just ended.
+        callerBusyTone.stop()
         guard ringtoneTimer == nil else { return }
         // 1005 = "sms-received5.caf" — the fallback only.
         let soundId: SystemSoundID = Self.registerInAppRingSound() ?? 1005
@@ -19413,6 +19546,9 @@ extension AppState {
     @MainActor
     @discardableResult
     private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) -> Bool {
+        // W-CALLERBUSY (review of #169) — answering an incoming call (any path: CallKit, in-app, notification)
+        // silences the busy tone of the outgoing call that just ended.
+        callerBusyTone.stop()
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) dismissNativeUI=\(dismissNativeUI) alreadyAnswered=\(self.answeredCallKitId == uuid)")
         // W-GHOSTCALL — before anything else: never turn a tap on a dead call's
         // ring into an in-call state (incident e3acecd7).
@@ -20374,7 +20510,12 @@ extension AppState {
     /// peer (call_hangup envelope, opaque HANGUP, inbound control frame) or
     /// when the caller already sent its own reason-bearing notify
     /// (W-MEDIADEAD, W-GLARE) — mirrors Android `hangup(notifyPeer=)`.
-    func endCall(notifyPeerInBand: Bool = true) {
+    ///
+    /// `outcome`: set only by the caller-side terminal envelopes (`call_busy`, `call_peer_offline`,
+    /// W-CALLERBUSY). It changes how the end is reported, nothing else: CallKit hears `.unanswered` (busy) or
+    /// `.remoteEnded` (peer offline) instead of `.userEnded`, and the call record and the telemetry carry
+    /// `busy` / `peer_offline` as the reason. The teardown itself is the one every other ending runs.
+    func endCall(notifyPeerInBand: Bool = true, outcome: CallerTerminalOutcome? = nil) {
         // H-6: idempotency — a second endCall() while teardown is
         // already in flight (CallKit onEndCall racing a remote
         // call_hangup) must be a no-op, otherwise we double-hangup the
@@ -20393,8 +20534,7 @@ extension AppState {
         // caller hangup before answer, and any other teardown path: the
         // ring screen must never outlive the call it was ringing for.
         incomingCallRingVisible = false
-        guard !isEndingCall else { return }
-        isEndingCall = true
+        guard let teardownToken = teardownLatch.begin() else { return }
         // Group calls v2 — however the 1:1 leg ends (the hand-over itself, the peer
         // hanging up, media dead, End on its CallKit entry): a pending hand-over is
         // moot, and a live group call that shared the 1:1's audio unit must take it
@@ -20429,7 +20569,14 @@ extension AppState {
         // inside (peer must have advertised dc-hangup-v1 for THIS call);
         // mirrors Android CallController.hangup's W-DCHANGUP block, which
         // fires it alongside the signaller sendHangup before teardown.
-        if notifyPeerInBand {
+        //
+        // W-CALLERBUSY (review of #169) — `announcesToPeer` is false for a busy / unreachable callee: the call
+        // never rang there (busy: the callee is inside ANOTHER call; peer offline: no connection), so a
+        // `call_hangup` envelope, the opaque HANGUP (`local_hangup`) or a control frame would reach a callee that
+        // is mid-call with someone else. Nothing at all goes to the peer for these two, as before this PR and as
+        // Android (`hangup(reason = "busy", notifyPeer = false)` gates `sendHangup` on `notifyPeer`).
+        let announcesToPeer: Bool = outcome?.sendsHangupToPeer ?? true
+        if notifyPeerInBand && announcesToPeer {
             callService.sendControlHangup(reason: "local_hangup")
         }
 
@@ -20439,7 +20586,8 @@ extension AppState {
         // callingApi.activeCallId is pre-bound: outgoing via sendCallOfferWithId,
         // incoming via bindIncomingCallId (AppState.wireIncomingCallHandlers).
         // Capture callContactId NOW before the teardown sequence clears it.
-        if let peer = callContactId,
+        if announcesToPeer,
+           let peer = callContactId,
            let provider = liveProvider,
            webRtcController == nil {
             // Read the id BEFORE the send — `sendHangup` clears it by design.
@@ -20480,9 +20628,11 @@ extension AppState {
             // is the minimum needed to see that clash in a real log
             // instead of reasoning about it in the abstract.
             let reportStartMs = Date().timeIntervalSince1970 * 1000
+            // W-CALLERBUSY — a busy / unreachable callee is not a local hangup, and never a failure.
+            let callKitEndReason: CallEndReason = outcome?.callKitEndReason ?? .userEnded
             RTLog.info("call", "reportCallEnded start uuid=\(uuid.uuidString.prefix(8))")
             Task { [weak self] in
-                await self?.callKit?.reportCallEnded(uuid: uuid, reason: .userEnded)
+                await self?.callKit?.reportCallEnded(uuid: uuid, reason: callKitEndReason)
                 let elapsedMs = Int(Date().timeIntervalSince1970 * 1000 - reportStartMs)
                 RTLog.info("call", "reportCallEnded done uuid=\(uuid.uuidString.prefix(8)) elapsedMs=\(elapsedMs)")
                 // Then close anything else this process still has open with
@@ -20569,7 +20719,11 @@ extension AppState {
             "terminal_state": String(describing: callState),
             "is_video": isVideoCall
         ]
-        if let closeReason { callEndAttrs["end_reason"] = closeReason.rawValue }
+        if let closeReason {
+            callEndAttrs["end_reason"] = closeReason.rawValue
+        } else if let outcome {
+            callEndAttrs["end_reason"] = outcome.closeToken  // W-CALLERBUSY
+        }
         TelemetryService.shared.emit(
             kind: "call.end",
             callId: endCallId,
@@ -20578,7 +20732,7 @@ extension AppState {
         // Persist call end time. Use the stable record id registered in startCall
         // or wireIncomingCallHandlers. Works for both outgoing and incoming paths.
         if let rid = activeOutgoingRecordId {
-            PersistentCallRecordStore.shared.endCall(id: rid, closeReason: closeReason?.rawValue)
+            PersistentCallRecordStore.shared.endCall(id: rid, closeReason: closeReason?.rawValue ?? outcome?.closeToken)
             activeOutgoingRecordId = nil
         }
         callService.endCall()
@@ -20615,11 +20769,20 @@ extension AppState {
         // W548 (iOS): emit call.media.summary on the canonical end edge.
         do {
             let cid = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
-            CallMediaTelemetry.shared.recordEnded(callId: cid, reason: closeReason?.rawValue ?? "user_hangup")
+            CallMediaTelemetry.shared.recordEnded(
+                callId: cid, reason: closeReason?.rawValue ?? outcome?.closeToken ?? "user_hangup")
             // W-KCMAC — drop this call's key-confirmation state. AFTER
             // `callService.endCall()` above (which already read
             // `getKeyConfirmationTelemetry` during its own teardown).
             clearKeyConfirmationState(callId: cid)
+        }
+        // W-CALLERBUSY (review of #169) — a hangup would have cleared the call id bound for the dead call
+        // (`sendHangup` clears it by design). With nothing sent, drop it locally, after every read of it above:
+        // a stale `active_call_id` must not be re-asserted on the next authenticate for a call the server never
+        // tracked.
+        if !announcesToPeer, let endedId = endCallId,
+           let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl {
+            impl.unbindActiveCallId(matching: endedId)
         }
         callState = .ended
         isInCall = false
@@ -20671,7 +20834,13 @@ extension AppState {
         // cifrato non leggibile]". Triggering now ensures both sides refresh to
         // a fresh X25519 shared secret before any post-call message is sent.
         // Fire-and-forget (triggerKeyExchange is try?-wrapped inside).
-        if let peer = callContactId { triggerKeyExchange(with: peer) }
+        //
+        // W-CALLERBUSY (review of #169) — gated by `announcesToPeer` like every other peer-bound send in this
+        // teardown. `ContactKeyExchange.initiate(force: false)` always sends an opaque KEY_EXCHANGE_OFFER, so
+        // ungated, every busy / unreachable dial would send one to a callee who is inside ANOTHER call or offline:
+        // for those two outcomes the call never rang there, no handshake ran and there is nothing to refresh.
+        // Ordinary endings (`outcome == nil`, `announcesToPeer == true`) are unchanged.
+        if announcesToPeer, let peer = callContactId { triggerKeyExchange(with: peer) }
         callContactId = nil
         incomingCallerName = ""
         activeCallKitId = nil
@@ -20828,7 +20997,12 @@ extension AppState {
         // sendHangupAndClose() captures recipientId first, then closes sync.
         #if canImport(WebRTC)
         if let ctrl = webRtcController as? QAudionWebRtcCallController {
-            ctrl.sendHangupAndClose()
+            if announcesToPeer {
+                ctrl.sendHangupAndClose()
+            } else {
+                // W-CALLERBUSY — busy / unreachable: close the peer connection, tell the peer nothing.
+                ctrl.closeSynchronously()
+            }
         }
         #endif
         webRtcController = nil
@@ -20887,8 +21061,9 @@ extension AppState {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self = self else { return }
             // H-6: clear the re-entrancy guard once teardown has fully
-            // settled so the next call's endCall() runs normally.
-            self.isEndingCall = false
+            // settled so the next call's endCall() runs normally. Only the
+            // guard of THIS teardown: a call admitted since has its own.
+            self.teardownLatch.release(token: teardownToken)
         }
     }
 
@@ -25037,6 +25212,7 @@ extension AppState {
             return
         }
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncomingGroupCall ENTER callId=\(invite.callId.prefix(8))")
+        callerBusyTone.stop()  // W-CALLERBUSY (review of #169) — see performAcceptIncoming
         stopInAppRingtone()
         markGroupCallHandled(invite.callId)
         incomingGroupCallInvite = nil

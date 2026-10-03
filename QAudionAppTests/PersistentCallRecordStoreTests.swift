@@ -772,4 +772,46 @@ final class PersistentCallRecordStoreTests: XCTestCase {
                        "now it is known to be sealed under a key that is gone")
         XCTAssertTrue(try readRecords(at: url, key: try XCTUnwrap(newProvider.key)).isEmpty)
     }
+
+    // MARK: - W-CALLERBUSY: an outgoing call the callee could not take closes as busy / peer_offline
+
+    @MainActor
+    func test_busyAndPeerOfflineCloseReasons_areStored_andSurviveARelaunch() throws {
+        let dir = try makeDirectory()
+        let url = dir.appendingPathComponent("call_history.enc")
+        let provider = FakeKeyProvider()
+        let store = makeStore(provider, at: url)
+        begin(store, "c1")
+        store.endCall(id: "c1", closeReason: "busy")
+        begin(store, "c2")
+        store.endCall(id: "c2", closeReason: "peer_offline")
+
+        XCTAssertEqual(store.records.first(where: { $0.id == "c1" })?.closeReason, "busy")
+        XCTAssertEqual(store.records.first(where: { $0.id == "c2" })?.closeReason, "peer_offline")
+        let key = try XCTUnwrap(provider.key)
+        let onDisk = try readRecords(at: url, key: key)
+        XCTAssertEqual(onDisk.first(where: { $0.id == "c1" })?.closeReason, "busy")
+        XCTAssertEqual(onDisk.first(where: { $0.id == "c2" })?.closeReason, "peer_offline")
+    }
+
+    @MainActor
+    func test_aFreeFormCloseReason_isStillDropped_andBusyHasNoDuration() throws {
+        let dir = try makeDirectory()
+        let store = makeStore(FakeKeyProvider(), at: dir.appendingPathComponent("call_history.enc"))
+        begin(store, "c1")
+        store.endCall(id: "c1", closeReason: "not_an_allow_listed_token")
+        XCTAssertNil(store.records.first?.closeReason)
+
+        // A busy dial that took a couple of seconds to be answered is not a call of that length.
+        let record = CallRecord(
+            id: "b1", peerUserId: "p", peerDisplayName: "P", direction: .outgoing,
+            startedAt: Date(timeIntervalSinceNow: -5), endedAt: Date(), isVideo: false,
+            peerExtension: nil, closeReason: "busy")
+        XCTAssertNil(record.durationSeconds)
+        let plain = CallRecord(
+            id: "p1", peerUserId: "p", peerDisplayName: "P", direction: .outgoing,
+            startedAt: Date(timeIntervalSinceNow: -5), endedAt: Date(), isVideo: false,
+            peerExtension: nil, closeReason: nil)
+        XCTAssertNotNil(plain.durationSeconds)
+    }
 }

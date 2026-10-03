@@ -265,8 +265,12 @@ enum LogRedactor {
     // (no digits, no base64/hex punctuation beyond '_'), and `identity_key_mismatch` is 21 characters,
     // above the 20-character residual bar, so without this allow-list the telemetry `end_reason` and the
     // log lines that name it would ship as `***REDACTED***`.
+    // W-CALLERBUSY -- plus the two outgoing-call outcomes (`busy`, `peer_offline`): `peer_offline` was being
+    // shipped as `***REDACTED***` as the call's `end_reason`.
     private static let closeReasonRegex = try! NSRegularExpression(
-        pattern: #"\b(?:"# + CallCloseReason.allTokens.joined(separator: "|") + #")\b"#)
+        pattern: #"\b(?:"#
+            + (CallCloseReason.allTokens + CallerTerminalOutcome.allCases.map { $0.closeToken }).joined(separator: "|")
+            + #")\b"#)
 
     // Dot-delimited JWT: three base64url segments. Caught explicitly because
     // '.' fragments each segment below the length bars of the blob/residual
