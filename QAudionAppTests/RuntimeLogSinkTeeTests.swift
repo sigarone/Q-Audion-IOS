@@ -117,17 +117,28 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
         }
     }
 
+    /// What the ring holds at the end, for a failure message: the newest entries, tag and the first characters.
+    private func ringTail(_ count: Int = 12) -> String {
+        RuntimeLogSink.shared.snapshotEntries.suffix(count)
+            .map { "[\($0.tag)] \($0.message.prefix(90))" }
+            .joined(separator: " | ")
+    }
+
     /// A line the process prints is recorded once. A feedback loop records it again on every pass, so after a pause
     /// that is long compared with one pass the count is the proof.
     func test_aLineTheProcessPrints_isRecordedOnce_andNeverEchoedBackIntoTheRing() async throws {
         RuntimeLogSink.shared.attachStdoutTee()
         let marker = uniqueMarker()
+        let stdoutMarker = uniqueMarker()
         fputs("\(marker) printed by the process\n", stderr)
-        try await waitUntil { !self.entries(containing: marker).isEmpty }
-        XCTAssertEqual(entries(containing: marker).count, 1, "captured once")
+        print("\(stdoutMarker) printed on stdout")
+        try await waitUntil { !self.entries(containing: marker).isEmpty && !self.entries(containing: stdoutMarker).isEmpty }
+        XCTAssertEqual(entries(containing: marker).count, 1, "stderr line captured once; ring tail: \(ringTail())")
+        XCTAssertEqual(entries(containing: stdoutMarker).count, 1, "stdout line captured once; ring tail: \(ringTail())")
         try await Task.sleep(nanoseconds: 1_500_000_000)
         let after = entries(containing: marker)
         XCTAssertEqual(after.count, 1, "the sink must not re-capture what it recorded")
+        XCTAssertEqual(entries(containing: stdoutMarker).count, 1)
         XCTAssertEqual(after.first?.tag, "stdout")
     }
 
