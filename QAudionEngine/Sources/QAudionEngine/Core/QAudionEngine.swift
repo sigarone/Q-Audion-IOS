@@ -138,6 +138,20 @@ public final class QAudionEngine: @unchecked Sendable {
 
     public func initialize() throws {
         lock.lock(); defer { lock.unlock() }
+        try initializeLocked()
+    }
+
+    /// A2 (a replacement round-1 OFFER): make the engine ready for a fresh session. An engine that is already
+    /// `.initialized` (no session was installed since) is exactly that state and is left as it is; any other state goes
+    /// through the ordinary `initialize()`, and a refusal is thrown, not swallowed (a destroyed or processing engine
+    /// is a real failure that the caller must see).
+    public func initializeUnlessAlreadyInitialized() throws {
+        lock.lock(); defer { lock.unlock() }
+        if state == .initialized { return }
+        try initializeLocked()
+    }
+
+    private func initializeLocked() throws {
         guard state.canTransitionTo(.initialized) else {
             throw QAudionEngineError.invalidStateTransition(from: state, to: .initialized)
         }

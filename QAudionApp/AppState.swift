@@ -1932,6 +1932,9 @@ final class AppState: ObservableObject {
     /// re-fragmenting/re-sealing. Co-lifecycled with videoPipeline — a
     /// fresh instance per call, same as `abrController`.
     private var videoNackCache: VideoNackFragmentCache?
+    /// Serial of the newest `startVideoPipeline`: a start whose camera returns after a newer one began (a redial) is
+    /// superseded and must not take over `videoPipeline`, the ABR loop or the NACK cache.
+    private var videoPipelineStartSerial: Int = 0
     // W533 — screen-share state. Mirrors the desktop client's
     // PeerConnectionManager.isScreenSharing flag and toggles a stub
     // `cameraFrameClosureSnapshot` so the camera-to-WebRTC pipe can
@@ -14556,9 +14559,10 @@ final class AppState: ObservableObject {
         let integration = state.isInitiator ? callService.callIntegration : responderCallIntegration
         let nowMs = SasCommit.monotonicNowMs()
         guard let book = integration?.sasCommit else {
-            return KcMacWindow.remainingMs(
-                isRound1: false, isInitiator: state.isInitiator, armedAtMs: state.armedAtMs, nowMs: nowMs,
-                revealHandedAtMs: nil, revealVerifiedAtMs: nil)
+            // No book to read a REVEAL time from: a round-1 wait keeps the longest value of its role (a wait may be
+            // longer, never shorter), not the base window.
+            return KcMacWindow.remainingMsWithoutBook(
+                isRound1: state.isRound1, isInitiator: state.isInitiator, armedAtMs: state.armedAtMs, nowMs: nowMs)
         }
         return book.kcWaitRemainingMs(
             callId: callId, isRound1: state.isRound1, isInitiator: state.isInitiator,
@@ -14682,8 +14686,17 @@ final class AppState: ObservableObject {
         // R-COMMIT-KCMAC-DEVICE (A1, every round, A6): a CALLER judges only a KCMAC whose opaque envelope carries the
         // `sender_device_id` of the ACCEPT it bound. Any other device, or none, is dropped silently: no judgment,
         // no `kcmac_mismatch`, no early hold and no effect on any window. This comes BEFORE the duplicate test.
-        if callService.callIntegration?.sasCommit.callerKcMacSenderVerdict(
-            callId: callId, envelopeSenderDeviceId: senderDeviceId) == .dropSilently {
+        // When the caller's integration is gone while its round-1 key-confirmation state is still alive there is no
+        // bound device to compare with: the KCMAC is dropped too (fail closed), never judged.
+        let senderVerdict: SasCommitBook.KcMacSenderVerdict
+        if let book = callService.callIntegration?.sasCommit {
+            senderVerdict = book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: senderDeviceId)
+        } else {
+            let aliveState = kcCallStates[key]
+            senderVerdict = SasCommitBook.callerKcMacSenderVerdictWithoutBook(
+                roundOneInitiatorStateAlive: aliveState?.isInitiator == true && aliveState?.isRound1 == true)
+        }
+        if senderVerdict == .dropSilently {
             print("[AppState] KCMAC dropped — not from the device whose ACCEPT was bound callId=\(callId.prefix(8))…")
             return
         }
@@ -18210,27 +18223,39 @@ final class AppState: ObservableObject {
                 // existed, so its `setVideoPaused(false)` did nothing, and a pipeline created paused here
                 // would stay paused for the whole call.
                 let finalizedInOfferWindow: Bool = callFinalizedCallId == nativeSrtpOutgoingCallId
-                let pipelineBeforeVideoStart = videoPipeline
-                await startVideoPipeline(
-                    for: contactId,
-                    startPaused: CallerOutgoingStatePolicy.videoStartsPaused(
-                        callAlreadyFinalized: finalizedInOfferWindow))
+                let videoStartedPaused: Bool = CallerOutgoingStatePolicy.videoStartsPaused(
+                    callAlreadyFinalized: finalizedInOfferWindow)
+                // The pipeline THIS start assigned (nil when none was, or a newer start took over meanwhile).
+                let startedPipeline = await startVideoPipeline(for: contactId, startPaused: videoStartedPaused)
                 // The camera start is a second suspension point: a hangup inside it ran `endCall()` with no
                 // pipeline to stop yet, so the pipeline just assigned (camera on) and the WebRTC controller
                 // below would belong to a call that no longer exists.
                 if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart(
                     callTornDown: callService.currentCallGeneration() != offerCallGeneration) {
                     RTLog.warn("call", "video start returned abandon=1 torndown=1")
-                    // A pipeline the start just assigned is this dead call's, whoever owns the call state now: a
-                    // redial's own camera start only runs after its OFFER and begins by stopping a leftover one.
-                    if videoPipeline !== pipelineBeforeVideoStart {
-                        abrController?.stop()
-                        abrController = nil
-                        videoPipeline?.stop()
-                        videoPipeline = nil
-                        videoNackCache = nil
+                    // Only the pipeline THIS start assigned is this dead call's: stop that one and nothing else, so a
+                    // redial's own pipeline (its camera start can complete before this one returns) is never touched.
+                    if let startedPipeline {
+                        startedPipeline.stop()
+                        if videoPipeline === startedPipeline {
+                            abrController?.stop()
+                            abrController = nil
+                            videoPipeline = nil
+                            videoNackCache = nil
+                        }
                     }
                     return
+                }
+                // The call may have finalized while the camera was starting (`call_accepted` + `call_answer` land
+                // during the permission prompt): `finalizeCallActive()` then found no pipeline to un-pause (it is only
+                // assigned once the start returns), so a pipeline created paused would stay paused for the whole call.
+                // Re-read the latch here, with nothing suspended in between.
+                if let startedPipeline,
+                   CallerOutgoingStatePolicy.shouldUnpauseAfterVideoStart(
+                       startedPaused: videoStartedPaused,
+                       callFinalizedNow: callFinalizedCallId == nativeSrtpOutgoingCallId) {
+                    RTLog.info("call", "video start unpaused finalized=1")
+                    startedPipeline.setVideoPaused(false)
                 }
             }
             // W347: also kick off a WebRTC outgoing call. This rides in
@@ -25494,14 +25519,24 @@ extension AppState {
     ///   - inbound `video_frame` WS events → `pipeline.acceptInboundFragment`
     /// Best-effort: a failure here doesn't abort the call (the audio
     /// path keeps working; the SwiftUI placeholders stay visible).
+    ///
+    /// Returns the pipeline this call assigned to `videoPipeline`, or `nil` when none was (the start failed, or a
+    /// NEWER `startVideoPipeline` began while the camera was starting, e.g. a redial: the newer one owns the state
+    /// and this one's pipeline is stopped here without touching it). A caller that has to undo its own start (the
+    /// call ended meanwhile) stops exactly this pipeline.
     @MainActor
+    @discardableResult
     func startVideoPipeline(
         for peerId: String,
         sourceMode: VideoCallPipeline.SourceMode = .camera,
         startPaused: Bool = false
-    ) async {
+    ) async -> VideoCallPipeline? {
         // Tear down any leftover pipeline from a previous call.
         videoPipeline?.stop()
+        // A newer start must win over this one if the two overlap: each start takes the next serial now and
+        // checks it once its camera start returns.
+        videoPipelineStartSerial &+= 1
+        let startSerial = videoPipelineStartSerial
 
         let pipeline = VideoCallPipeline()
         // media-consent v1:
@@ -25536,7 +25571,7 @@ extension AppState {
         // silently dropped (webSocketTask == nil → "DROPPED" log).
         guard let ws = liveProvider?.getWebSocketClient() else {
             print("[AppState] startVideoPipeline: no live WS provider, skipping")
-            return
+            return nil
         }
 
         // W525: capture a weak reference to the calling impl so each
@@ -25731,6 +25766,13 @@ extension AppState {
 
         do {
             try await pipeline.start()
+            // A newer start began while the camera was starting (a redial): it owns `videoPipeline`, the ABR loop and
+            // the NACK cache now. Assigning this pipeline would orphan the newer one with its camera running.
+            guard startSerial == videoPipelineStartSerial else {
+                RTLog.warn("call", "video start superseded by a newer start — stopping this pipeline")
+                pipeline.stop()
+                return nil
+            }
             self.videoPipeline = pipeline
             // W398: spin up ABR loop on the same lifecycle.
             let abr = AbrController(pipeline: pipeline)
@@ -25745,6 +25787,7 @@ extension AppState {
             abr.start()
             self.abrController = abr
             print("[AppState] video pipeline up for peer \(peerId.prefix(8))…, ABR active")
+            return pipeline
         } catch let err as VideoCallPipeline.PipelineError {
             // W393: user-visible error surfacing. The audio call keeps
             // running; only the video portion is degraded. Surface a
@@ -25759,9 +25802,11 @@ extension AppState {
                 errorMessage = "Impossibile inizializzare il flusso video."
             }
             print("[AppState] video pipeline start failed: \(err)")
+            return nil
         } catch {
             errorMessage = "Errore avvio video: \(error.localizedDescription)"
             print("[AppState] video pipeline start failed: \(error)")
+            return nil
         }
     }
 

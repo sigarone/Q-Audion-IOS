@@ -459,7 +459,7 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertFalse(reject.contains("reportIncomingCall"), "no ring")
 
         let integration = try sourceText(integrationPath)
-        let emit = code(try slice(integration, from: "private func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool) async throws {",
+        let emit = code(try slice(integration, from: "func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool, calleeToken: UInt64? = nil) async throws {",
                                   to: "/// Review fix — closes the check-then-store race of the two gates above"))
         let emptyAt = try XCTUnwrap(emit.range(of: "guard !cid.isEmpty else {"))
         let holdAt = try XCTUnwrap(emit.range(of: "if shouldHoldResponderAccept?(cid) == true {"))

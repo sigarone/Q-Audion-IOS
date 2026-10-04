@@ -372,6 +372,16 @@ public enum KcMacWindow {
         }
         return max(0, end - nowMs)
     }
+
+    /// The wait when no SAS book is reachable (the integration that carried the call is gone while its
+    /// key-confirmation state is still alive): there is no REVEAL time to read, so a round-1 wait keeps the
+    /// LONGEST value of its role instead of falling back to the base window (a wait may be longer, never
+    /// shorter): the initiator's 30 s from arming, the callee's pre-REVEAL backstop. A later round is the base
+    /// window as always.
+    public static func remainingMsWithoutBook(isRound1: Bool, isInitiator: Bool, armedAtMs: Int, nowMs: Int) -> Int {
+        remainingMs(isRound1: isRound1, isInitiator: isInitiator, armedAtMs: armedAtMs, nowMs: nowMs,
+                    revealHandedAtMs: isInitiator ? armedAtMs : nil, revealVerifiedAtMs: nil)
+    }
 }
 
 /// Per-call store of the SAS commitment state, driven by `QAudionCallIntegration` (round 1 only).
@@ -392,6 +402,10 @@ public final class SasCommitBook: @unchecked Sendable {
     private var callees: [String: SasCommitCallee] = [:]
     private var round1: [String: Round1] = [:]
     private var wordsByCall: [String: [String]] = [:]
+    /// A2: the serial of each callee context (`beginCalleeOwned`). Serials only grow, so the context of a replaced
+    /// OFFER and the one that replaced it never share one, and a step of the replaced OFFER can tell it is stale.
+    private var calleeSerials: [String: UInt64] = [:]
+    private var lastCalleeSerial: UInt64 = 0
 
     public init() {}
 
@@ -557,6 +571,14 @@ public final class SasCommitBook: @unchecked Sendable {
         }
     }
 
+    /// R-COMMIT-KCMAC-DEVICE when no SAS book is reachable. A round-1 initiator's key-confirmation state that is still
+    /// alive means this device IS the caller of the call but the integration holding the bound ACCEPT's device is
+    /// gone: nothing can vouch for the sender, so the KCMAC is dropped silently (fail closed, as for a missing
+    /// device id). Without such a state the rule does not apply (a callee has no caller book by design).
+    public static func callerKcMacSenderVerdictWithoutBook(roundOneInitiatorStateAlive: Bool) -> KcMacSenderVerdict {
+        roundOneInitiatorStateAlive ? .dropSilently : .notApplicable
+    }
+
     /// True when `callId` has a caller context that bound an ACCEPT.
     public func callerHasBound(callId: String) -> Bool {
         lock.withLock { callers[callId.lowercased()]?.boundAcceptHash != nil }
@@ -576,9 +598,88 @@ public final class SasCommitBook: @unchecked Sendable {
         let id = callId.lowercased()
         guard !id.isEmpty, commit.count == SasCommit.commitLength else { return false }
         return lock.withLock { () -> Bool in
-            if callees[id] != nil { return false }
-            callees[id] = SasCommitCallee(callId: callId, storedCommit: commit)
+            installCalleeLocked(id: id, callId: callId, commit: commit, acceptHash: nil) != nil
+        }
+    }
+
+    /// A2: begin the callee context of the round-1 OFFER being answered AND store the hash of the ACCEPT built for
+    /// it, in one step, and return the context's serial (`nil` when a context already exists for the call, or an
+    /// argument is malformed: this OFFER does not own the call's commitment). The processing of that OFFER hands the
+    /// serial back to `calleeIsCurrent` / `calleeMarkAcceptSent`, so nothing it still has to do can land on the
+    /// context of a different OFFER.
+    public func beginCalleeOwned(callId: String, commit: Data, acceptHash: Data) -> UInt64? {
+        let id = callId.lowercased()
+        guard !id.isEmpty, commit.count == SasCommit.commitLength, acceptHash.count == 32 else { return nil }
+        return lock.withLock { () -> UInt64? in
+            installCalleeLocked(id: id, callId: callId, commit: commit, acceptHash: acceptHash)
+        }
+    }
+
+    private func installCalleeLocked(id: String, callId: String, commit: Data, acceptHash: Data?) -> UInt64? {
+        if callees[id] != nil { return nil }
+        var callee = SasCommitCallee(callId: callId, storedCommit: commit)
+        if let acceptHash { callee.setAcceptHash(acceptHash) }
+        callees[id] = callee
+        lastCalleeSerial &+= 1
+        calleeSerials[id] = lastCalleeSerial
+        return lastCalleeSerial
+    }
+
+    /// A2: true while `token` (from `beginCalleeOwned`) still names the call's callee context: it was neither
+    /// replaced nor cleared.
+    public func calleeIsCurrent(callId: String, token: UInt64) -> Bool {
+        let id = callId.lowercased()
+        return lock.withLock { callees[id] != nil && calleeSerials[id] == token }
+    }
+
+    /// A2: the serial of the call's current callee context (a replay of a cached ACCEPT belongs to it), or `nil`
+    /// when the call has none.
+    public func calleeCurrentToken(callId: String) -> UInt64? {
+        let id = callId.lowercased()
+        return lock.withLock { callees[id] != nil ? calleeSerials[id] : nil }
+    }
+
+    /// A2 compare-and-remove: wipe the callee context (and the round-1 material and counters recorded for it) of a
+    /// call whose ACCEPT was NOT sent, in ONE step under the book's lock. `false` (nothing touched) when no callee
+    /// context exists or its ACCEPT is already out: the answered commitment is frozen then. A concurrent
+    /// `calleeMarkAcceptSent` and this call cannot both win: whichever takes the lock first decides.
+    public func calleeSupersedeIfUnsent(callId: String) -> Bool {
+        let id = callId.lowercased()
+        return lock.withLock { () -> Bool in
+            guard callers[id] == nil, callees[id]?.canBeSuperseded == true else { return false }
+            callees.removeValue(forKey: id)
+            calleeSerials.removeValue(forKey: id)
+            round1.removeValue(forKey: id)
+            wordsByCall.removeValue(forKey: id)
+            resendEvents.removeValue(forKey: id)
+            reauthLogs.removeValue(forKey: id)
             return true
+        }
+    }
+
+    /// What `calleeMarkAcceptSent` decided.
+    public enum CalleeAcceptSend: Equatable {
+        /// First send of the ACCEPT of this context: the commitment is frozen now and the caller arms the REVEAL timer.
+        case first
+        /// The ACCEPT of this context was sent before (a retransmission or a cached replay): send it, arm nothing.
+        case notFirst
+        /// The context named by the token is gone (replaced or cleared): the ACCEPT must NOT be sent.
+        case stale
+    }
+
+    /// A2: mark the ACCEPT of the context `token` names as SENT, atomically with the check that the context is still
+    /// the call's current one. Every send of a round-1 ACCEPT goes through here BEFORE the hand-over to the transport,
+    /// so an ACCEPT can never leave for a context a newer OFFER already replaced.
+    public func calleeMarkAcceptSent(callId: String, token: UInt64, nowMs: Int) -> CalleeAcceptSend {
+        let id = callId.lowercased()
+        return lock.withLock { () -> CalleeAcceptSend in
+            guard var callee = callees[id], calleeSerials[id] == token else { return .stale }
+            let first = callee.acceptSent(nowMs: nowMs)
+            callees[id] = callee
+            if first { return .first }
+            // Not the first send: only a context whose ACCEPT really went out before may send it again. One that
+            // refused to mark (no ACCEPT hash stored, or already ended) has nothing to re-send.
+            return callee.acceptSentAtMs != nil ? .notFirst : .stale
         }
     }
 
@@ -725,6 +826,7 @@ public final class SasCommitBook: @unchecked Sendable {
             callers[id]?.end()
             callers.removeValue(forKey: id)
             callees.removeValue(forKey: id)
+            calleeSerials.removeValue(forKey: id)
             round1.removeValue(forKey: id)
             wordsByCall.removeValue(forKey: id)
             resendEvents.removeValue(forKey: id)
@@ -737,6 +839,7 @@ public final class SasCommitBook: @unchecked Sendable {
             for key in Array(callers.keys) { callers[key]?.end() }
             callers.removeAll()
             callees.removeAll()
+            calleeSerials.removeAll()
             round1.removeAll()
             wordsByCall.removeAll()
             resendEvents.removeAll()

@@ -40,6 +40,9 @@ final class CallerAcceptLatchTests: XCTestCase {
         /// setup stopped there because the call was torn down during the camera start.
         var videoStartedPaused: Bool?
         var abandonedAfterVideoStart = false
+        /// The pipeline the camera start assigned to `videoPipeline`: nil until the start returned, then whether it is
+        /// paused. `finalizeCallActive()` un-pauses it only when it exists.
+        var pipelinePaused: Bool?
 
         /// `startCall()`: the OFFER round trip returned, the call is in its pre-ring `.active`.
         init(call: String, phase: Phase = .active) {
@@ -116,6 +119,17 @@ final class CallerAcceptLatchTests: XCTestCase {
             }
         }
 
+        /// `startCall` once `startVideoPipeline` returned the pipeline it assigned: the pipeline appears (paused or not,
+        /// as it was started) and the call may have finalized while the camera was starting.
+        mutating func videoPipelineAssigned(startedPaused: Bool) {
+            pipelinePaused = startedPaused
+            let finalizedNow = latch.finalizedCallId != nil && latch.finalizedCallId == activeCallId
+            if CallerOutgoingStatePolicy.shouldUnpauseAfterVideoStart(
+                startedPaused: startedPaused, callFinalizedNow: finalizedNow) {
+                pipelinePaused = false
+            }
+        }
+
         /// A NEW call started while the previous call's OFFER was still in flight.
         mutating func redial(_ id: String) {
             activeCallId = id
@@ -148,6 +162,7 @@ final class CallerAcceptLatchTests: XCTestCase {
         private mutating func finalize() {
             finalizeCount += 1
             latch.markFinalized(callId: activeCallId)
+            if pipelinePaused != nil { pipelinePaused = false }
             if keyReady || phase == .encrypted { phase = .encrypted } else { phase = .active }
         }
     }
@@ -720,6 +735,83 @@ final class CallerAcceptLatchTests: XCTestCase {
         typealias P = CallerOutgoingStatePolicy
         XCTAssertTrue(P.videoStartsPaused(callAlreadyFinalized: false))
         XCTAssertFalse(P.videoStartsPaused(callAlreadyFinalized: true))
+    }
+
+    /// The call finalizes WHILE the camera starts (the first-time permission prompt can last seconds): the finalize
+    /// had no pipeline to un-pause, and the pipeline created paused before it must be un-paused when it is assigned.
+    func testStateGuard_aCallThatFinalizesDuringTheCameraStartIsUnpausedWhenThePipelineAppears() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.offerReturned()
+        let startedPaused = CallerOutgoingStatePolicy.videoStartsPaused(
+            callAlreadyFinalized: sim.latch.finalizedCallId != nil && sim.latch.finalizedCallId == sim.activeCallId)
+        XCTAssertTrue(startedPaused, "not finalized when the camera start began")
+        // inside the camera start: call_accepted, call_answer (SDP) and call_ready arrive, the call finalizes
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: true)
+        sim.callReady()
+        XCTAssertEqual(sim.finalizeCount, 1)
+        XCTAssertNil(sim.pipelinePaused, "finalizeCallActive found no pipeline to un-pause")
+        sim.videoPipelineAssigned(startedPaused: startedPaused)
+        XCTAssertEqual(sim.pipelinePaused, false, "a finalized call's pipeline must not stay paused for the whole call")
+    }
+
+    /// A call that has not finalized when the pipeline appears keeps it paused; `finalizeCallActive()` un-pauses it
+    /// later, as before.
+    func testStateGuard_aCallThatHasNotFinalizedKeepsThePipelinePausedUntilItFinalizes() {
+        var sim = CallerSim(call: call, phase: .connecting)
+        sim.offerReturned()
+        sim.videoPipelineAssigned(startedPaused: true)
+        XCTAssertEqual(sim.pipelinePaused, true)
+        sim.callAccepted(call)
+        sim.callAnswer(call, sdp: true)
+        XCTAssertEqual(sim.finalizeCount, 1)
+        XCTAssertEqual(sim.pipelinePaused, false)
+    }
+
+    func testStateGuardRules_shouldUnpauseAfterVideoStart() {
+        typealias P = CallerOutgoingStatePolicy
+        XCTAssertTrue(P.shouldUnpauseAfterVideoStart(startedPaused: true, callFinalizedNow: true))
+        XCTAssertFalse(P.shouldUnpauseAfterVideoStart(startedPaused: true, callFinalizedNow: false),
+                       "an unanswered call keeps its pipeline paused")
+        XCTAssertFalse(P.shouldUnpauseAfterVideoStart(startedPaused: false, callFinalizedNow: true),
+                       "a pipeline that started un-paused has nothing to un-pause")
+        XCTAssertFalse(P.shouldUnpauseAfterVideoStart(startedPaused: false, callFinalizedNow: false))
+    }
+
+    /// Wiring: `startCall` keeps the pipeline its own start returned, re-reads the finalize latch after the start
+    /// (after the torn-down check, nothing suspended in between) and un-pauses THAT pipeline; the abandon branch stops
+    /// only it; `startVideoPipeline` returns the pipeline it assigned and stops itself, assigning nothing, when a newer
+    /// start began meanwhile.
+    func testStartCallAndStartVideoPipelineWiring() throws {
+        var dir = URL(fileURLWithPath: #filePath)
+        var app: String?
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent("QAudionApp/AppState.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                app = try String(contentsOf: candidate, encoding: .utf8)
+                break
+            }
+        }
+        guard let appText = app else { throw XCTSkip("AppState.swift not found") }
+        let src = appText.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        let startAt = try XCTUnwrap(src.range(of: "let startedPipeline = await startVideoPipeline(for: contactId, startPaused: videoStartedPaused)"))
+        let tail = String(src[startAt.upperBound...])
+        let abandonAt = try XCTUnwrap(tail.range(of: "if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart("))
+        let stopAt = try XCTUnwrap(tail.range(of: "if let startedPipeline { startedPipeline.stop()"))
+        let unpauseAt = try XCTUnwrap(tail.range(of: "CallerOutgoingStatePolicy.shouldUnpauseAfterVideoStart( startedPaused: videoStartedPaused, callFinalizedNow: callFinalizedCallId == nativeSrtpOutgoingCallId)"))
+        let setAt = try XCTUnwrap(tail.range(of: "startedPipeline.setVideoPaused(false)"))
+        XCTAssertLessThan(abandonAt.lowerBound, stopAt.lowerBound)
+        XCTAssertLessThan(stopAt.lowerBound, unpauseAt.lowerBound, "the un-pause is after the torn-down check")
+        XCTAssertLessThan(unpauseAt.lowerBound, setAt.lowerBound)
+        XCTAssertFalse(String(tail[..<unpauseAt.lowerBound]).contains("await "),
+                       "nothing suspends between the start returning and the latch being re-read")
+        XCTAssertTrue(src.contains(") async -> VideoCallPipeline? {"), "startVideoPipeline returns the pipeline it assigned")
+        XCTAssertTrue(src.contains("guard startSerial == videoPipelineStartSerial else {"))
+        let guardAt = try XCTUnwrap(src.range(of: "guard startSerial == videoPipelineStartSerial else {"))
+        let assignAt = try XCTUnwrap(src.range(of: "self.videoPipeline = pipeline", range: guardAt.upperBound..<src.endIndex))
+        XCTAssertLessThan(guardAt.lowerBound, assignAt.lowerBound, "a superseded start assigns nothing")
     }
 
     func testStateGuardRules_shouldSettleToIdle() {
