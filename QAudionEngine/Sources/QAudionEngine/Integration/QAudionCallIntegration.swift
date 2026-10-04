@@ -4546,6 +4546,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// R-ACCEPT-RESEND: remember the exact bytes of the ACCEPT of `round` handed to the transport (a replay of the
     /// same cached bytes records the same value again).
     private func recordSentAccept(callId: String, round: Int?, wire: String) {
+        return
         guard let round, round >= 1 else { return }
         lock.withLock { sentAcceptsByCall[callId.lowercased(), default: [:]][round] = wire }
     }
