@@ -53,13 +53,16 @@ public final class QAudionEngine: @unchecked Sendable {
     // byte-identical to Android FrameRelayTransport:
     //   TX: static sessionKey + NO AAD + 2-byte len header + 120-byte padding
     //   RX: static sessionKey + NO AAD + strip 2-byte len header
-    // This is set automatically by QAudionCallIntegration when the peer
-    // handshakes via the Android JSON bundle path (onAndroidBundleReceived).
-    // iOS↔iOS calls keep useAdaptivePadding = false (ratchet path, W477+W473).
+    // QAudionCallIntegration passes adaptivePadding: true at both session
+    // installs (OFFER and ACCEPT), so this is the live audio path for every
+    // call, iOS↔iOS included; the ratchet path further down is what an engine
+    // initialised without the flag falls back to (W477+W473).
     // Flag is reset in initialize() so each call starts clean.
     private var useAdaptivePadding: Bool = false
     private var sessionKey: Data?          // raw 32-byte key for adaptive path
-    private var txSeqAdaptive: UInt64 = 0  // monotonic TX counter for adaptive path
+    // Internal, not private, only so tests can position the counter near
+    // UInt32.max; production code writes it solely under `lock`.
+    var txSeqAdaptive: UInt64 = 0          // monotonic TX counter for adaptive path
 
     // ── MEDIA-3/MEDIA-4/MEDIA-5 (W-INNERAUDIOAAD, 2026-09-02) ──
     //
@@ -70,8 +73,8 @@ public final class QAudionEngine: @unchecked Sendable {
     // (`QAudionCallIntegration.innerAudioAadV1Enabled`, default false — see
     // that constant's doc): per-direction keys derived from the SAME shared
     // secret via distinct HKDF info labels, AAD binding callId/direction/
-    // epoch/seq, and a 1024-slot replay window mirroring the outer M-15
-    // sealer's (`PqcRtpFrameSealer`) shape exactly.
+    // epoch/seq, and a 1024-slot replay window (`InnerAudioReplayWindow`):
+    // read-only check before the AEAD open, commit only after it succeeded.
     //
     // `innerAudioAadActive` is false whenever the capability was not
     // negotiated (kill switch off, or peer didn't advertise it) — in that
@@ -85,21 +88,13 @@ public final class QAudionEngine: @unchecked Sendable {
     private var adaptiveSelfIsRoleA: Bool = false
     private var adaptiveEpoch: UInt32 = 1  // the call's re-key round (CALL-3), reused as epoch
 
-    /// 1024-slot sliding-window anti-replay state for the inner sealed-audio
-    /// RX path, keyed on the wire sequence number. Same shape (word-sliced
-    /// UInt64 bitmask, highest-accepted-counter tracking) as
-    /// `PqcRtpFrameSealer`'s replay window — duplicated rather than shared
-    /// because that class's window is `private` and counter-derived from its
-    /// own nonce layout, whereas this one is keyed directly off the frame's
-    /// wire `seq`. Reset whenever a fresh adaptive+AAD session is installed
-    /// (see `initSession`), since `txSeqAdaptive`/the peer's mirror of it
-    /// restart at 0 for every new epoch.
-    private var innerAudioReplayInitialized = false
-    private var innerAudioReplayHighest: UInt64 = 0
-    private static let innerAudioReplayWindowSize: UInt64 = 1024
-    private static let innerAudioReplayWordCount = Int(innerAudioReplayWindowSize / 64)
-    private var innerAudioReplayWindow: [UInt64] =
-        [UInt64](repeating: 0, count: QAudionEngine.innerAudioReplayWordCount)
+    /// Anti-replay state for the inner sealed-audio RX path, keyed on the wire
+    /// sequence number. Touched only under `lock`, which is what keeps
+    /// check -> AEAD open -> commit atomic in `processIncomingAudio`. Reset
+    /// whenever a fresh adaptive+AAD session is installed (see `initSession`),
+    /// since `txSeqAdaptive`/the peer's mirror of it restart at 0 for every
+    /// new epoch.
+    private var innerAudioReplay = InnerAudioReplayWindow()
     // W-BLOCKSIZE — the audio BLOCK: the total plaintext one frame occupies
     // before encryption (2-byte true-length header + Opus frame + CSPRNG
     // filler). Same numbers as before, now taken from the single fleet-wide
@@ -204,9 +199,14 @@ public final class QAudionEngine: @unchecked Sendable {
         adaptiveCallIdBytes = Data()
         adaptiveSelfIsRoleA = false
         adaptiveEpoch = 1
-        innerAudioReplayInitialized = false
-        innerAudioReplayHighest = 0
-        for i in innerAudioReplayWindow.indices { innerAudioReplayWindow[i] = 0 }
+        innerAudioReplay.reset()
+    }
+
+    /// Test seam (read-only): is any inner-audio directional key still held?
+    /// `resetInnerAudioAadState` is the only thing that clears them.
+    var innerAudioAadKeyMaterialHeld: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return adaptiveSendKey != nil || adaptiveRecvKey != nil
     }
 
     /// W-LONGAUDIO (2026-08-10) — latch the audio profile for this call.
@@ -362,6 +362,14 @@ public final class QAudionEngine: @unchecked Sendable {
             guard let key = innerAudioAadActive ? adaptiveSendKey : sessionKey else {
                 throw QAudionEngineError.notInitialized
             }
+            // The wire seq is a UInt32 and the AAD binds that same value, so in AAD mode
+            // the counter must never pass UInt32.max: wrapping would reuse a seq under
+            // the same key. Refuse to send instead (the counter stays put, every later
+            // call refuses too, until a new session/epoch restarts it). Legacy mode keeps
+            // its truncating behaviour untouched.
+            if innerAudioAadActive && txSeqAdaptive > UInt64(UInt32.max) {
+                throw QAudionEngineError.txSequenceExhausted
+            }
             let opus = audioProcessor?.processOutgoing(pcmFrame: pcmFrame) ?? pcmFrame
             // W-PADOVERFLOW (2026-08-10) — an oversized frame must NOT change
             // the size of the packet.
@@ -421,8 +429,7 @@ public final class QAudionEngine: @unchecked Sendable {
             // callId||direction||epoch||seq as AAD instead — same cipher call,
             // same ciphertext framing, only the key and the `associatedData`
             // argument differ.
-            let seq64 = txSeqAdaptive
-            let seq = UInt32(truncatingIfNeeded: seq64)
+            let seq = UInt32(truncatingIfNeeded: txSeqAdaptive)
             txSeqAdaptive &+= 1
             let aad: Data? = innerAudioAadActive
                 ? Self.innerAudioAad(
@@ -432,7 +439,9 @@ public final class QAudionEngine: @unchecked Sendable {
                     // own selection above.
                     direction: adaptiveSelfIsRoleA ? 0x01 : 0x02,
                     epoch: adaptiveEpoch,
-                    seq: seq64)
+                    // The UInt32 that goes on the wire, widened: exactly what
+                    // the receiver rebuilds from `frame.sequenceNumber`.
+                    seq: UInt64(seq))
                 : nil
             let encrypted = try cipher.encrypt(plaintext: padded, key: key, associatedData: aad)
             let frame = EncryptedFrame(
@@ -484,8 +493,9 @@ public final class QAudionEngine: @unchecked Sendable {
         // W479 — Android-compat path: static session key, no AAD, strip 2-byte padding header.
         // W-INNERAUDIOAAD (MEDIA-3/4/5) — when negotiated, `key` is this call's
         // RX-direction key, a replay window rejects a repeated/too-old `seq`
-        // BEFORE the AEAD open is attempted, and the AEAD open binds the same
-        // AAD the sender used instead of none.
+        // BEFORE the AEAD open is attempted (read-only), the AEAD open binds the
+        // same AAD the sender used instead of none, and the window records the
+        // `seq` only AFTER that open succeeded.
         if useAdaptivePadding {
             guard let cipher = aeadCipher else {
                 throw QAudionEngineError.notInitialized
@@ -494,12 +504,14 @@ public final class QAudionEngine: @unchecked Sendable {
                 throw QAudionEngineError.notInitialized
             }
             // MEDIA-5 — reject replays/too-old frames before spending any
-            // crypto on them. Keyed on the wire sequence number, same
-            // 1024-slot shape as the outer M-15 sealer's replay window.
+            // crypto on them. READ-ONLY: the window is not touched until the
+            // tag below has verified (W-M15ORDER order), so a frame that fails
+            // authentication costs one frame and nothing else.
             if innerAudioAadActive {
-                guard innerAudioCheckAndUpdateReplay(seq: UInt64(frame.sequenceNumber)) else {
-                    throw QAudionEngineError.malformedFrame(
-                        "inner-audio replay/stale seq=\(frame.sequenceNumber)")
+                let verdict = innerAudioReplay.check(UInt64(frame.sequenceNumber))
+                guard verdict == .fresh else {
+                    throw QAudionEngineError.replayedFrame(
+                        seq: frame.sequenceNumber, tooOld: verdict == .tooOld)
                 }
             }
             let cipherOutput = AeadCipher.CipherOutput(
@@ -519,6 +531,16 @@ public final class QAudionEngine: @unchecked Sendable {
                 : nil
             let padded = try cipher.decrypt(cipherOutput: cipherOutput, key: key,
                                             associatedData: aad)
+            // Authenticated: record the seq now, whatever the body turns out to
+            // hold. `lock` is held since the check above, so nothing can have
+            // moved the window in between; the verdict is re-checked anyway.
+            if innerAudioAadActive {
+                let verdict = innerAudioReplay.commit(UInt64(frame.sequenceNumber))
+                guard verdict == .fresh else {
+                    throw QAudionEngineError.replayedFrame(
+                        seq: frame.sequenceNumber, tooOld: verdict == .tooOld)
+                }
+            }
             guard padded.count >= Self.adaptiveHeader else {
                 throw QAudionEngineError.malformedFrame("adaptive padding too short: \(padded.count)")
             }
@@ -683,6 +705,7 @@ public final class QAudionEngine: @unchecked Sendable {
     /// `direction` is `0x01` for a2b, `0x02` for b2a — the direction the KEY
     /// used for this frame belongs to (not "am I sending or receiving").
     /// Exact byte layout required on every platform that turns this on.
+    /// `seq` is the 32-bit wire sequence number zero-extended, on TX and RX alike.
     private static func innerAudioAad(
         callIdBytes: Data, direction: UInt8, epoch: UInt32, seq: UInt64
     ) -> Data {
@@ -694,78 +717,6 @@ public final class QAudionEngine: @unchecked Sendable {
         var seqBE = seq.bigEndian
         aad.append(withUnsafeBytes(of: &seqBE) { Data($0) })
         return aad
-    }
-
-    /// MEDIA-5 (W-INNERAUDIOAAD) — sliding-window anti-replay check for the
-    /// inner sealed-audio RX path, keyed directly on the wire `seq` (unlike
-    /// `PqcRtpFrameSealer`'s, which extracts a counter from its own nonce
-    /// layout). Algorithm and window size (1024 slots) are otherwise
-    /// identical: returns true and accepts if `seq` is fresh; returns false
-    /// (caller must reject, before spending any AEAD work) if it is a replay
-    /// or falls outside the window. Already lock-protected by the caller
-    /// holding `lock` for the whole of `processIncomingAudio`.
-    private func innerAudioCheckAndUpdateReplay(seq: UInt64) -> Bool {
-        if !innerAudioReplayInitialized {
-            innerAudioReplayInitialized = true
-            innerAudioReplayHighest = seq
-            for i in innerAudioReplayWindow.indices { innerAudioReplayWindow[i] = 0 }
-            innerAudioReplayWindow[0] = 1   // bit 0 = highest = seen
-            return true
-        }
-        if seq > innerAudioReplayHighest {
-            let shift = seq - innerAudioReplayHighest
-            if shift >= Self.innerAudioReplayWindowSize {
-                for i in innerAudioReplayWindow.indices { innerAudioReplayWindow[i] = 0 }
-            } else {
-                innerAudioShiftWindowRight(by: Int(shift))
-            }
-            innerAudioSetWindowBit(0)
-            innerAudioReplayHighest = seq
-            return true
-        }
-        let gap = innerAudioReplayHighest - seq
-        guard gap < Self.innerAudioReplayWindowSize else { return false }   // too old
-        if innerAudioTestWindowBit(Int(gap)) { return false }   // already seen
-        innerAudioSetWindowBit(Int(gap))
-        return true
-    }
-
-    private func innerAudioSetWindowBit(_ index: Int) {
-        innerAudioReplayWindow[index / 64] |= (1 << UInt64(index % 64))
-    }
-
-    private func innerAudioTestWindowBit(_ index: Int) -> Bool {
-        (innerAudioReplayWindow[index / 64] & (1 << UInt64(index % 64))) != 0
-    }
-
-    /// Right-shifts the whole multi-word bitmask by `n` bits: word[0]
-    /// holds the least-significant (most recent) bits.
-    ///
-    /// KNOWN DEFECT (W-M15ORDER review, 2026-10-03), not fixed here because this path only runs
-    /// with `innerAudioAadV1` negotiated (kill switch off): this moves recorded bits toward LOWER
-    /// indices, so only the highest seq stays protected, and the caller records the seq BEFORE the
-    /// AEAD check. `PqcRtpFrameSealer.ageWindow` / `open` carry the corrected direction and order;
-    /// port both before turning `innerAudioAadV1` on.
-    private func innerAudioShiftWindowRight(by n: Int) {
-        guard n > 0 else { return }
-        let wordShift = n / 64
-        let bitShift = n % 64
-        let count = innerAudioReplayWindow.count
-        if bitShift == 0 {
-            for i in 0..<count {
-                innerAudioReplayWindow[i] =
-                    (i + wordShift < count) ? innerAudioReplayWindow[i + wordShift] : 0
-            }
-            return
-        }
-        for i in 0..<count {
-            let lo = (i + wordShift < count)
-                ? (innerAudioReplayWindow[i + wordShift] >> UInt64(bitShift)) : 0
-            let hiIdx = i + wordShift + 1
-            let hi = (hiIdx < count)
-                ? (innerAudioReplayWindow[hiIdx] << UInt64(64 - bitShift)) : 0
-            innerAudioReplayWindow[i] = lo | hi
-        }
     }
 
     /// XP-ratchet-loss — max forward gap the RX ratchet will fast-forward
@@ -860,6 +811,10 @@ public final class QAudionEngine: @unchecked Sendable {
         rxSessionManager?.destroySession()
         txSessionManager = nil; rxSessionManager = nil
         aeadCipher = nil; pqcKeyExchange = nil; audioProcessor = nil
+        // W-INNERAUDIOAAD — same as destroySession: no key (static or directional) and
+        // no replay state is held past the engine's end.
+        sessionKey = nil
+        resetInnerAudioAadState()
         clearSkippedKeys()  // W-RXREORDER
         state = .destroyed
     }
@@ -951,6 +906,14 @@ public enum QAudionEngineError: Error, CustomStringConvertible {
     case noActiveSession
     /// W479 — adaptive-padding frame failed structural validation (bad length header etc.).
     case malformedFrame(String)
+    /// W-INNERAUDIOAAD — the inner-audio replay window refused a frame BEFORE any AEAD work:
+    /// `tooOld` is a seq behind the window, otherwise a seq that was already accepted. Distinct
+    /// from an AEAD failure (a CryptoKit error) so a replay is never read as a bad key. Callers
+    /// still classify it like any other non-`noActiveSession` error (`RxDecodeFailureKind.decrypt`).
+    case replayedFrame(seq: UInt32, tooOld: Bool)
+    /// W-INNERAUDIOAAD — the inner-audio TX counter would pass UInt32.max (the wire seq width);
+    /// refusing to send is the only way to never reuse a seq under the same key.
+    case txSequenceExhausted
 
     public var description: String {
         switch self {
@@ -958,6 +921,10 @@ public enum QAudionEngineError: Error, CustomStringConvertible {
         case .notInitialized: return "Engine not initialized"
         case .noActiveSession: return "No active session"
         case .malformedFrame(let reason): return "Malformed frame: \(reason)"
+        case .replayedFrame(let seq, let tooOld):
+            let why = tooOld ? "older than the replay window" : "already accepted"
+            return "Replayed frame: inner-audio seq=\(seq) \(why)"
+        case .txSequenceExhausted: return "Inner-audio TX sequence space exhausted"
         }
     }
 }
