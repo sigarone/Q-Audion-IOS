@@ -4539,8 +4539,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         // R-ACCEPT-RESEND: the exact bytes are kept from the hand-over on, before the write completes (a write into a
         // socket that is replaced meanwhile is the loss the re-send after the re-authentication repairs).
-        recordSentAccept(callId: cid, round: acceptRound, wire: wire)
         try await sendOpaqueRaw(wire)
+        recordSentAccept(callId: cid, round: acceptRound, wire: wire)
     }
 
     /// R-ACCEPT-RESEND: remember the exact bytes of the ACCEPT of `round` handed to the transport (a replay of the
