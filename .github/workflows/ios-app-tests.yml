@@ -156,6 +156,7 @@ jobs:
             -only-testing:QAudionAppTests/BugReporterRetryQueueTests \
             -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \
             -only-testing:QAudionAppTests/CallCloseReasonRedactionTests \
+            -only-testing:QAudionAppTests/CallMetricsRedactionTests \
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \

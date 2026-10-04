@@ -35,6 +35,7 @@ targets:
           - BugReporterRetryQueueTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
+          - CallMetricsRedactionTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
           - MissedCallsBadgeTests.swift

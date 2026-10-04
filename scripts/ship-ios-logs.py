@@ -757,7 +757,21 @@ APP_VOCAB = frozenset("""
     pcinit nudge
 
     audiosrtpfb engage recover admreset wedges latch split
+
+    audioroute suspect duck silent hear
 """.split())
+# CALL-METRICS (2026-10-04) -- the 5 words on the line right above ("audioroute suspect duck silent hear") are for the new
+# "call"-tagged RTLog lines of CallService's call-monitoring package (docs/TELEMETRY_CALL_METRICS.md):
+#   audioroute why=<reason> old=<code> out=<code> in=<code> profile=<0-3> sr=<Hz> out_ch=<n> in_ch=<n> vol=<0-100>
+#   audiosrtp hb=3 eng=<1|2> vpio=<0|1> duck=<0|1> echo_act=<n> echo_idle=<n> echo_far=<n>
+#       echo_active_db=<dBFS> echo_idle_db=<dBFS> echo_suspect=<0|1>
+#   audiosrtp hb=2 ... rtt_max=<ms> jitter_max=<ms> rtt_remote_max=<ms> lost_max=<n> plc_max=<n> sample=<n>
+# The bare word "audioroute" is 10 letters (over UNKNOWN_MAX_LEN) and not vocabulary, so every route line failed the
+# structured gate and was dropped; "suspect" (echo_suspect) turned the whole hb=3 line into a blob; "duck" is the
+# bypass echo ducker flag. The other new words (max, lost, rtt, jitter, remote, sample, profile, sr, ch, in, out,
+# old, why, vol, eng, vpio, echo, active, idle, frames, far, db) were already accepted. Global, like "audiosrtp": every
+# line is numeric and only printed during a call. The tag stays "call" (TAG_SCOPE_PREFIXES has no "audioroute" tag and
+# is deny-by-default), so the family word rides in the body. Pinned by test_ship_ios_callmetrics_vocab.py.
 # W-FALLBACKLATCH (2026-10-03) -- the 6 words on the line right above
 # ("audiosrtpfb engage recover admreset wedges latch split") are for the "call"-tagged
 # RTLog lines of CallService's SRTP-fallback latch, which NEVER reached Loki: the

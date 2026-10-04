@@ -248,6 +248,11 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
         let frameCount = audioBuffer.frames
         guard frameCount > 0, audioBuffer.channels > 0 else { return }
 
+        // CALL-METRICS (2026-10-04) — far-end level for the echo-suspect PROXY (telemetry only; see `NativeEchoProxy`):
+        // the frame about to be played, before the fallback injection below may replace it. Allocation-free, never blocks.
+        let farRaw = UnsafeBufferPointer(start: audioBuffer.rawBuffer(forChannel: 0), count: frameCount)
+        NativeEchoProbe.shared.noteFar(rms: NativeEchoProxy.rmsOfFloatS16(farRaw))
+
         lock.lock()
         processCallsTotal += 1
         let processN = processCallsTotal
@@ -298,6 +303,10 @@ public final class NativeAudioPlayoutInjector: NSObject, RTCAudioCustomProcessin
                 dst[i] = overwritten[i]
             }
         }
+        // CALL-METRICS — the relayed voice just replaced the frame: it is what the loudspeaker plays now, so it is what
+        // the microphone may hear back. Refreshes the "far end audible" stamp only (the callback was counted above).
+        let playedRaw = UnsafeBufferPointer(start: audioBuffer.rawBuffer(forChannel: 0), count: frameCount)
+        NativeEchoProbe.shared.noteFar(rms: NativeEchoProxy.rmsOfFloatS16(playedRaw), countCallback: false)
     }
 
     public func audioProcessingRelease() {

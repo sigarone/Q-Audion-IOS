@@ -40,6 +40,8 @@ public enum NativeAudioHeartbeatDeltas {
         public var jitterBufferTargetDelaySec: Double
         public var jitterBufferEmittedCount: Int64
         public var concealedSamples: Int64
+        public var silentConcealedSamples: Int64
+        public var concealmentEvents: Int64
         public var fecPacketsReceived: Int64
         public var fecPacketsDiscarded: Int64
         public var nackCount: Int64
@@ -49,6 +51,8 @@ public enum NativeAudioHeartbeatDeltas {
                     jitterBufferTargetDelaySec: Double = -1,
                     jitterBufferEmittedCount: Int64 = -1,
                     concealedSamples: Int64 = -1,
+                    silentConcealedSamples: Int64 = -1,
+                    concealmentEvents: Int64 = -1,
                     fecPacketsReceived: Int64 = -1,
                     fecPacketsDiscarded: Int64 = -1,
                     nackCount: Int64 = -1,
@@ -57,6 +61,8 @@ public enum NativeAudioHeartbeatDeltas {
             self.jitterBufferTargetDelaySec = jitterBufferTargetDelaySec
             self.jitterBufferEmittedCount = jitterBufferEmittedCount
             self.concealedSamples = concealedSamples
+            self.silentConcealedSamples = silentConcealedSamples
+            self.concealmentEvents = concealmentEvents
             self.fecPacketsReceived = fecPacketsReceived
             self.fecPacketsDiscarded = fecPacketsDiscarded
             self.nackCount = nackCount
@@ -81,6 +87,9 @@ public enum NativeAudioHeartbeatDeltas {
         /// as opposed to the delay actually experienced above).
         public var jitterBufferTargetDelayMsAvg: Int
         public var concealedSamplesDelta: Int64
+        /// Concealed samples produced while the sender was silent or in DTX (inside `concealedSamplesDelta`).
+        public var silentConcealedSamplesDelta: Int64
+        public var concealmentEventsDelta: Int64
         public var fecPacketsReceivedDelta: Int64
         public var fecPacketsDiscardedDelta: Int64
         public var nackCountDelta: Int64
@@ -89,6 +98,8 @@ public enum NativeAudioHeartbeatDeltas {
         public init(jitterBufferDelayMsAvg: Int = -1,
                     jitterBufferTargetDelayMsAvg: Int = -1,
                     concealedSamplesDelta: Int64 = -1,
+                 silentConcealedSamplesDelta: Int64 = -1,
+                 concealmentEventsDelta: Int64 = -1,
                     fecPacketsReceivedDelta: Int64 = -1,
                     fecPacketsDiscardedDelta: Int64 = -1,
                     nackCountDelta: Int64 = -1,
@@ -96,6 +107,8 @@ public enum NativeAudioHeartbeatDeltas {
             self.jitterBufferDelayMsAvg = jitterBufferDelayMsAvg
             self.jitterBufferTargetDelayMsAvg = jitterBufferTargetDelayMsAvg
             self.concealedSamplesDelta = concealedSamplesDelta
+            self.silentConcealedSamplesDelta = silentConcealedSamplesDelta
+            self.concealmentEventsDelta = concealmentEventsDelta
             self.fecPacketsReceivedDelta = fecPacketsReceivedDelta
             self.fecPacketsDiscardedDelta = fecPacketsDiscardedDelta
             self.nackCountDelta = nackCountDelta
@@ -137,6 +150,8 @@ public enum NativeAudioHeartbeatDeltas {
             jitterBufferTargetDelayMsAvg: averageMs(previousDelaySec: previous.jitterBufferTargetDelaySec,
                                                     currentDelaySec: current.jitterBufferTargetDelaySec),
             concealedSamplesDelta: counterDelta(previous.concealedSamples, current.concealedSamples),
+            silentConcealedSamplesDelta: counterDelta(previous.silentConcealedSamples, current.silentConcealedSamples),
+            concealmentEventsDelta: counterDelta(previous.concealmentEvents, current.concealmentEvents),
             fecPacketsReceivedDelta: counterDelta(previous.fecPacketsReceived, current.fecPacketsReceived),
             fecPacketsDiscardedDelta: counterDelta(previous.fecPacketsDiscarded, current.fecPacketsDiscarded),
             nackCountDelta: counterDelta(previous.nackCount, current.nackCount),

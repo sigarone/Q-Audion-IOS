@@ -435,6 +435,9 @@ final class CallService: @unchecked Sendable {
         let rtpTx = getAudioRtpBytesSent?() ?? -1
         let rtpRx = getAudioRtpBytesReceived?() ?? -1
         let useRtp = rtpTx >= 0 || rtpRx >= 0
+        // CALL-METRICS (2026-10-04) — one more 1 s sample for the per-interval extremes (rtt, jitter, loss, concealment)
+        // that the 5 s heartbeat below reports as maxima.
+        if getCallId?() != nil { noteCallMetricsSample(rttMs: rttMs) }
         let tx = useRtp ? max(rtpTx, 0) : wireTxBytes
         let rx = useRtp ? max(rtpRx, 0) : wireRxBytes
         if let prev = lastThroughputSample {
@@ -465,13 +468,20 @@ final class CallService: @unchecked Sendable {
         if getCallId?() != nil, srtpHbSampleCounter % 5 == 0 {
             let ptx = getAudioRtpPacketsSent?() ?? -1
             let prx = getAudioRtpPacketsReceived?() ?? -1
+            // CALL-METRICS — close the 1 s samples of this interval (also counts the heartbeat for the mid-call diag).
+            let closedInterval = callMetrics.closeInterval()
             // W-SRTPLOSSDIAG (2026-09-09) — lost is a plain Int64, ok
             // numeric per this line's own redactor discipline; jitter is
             // seconds from the stats API, shipped as whole milliseconds
             // (still numeric, finer than ms is not useful here) so it
             // survives the same shipper rule as `buf=` elsewhere in this file.
             let lost = getAudioRtpPacketsLost?() ?? -1
-            let jitterMs = Int((getAudioRtpJitterSec?() ?? -1) * 1000)
+            // CALL-METRICS — a stats row that does not exist is -1 s here; it must not reach the line as -1000 ms.
+            let jitterSecRaw: Double = getAudioRtpJitterSec?() ?? -1
+            var jitterMs: Int = -1
+            if jitterSecRaw.isFinite, jitterSecRaw >= 0, jitterSecRaw < 1_000_000 {
+                jitterMs = Int(jitterSecRaw * 1000)
+            }
             // W-AUDIOOUTDIAG (2026-09-09) — tx/rx byte counters only prove the
             // RTP/SRTP layer moved bytes; they say nothing about whether the
             // decoded PCM ever reached hardware output once native audio-srtp
@@ -485,7 +495,17 @@ final class CallService: @unchecked Sendable {
             let outSess = AVAudioSession.sharedInstance()
             let outPorts = outSess.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: "+")
             let outVol = Int(outSess.outputVolume * 100)
-            var line = "audiosrtp hb=1 tx=\(rtpTx) rx=\(rtpRx) ptx=\(ptx) prx=\(prx) lost=\(lost) jitter=\(jitterMs) outp=\(outPorts.isEmpty ? "none" : outPorts) vol=\(outVol)"
+            // CALL-METRICS — a counter without a stats row (-1) is OMITTED, never printed: the analysis tool reads numbers.
+            let outPortName: String = outPorts.isEmpty ? "none" : outPorts
+            var line: String = "audiosrtp hb=1"
+            line += CallMetricsLines.field("tx", rtpTx)
+            line += CallMetricsLines.field("rx", rtpRx)
+            line += CallMetricsLines.field("ptx", ptx)
+            line += CallMetricsLines.field("prx", prx)
+            line += CallMetricsLines.field("lost", lost)
+            line += CallMetricsLines.field("jitter", jitterMs)
+            line += " outp=" + outPortName
+            line += " vol=\(outVol)"
             // N7 (network-resilience-max, this task) — candidate-pair
             // `currentRoundTripTime`, the SAME measurement this call already
             // received as `rttMs` (`QAudionWebRtcCallController
@@ -498,7 +518,7 @@ final class CallService: @unchecked Sendable {
             // WHOLE LINE, whereas bare `rtt` is already-recognized
             // vocabulary there (confirmed via direct `redact_body()`
             // round-trip, not assumed).
-            if let rttMs, rttMs.isFinite {
+            if let rttMs, rttMs.isFinite, rttMs >= 0 {
                 line += " rtt=\(Int(rttMs.rounded()))"
             }
             // N7 review fix — the resilience fields ride their OWN line
@@ -511,6 +531,7 @@ final class CallService: @unchecked Sendable {
             // appended to it never reaches the server. `hb=2` stays short
             // and ships intact at every value range (incl. all -1).
             var resilienceLine: String?
+            var concealLine: String?
             // W-NATIVESRTPDIAG (this task) — extend the SAME heartbeat line
             // (no second timer) with the wider stats snapshot, ONLY on a
             // call that actually negotiated native SRTP: every field below
@@ -524,13 +545,13 @@ final class CallService: @unchecked Sendable {
                 // rather than a decimal point, matching this line's own
                 // all-integer convention.
                 func milli(_ v: Double) -> Int { (v < 0 || !v.isFinite) ? -1 : Int((v * 1000).rounded()) }
-                line += " rtx=\(stats.outboundRetransmittedPacketsSent)"
-                line += " mslvl=\(milli(stats.mediaSourceAudioLevel))"
-                line += " mseng=\(milli(stats.mediaSourceTotalAudioEnergy))"
-                line += " tsr=\(stats.inboundTotalSamplesReceived)"
-                line += " rxlvl=\(milli(stats.inboundAudioLevel))"
-                line += " isd=\(stats.inboundInsertedSamplesForDeceleration)"
-                line += " rsa=\(stats.inboundRemovedSamplesForAcceleration)"
+                line += CallMetricsLines.field("rtx", stats.outboundRetransmittedPacketsSent)
+                line += CallMetricsLines.field("mslvl", milli(stats.mediaSourceAudioLevel))
+                line += CallMetricsLines.field("mseng", milli(stats.mediaSourceTotalAudioEnergy))
+                line += CallMetricsLines.field("tsr", stats.inboundTotalSamplesReceived)
+                line += CallMetricsLines.field("rxlvl", milli(stats.inboundAudioLevel))
+                line += CallMetricsLines.field("isd", stats.inboundInsertedSamplesForDeceleration)
+                line += CallMetricsLines.field("rsa", stats.inboundRemovedSamplesForAcceleration)
                 line += " dtls=\(stats.transportDtlsState ?? "none")"
                 line += " srtpc=\(stats.transportSrtpCipher ?? "none")"
                 line += " dtlsc=\(stats.transportDtlsCipher ?? "none")"
@@ -549,8 +570,8 @@ final class CallService: @unchecked Sendable {
                 // overload set as a type-checker trap.
                 let clockRate: Int = stats.codecClockRate ?? -1
                 let channels: Int = stats.codecChannels ?? -1
-                line += " clk=\(clockRate)"
-                line += " ch=\(channels)"
+                line += CallMetricsLines.field("clk", clockRate)
+                line += CallMetricsLines.field("ch", channels)
                 // W-NATIVESRTPFMTP — never the raw fmtp line (text the peer's
                 // SDP controls): only allowlisted numeric params, one flat
                 // `fmtp_<key>=<digits>` token each (FmtpLogTokens).
@@ -570,6 +591,8 @@ final class CallService: @unchecked Sendable {
                     jitterBufferTargetDelaySec: stats.inboundJitterBufferTargetDelaySec,
                     jitterBufferEmittedCount: stats.inboundJitterBufferEmittedCount,
                     concealedSamples: stats.inboundConcealedSamples,
+                    silentConcealedSamples: stats.inboundSilentConcealedSamples,
+                    concealmentEvents: stats.inboundConcealmentEvents,
                     fecPacketsReceived: stats.inboundFecPacketsReceived,
                     fecPacketsDiscarded: stats.inboundFecPacketsDiscarded,
                     nackCount: stats.inboundNackCount,
@@ -597,35 +620,48 @@ final class CallService: @unchecked Sendable {
                 // name), so the line ships whole instead of collapsing to
                 // an empty attribute summary.
                 let rttField: Int
-                if let rttMs, rttMs.isFinite { rttField = Int(rttMs.rounded()) } else { rttField = -1 }
-                var net = "audiosrtp hb=2 rtt=\(rttField)"
-                net += " jitter_ms=\(deltas.jitterBufferDelayMsAvg)"
-                net += " target_ms=\(deltas.jitterBufferTargetDelayMsAvg)"
-                net += " plc=\(deltas.concealedSamplesDelta)"
-                net += " fec_recv=\(deltas.fecPacketsReceivedDelta)"
-                net += " fec_drop=\(deltas.fecPacketsDiscardedDelta)"
-                net += " nack=\(deltas.nackCountDelta)"
+                if let rttMs, rttMs.isFinite, rttMs >= 0 { rttField = Int(rttMs.rounded()) } else { rttField = -1 }
                 // Instantaneous (report-snapshot) fields, never delta'd — see
                 // `NativeAudioSrtpStatsSnapshot`'s own field docs for why.
                 // `fractionLost` is 0.0...1.0 -> milli-units, same convention
                 // `milli(_:)` above already uses for the audio-level fields.
-                net += " remote_loss=\(milli(stats.remoteInboundFractionLost))"
+                let remoteLossField: Int = milli(stats.remoteInboundFractionLost)
                 let remoteRttSec = stats.remoteInboundRoundTripTimeSec
                 let remoteRttMs = (remoteRttSec < 0 || !remoteRttSec.isFinite)
                     ? -1 : Int((remoteRttSec * 1000).rounded())
-                net += " remote_rtt=\(remoteRttMs)"
                 // Numeric-encoded, never the raw platform string (see
                 // `NativeAudioHeartbeatDeltas.relayProtocolCode`/
                 // `.networkTypeCode`'s own docs) — no addresses either way.
                 let relayCode = NativeAudioHeartbeatDeltas.relayProtocolCode(
                     stats.localCandidateRelayProtocol,
                     viaWssBridge: stats.localCandidateViaWssBridge)
-                net += " relay=\(relayCode)"
-                net += " network_type=\(NativeAudioHeartbeatDeltas.networkTypeCode(stats.localCandidateNetworkType))"
+                let networkCode: Int = NativeAudioHeartbeatDeltas.networkTypeCode(stats.localCandidateNetworkType)
+                // CALL-METRICS (2026-10-04) — the line is built by a pure, tested builder: same field names and order as
+                // before, a missing value is omitted instead of printed as -1, and the per-interval extremes
+                // (rtt_max, jitter_max, rtt_remote_max, lost_max, plc_max, sample) are appended.
+                let net: String = CallMetricsLines.hb2(
+                    rttMs: rttField,
+                    jitterBufferMs: deltas.jitterBufferDelayMsAvg,
+                    targetMs: deltas.jitterBufferTargetDelayMsAvg,
+                    plc: deltas.concealedSamplesDelta,
+                    fecRecv: deltas.fecPacketsReceivedDelta,
+                    fecDrop: deltas.fecPacketsDiscardedDelta,
+                    nack: deltas.nackCountDelta,
+                    remoteLossPermille: remoteLossField,
+                    remoteRttMs: remoteRttMs,
+                    relayCode: relayCode,
+                    networkTypeCode: networkCode,
+                    extremes: closedInterval.extremes)
                 resilienceLine = net
+                concealLine = CallMetricsLines.hb4(concealedDelta: deltas.concealedSamplesDelta,
+                                                   silentDelta: deltas.silentConcealedSamplesDelta,
+                                                   eventsDelta: deltas.concealmentEventsDelta)
             }
             RTLog.info("call", line)
             if let resilienceLine { RTLog.info("call", resilienceLine) }
+            if let concealLine { RTLog.info("call", concealLine) }
+            // CALL-METRICS — hb=3 (echo / VP-IO state), the route sample and the mid-call call.audio.diag.
+            emitCallMetricsAtHeartbeat(heartbeat: closedInterval.heartbeat)
         }
         // W-AUDIOSENDPICK sentinel — an armed native audio-srtp call whose
         // outbound-rtp row still does not exist after ~8 s of samples (was
@@ -700,6 +736,27 @@ final class CallService: @unchecked Sendable {
 
     /// W-SRTPRXDIAG — sample counter for the ~5 s RTP heartbeat above.
     private var srtpHbSampleCounter: Int = 0
+
+    /// CALL-METRICS (2026-10-04) — per-call monitoring state: the extremes of the 1 s samples between two heartbeats, the
+    /// audio-route ledger and the heartbeat count. Lock-protected inside; see `CallService+CallMetrics.swift`.
+    let callMetrics = CallMetricsState()
+
+    /// CALL-METRICS — which audio engine carries the call right now and what its voice processing looks like, for the
+    /// `audiosrtp hb=3` line: `engine` 1 = WebRTC's own audio unit (native SRTP), 2 = the app's AVAudioEngine (legacy
+    /// call, or the native call's ICE-loss fallback). `vpio` on engine 2 is read from the pipeline (VP-IO really active);
+    /// on engine 1 it is the CONFIGURATION (the factory is built with bypassVoiceProcessing=false and the unit is
+    /// enabled or left to WebRTC): iOS gives no way to read whether the canceller inside that unit works. `duck` is the
+    /// bypass echo ducker being armed (engine 2 only).
+    func callMetricsEngineState() -> (engine: Int, vpio: Bool, duck: Bool) {
+        let native: Bool = getUsesNativeAudioSrtp?() == true
+        if native && !audioSrtpFallbackActive {
+            let unitOn: Bool = !NativeAudioSessionGate.isArmed || NativeAudioSessionGate.isNativeAudioEnabled
+            return (1, unitOn, false)
+        }
+        let vpioActive: Bool = audioPipeline?.voiceProcessingIsActive == true
+        let duckArmed: Bool = audioCapture?.bypassEchoDuckEnabled == true
+        return (2, vpioActive, duckArmed)
+    }
 
     private var framesReceivedRx: Int64 = 0   // audio_frame envelopes off the WS, pre-decrypt
     private var txEncryptErrorCount: Int64 = 0
@@ -3699,6 +3756,10 @@ final class CallService: @unchecked Sendable {
         //   engines_started=false                         → engines never ran.
         // Only emit when the call actually had an audio stack (skip the
         // defensive pre-call cleanups that would log all-zeros).
+        // CALL-METRICS (2026-10-04) — true once THIS teardown has emitted a legacy `call.audio.diag`. On a native-SRTP call
+        // the legacy engine never starts, so none of the conditions below hold and no diag used to be emitted at all
+        // (field: iOS build 1.0.1208, native call). The native diag is emitted by `finishCallMetrics` after this block.
+        var legacyDiagEmitted = false
         if audioEngineStartAttempted || audioEnginesStarted || framesReceivedRx > 0 || framesEncryptedTx > 0 {
             let _callId = getCallId?()
             // W-FALLBACKLATCH (2026-10-03) — can this side tell the two ends were on different
@@ -4004,11 +4065,21 @@ final class CallService: @unchecked Sendable {
                     diagAttrs["assurance_state"] = kc.assuranceState
                     diagAttrs["expected_but_missing"] = kc.expectedButMissing
                 }
+                // CALL-METRICS — one record per call: a native call whose ICE-loss fallback ran this legacy engine gets
+                // its native-only keys (extremes, route ledger, heartbeat count) merged in; the legacy names win.
+                if resetSrtpFallback { mergeNativeAudioDiag(into: &diagAttrs) }
+                diagAttrs["diag_final"] = resetSrtpFallback
+                let diagToEmit: [String: Any] = diagAttrs
                 Task { @MainActor in
-                    TelemetryService.shared.emit(kind: "call.audio.diag", callId: _callId, attrs: diagAttrs)
+                    TelemetryService.shared.emit(kind: "call.audio.diag", callId: _callId, attrs: diagToEmit)
                 }
+                legacyDiagEmitted = true
             }
         }
+        // CALL-METRICS — end of a call (or the defensive teardown of a new one, which finds nothing to report): emit the
+        // native diag when no legacy one went out, then reset the per-call state. NOT at the answer-time defensive
+        // teardown (`resetSrtpFallback` false), which runs inside the same call.
+        if resetSrtpFallback { finishCallMetrics(legacyDiagEmitted: legacyDiagEmitted) }
         audioEnginesStarted = false
         audioEngineStartAttempted = false
         didActivateFallbackFired = false

@@ -818,6 +818,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         /// here for the same "one self-contained snapshot" reason as
         /// `inboundJitterBufferDelaySec` above.
         public var inboundConcealedSamples: Int64 = -1
+        /// `inbound-rtp` `silentConcealedSamples` - cumulative; the part of `concealedSamples` produced while the sender
+        /// was silent or in DTX (not audible as a fault). AUDIBLE concealment = concealed - silent.
+        public var inboundSilentConcealedSamples: Int64 = -1
+        /// `inbound-rtp` `concealmentEvents` - cumulative number of concealment events.
+        public var inboundConcealmentEvents: Int64 = -1
         /// `inbound-rtp` (kind=audio) `fecPacketsReceived` — cumulative.
         public var inboundFecPacketsReceived: Int64 = -1
         /// `inbound-rtp` (kind=audio) `fecPacketsDiscarded` — cumulative.
@@ -962,6 +967,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     snapshot.inboundFecPacketsDiscarded =
                         (s.values["fecPacketsDiscarded"] as? NSNumber)?.int64Value ?? -1
                     snapshot.inboundNackCount = (s.values["nackCount"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundSilentConcealedSamples = (s.values["silentConcealedSamples"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.inboundConcealmentEvents = audioConcealmentEvents
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
