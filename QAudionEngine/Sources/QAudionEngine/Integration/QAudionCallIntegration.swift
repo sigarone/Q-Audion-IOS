@@ -4582,7 +4582,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             print("[QAudionCallIntegration] ACCEPT not re-sent (no sender) callId=\(callId.prefix(8))…")
             return
         }
-        for accept in accepts {
+        for accept in accepts.reversed() {
             do {
                 try await sender(accept.wire)
                 print("[QAudionCallIntegration] ACCEPT re-sent after a socket re-authentication round=\(accept.round) callId=\(callId.prefix(8))…")
