@@ -4638,7 +4638,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     return false
                 }
                 // R-ACCEPT-RESEND: recorded at the hand-over, as for an ACCEPT that was never held.
-                recordSentAccept(callId: cid, round: acceptRound, wire: wire)
                 try await sender(wire)
             }
             print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT released callId=\(cid.prefix(8))…")
