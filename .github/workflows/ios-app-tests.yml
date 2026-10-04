@@ -138,6 +138,9 @@ jobs:
       # purpose: a class that is added there but forgotten here (or the other
       # way round) should fail loudly instead of silently not running.
       - name: Run app-target unit tests
+        # A run that stalls here (the 2026-10-04 stdout-tee feedback loop did, for the whole job cap) is cut after
+        # 25 minutes instead of 60: a healthy run takes about a minute.
+        timeout-minutes: 25
         working-directory: QAudionApp
         run: |
           set -o pipefail
@@ -156,6 +159,7 @@ jobs:
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
+            -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -resultBundlePath /tmp/app-tests.xcresult \
             COMPILER_INDEX_STORE_ENABLE=NO \

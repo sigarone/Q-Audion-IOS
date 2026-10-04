@@ -104,24 +104,57 @@ final class TrustEvaluationModelTests: XCTestCase {
 
     // MARK: - Deadline
 
-    func test_run_timesOut_whenTheEvaluatorHangs_evenIfItIgnoresCancellation() async throws {
-        let model = Model(timeout: 0.05)
-        let late = makeEvaluation()
-        let started = Date()
-        await model.run(peerUserId: "p") { _ in
-            // Deliberately not cancellable: resumes only when the timer fires.
+    /// An evaluator that ignores cancellation: it parks on a continuation that nothing but `release` resumes.
+    /// Main-actor only, like the evaluator closures that call it.
+    @MainActor
+    private final class ParkedEvaluator {
+        private(set) var released = false
+        private var releasedWith: PeerTrustEvaluator.Evaluation?
+        private var continuation: CheckedContinuation<PeerTrustEvaluator.Evaluation, Error>?
+
+        func evaluate() async throws -> PeerTrustEvaluator.Evaluation {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<PeerTrustEvaluator.Evaluation, Error>) in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    continuation.resume(returning: late)
+                if let releasedWith = self.releasedWith {
+                    continuation.resume(returning: releasedWith)   // released before it parked
+                } else {
+                    self.continuation = continuation
                 }
             }
         }
+
+        func release(with evaluation: PeerTrustEvaluator.Evaluation) {
+            released = true
+            releasedWith = evaluation
+            continuation?.resume(returning: evaluation)
+            continuation = nil
+        }
+    }
+
+    /// Deterministic: no wall-clock bound. The evaluator is released only AFTER `run` returned, so `run` returning
+    /// at all proves the deadline did not wait for an evaluator that ignores cancellation. (An earlier version bounded
+    /// the elapsed time at 0.45 s, which a loaded runner can exceed: it failed after 502 s on a starved CI host.)
+    func test_run_timesOut_whenTheEvaluatorHangs_evenIfItIgnoresCancellation() async throws {
+        let model = Model(timeout: 0.05)
+        let late = makeEvaluation()
+        let parked = ParkedEvaluator()
+        let abandonedEnded = expectation(description: "the abandoned evaluator ran to its end")
+        // Safety net for a regression only: without it a deadline that waits for the evaluator would hang the job.
+        // It is far longer than any healthy run and is cancelled as soon as `run` returns.
+        let watchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            parked.release(with: late)
+        }
+        await model.run(peerUserId: "p") { _ in
+            defer { abandonedEnded.fulfill() }
+            return try await parked.evaluate()
+        }
+        watchdog.cancel()
+        XCTAssertFalse(parked.released, "the deadline must not wait for an evaluator that ignores cancellation")
         XCTAssertEqual(model.phase, .failed(.timeout))
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.45,
-                          "the deadline must not wait for an evaluator that ignores cancellation")
 
         // The abandoned evaluator finishing later must not overwrite the failure.
-        try await Task.sleep(nanoseconds: 800_000_000)
+        parked.release(with: late)
+        await fulfillment(of: [abandonedEnded], timeout: 30)
         XCTAssertEqual(model.phase, .failed(.timeout))
     }
 
