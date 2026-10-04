@@ -814,7 +814,7 @@ final class SasCommitTests: XCTestCase {
         XCTAssertTrue(handler.contains("== .dropSilently"))
         XCTAssertFalse(app.contains("try? await Task.sleep(nanoseconds: 5_000_000_000)\n            guard !Task.isCancelled else { return }\n            await MainActor.run { [weak self] in\n                guard let self, let cur = self.kcCallStates[key]"),
                        "the KCMAC deadline is no longer a fixed 5 s")
-        XCTAssertTrue(app.contains("return self.kcWaitRemainingMs(callId: event.callId, state: cur)"))
+        XCTAssertTrue(app.contains("let left = self.kcWaitRemainingMs(callId: event.callId, state: cur)"))
         XCTAssertTrue(app.contains("isRound1 = event.round == 1"))
 
         let src = try integrationText()

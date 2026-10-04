@@ -386,8 +386,8 @@ public enum KcMacWindow {
     /// The wait when no SAS book is reachable (the integration that carried the call is gone while its
     /// key-confirmation state is still alive): there is no REVEAL time to read, so a round-1 wait keeps the
     /// LONGEST value of its role instead of falling back to the base window (a wait may be longer, never
-    /// shorter): the initiator's 30 s from arming, the callee's pre-REVEAL backstop. A later round is the base
-    /// window as always.
+    /// shorter): the initiator's 30 s from arming, the callee's pre-REVEAL backstop. A later round keeps its own
+    /// window: the base window for its offerer, 30 s for its acceptor (K2).
     public static func remainingMsWithoutBook(isRound1: Bool, isInitiator: Bool, armedAtMs: Int, nowMs: Int) -> Int {
         remainingMs(isRound1: isRound1, isInitiator: isInitiator, armedAtMs: armedAtMs, nowMs: nowMs,
                     revealHandedAtMs: isInitiator ? armedAtMs : nil, revealVerifiedAtMs: nil)

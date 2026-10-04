@@ -159,7 +159,7 @@ final class ConfirmTimersTests: XCTestCase {
         let rules = code(try sourceText("QAudionEngine/Sources/QAudionEngine/Crypto/KcMacRoundBook.swift"))
         XCTAssertTrue(rules.contains("public static let heldFreshMs = ConfirmTimeout.earlyKcMacHoldMs"))
         let app = code(try sourceText(appPath))
-        XCTAssertTrue(app.contains("return self.kcWaitRemainingMs(callId: event.callId, state: cur)"),
+        XCTAssertTrue(app.contains("let left = self.kcWaitRemainingMs(callId: event.callId, state: cur)"),
                       "the KCMAC wait is `KcMacWindow`'s, not a fixed sleep")
     }
 
@@ -260,7 +260,7 @@ final class ConfirmTimersTests: XCTestCase {
         let app = try sourceText(appPath)
         let handler = code(try slice(app, from: "private func handleSocketReauthForConfirmation() {",
                                      to: "/// W-KCMAC — verify an inbound `KCMAC:` piggy-back"))
-        let dueAt = try XCTUnwrap(handler.range(of: "guard due.any || !olderWires.isEmpty else { return }"))
+        let dueAt = try XCTUnwrap(handler.range(of: "guard due.any || !olderWires.isEmpty || !acceptsDue.isEmpty else { return }"))
         let takeAt = try XCTUnwrap(handler.range(of: "integration.takeResendEvent(callId: cid)"))
         XCTAssertLessThan(dueAt.lowerBound, takeAt.lowerBound, "nothing due: no budget is consumed")
         let revealAt = try XCTUnwrap(handler.range(of: "await integration.resendRevealAfterReauth(callId: cid)"))

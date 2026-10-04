@@ -324,7 +324,7 @@ final class SasCommitA2AtomicTests: XCTestCase {
         XCTAssertTrue(src.contains("sasCommit.beginCalleeOwned( callId: callId, commit: commitRaw, acceptHash: acceptBinding)"))
 
         let begin = try XCTUnwrap(src.range(of: "sasCommit.beginCalleeOwned("))
-        let emit = try XCTUnwrap(src.range(of: "try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: !isReKeyRound, calleeToken: calleeToken)"))
+        let emit = try XCTUnwrap(src.range(of: "try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: !isReKeyRound, calleeToken: calleeToken, acceptRound: Int(round))"))
         let guarded = try XCTUnwrap(src.range(of: "let installed: Bool = try offerInstallLock.withLock {"))
         let tokenCheck = try XCTUnwrap(src.range(of: "if let calleeToken, !sasCommit.calleeIsCurrent(callId: callId, token: calleeToken) { return false }"))
         let initSession = try XCTUnwrap(src.range(of: "try engine.initSession(sharedSecret: combined, adaptivePadding: true,"))
@@ -383,11 +383,11 @@ final class SasCommitA2AtomicTests: XCTestCase {
         // callee: the pre-REVEAL backstop, also 30 s from arming
         XCTAssertGreaterThan(W.remainingMsWithoutBook(isRound1: true, isInitiator: false, armedAtMs: 1_000, nowMs: 1_000 + 29_900), 0)
         XCTAssertEqual(W.remainingMsWithoutBook(isRound1: true, isInitiator: false, armedAtMs: 1_000, nowMs: 1_000 + 30_000), 0)
-        // a later round is the base window
-        for initiator in [true, false] {
-            XCTAssertGreaterThan(W.remainingMsWithoutBook(isRound1: false, isInitiator: initiator, armedAtMs: 0, nowMs: 14_900), 0)
-            XCTAssertEqual(W.remainingMsWithoutBook(isRound1: false, isInitiator: initiator, armedAtMs: 0, nowMs: 15_000), 0)
-        }
+        // a later round: the offerer keeps the base window, the acceptor of the rekey round waits 30 s (K2)
+        XCTAssertGreaterThan(W.remainingMsWithoutBook(isRound1: false, isInitiator: true, armedAtMs: 0, nowMs: 14_900), 0)
+        XCTAssertEqual(W.remainingMsWithoutBook(isRound1: false, isInitiator: true, armedAtMs: 0, nowMs: 15_000), 0)
+        XCTAssertGreaterThan(W.remainingMsWithoutBook(isRound1: false, isInitiator: false, armedAtMs: 0, nowMs: 29_900), 0)
+        XCTAssertEqual(W.remainingMsWithoutBook(isRound1: false, isInitiator: false, armedAtMs: 0, nowMs: 30_000), 0)
     }
 
     func testTheWaitWithoutABookIsNeverShorterThanTheWaitWithOne() {
