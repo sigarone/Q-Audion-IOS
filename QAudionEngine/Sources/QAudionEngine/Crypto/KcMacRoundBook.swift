@@ -202,7 +202,7 @@ public struct KcMacRoundBook {
     /// `kcmac_mismatch`), false when it was already decided.
     @discardableResult
     public mutating func expire(round: Int) -> Bool {
-        guard let index = pending.firstIndex(where: { $0.round == round }) else { return false }
+        guard let index = pending.firstIndex(where: { $0.round == round }) else { return true }
         pending.remove(at: index)
         return true
     }
