@@ -3566,6 +3566,9 @@ final class AppState: ObservableObject {
                 self?.updateProximityMonitoring()
                 self?.groupRouteChangeDiag(reason: reason, previousPortType: previousPortType,
                                            portType: portType, volume: volume)
+                // CALL-METRICS (2026-10-04) — the same change for a 1:1 call: `audioroute` line with the route, the
+                // Bluetooth profile and the session sample rate (primitives only, CLAUDE.md §16).
+                self?.callService.noteAudioRouteChange(reason: reason, previousPortType: previousPortType)
             }
         }
         // W-CARPLAYVIDEOFIX — see the property's own doc above: this is the

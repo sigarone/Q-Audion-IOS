@@ -87,6 +87,12 @@ public final class NativeAudioCaptureTap: NSObject, RTCAudioCustomProcessingDele
         let frameCount = audioBuffer.frames
         guard channelCount > 0, frameCount > 0 else { return }
 
+        // CALL-METRICS (2026-10-04) — echo-suspect PROXY, telemetry only: the level of THIS frame (the microphone after the
+        // hardware canceller) goes to the probe, which grades it against the far-end level the render hook reports. One
+        // pass over the frame, no allocation, never blocks (the probe only try-locks). See `NativeEchoProxy`.
+        let nearRaw = UnsafeBufferPointer(start: audioBuffer.rawBuffer(forChannel: 0), count: frameCount)
+        NativeEchoProbe.shared.noteNear(rms: NativeEchoProxy.rmsOfFloatS16(nearRaw))
+
         var channels: [[Float]] = []
         channels.reserveCapacity(channelCount)
         for ch in 0..<channelCount {
