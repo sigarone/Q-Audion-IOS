@@ -23,8 +23,10 @@ extension CallService {
             concealed = stats.inboundConcealedSamples
             remoteRttSec = stats.remoteInboundRoundTripTimeSec
         }
-        callMetrics.noteSample(rttMs: rttMs, jitterSec: jitterSec, remoteRttSec: remoteRttSec,
+        let firstSample: Bool = callMetrics.noteSample(rttMs: rttMs, jitterSec: jitterSec, remoteRttSec: remoteRttSec,
                                lostCumulative: lost, concealedCumulative: concealed, native: native)
+        // The echo probe is process-wide and the render hook also runs during group calls: start every call from zero.
+        if firstSample { NativeEchoProbe.shared.resetForNewCall() }
     }
 
     /// The route right now: ledger update, and (for a change or the first heartbeat) the `audioroute` line.
@@ -98,7 +100,11 @@ extension CallService {
     /// legacy engine): one record per call, the legacy names win where both exist, the native-only keys are added.
     func mergeNativeAudioDiag(into attrs: inout [String: Any]) {
         guard let extras = nativeAudioDiagAttrs(final: true) else { return }
+        // The legacy echo buckets count 20 ms frames, the native ones 10 ms: when the legacy record has its buckets, none of the
+        // native echo_* keys (nor echo_frame_ms) is added, so the unit of the merged record stays unambiguous.
+        let legacyHasEcho: Bool = attrs["echo_active_frames"] != nil
         for (key, value) in extras where attrs[key] == nil {
+            if legacyHasEcho && key.hasPrefix("echo_") { continue }
             attrs[key] = value
         }
     }

@@ -112,7 +112,7 @@ final class CallMetricsTests: XCTestCase {
         e.lostMax = 0
         e.plcMax = 960
         XCTAssertEqual(CallMetricsLines.extremesFields(e),
-                       " rtt_max=12 jitter_max=3 remote_rtt_max=21 lost_max=0 plc_max=960 sample=5")
+                       " rtt_max=12 jitter_max=3 rtt_remote_max=21 lost_max=0 plc_max=960 sample=5")
     }
 
     // MARK: - hb=2 / hb=3 lines
@@ -147,8 +147,8 @@ final class CallMetricsTests: XCTestCase {
         w.evaluated = true
         w.suspect = true
         let line = CallMetricsLines.hb3(engine: 1, vpio: true, duck: false, echo: w)
-        XCTAssertEqual(line, "audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_active_frames=120 echo_idle_frames=380"
-                             + " echo_far_frames=500 echo_active_db=-23 echo_idle_db=-41 echo_suspect=1")
+        XCTAssertEqual(line, "audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_act=120 echo_idle=380"
+                             + " echo_far=500 echo_active_db=-23 echo_idle_db=-41 echo_suspect=1")
     }
 
     func test_hb3OmitsTheLevelsOfAnEmptyBucketAndTheWholeEchoBlockOnTheLegacyEngine() {
@@ -158,7 +158,7 @@ final class CallMetricsTests: XCTestCase {
         let native = CallMetricsLines.hb3(engine: 1, vpio: true, duck: false, echo: w)
         XCTAssertFalse(native.contains("echo_active_db"), "an empty bucket has no level, not 0 dB and not -200")
         XCTAssertTrue(native.contains("echo_idle_db=-40"))
-        XCTAssertTrue(native.contains("echo_far_frames=0"), "frames are always shown, so a blind probe is visible")
+        XCTAssertTrue(native.contains("echo_far=0"), "frames are always shown, so a blind probe is visible")
         let legacy = CallMetricsLines.hb3(engine: 2, vpio: false, duck: true, echo: nil)
         XCTAssertEqual(legacy, "audiosrtp hb=3 eng=2 vpio=0 duck=1")
     }
@@ -243,7 +243,12 @@ final class CallMetricsTests: XCTestCase {
         XCTAssertFalse(s.hasHeartbeats)
         XCTAssertFalse(s.sawNativeCall)
         _ = s.closeInterval(); _ = s.closeInterval(); _ = s.closeInterval()
-        XCTAssertTrue(s.takeMidCallDiagSlot(), "a new call gets its own slot")
+        XCTAssertFalse(s.takeMidCallDiagSlot(), "a call that is not native (yet) does not burn the slot")
+        XCTAssertTrue(s.noteSample(rttMs: nil, jitterSec: nil, remoteRttSec: nil, lostCumulative: nil,
+                                   concealedCumulative: nil, native: true), "first sample of the new call")
+        XCTAssertFalse(s.noteSample(rttMs: nil, jitterSec: nil, remoteRttSec: nil, lostCumulative: nil,
+                                    concealedCumulative: nil, native: true))
+        XCTAssertTrue(s.takeMidCallDiagSlot(), "a new call gets its own slot, once it is native")
     }
 
     // MARK: - native call.audio.diag
@@ -299,9 +304,9 @@ final class CallMetricsTests: XCTestCase {
     func test_hb4SplitsTotalConcealmentIntoSilentAndAudibleInMilliseconds() {
         // A quiet peer: the whole 5 s window concealed (240000 samples), all of it while the sender was silent.
         XCTAssertEqual(CallMetricsLines.hb4(concealedDelta: 240_000, silentDelta: 240_000, eventsDelta: 1),
-                       "audiosrtp hb=4 plc_silent_ms=5000 plc_audible_ms=0 plc_event=1")
+                       "audiosrtp hb=4 plc_silent_ms=5000 plc_hear_ms=0 plc_event=1")
         XCTAssertEqual(CallMetricsLines.hb4(concealedDelta: 4_800, silentDelta: 0, eventsDelta: 3),
-                       "audiosrtp hb=4 plc_silent_ms=0 plc_audible_ms=100 plc_event=3")
+                       "audiosrtp hb=4 plc_silent_ms=0 plc_hear_ms=100 plc_event=3")
     }
 
     func test_hb4OmitsWhatIsMissingOrInconsistent() {

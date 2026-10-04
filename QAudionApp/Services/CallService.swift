@@ -638,7 +638,7 @@ final class CallService: @unchecked Sendable {
                 let networkCode: Int = NativeAudioHeartbeatDeltas.networkTypeCode(stats.localCandidateNetworkType)
                 // CALL-METRICS (2026-10-04) — the line is built by a pure, tested builder: same field names and order as
                 // before, a missing value is omitted instead of printed as -1, and the per-interval extremes
-                // (rtt_max, jitter_max, remote_rtt_max, lost_max, plc_max, sample) are appended.
+                // (rtt_max, jitter_max, rtt_remote_max, lost_max, plc_max, sample) are appended.
                 let net: String = CallMetricsLines.hb2(
                     rttMs: rttField,
                     jitterBufferMs: deltas.jitterBufferDelayMsAvg,

@@ -4,7 +4,7 @@ import Foundation
 /// call-forensics analysis tool reads: per-interval extremes, the audio-route ledger and route line,
 /// the numeric heartbeat lines and the native-path `call.audio.diag` attribute set. Telemetry only:
 /// nothing here decides anything about the audio path. Foundation only, so the whole file is unit-tested
-/// off-device (`CallMetricsTests`). Field names, units and example lines: Docs/TELEMETRY_CALL_METRICS.md.
+/// off-device (`CallMetricsTests`). Field names, units and example lines: docs/TELEMETRY_CALL_METRICS.md.
 ///
 /// RULES THAT EVERY LINE FOLLOWS
 ///  * A value that was not measured is OMITTED, never printed as -1 / -1000 / 0. The analysis tool
@@ -41,13 +41,13 @@ public enum CallMetricsLines {
 
     /// The per-interval extremes as ` key=value` tokens, in a fixed order, omitting what was not measured:
     /// `rtt_max` (ms, ICE pair RTT), `jitter_max` (ms, RFC 3550 interarrival jitter, same quantity as hb=1 `jitter`),
-    /// `remote_rtt_max` (ms, the peer's RTCP view), `lost_max` (packets newly counted lost within one 1 s sample),
+    /// `rtt_remote_max` (ms, the peer's RTCP view), `lost_max` (packets newly counted lost within one 1 s sample),
     /// `plc_max` (concealed samples within one 1 s sample), `sample` (number of 1 s samples the extremes cover).
     public static func extremesFields(_ e: IntervalExtremes) -> String {
         var out: String = ""
         out += field("rtt_max", e.rttMaxMs)
         out += field("jitter_max", e.jitterMaxMs)
-        out += field("remote_rtt_max", e.remoteRttMaxMs)
+        out += field("rtt_remote_max", e.remoteRttMaxMs)
         out += field("lost_max", e.lostMax)
         out += field("plc_max", e.plcMax)
         if e.samples > 0 { out += field("sample", e.samples) }
@@ -78,7 +78,7 @@ public enum CallMetricsLines {
         return out
     }
 
-    /// `audiosrtp hb=4 plc_silent_ms=<ms> plc_audible_ms=<ms> plc_event=<n>`: concealment of the interval split into the part
+    /// `audiosrtp hb=4 plc_silent_ms=<ms> plc_hear_ms=<ms> plc_event=<n>`: concealment of the interval split into the part
     /// produced while the sender was silent or in DTX (inbound `silentConcealedSamples`, not heard as a fault) and the
     /// AUDIBLE part (concealed minus silent). `plc` of hb=2 is the TOTAL and so is inflated by a quiet peer. Samples are
     /// converted to ms at 48 kHz (Opus clock) so the values stay under 6 digits: the shipper allows two numbers of 6+
@@ -87,13 +87,13 @@ public enum CallMetricsLines {
         var out: String = "audiosrtp hb=4"
         if concealedDelta >= 0, silentDelta >= 0, silentDelta <= concealedDelta {
             out += field("plc_silent_ms", silentDelta / 48)
-            out += field("plc_audible_ms", (concealedDelta - silentDelta) / 48)
+            out += field("plc_hear_ms", (concealedDelta - silentDelta) / 48)
         }
         out += field("plc_event", eventsDelta)
         return out == "audiosrtp hb=4" ? nil : out
     }
 
-    /// `audiosrtp hb=3 eng=<1|2> vpio=<0|1> duck=<0|1> echo_active_frames=<n> echo_idle_frames=<n> echo_far_frames=<n>
+    /// `audiosrtp hb=3 eng=<1|2> vpio=<0|1> duck=<0|1> echo_act=<n> echo_idle=<n> echo_far=<n>
     /// [echo_active_db=<dBFS>] [echo_idle_db=<dBFS>] echo_suspect=<0|1>`: the echo state of the interval.
     /// `engine` 1 = WebRTC's own audio unit (native SRTP), 2 = the app's AVAudioEngine (legacy or fallback).
     /// `vpio` 1 = Voice-Processing I/O active (legacy engine: read from the pipeline) or CONFIGURED on (native: the
@@ -108,9 +108,9 @@ public enum CallMetricsLines {
         out += field("duck", duck ? 1 : 0)
         // The echo proxy only exists on the native path (nil on the legacy engine, which has its own buckets).
         guard let echo else { return out }
-        out += field("echo_active_frames", echo.activeFrames)
-        out += field("echo_idle_frames", echo.idleFrames)
-        out += field("echo_far_frames", echo.farCallbacks)
+        out += field("echo_act", echo.activeFrames)
+        out += field("echo_idle", echo.idleFrames)
+        out += field("echo_far", echo.farCallbacks)
         if let db = NativeEchoProxy.dbfs(echo.activeRms) { out += " echo_active_db=" + String(db) }
         if let db = NativeEchoProxy.dbfs(echo.idleRms) { out += " echo_idle_db=" + String(db) }
         out += field("echo_suspect", echo.suspect ? 1 : 0)
@@ -364,17 +364,24 @@ public final class CallMetricsState: @unchecked Sendable {
     private var heartbeats = 0
     private var midDiagTaken = false
     private var nativeSeen = false
+    private var samplesSeen = 0
 
     public init() {}
 
     /// One 1 s sample. `native` true = the call is on native SRTP at this moment; it latches for the call, so the
     /// end-of-call diag still knows after the negotiation state has been torn down.
+    /// Returns true for the first sample of the call (the caller resets the process-wide echo probe then, so a group
+    /// call or an aborted call that fed it cannot leak into this one).
+    @discardableResult
     public func noteSample(rttMs: Double?, jitterSec: Double?, remoteRttSec: Double?,
-                           lostCumulative: Int64?, concealedCumulative: Int64?, native: Bool) {
+                           lostCumulative: Int64?, concealedCumulative: Int64?, native: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        let first = samplesSeen == 0
+        samplesSeen += 1
         if native { nativeSeen = true }
         tracker.note(rttMs: rttMs, jitterSec: jitterSec, remoteRttSec: remoteRttSec,
                      lostCumulative: lostCumulative, concealedCumulative: concealedCumulative)
+        return first
     }
 
     /// Called once per heartbeat (every 5 s): returns the extremes of the interval just closed and the heartbeat number.
@@ -387,7 +394,8 @@ public final class CallMetricsState: @unchecked Sendable {
     /// True exactly once, at the `midCallHeartbeat`-th heartbeat.
     public func takeMidCallDiagSlot() -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard !midDiagTaken, heartbeats >= Self.midCallHeartbeat else { return false }
+        // Not before the call is on native SRTP: a slot burned during a long ring would leave the call without its record.
+        guard nativeSeen, !midDiagTaken, heartbeats >= Self.midCallHeartbeat else { return false }
         midDiagTaken = true
         return true
     }
@@ -426,6 +434,7 @@ public final class CallMetricsState: @unchecked Sendable {
         heartbeats = 0
         midDiagTaken = false
         nativeSeen = false
+        samplesSeen = 0
     }
 }
 

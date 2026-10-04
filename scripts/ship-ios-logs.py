@@ -758,14 +758,14 @@ APP_VOCAB = frozenset("""
 
     audiosrtpfb engage recover admreset wedges latch split
 
-    audioroute suspect duck silent audible
+    audioroute suspect duck silent hear
 """.split())
-# CALL-METRICS (2026-10-04) -- the 5 words on the line right above ("audioroute suspect duck silent audible") are for the new
+# CALL-METRICS (2026-10-04) -- the 5 words on the line right above ("audioroute suspect duck silent hear") are for the new
 # "call"-tagged RTLog lines of CallService's call-monitoring package (docs/TELEMETRY_CALL_METRICS.md):
 #   audioroute why=<reason> old=<code> out=<code> in=<code> profile=<0-3> sr=<Hz> out_ch=<n> in_ch=<n> vol=<0-100>
-#   audiosrtp hb=3 eng=<1|2> vpio=<0|1> duck=<0|1> echo_active_frames=<n> echo_idle_frames=<n> echo_far_frames=<n>
+#   audiosrtp hb=3 eng=<1|2> vpio=<0|1> duck=<0|1> echo_act=<n> echo_idle=<n> echo_far=<n>
 #       echo_active_db=<dBFS> echo_idle_db=<dBFS> echo_suspect=<0|1>
-#   audiosrtp hb=2 ... rtt_max=<ms> jitter_max=<ms> remote_rtt_max=<ms> lost_max=<n> plc_max=<n> sample=<n>
+#   audiosrtp hb=2 ... rtt_max=<ms> jitter_max=<ms> rtt_remote_max=<ms> lost_max=<n> plc_max=<n> sample=<n>
 # The bare word "audioroute" is 10 letters (over UNKNOWN_MAX_LEN) and not vocabulary, so every route line failed the
 # structured gate and was dropped; "suspect" (echo_suspect) turned the whole hb=3 line into a blob; "duck" is the
 # bypass echo ducker flag. The other new words (max, lost, rtt, jitter, remote, sample, profile, sr, ch, in, out,

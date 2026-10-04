@@ -51,16 +51,16 @@ LINES = [
     # hb=2: first heartbeat (nothing computable), a quiet one, and the spike case.
     "audiosrtp hb=2 relay=0 network_type=0",
     "audiosrtp hb=2 rtt=7 jitter_ms=77 target_ms=80 plc=0 fec_recv=44 fec_drop=45 nack=0 remote_loss=0 remote_rtt=20"
-    " relay=0 network_type=1 rtt_max=12 jitter_max=3 remote_rtt_max=21 lost_max=0 plc_max=0 sample=5",
+    " relay=0 network_type=1 rtt_max=12 jitter_max=3 rtt_remote_max=21 lost_max=0 plc_max=0 sample=5",
     "audiosrtp hb=2 rtt=337 jitter_ms=470 target_ms=455 plc=93600 fec_recv=83 fec_drop=2 nack=1 remote_loss=20"
-    " remote_rtt=1734 relay=1 network_type=3 rtt_max=730 jitter_max=70 remote_rtt_max=1734 lost_max=12 plc_max=93600 sample=5",
+    " remote_rtt=1734 relay=1 network_type=3 rtt_max=730 jitter_max=70 rtt_remote_max=1734 lost_max=12 plc_max=93600 sample=5",
     "audiosrtp hb=2 rtt=9 relay=0 network_type=1 rtt_max=9 sample=4",
-    "audiosrtp hb=4 plc_silent_ms=4800 plc_audible_ms=20 plc_event=3",
+    "audiosrtp hb=4 plc_silent_ms=4800 plc_hear_ms=20 plc_event=3",
     "audiosrtp hb=4 plc_event=0",
     # hb=3: native engine with the echo proxy, an empty bucket, the legacy engine.
-    "audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_active_frames=120 echo_idle_frames=380 echo_far_frames=500"
+    "audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_act=120 echo_idle=380 echo_far=500"
     " echo_active_db=-23 echo_idle_db=-41 echo_suspect=1",
-    "audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_active_frames=0 echo_idle_frames=500 echo_far_frames=0 echo_idle_db=-54 echo_suspect=0",
+    "audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_act=0 echo_idle=500 echo_far=0 echo_idle_db=-54 echo_suspect=0",
     "audiosrtp hb=3 eng=2 vpio=0 duck=1",
     # audioroute: Bluetooth hands-free at 16 kHz, loudspeaker, the call-start sample (no previous route), LE.
     "audioroute why=1 old=1 out=3 in=3 profile=1 sr=16000 out_ch=1 in_ch=1 vol=50",

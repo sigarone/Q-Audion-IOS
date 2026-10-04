@@ -23,7 +23,7 @@ import Foundation
 /// reason that is not echo, so a flagged window is a suspicion to be read next to `rxlvl` / `mslvl` of hb=1 and the
 /// route, never a verdict. (2) An earpiece route has no acoustic path from loudspeaker to microphone at all.
 /// (3) No sample alignment: only "some far-end energy was recently audible" is known. (4) If the render hook did not
-/// fire, `echo_far_frames` is 0 and every capture frame is `idle`: the proxy is blind, and says so.
+/// fire, `echo_far` is 0 and every capture frame is `idle`: the proxy is blind, and says so.
 public struct NativeEchoProxy: Equatable, Sendable {
 
     /// Same level threshold as the legacy `AudioCapture.echoRefLoudRms`.

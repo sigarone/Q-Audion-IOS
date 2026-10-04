@@ -22,7 +22,7 @@ New fields, the extremes of the 1 s samples inside the interval, so a spike betw
 |---|---|---|
 | `rtt_max` | ms | largest ICE pair round trip seen in any 1 s sample of the interval |
 | `jitter_max` | ms | largest RFC 3550 interarrival jitter of the inbound audio (same quantity as hb=1 `jitter`, not as `jitter_ms`) |
-| `remote_rtt_max` | ms | largest peer-reported round trip |
+| `rtt_remote_max` | ms | largest peer-reported round trip |
 | `lost_max` | packets | largest number of packets newly counted lost within one 1 s sample. The stats API exposes only the cumulative count, never the length of a consecutive run, so the real burst is at most this value and at least 1 when it is non-zero. |
 | `plc_max` | samples | largest number of concealed samples within one 1 s sample (at 48 kHz, 48000 is one second of concealment) |
 | `sample` | count | how many 1 s samples the extremes cover (4 or 5; fewer means the stats poll skipped a second) |
@@ -31,7 +31,7 @@ A field is absent when no sample of the interval carried it. Counters that go do
 
 Example:
 
-    audiosrtp hb=2 rtt=7 jitter_ms=77 target_ms=80 plc=0 fec_recv=44 fec_drop=45 nack=0 remote_loss=0 remote_rtt=20 relay=0 network_type=1 rtt_max=12 jitter_max=3 remote_rtt_max=21 lost_max=0 plc_max=0 sample=5
+    audiosrtp hb=2 rtt=7 jitter_ms=77 target_ms=80 plc=0 fec_recv=44 fec_drop=45 nack=0 remote_loss=0 remote_rtt=20 relay=0 network_type=1 rtt_max=12 jitter_max=3 rtt_remote_max=21 lost_max=0 plc_max=0 sample=5
 
 ### hb=4 (audible concealment)
 
@@ -40,10 +40,10 @@ New. `plc` of hb=2 is the delta of the inbound `concealedSamples`, which by the 
 | field | unit | meaning |
 |---|---|---|
 | `plc_silent_ms` | ms | concealment of the interval produced while the sender was silent or in DTX (silentConcealedSamples delta, at 48 kHz) |
-| `plc_audible_ms` | ms | the rest: (concealedSamples delta minus silentConcealedSamples delta), at 48 kHz. This is what the listener can hear as a fault. |
+| `plc_hear_ms` | ms | the rest: (concealedSamples delta minus silentConcealedSamples delta), at 48 kHz. This is what the listener can hear as a fault. |
 | `plc_event` | count | concealment events in the interval (concealmentEvents delta) |
 
-Values are in ms, not samples, so no number reaches 6 digits (the shipper drops a line with more than two such numbers). Fields are omitted when a counter is missing or the pair is inconsistent. Example: `audiosrtp hb=4 plc_silent_ms=5000 plc_audible_ms=0 plc_event=1`.
+Values are in ms, not samples, so no number reaches 6 digits (the shipper drops a line with more than two such numbers). Fields are omitted when a counter is missing or the pair is inconsistent. Example: `audiosrtp hb=4 plc_silent_ms=5000 plc_hear_ms=0 plc_event=1`.
 
 ### hb=3 (echo and voice-processing state)
 
@@ -54,9 +54,9 @@ New. Written on every heartbeat of every call, native or not.
 | `eng` | code | 1 = WebRTC's own audio unit carries the call (native SRTP), 2 = the app's AVAudioEngine (legacy call, or the native call's ICE-loss fallback) |
 | `vpio` | 0/1 | Voice-Processing I/O. On `eng=2` it is read from the audio pipeline: 1 active, 0 bypassed or off. On `eng=1` it is the configuration: 1 when the unit is enabled and WebRTC's factory is built with voice processing on. iOS does not let an app read whether the echo canceller inside that unit works, so `vpio=1` on `eng=1` is "configured", not proof. |
 | `duck` | 0/1 | the bypass echo ducker is armed (`eng=2` only; always 0 on `eng=1`, which has no software suppression stage) |
-| `echo_active_frames` | frames | 10 ms microphone frames in this interval that were captured while the far end had been audible within the last 200 ms |
-| `echo_idle_frames` | frames | microphone frames captured while it had not |
-| `echo_far_frames` | frames | render callbacks seen (loud or not). 0 means the far-end hook did not run and the proxy was blind |
+| `echo_act` | frames | 10 ms microphone frames in this interval that were captured while the far end had been audible within the last 200 ms |
+| `echo_idle` | frames | microphone frames captured while it had not |
+| `echo_far` | frames | render callbacks seen (loud or not). 0 means the far-end hook did not run and the proxy was blind |
 | `echo_active_db` | dBFS | RMS of the active bucket, whole dB below full scale (negative). Absent when the bucket is empty. |
 | `echo_idle_db` | dBFS | the same for the idle bucket |
 | `echo_suspect` | 0/1 | the proxy below |
@@ -65,7 +65,7 @@ The echo fields appear only on `eng=1`; the legacy engine has its own buckets in
 
 Example:
 
-    audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_active_frames=120 echo_idle_frames=380 echo_far_frames=500 echo_active_db=-23 echo_idle_db=-41 echo_suspect=1
+    audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_act=120 echo_idle=380 echo_far=500 echo_active_db=-23 echo_idle_db=-41 echo_suspect=1
 
 #### What `echo_suspect` is, and is not
 
@@ -73,7 +73,7 @@ It is a proxy. It is not an ERLE and not an echo return loss, and the app does n
 
 Two hooks that already ran on every native call are used. The capture post-processing hook sees the microphone after the hardware canceller, which is the signal that is encoded and sent. The render pre-processing hook sees the far-end signal about to be played. A capture frame counts as active when a far-end frame of RMS 0.01 of full scale (about -40 dBFS) or more was played in the last 200 ms, otherwise idle. These are the same thresholds as the legacy engine's `echo_active_*` and `echo_idle_*` buckets. A window (one heartbeat interval) is flagged `echo_suspect=1` when both buckets hold at least 50 frames (0.5 s), the active bucket is at least -40 dBFS, and the active RMS is at least 3 times the idle RMS (about +9.5 dB), with the idle RMS floored at 0.002 (-54 dBFS) so digital silence cannot make a trivial ratio.
 
-Limits to keep in mind when reading it. Double talk: when the near-end person speaks while the far end plays, the active bucket is louder for a reason that is not echo, so a flag is a suspicion to read next to `rxlvl`, `mslvl` and the route, never a verdict. An earpiece route has no acoustic path from loudspeaker to microphone at all. There is no sample alignment, only "some far-end energy was audible recently". If `echo_far_frames` is 0 the render hook did not run and every frame is idle.
+Limits to keep in mind when reading it. Double talk: when the near-end person speaks while the far end plays, the active bucket is louder for a reason that is not echo, so a flag is a suspicion to read next to `rxlvl`, `mslvl` and the route, never a verdict. An earpiece route has no acoustic path from loudspeaker to microphone at all. There is no sample alignment, only "some far-end energy was audible recently". If `echo_far` is 0 the render hook did not run and every frame is idle.
 
 ## Audio route line
 
@@ -101,7 +101,7 @@ Fields that cannot be read are omitted. Examples:
 
 The record was written by `teardownAudioStack` only when the app's own audio engine had been started or had counted frames, and its fields come from that engine's capture and pipeline objects. On a native-SRTP call WebRTC's own audio unit carries the audio and the app's engine never starts (the start path returns at the native gate before it marks an attempt), and the sealed-audio frame counters stay at zero, so the entry condition did not hold and nothing was written. (Inside the block the fields additionally need the engine's capture and pipeline objects, which a native call does not drive.) This was found by reading the code, not by examining a call.
 
-Now a call that was seen on native SRTP always writes the record: once about 15 s into the call (`diag_final=false`, so a call that never reaches a clean teardown still leaves one) and once at the end (`diag_final=true`). If the native call also ran the legacy engine through the ICE-loss fallback, the legacy record is written (one record per call) and the native-only keys are merged into it. A call that was never native keeps the previous behaviour; its legacy record now also carries `diag_final=true`.
+Now a call that was seen on native SRTP always writes the record: once about 15 s into the call (`diag_final=false`, so a call that never reaches a clean teardown still leaves one) and once at the end (`diag_final=true`). If the native call also ran the legacy engine through the ICE-loss fallback, the legacy record is written (one record per call) and the native-only keys are merged into it, except every `echo_*` key and `echo_frame_ms`: the legacy buckets count 20 ms frames and win, so the unit of the record stays unambiguous. The mid-call record is taken only once the call is seen on native SRTP, so a long ring does not use it up. A call that was never native keeps the previous behaviour; its legacy record now also carries `diag_final=true`.
 
 ### Fields written on a native call
 
