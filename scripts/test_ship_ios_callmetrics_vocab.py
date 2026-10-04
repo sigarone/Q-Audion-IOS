@@ -55,6 +55,8 @@ LINES = [
     "audiosrtp hb=2 rtt=337 jitter_ms=470 target_ms=455 plc=93600 fec_recv=83 fec_drop=2 nack=1 remote_loss=20"
     " remote_rtt=1734 relay=1 network_type=3 rtt_max=730 jitter_max=70 remote_rtt_max=1734 lost_max=12 plc_max=93600 sample=5",
     "audiosrtp hb=2 rtt=9 relay=0 network_type=1 rtt_max=9 sample=4",
+    "audiosrtp hb=4 plc_silent_ms=4800 plc_audible_ms=20 plc_event=3",
+    "audiosrtp hb=4 plc_event=0",
     # hb=3: native engine with the echo proxy, an empty bucket, the legacy engine.
     "audiosrtp hb=3 eng=1 vpio=1 duck=0 echo_active_frames=120 echo_idle_frames=380 echo_far_frames=500"
     " echo_active_db=-23 echo_idle_db=-41 echo_suspect=1",

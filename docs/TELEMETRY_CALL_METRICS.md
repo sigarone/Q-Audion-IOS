@@ -33,6 +33,18 @@ Example:
 
     audiosrtp hb=2 rtt=7 jitter_ms=77 target_ms=80 plc=0 fec_recv=44 fec_drop=45 nack=0 remote_loss=0 remote_rtt=20 relay=0 network_type=1 rtt_max=12 jitter_max=3 remote_rtt_max=21 lost_max=0 plc_max=0 sample=5
 
+### hb=4 (audible concealment)
+
+New. `plc` of hb=2 is the delta of the inbound `concealedSamples`, which by the WebRTC stats spec includes `silentConcealedSamples` (concealment while the sender is silent or in DTX). A quiet peer therefore produces fully concealed windows (240000 samples in 5 s at 48 kHz) that nobody hears as a fault. hb=4 splits it. AUDIBLE concealment = concealed minus silent_concealed.
+
+| field | unit | meaning |
+|---|---|---|
+| `plc_silent_ms` | ms | concealment of the interval produced while the sender was silent or in DTX (silentConcealedSamples delta, at 48 kHz) |
+| `plc_audible_ms` | ms | the rest: (concealedSamples delta minus silentConcealedSamples delta), at 48 kHz. This is what the listener can hear as a fault. |
+| `plc_event` | count | concealment events in the interval (concealmentEvents delta) |
+
+Values are in ms, not samples, so no number reaches 6 digits (the shipper drops a line with more than two such numbers). Fields are omitted when a counter is missing or the pair is inconsistent. Example: `audiosrtp hb=4 plc_silent_ms=5000 plc_audible_ms=0 plc_event=1`.
+
 ### hb=3 (echo and voice-processing state)
 
 New. Written on every heartbeat of every call, native or not.

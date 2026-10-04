@@ -78,6 +78,21 @@ public enum CallMetricsLines {
         return out
     }
 
+    /// `audiosrtp hb=4 plc_silent_ms=<ms> plc_audible_ms=<ms> plc_event=<n>`: concealment of the interval split into the part
+    /// produced while the sender was silent or in DTX (inbound `silentConcealedSamples`, not heard as a fault) and the
+    /// AUDIBLE part (concealed minus silent). `plc` of hb=2 is the TOTAL and so is inflated by a quiet peer. Samples are
+    /// converted to ms at 48 kHz (Opus clock) so the values stay under 6 digits: the shipper allows two numbers of 6+
+    /// digits per line. Omitted when either counter is missing or the pair is inconsistent (silent > concealed).
+    public static func hb4(concealedDelta: Int64, silentDelta: Int64, eventsDelta: Int64) -> String? {
+        var out: String = "audiosrtp hb=4"
+        if concealedDelta >= 0, silentDelta >= 0, silentDelta <= concealedDelta {
+            out += field("plc_silent_ms", silentDelta / 48)
+            out += field("plc_audible_ms", (concealedDelta - silentDelta) / 48)
+        }
+        out += field("plc_event", eventsDelta)
+        return out == "audiosrtp hb=4" ? nil : out
+    }
+
     /// `audiosrtp hb=3 eng=<1|2> vpio=<0|1> duck=<0|1> echo_active_frames=<n> echo_idle_frames=<n> echo_far_frames=<n>
     /// [echo_active_db=<dBFS>] [echo_idle_db=<dBFS>] echo_suspect=<0|1>`: the echo state of the interval.
     /// `engine` 1 = WebRTC's own audio unit (native SRTP), 2 = the app's AVAudioEngine (legacy or fallback).

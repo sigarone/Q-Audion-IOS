@@ -758,9 +758,9 @@ APP_VOCAB = frozenset("""
 
     audiosrtpfb engage recover admreset wedges latch split
 
-    audioroute suspect duck
+    audioroute suspect duck silent audible
 """.split())
-# CALL-METRICS (2026-10-04) -- the 3 words on the line right above ("audioroute suspect duck") are for the new
+# CALL-METRICS (2026-10-04) -- the 5 words on the line right above ("audioroute suspect duck silent audible") are for the new
 # "call"-tagged RTLog lines of CallService's call-monitoring package (docs/TELEMETRY_CALL_METRICS.md):
 #   audioroute why=<reason> old=<code> out=<code> in=<code> profile=<0-3> sr=<Hz> out_ch=<n> in_ch=<n> vol=<0-100>
 #   audiosrtp hb=3 eng=<1|2> vpio=<0|1> duck=<0|1> echo_active_frames=<n> echo_idle_frames=<n> echo_far_frames=<n>

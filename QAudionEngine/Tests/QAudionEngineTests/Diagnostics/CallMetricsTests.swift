@@ -293,4 +293,20 @@ final class CallMetricsTests: XCTestCase {
         XCTAssertEqual(attrs["min_sr"] as? Int, 16_000)
         XCTAssertEqual(attrs["output_route"] as? String, "BluetoothHFP")
     }
+
+    // MARK: - audible concealment (hb=4)
+
+    func test_hb4SplitsTotalConcealmentIntoSilentAndAudibleInMilliseconds() {
+        // A quiet peer: the whole 5 s window concealed (240000 samples), all of it while the sender was silent.
+        XCTAssertEqual(CallMetricsLines.hb4(concealedDelta: 240_000, silentDelta: 240_000, eventsDelta: 1),
+                       "audiosrtp hb=4 plc_silent_ms=5000 plc_audible_ms=0 plc_event=1")
+        XCTAssertEqual(CallMetricsLines.hb4(concealedDelta: 4_800, silentDelta: 0, eventsDelta: 3),
+                       "audiosrtp hb=4 plc_silent_ms=0 plc_audible_ms=100 plc_event=3")
+    }
+
+    func test_hb4OmitsWhatIsMissingOrInconsistent() {
+        XCTAssertEqual(CallMetricsLines.hb4(concealedDelta: -1, silentDelta: -1, eventsDelta: 2), "audiosrtp hb=4 plc_event=2")
+        XCTAssertEqual(CallMetricsLines.hb4(concealedDelta: 100, silentDelta: 200, eventsDelta: -1), nil)
+        XCTAssertNil(CallMetricsLines.hb4(concealedDelta: -1, silentDelta: -1, eventsDelta: -1))
+    }
 }

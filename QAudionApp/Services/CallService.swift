@@ -531,6 +531,7 @@ final class CallService: @unchecked Sendable {
             // appended to it never reaches the server. `hb=2` stays short
             // and ships intact at every value range (incl. all -1).
             var resilienceLine: String?
+            var concealLine: String?
             // W-NATIVESRTPDIAG (this task) — extend the SAME heartbeat line
             // (no second timer) with the wider stats snapshot, ONLY on a
             // call that actually negotiated native SRTP: every field below
@@ -590,6 +591,8 @@ final class CallService: @unchecked Sendable {
                     jitterBufferTargetDelaySec: stats.inboundJitterBufferTargetDelaySec,
                     jitterBufferEmittedCount: stats.inboundJitterBufferEmittedCount,
                     concealedSamples: stats.inboundConcealedSamples,
+                    silentConcealedSamples: stats.inboundSilentConcealedSamples,
+                    concealmentEvents: stats.inboundConcealmentEvents,
                     fecPacketsReceived: stats.inboundFecPacketsReceived,
                     fecPacketsDiscarded: stats.inboundFecPacketsDiscarded,
                     nackCount: stats.inboundNackCount,
@@ -650,9 +653,13 @@ final class CallService: @unchecked Sendable {
                     networkTypeCode: networkCode,
                     extremes: closedInterval.extremes)
                 resilienceLine = net
+                concealLine = CallMetricsLines.hb4(concealedDelta: deltas.concealedSamplesDelta,
+                                                   silentDelta: deltas.silentConcealedSamplesDelta,
+                                                   eventsDelta: deltas.concealmentEventsDelta)
             }
             RTLog.info("call", line)
             if let resilienceLine { RTLog.info("call", resilienceLine) }
+            if let concealLine { RTLog.info("call", concealLine) }
             // CALL-METRICS — hb=3 (echo / VP-IO state), the route sample and the mid-call call.audio.diag.
             emitCallMetricsAtHeartbeat(heartbeat: closedInterval.heartbeat)
         }

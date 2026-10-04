@@ -144,4 +144,18 @@ final class NativeAudioHeartbeatDeltasTests: XCTestCase {
         XCTAssertEqual(NativeAudioHeartbeatDeltas.networkTypeCode(nil), 0)
         XCTAssertEqual(NativeAudioHeartbeatDeltas.networkTypeCode("satellite"), 0)
     }
+
+    func test_silentConcealmentAndEventsAreDeltasAndSurviveAbsence() {
+        let previous = NativeAudioHeartbeatDeltas.IntervalCounters(concealedSamples: 1000, silentConcealedSamples: 900,
+                                                                   concealmentEvents: 4)
+        let current = NativeAudioHeartbeatDeltas.IntervalCounters(concealedSamples: 241_000, silentConcealedSamples: 240_900,
+                                                                  concealmentEvents: 5)
+        let d = NativeAudioHeartbeatDeltas.compute(previous: previous, current: current)
+        XCTAssertEqual(d.concealedSamplesDelta, 240_000)
+        XCTAssertEqual(d.silentConcealedSamplesDelta, 240_000)
+        XCTAssertEqual(d.concealmentEventsDelta, 1)
+        let absent = NativeAudioHeartbeatDeltas.compute(previous: previous, current: NativeAudioHeartbeatDeltas.IntervalCounters())
+        XCTAssertEqual(absent.silentConcealedSamplesDelta, -1)
+        XCTAssertEqual(absent.concealmentEventsDelta, -1)
+    }
 }
