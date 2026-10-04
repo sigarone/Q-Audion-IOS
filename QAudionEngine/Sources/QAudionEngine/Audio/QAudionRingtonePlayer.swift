@@ -36,7 +36,8 @@ public final class QAudionRingtonePlayer {
         case keyExchange
         case callConnected
         case callEnded
-        /// W-CALLERBUSY — busy signal (425 Hz, 0.5 s on / 0.5 s off, 3 s one-shot). Port of Android `Cue.Busy`.
+        /// W-CALLERBUSY — busy signal (425 Hz, 0.5 s on / 0.5 s off, one-shot as long as the busy hold:
+        /// `CallerBusyFeedback`). Port of Android `Cue.Busy`.
         /// The app plays it as a system sound (see `QAudionCueWav`) because it starts after CallKit ended the call;
         /// the cue exists here so every platform's cue list matches and `play(.busy)` works while a session is active.
         case busy

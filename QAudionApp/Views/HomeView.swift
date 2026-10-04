@@ -11,6 +11,10 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .chats
     @State private var presentingInCall: Bool = false
+    /// W-MISSEDBADGE (2026-10-04) — the number on the Calls tab (unread missed calls) and what tells it the tab is
+    /// being looked at. See `MissedCallsBadge`.
+    @ObservedObject private var missedCalls = MissedCallsBadge.shared
+    @Environment(\.scenePhase) private var scenePhase
     /// W-L10N-BATCH2 (2026-09-08) — explicit per-tab navigation path, reset
     /// to root on a language change (see `.onChange(of: locale)` below).
     /// TabView keeps every tab's UIHostingController alive off-screen, so a
@@ -127,6 +131,21 @@ struct HomeView: View {
                 selectedTab = .chats
             }
         }
+        // W-MISSEDBADGE — the Calls tab is looked at (selected, app active): the missed calls on it are seen. Asked
+        // when the shell appears, when the tab or the scene changes, and when a call is missed while it is already on
+        // screen (the row is right there, so the number must not appear under the user's eyes).
+        .onAppear { markMissedCallsSeenIfLookedAt() }
+        .onChange(of: selectedTab) { _ in markMissedCallsSeenIfLookedAt() }
+        .onChange(of: scenePhase) { _ in markMissedCallsSeenIfLookedAt() }
+        .onChange(of: missedCalls.unreadCount) { _ in markMissedCallsSeenIfLookedAt() }
+    }
+
+    /// W-MISSEDBADGE — moves the "seen" mark when the Calls tab counts as looked at
+    /// (`MissedCallsBadgeState.countsAsLookedAt`: selected AND the app on screen).
+    private func markMissedCallsSeenIfLookedAt() {
+        let lookedAt: Bool = MissedCallsBadgeState.countsAsLookedAt(
+            callsTabSelected: selectedTab == .calls, appActive: scenePhase == .active)
+        if lookedAt { missedCalls.markSeen() }
     }
 
     // MARK: - W55 layouts
@@ -150,6 +169,9 @@ struct HomeView: View {
 
             callsTab
                 .tabItem { Label(Tab.calls.label, systemImage: Tab.calls.systemImage) }
+                // W-MISSEDBADGE (2026-10-04) — unread missed calls (the one a busy user could not answer
+                // included): the Calls section's own number, never the chat one. 0 draws no badge.
+                .badge(missedCalls.unreadCount)
                 .tag(Tab.calls)
 
             settingsTab
@@ -211,6 +233,15 @@ struct HomeView: View {
                             // Unread badge solo sulla tab Chat
                             if tab == .chats, totalUnreadCount > 0 {
                                 Text(totalUnreadCount > 99 ? "99+" : "\(totalUnreadCount)")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(scheme.primary))
+                            }
+                            // W-MISSEDBADGE — the same capsule for the unread missed calls on the Calls row.
+                            if tab == .calls, missedCalls.unreadCount > 0 {
+                                Text(missedCalls.unreadCount > 99 ? "99+" : "\(missedCalls.unreadCount)")
                                     .font(.system(size: 11, weight: .bold))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 6)

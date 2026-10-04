@@ -79,7 +79,8 @@ enum QAudionSynth {
     }
 
     /// W-CALLERBUSY — classic busy signal, port of Android `QAudionSynth.renderBusyTone`: 425 Hz, 0.5 s on /
-    /// 0.5 s off, three repetitions baked into one 3 s one-shot buffer. A plain gated sine on purpose (no bell
+    /// 0.5 s off, repeated to fill the busy hold (W-BUSYHOLD: four bursts baked into one 4 s one-shot buffer, the
+    /// length of the "Occupato" screen; Android's buffer is three bursts in 3 s). A plain gated sine on purpose (no bell
     /// timbre: it must be recognisable as "busy" at once); `addToneBurst` ramps each edge by 8 ms so the hard
     /// on/off never clicks. Same amplitude as the confirmed ringback (0.22).
     static func renderBusyTone(sampleRate: Double = defaultSampleRate) -> [Float] {
@@ -90,9 +91,11 @@ enum QAudionSynth {
         return buf
     }
 
-    /// Repetitions and total length of `renderBusyTone` (Android: three bursts in a 3 s buffer).
-    static let busyToneRepetitions = 3
-    static let busyToneSeconds = 3.0
+    /// Repetitions and total length of `renderBusyTone`: both come from `CallerBusyFeedback`, the one constant the
+    /// outcome hold, this tone and the disposal of the system sound that plays it share. One burst plus its pause
+    /// is one second (`startSec: Double(rep)` above).
+    static let busyToneRepetitions = CallerBusyFeedback.toneRepetitions
+    static let busyToneSeconds = CallerBusyFeedback.holdSeconds
 
     /// One-shot descending dissolve for call end.
     static func renderCallEnded(sampleRate: Double = defaultSampleRate) -> [Float] {

@@ -2,8 +2,9 @@ import XCTest
 @testable import QAudionEngine
 
 /// W-CALLERBUSY (2026-10-03) — the busy signal mirrors Android's `QAudionSynth.renderBusyTone`: 425 Hz, 0.5 s on /
-/// 0.5 s off, three repetitions in a 3 s one-shot buffer, each edge ramped so it never clicks. Also its WAV form
-/// (`QAudionCueWav.busyTone()`), which is what the app plays as a system sound after CallKit ended the call.
+/// 0.5 s off, repeated to fill the busy hold (W-BUSYHOLD: four bursts in a 4 s one-shot buffer, `CallerBusyFeedback`),
+/// each edge ramped so it never clicks. Also its WAV form (`QAudionCueWav.busyTone()`), which is what the app plays as
+/// a system sound after CallKit ended the call.
 final class BusyToneTests: XCTestCase {
 
     private let rate = 48_000.0
@@ -17,10 +18,11 @@ final class BusyToneTests: XCTestCase {
         return (s.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(s.count)).squareRoot()
     }
 
-    func testThreeSecondsOfThreeHalfSecondBursts() {
+    func testFourSecondsOfFourHalfSecondBursts() {
         let buf = QAudionSynth.renderBusyTone(sampleRate: rate)
-        XCTAssertEqual(buf.count, Int(rate * 3.0))
-        for rep in 0..<3 {
+        XCTAssertEqual(buf.count, Int(rate * 4.0), "as long as the 4000 ms hold")
+        XCTAssertEqual(QAudionSynth.busyToneRepetitions, 4)
+        for rep in 0..<QAudionSynth.busyToneRepetitions {
             let t0 = Double(rep)
             XCTAssertGreaterThan(rms(slice(buf, from: t0 + 0.05, to: t0 + 0.45, rate: rate)), 0.10,
                                  "burst \(rep) is on for 0.5 s")
@@ -46,7 +48,7 @@ final class BusyToneTests: XCTestCase {
 
     func testEveryEdgeIsRampedSoItNeverClicks() {
         let buf = QAudionSynth.renderBusyTone(sampleRate: rate)
-        for rep in 0..<3 {
+        for rep in 0..<QAudionSynth.busyToneRepetitions {
             XCTAssertLessThan(abs(buf[Int(Double(rep) * rate)]), 0.001, "burst \(rep) starts from zero")
             XCTAssertLessThan(abs(buf[Int((Double(rep) + 0.5) * rate) - 1]), 0.02, "burst \(rep) ends near zero")
         }
@@ -66,7 +68,7 @@ final class BusyToneTests: XCTestCase {
     func testTheWavIsAWellFormedMono16BitFileOfTheSameTone() {
         let wav = QAudionCueWav.busyTone()
         let rate = QAudionCueWav.busySampleRate
-        let samples = rate * 3
+        let samples = rate * 4
         XCTAssertEqual(wav.count, 44 + samples * 2)
         XCTAssertEqual(String(decoding: wav[0..<4], as: UTF8.self), "RIFF")
         XCTAssertEqual(String(decoding: wav[8..<12], as: UTF8.self), "WAVE")

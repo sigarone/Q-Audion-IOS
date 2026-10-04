@@ -137,7 +137,7 @@ final class CallerBusyWiringTests: XCTestCase {
             body, "callerTerminalEnd = CallerTerminalEndRecord(", before: "endCall(notifyPeerInBand: false, outcome: outcome)",
             "how the call ended is remembered before the teardown, for a CallKit start that returns after it")
         assertOrder(
-            body, "endCall(notifyPeerInBand: false, outcome: outcome)", before: "showCallerOutcome(outcome)",
+            body, "endCall(notifyPeerInBand: false, outcome: outcome)", before: "showCallerOutcome(outcome, callId: envelopeCallId)",
             "the outcome screen is shown after the call is torn down")
     }
 

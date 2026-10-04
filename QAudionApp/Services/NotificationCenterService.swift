@@ -1,6 +1,7 @@
 import Foundation
 import UserNotifications
 import UIKit
+import QAudionEngine
 
 @MainActor
 final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegate {
@@ -57,6 +58,13 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     /// yet; AppState drains it via `flushPendingIncomingAction()` right after
     /// wiring so the user's Answer/Decline tap is never lost.
     private var pendingIncomingAction: (CallAction, [String: String])?
+
+    /// W-MISSEDQUIET (2026-10-04) — "the user has a call in flight" (in a call, ringing for one, or a CallKit call
+    /// still open): the missed-call notification that arrives then is presented quietly
+    /// (`MissedCallAlertPolicy`). A closure over primitives and not the AppState type (CLAUDE.md §16); AppState
+    /// wires it in `initialize()`. Unset (tests, a launch before AppState exists) reads as "no call".
+    typealias CallInFlightProvider = @MainActor () -> Bool
+    var callInFlightProvider: CallInFlightProvider?
 
     /// Latest known authorization state (refreshed via `refreshAuthorizationState()`).
     @Published private(set) var authorization: AuthorizationState = .notDetermined
@@ -190,7 +198,13 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         content.body = body
         // W405: gate the chime on the in-app sound toggle. Setting
         // `sound = nil` makes APNs deliver a silent notification.
-        content.sound = NotificationsGate.inAppSoundEnabled ? .default : nil
+        // W-MISSEDQUIET: and never for a missed call that arrives while a call is in flight (it can be delivered with
+        // the app in the background, where `willPresent` is not asked and this content is all there is).
+        let hasSound: Bool = MissedCallAlertPolicy.localContentHasSound(
+            inAppSoundEnabled: NotificationsGate.inAppSoundEnabled,
+            isMissedCall: category == .missedCall,
+            callInFlight: callInFlightProvider?() ?? false)
+        content.sound = hasSound ? .default : nil
         content.categoryIdentifier = category.rawValue
         content.userInfo = userInfo
         content.threadIdentifier = category.rawValue
@@ -323,16 +337,30 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         // W405: foreground presentation respects the user's preferences.
         // Banner suppressed if banners disabled; sound suppressed if
         // in-app sound disabled or in quiet hours.
-        if !NotificationsGate.bannersEnabled {
-            return [.list, .badge]
-        }
-        if NotificationsGate.isQuietNow {
-            return [.list, .badge]
-        }
-        if NotificationsGate.inAppSoundEnabled {
-            return [.banner, .sound, .list, .badge]
-        }
-        return [.banner, .list, .badge]
+        //
+        // W-MISSEDQUIET (2026-10-04): a missed-call notification that arrives while a call is in flight is shown
+        // quietly (banner / list, no sound). Every other notification, and a missed call outside a call, is
+        // presented exactly as before. The decision is `MissedCallAlertPolicy.foreground`.
+        let isMissedCall: Bool = notification.request.content.categoryIdentifier == Category.missedCall.rawValue
+        var callInFlight: Bool = false
+        if isMissedCall { callInFlight = await self.isCallInFlight() }
+        let presentation = MissedCallAlertPolicy.foreground(
+            bannersEnabled: NotificationsGate.bannersEnabled,
+            quietNow: NotificationsGate.isQuietNow,
+            inAppSoundEnabled: NotificationsGate.inAppSoundEnabled,
+            isMissedCall: isMissedCall,
+            callInFlight: callInFlight)
+        var options: UNNotificationPresentationOptions = []
+        if presentation.banner { options.insert(.banner) }
+        if presentation.sound { options.insert(.sound) }
+        if presentation.list { options.insert(.list) }
+        if presentation.badge { options.insert(.badge) }
+        return options
+    }
+
+    /// W-MISSEDQUIET — `callInFlightProvider`, read on the main actor (`willPresent` is not isolated).
+    private func isCallInFlight() -> Bool {
+        callInFlightProvider?() ?? false
     }
 
     nonisolated func userNotificationCenter(

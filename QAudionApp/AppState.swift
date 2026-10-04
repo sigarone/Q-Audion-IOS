@@ -1339,7 +1339,7 @@ final class AppState: ObservableObject {
     /// CallKit-mediated wake), exactly like the group-call ring.
     ///
     /// W-CALLERBUSY (review of #169) — an incoming ring silences the busy tone of the outgoing call that just ended
-    /// (it is a system sound that would otherwise play under the ring for the rest of its 3 s).
+    /// (it is a system sound that would otherwise play under the ring for the rest of its 4 s, `CallerBusyFeedback`).
     @Published var incomingCallRingVisible: Bool = false {
         didSet { if incomingCallRingVisible { callerBusyTone.stop() } }
     }
@@ -3090,9 +3090,11 @@ final class AppState: ObservableObject {
     /// before returning to Home. `isInCall` is already false then, so `ContentView` shows the screen for this
     /// value; `startCall` (a redial, from anywhere) and the close button clear it at once.
     @Published private(set) var callerOutcome: CallerTerminalOutcome?
-    /// Which showing of `callerOutcome` a pending hold timer belongs to: a timer of an earlier showing must not
-    /// clear a later one.
-    private var callerOutcomeSerial = 0
+    /// W-BUSYHOLD (2026-10-04) — the life of the outcome screen: one showing per call (first terminal wins), a hold
+    /// timer closes only its own showing, and the only ways out are that timer and `dismissCallerOutcome()`. Pure,
+    /// in the engine (`CallerOutcomeHold`), so it is tested there; `callerOutcome` follows it and nothing else
+    /// writes `callerOutcome`.
+    private var callerOutcomeHold = CallerOutcomeHold()
     /// The busy tone (system sound: it must be audible after CallKit ended the call, see `CallerBusyTone`).
     private let callerBusyTone = CallerBusyTone()
     /// W-CALLERBUSY (review of #169) — how the last outgoing call ended when a caller-side terminal envelope ended
@@ -3918,6 +3920,18 @@ final class AppState: ObservableObject {
         // W-NOCALLKIT cold-start: drain any notification action that fired before
         // this handler was wired (app-killed launch via Answer/Decline tap).
         NotificationCenterService.shared.flushPendingIncomingAction()
+
+        // W-MISSEDQUIET (2026-10-04) — "a call is in flight" for the missed-call notification: while one is, that
+        // notification is shown without sound (`MissedCallAlertPolicy`). The app's own definition of a call in
+        // flight (`noCallInFlight`: in a call, ringing, a CallKit call open, a live group call).
+        NotificationCenterService.shared.callInFlightProvider = { [weak self] in
+            guard let self else { return false }
+            return !self.noCallInFlight()
+        }
+        // W-MISSEDBADGE (2026-10-04) — the Calls-tab badge is created here, at launch, so that the "seen up to"
+        // mark of a first run is the launch time: a missed call replayed right after start-up (before the home
+        // screen first appears) is then counted, not swallowed by a mark that started later.
+        _ = MissedCallsBadge.shared
 
         // W-NOCALLKIT — receive the standard APNs device token from AppDelegate
         // and register it server-side (only when callKitFreeMode; handleApnsDeviceToken
@@ -9366,27 +9380,56 @@ final class AppState: ObservableObject {
             self.callState = .idle
         }
         guard !hangupInFlight else { return }
-        showCallerOutcome(outcome)
+        showCallerOutcome(outcome, callId: envelopeCallId)
     }
 
-    /// W-CALLERBUSY — puts the outcome on the outgoing screen for `outcome.holdSeconds` (and plays the busy tone for
-    /// `call_busy`). A timer of an earlier showing never clears this one.
-    private func showCallerOutcome(_ outcome: CallerTerminalOutcome) {
-        callerOutcomeSerial &+= 1
-        let serial = callerOutcomeSerial
-        callerOutcome = outcome
-        RTLog.info("call", "callerOutcome show=\(outcome.rawValue) tone=\(outcome.playsBusyTone ? 1 : 0)")
-        if outcome.playsBusyTone { callerBusyTone.play() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + outcome.holdSeconds) { [weak self] in
-            guard let self, self.callerOutcomeSerial == serial else { return }
-            self.callerOutcome = nil
+    /// Milliseconds on a clock that only moves forward (the hold's own clock: only differences are read).
+    private static func monotonicMs() -> Int {
+        Int(DispatchTime.now().uptimeNanoseconds / 1_000_000)
+    }
+
+    /// W-CALLERBUSY — puts the outcome on the outgoing screen for `outcome.holdMs` (and plays the busy tone for
+    /// `call_busy`).
+    ///
+    /// W-BUSYHOLD (2026-10-04) — the showing is `callerOutcomeHold`'s: a second outcome for the SAME call (a duplicate
+    /// `call_busy`, a `call_peer_offline` after it) changes nothing, so the first one keeps its screen, its tone and its
+    /// clock; the hold timer closes only the showing it was started for. One log line when it is shown and one when it
+    /// closes (`busy feedback shown call=<id> holdMs=<n>`, `busy feedback closed call=<id> by=<timeout|user> ms=<n>`).
+    private func showCallerOutcome(_ outcome: CallerTerminalOutcome, callId: String) {
+        switch callerOutcomeHold.show(outcome, callId: callId, nowMs: Self.monotonicMs()) {
+        case .alreadyShown:
+            let dupLabel: String = outcome.feedbackLogLabel
+            let dupId: String = String(callId.prefix(8))
+            let dupLine: String = "\(dupLabel) feedback duplicate ignored call=\(dupId)"
+            RTLog.info("call", dupLine)
+        case .started(let showing, let replaced):
+            if let replaced { RTLog.info("call", replaced.closedLine) }
+            callerOutcome = outcome
+            RTLog.info("call", showing.shownLine)
+            if outcome.playsBusyTone { callerBusyTone.play() }
+            let serial: Int = showing.serial
+            let holdSeconds: Double = Double(showing.holdMs) / 1_000
+            DispatchQueue.main.asyncAfter(deadline: .now() + holdSeconds) { [weak self] in
+                self?.callerOutcomeHoldElapsed(serial: serial)
+            }
         }
+    }
+
+    /// W-BUSYHOLD — the hold timer of the showing `serial`. A timer of an earlier showing finds nothing to close.
+    /// The tone is not stopped here: it is as long as the hold and disposes of itself after its end
+    /// (`CallerBusyFeedback.soundDisposeAfterMs`).
+    private func callerOutcomeHoldElapsed(serial: Int) {
+        guard let closed = callerOutcomeHold.holdElapsed(serial: serial, nowMs: Self.monotonicMs()) else { return }
+        RTLog.info("call", closed.closedLine)
+        callerOutcome = nil
     }
 
     /// W-CALLERBUSY — closes the outcome screen and stops the busy tone: the user tapped the close button, or a new
     /// call is starting (`startCall` calls this before it admits anything, so a redial never waits for the hold).
     func dismissCallerOutcome() {
-        callerOutcomeSerial &+= 1
+        if let closed = callerOutcomeHold.close(by: .user, nowMs: Self.monotonicMs()) {
+            RTLog.info("call", closed.closedLine)
+        }
         callerOutcome = nil
         callerBusyTone.stop()
     }
@@ -16844,8 +16887,8 @@ final class AppState: ObservableObject {
     /// new one's first session convergence), and the peers of the calls the old
     /// account placed in this session (`recentCalls`: Home "recents", and the
     /// presence subscriptions derived from it), the contacts snapshot
-    /// (`cachedContacts`) and the accept latch. Call it right after every
-    /// `LocalCryptoWipe.wipeAll()`.
+    /// (`cachedContacts`), the accept latch and the Calls-tab missed-calls mark (`MissedCallsBadge`). Call it right
+    /// after every `LocalCryptoWipe.wipeAll()`.
     func resetAccountScopedRuntimeState() {
         recentCalls = []
         // `LocalCryptoWipe.wipeAll()` empties ContactsStore without posting
@@ -16869,6 +16912,10 @@ final class AppState: ObservableObject {
         // account left (logout, remote wipe, account deletion) must not leave its
         // call id in the accept latch for the next session.
         acceptLatch.reset()
+        // W-MISSEDBADGE (2026-10-04): the Calls-tab number belongs to the account that left. The history it counts
+        // is already wiped by `LocalCryptoWipe.wipeAll()`; the persisted "seen up to" mark is not, so it starts
+        // again from now here, in the one function every wipe path calls.
+        MissedCallsBadge.shared.resetForAccountChange()
     }
 
     /// Idempotent: returns the live call engine, building it first when there

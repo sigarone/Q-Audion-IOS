@@ -42,4 +42,26 @@ final class CallerBusyOutcomeTests: XCTestCase {
             XCTAssertTrue(LogRedactor.redactStructured("{\"end_reason\":\"\(token)\"}").contains(token), token)
         }
     }
+
+    /// W-BUSYHOLD — the two lines that say when the busy feedback was shown and when (and why) it closed are the only
+    /// way to read the hold in a trace, so they must reach it: the short call id, the hold and the duration survive the
+    /// egress redactor, and nothing in them is masked.
+    func test_theBusyFeedbackLogLinesSurviveTheEgressRedactor() {
+        var hold = CallerOutcomeHold()
+        guard case .started(let showing, _) = hold.show(
+            .busy, callId: "c16bc8ca-1111-4111-8111-111111111111", nowMs: 0) else {
+            return XCTFail("a new showing")
+        }
+        guard let closed = hold.holdElapsed(serial: showing.serial, nowMs: 4_000) else {
+            return XCTFail("the hold timer closes its own showing")
+        }
+        for (line, parts) in [
+            (showing.shownLine, ["busy feedback shown", "call=c16bc8ca", "holdMs=4000"]),
+            (closed.closedLine, ["busy feedback closed", "call=c16bc8ca", "by=timeout", "ms=4000"]),
+        ] {
+            let shipped = LogRedactor.redactStructured(line)
+            XCTAssertFalse(shipped.contains("REDACTED"), shipped)
+            for part in parts { XCTAssertTrue(shipped.contains(part), "\(part) in \(shipped)") }
+        }
+    }
 }

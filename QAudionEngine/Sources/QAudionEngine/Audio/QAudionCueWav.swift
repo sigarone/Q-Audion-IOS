@@ -11,11 +11,17 @@ import Foundation
 /// the busy tone takes that route: the app registers this WAV as a system sound and plays it, with no session
 /// involved and nothing to hand back to the next call.
 ///
-/// 16-bit PCM, mono, 16 kHz: a 425 Hz tone does not need more, and the file is ~96 KB.
+/// 16-bit PCM, mono, 16 kHz: a 425 Hz tone does not need more, and the file is ~128 KB (4 s, the busy hold).
 public enum QAudionCueWav {
 
     /// Sample rate of `busyTone()`.
     public static let busySampleRate = 16_000
+
+    /// Where the app keeps the rendered busy tone in its temporary directory. The name carries the tone's length
+    /// (the busy hold, `CallerBusyFeedback`): the file is written once and reused, and a temporary directory can
+    /// outlive an app update, so a file rendered for another length (the 3 s of 1.0.1207) must never be picked up
+    /// for this one.
+    public static var busyToneFileName: String { "qaudion_busy_tone_\(CallerBusyFeedback.holdMs)ms.wav" }
 
     /// The busy tone (`QAudionSynth.renderBusyTone`) as a WAV file's bytes.
     public static func busyTone() -> Data {
