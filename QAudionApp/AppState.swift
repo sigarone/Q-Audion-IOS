@@ -437,7 +437,9 @@ final class AppState: ObservableObject {
     /// on each event.
     /// Internal read access (module-visible) so Views can use the cached
     /// snapshot directly without re-loading ContactsStore. Mutation is
-    /// private — only refreshContactsCache() may write this.
+    /// private — only refreshContactsCache() and
+    /// resetAccountScopedRuntimeState() (which empties it when the account
+    /// leaves) may write this.
     private(set) var cachedContacts: [ContactsStore.StoredContact] = []
     private var contactsCacheObserver: NSObjectProtocol?
     /// I1-RESUME — see `.presenceVisibilityDidChange`'s declaration.
@@ -16841,10 +16843,19 @@ final class AppState: ObservableObject {
     /// `ensureV4Session` (a throttle armed by the old account must not delay the
     /// new one's first session convergence), and the peers of the calls the old
     /// account placed in this session (`recentCalls`: Home "recents", and the
-    /// presence subscriptions derived from it). Call it right after every
+    /// presence subscriptions derived from it), the contacts snapshot
+    /// (`cachedContacts`) and the accept latch. Call it right after every
     /// `LocalCryptoWipe.wipeAll()`.
     func resetAccountScopedRuntimeState() {
         recentCalls = []
+        // `LocalCryptoWipe.wipeAll()` empties ContactsStore without posting
+        // `.contactsDidChange`, so nothing refreshes the in-memory snapshot of the
+        // account that left: its names would keep labelling incoming calls, chat
+        // and call-history rows and the Siri donation (`cachedContacts` feeds all
+        // of them) until the next login refreshed it. The store is empty right
+        // after the wipe, so the cache is emptied here, in the one function every
+        // wipe path (logout, remote wipe, account deletion) already calls.
+        cachedContacts = []
         ServiceSendHub.shared.reset()
         AppState.nackResendCounts.removeAll()
         AppState.decryptNackLastSentMs.removeAll()
@@ -16892,11 +16903,6 @@ final class AppState: ObservableObject {
         // conversation/threat-report store on the device untouched.
         LocalCryptoWipe.wipeAll()
         resetAccountScopedRuntimeState()
-        // `wipeAll()` empties ContactsStore without posting `.contactsDidChange`,
-        // so the in-memory snapshot of the account that left (names used for
-        // incoming-call labels and the Siri donation) would otherwise stay until
-        // the next login refreshes it. The store is empty now: so is the cache.
-        cachedContacts = []
         // Released here, rebuilt by `ensureCallEngine` on the next login / call.
         if callEngineLifecycle.teardown() {
             RTLog.info("call", "engine released on logout")
