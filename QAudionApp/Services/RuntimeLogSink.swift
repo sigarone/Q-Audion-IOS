@@ -356,6 +356,7 @@ public final class RuntimeLogSink: ObservableObject {
                 _ = write(self.origStdoutFd, buf, n)
                 // 2) Parse + record into the ring buffer.
                 for line in assembler.lines(from: buf[0..<n]) {
+                    StdoutTeeLines.rawLineObserver?(line)
                     // The sink never re-captures its own writes: the console echo of its OSLog mirror
                     // (a process run with OS_ACTIVITY_DT_MODE echoes every Logger line to stderr, i.e. into this
                     // pipe) is dropped here, on the RAW line, before any redaction rewrites its prefix.
@@ -426,6 +427,9 @@ enum StdoutTeeLines {
 
     /// The `Logger` category of the sink's own OSLog mirror (`RuntimeLogSink.osLogger`).
     static let osLogCategory = "runtime"
+
+    /// Test seam: called with every complete line the tee assembled, RAW, before the echo filter. `nil` in production.
+    static var rawLineObserver: ((String) -> Void)?
 
     /// `2026-10-04 02:11:05.328185+0000 QAudionApp[6733:26267] [runtime] ...`: the shape in which a process that runs
     /// with `OS_ACTIVITY_DT_MODE` echoes a `Logger` line to stderr: date, time with fractional seconds and zone, the

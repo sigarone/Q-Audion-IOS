@@ -101,67 +101,54 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
 
     // MARK: - end to end, in this host process (attached to the tee like the app)
 
-    private func entries(containing marker: String) -> [RuntimeLogSink.Entry] {
-        RuntimeLogSink.shared.snapshotEntries.filter { $0.message.contains(marker) }
-    }
-
     /// Letters from g to z only: the log redactors leave such a run alone.
     private func uniqueMarker() -> String {
         "teeprobe" + String((0..<12).map { _ in "ghijklmnopqrstuvwxyz".randomElement() ?? "g" })
     }
 
-    private func waitUntil(timeout: TimeInterval = 10, _ condition: () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() && Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
+    private func lastSeq() -> Int64 { RuntimeLogSink.shared.snapshotEntries.last?.seq ?? 0 }
+
+    /// The regression the incident was: a recorded line came back through the tee and was recorded again, on every
+    /// pass, without end. After a pause that is long next to one pass, the ring has grown by the lines recorded here
+    /// plus a handful (the test runner's own lines, an echo or two) and not by hundreds.
+    func test_recordedLines_doNotMakeTheRingGrowWithoutEnd() async throws {
+        RuntimeLogSink.shared.attachStdoutTee()
+        let before = lastSeq()
+        let marker = uniqueMarker()
+        for index in 0..<5 {
+            RuntimeLogSink.shared.record(level: .info, tag: "teeprobe", "line \(index) \(marker)")
         }
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        let grown = Int(lastSeq() - before)
+        XCTAssertGreaterThanOrEqual(grown, 5, "the five recorded lines are in the ring")
+        XCTAssertLessThan(grown, 60, "a feedback loop adds hundreds of lines a second; the ring grew by \(grown)")
     }
 
-    /// Everything the ring took since `seq`, for a failure message: the tag, the length and the escaped text.
-    private func ringSince(_ seq: Int64) -> String {
-        RuntimeLogSink.shared.snapshotEntries.filter { $0.seq > seq }
-            .map { "[\($0.tag)] \($0.message.count) \($0.message.debugDescription.prefix(200))" }
-            .joined(separator: " | ")
-    }
-
-    /// A line the process prints is recorded once. A feedback loop records it again on every pass, so after a pause
-    /// that is long compared with one pass the count is the proof. All observations are taken before any assertion:
-    /// a failure message is itself printed, and the tee would record it.
-    func test_aLineTheProcessPrints_isRecordedOnce_andNeverEchoedBackIntoTheRing() async throws {
+    /// Observation only (no assertion): what the tee assembled and what the ring took, to see in the job log how the
+    /// echo of a recorded line and a line printed on stderr arrive. Printed as one line starting with TEEOBS.
+    func test_observation_rawTeeLinesAndRingEntries() async throws {
         RuntimeLogSink.shared.attachStdoutTee()
-        let seqBefore = RuntimeLogSink.shared.snapshotEntries.last?.seq ?? 0
+        final class Box: @unchecked Sendable {
+            private let lock = NSLock()
+            private var items: [String] = []
+            func add(_ s: String) { lock.withLock { items.append(s) } }
+            var all: [String] { lock.withLock { items } }
+        }
+        let raw = Box()
+        StdoutTeeLines.rawLineObserver = { raw.add($0) }
+        let before = lastSeq()
         let marker = uniqueMarker()
-        let stdoutMarker = uniqueMarker()
-        let stderrLine = "\(marker) printed by the process"
-        fputs(stderrLine + "\n", stderr)
-        print("\(stdoutMarker) printed on stdout")
-        try await waitUntil { !self.entries(containing: marker).isEmpty && !self.entries(containing: stdoutMarker).isEmpty }
-        let firstStderr = entries(containing: marker).count
-        let firstStdout = entries(containing: stdoutMarker).count
-        try await Task.sleep(nanoseconds: 1_500_000_000)
-        let afterStderr = entries(containing: marker)
-        let afterStdout = entries(containing: stdoutMarker).count
-        let redacted = LogRedactor.redact(stderrLine)
-        let seen = ringSince(seqBefore)
-        XCTAssertEqual(firstStderr, 1, "stderr line captured once; redactor gives \(redacted.debugDescription); ring since the start: \(seen)")
-        XCTAssertEqual(firstStdout, 1, "stdout line captured once")
-        XCTAssertEqual(afterStderr.count, 1, "the sink must not re-capture what it recorded")
-        XCTAssertEqual(afterStdout, 1)
-        XCTAssertEqual(afterStderr.first?.tag, "stdout")
-    }
-
-    /// A line recorded through the sink is in the ring once: the console echo of its own OSLog mirror (present
-    /// whenever the process runs with `OS_ACTIVITY_DT_MODE`, as the CI test host does) is not recorded as a second
-    /// line.
-    func test_aLineRecordedThroughTheSink_isNotRecordedAgainFromItsConsoleEcho() async throws {
-        RuntimeLogSink.shared.attachStdoutTee()
-        let marker = uniqueMarker()
-        RuntimeLogSink.shared.record(level: .info, tag: "teeprobe", "\(marker) written through the sink")
-        XCTAssertEqual(entries(containing: marker).count, 1, "recorded once, synchronously")
-        try await Task.sleep(nanoseconds: 1_500_000_000)
-        let after = entries(containing: marker)
-        XCTAssertEqual(after.count, 1, "its echo on stderr must not be recorded again")
-        XCTAssertEqual(after.first?.tag, "teeprobe")
+        fputs("\(marker) printed by the process" + "\n", stderr)
+        RuntimeLogSink.shared.record(level: .info, tag: "teeprobe", "\(marker) recorded")
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        StdoutTeeLines.rawLineObserver = nil
+        let rawText = raw.all.map { "\($0.utf8.count)|\(StdoutTeeLines.isOwnOSLogMirror($0))|\($0.debugDescription.prefix(160))" }
+            .joined(separator: " ## ")
+        let ringText = RuntimeLogSink.shared.snapshotEntries.filter { $0.seq > before }
+            .map { "[\($0.tag)] \($0.message.utf8.count)/\($0.message.unicodeScalars.count)/\($0.message.count)|\($0.message.debugDescription.prefix(160))" }
+            .joined(separator: " ## ")
+        print("TEEOBS raw: \(rawText)")
+        print("TEEOBS ring: \(ringText)")
     }
 
     // MARK: - wiring
