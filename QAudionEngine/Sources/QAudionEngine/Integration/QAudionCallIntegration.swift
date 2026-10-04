@@ -4567,7 +4567,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return sent.keys.sorted().compactMap { round -> SentAccept? in
             guard let wire = sent[round] else { return nil }
             if round == 1 {
-                return sasCommit.isWaitingForReveal(callId: callId) ? SentAccept(round: round, wire: wire) : nil
+                return SentAccept(round: round, wire: wire)
             }
             return roundDecided(round) ? nil : SentAccept(round: round, wire: wire)
         }
