@@ -856,6 +856,30 @@ and any OFFER whose `rekeyNonce` differs from the one recorded for that call. Th
 `callId` MUST have `round` = 1 (R-COMMIT-FIRST-ROUND, §3.1); an OFFER that arrives before the device has a call context for
 its `callId` follows the pending-OFFER rule of §3.7.4.
 
+**Rekey ACCEPT wait (R-REKEY-ACCEPT-WAIT).** The offerer of a rekey round (`round` >= 2) waits for that round's ACCEPT
+`2 × CONFIRM_TIMEOUT` = 30 s after it handed the OFFER to the transport, never shorter; a platform uses exactly this
+value unless it has a reason to wait longer. One leg is the OFFER, the other the ACCEPT, and each may need a socket
+re-authentication. The offerer processes at most one ACCEPT per rekey round. Any later ACCEPT for a round it already
+bound (keys installed or the round refused) or abandoned, byte-identical or not, is dropped silently: it touches no key,
+media or KCMAC state, is no re-send event and is no close reason. The round-1 wait is not this one: it includes the ring
+(§3.5).
+
+The acceptor arms its KCMAC window for the round when it sends the ACCEPT (§3.7.1). Let T0 be the moment the offerer
+handed the OFFER to the transport, `d` the time the OFFER leg takes and `e` the time the ACCEPT leg takes. If the
+ACCEPT does not reach the offerer by T0 + 30 s, the round is abandoned and each side does the following:
+
+- The offerer, at T0 + 30 s: it installs no key, arms no round (it arms a round on a verified ACCEPT), sends no MAC for
+  it and keeps the current key. Its own call does not end by itself, and the next scheduled round retries.
+- An acceptor that never armed the round (the OFFER never reached it, or it refused the round): nothing happened on its
+  side. The call goes on.
+- An acceptor that armed the round (it sent its ACCEPT at T0 + d): the offerer drops that ACCEPT and every re-sent copy
+  of it (R-ACCEPT-RESEND) and never sends a MAC for the round, so no MAC for it can arrive. The acceptor's window (30 s
+  from arming, §3.7.1) ends the call with `kcmac_mismatch` at T0 + d + 30 s. This happens only when `d + e` exceeds
+  30 s, that is, after more than 30 s of signalling trouble on the two legs together (or when every copy of the ACCEPT
+  is lost). It is accepted and not repaired: a rekey round has no abort message, and a longer wait only moves the limit.
+
+So "the call goes on" holds only when the acceptor never armed the round.
+
 #### 3.7.1 Transcript-bound session key, SAS and key confirmation (unconditional)
 
 There is no capability gate and no non-bound variant: every 1:1 session key, SAS and key-confirmation MAC is
@@ -914,45 +938,101 @@ sessionKey = HKDF-SHA256(IKM = pqcSS ‖ x25519SS,
     protocol: the key-confirmation window of every round, the callee's REVEAL timer (§3.7.4) and the DTLS statistics
     check (§3.8.4). A platform defines it once and uses that one constant. The KCMAC window of the fail-closed rule
     below is `CONFIRM_TIMEOUT` and runs per round, from the moment that round's context is armed (the round's key is
-    derived), rekey rounds included. Two exceptions, both for round 1 (R-COMMIT-KCMAC-HOLD, §3.7.4): the CALLER's wait
+    derived), rekey rounds included.
+    Three exceptions, two for round 1 (R-COMMIT-KCMAC-HOLD, §3.7.4) and one for rekey rounds: the CALLER's wait
     for the callee's MAC ends no earlier than `2 × CONFIRM_TIMEOUT` = 30 s after the caller handed its REVEAL to the
     transport, because the callee sends that MAC only after the REVEAL round trip and each of the two legs (REVEAL
     to the callee, MAC back) may need a socket re-authentication and a re-send; the CALLEE's wait for the caller's
     MAC ends no earlier than `CONFIRM_TIMEOUT` = 15 s after the callee's own REVEAL verified, because the caller sends
     its MAC right after the REVEAL, and the REVEAL may itself arrive at the very end of the REVEAL timer, after the
-    window armed with the callee's own round-1 key would have ended. All waits are minimums: a platform may wait
-    longer, never shorter, and expiry is the same `kcmac_mismatch`. A platform uses exactly these values unless it has a
-    reason to wait longer: the wait is local and no peer depends on its length. "Handed to the transport" is as defined
-    for the ACCEPT in §3.7.4 (a message that is queued behind a socket re-authentication counts from the moment it is
-    queued). Why a long window is safe: delaying a message
-    only lets whoever delays it end the call, which the server can already do; every mismatch still ends the call
-    fail-closed, and media under a wrong key never decrypts (AEAD).
-  - **Sender device (caller, every round, R-COMMIT-KCMAC-DEVICE, §3.7.4):** a caller runs the duplicate test, the
-    hold and the judgment below only on a MAC whose opaque envelope `sender_device_id` equals the `sender_device_id`
-    of the opaque envelope that carried the ACCEPT it bound. A MAC from any other device, or without that field, is
-    dropped silently: no judgment, no `kcmac_mismatch`, no hold and no effect on any window. This test comes BEFORE
-    the duplicate test and the judgment.
-  - **Duplicate:** a receiver keeps, for the rest of the call, the peer MAC (32 bytes) it verified for each decided
-    round. An inbound MAC that is byte-identical to one of them (a retransmission, or the previous round's MAC arriving
-    after the next round was armed) is a duplicate: it is dropped silently, never judged `wrong`, never ends the call.
-    Only the first MAC for a round is judged. The duplicate test comes BEFORE the judgment against the live round.
-  - **Judgment:** a MAC that is not a duplicate is judged against the live round (armed and not yet decided). If it
-    does not verify, or its role byte is not the peer's role for that round, the call ends with `kcmac_mismatch`.
-  - **Early MAC:** a MAC that is not a duplicate and arrives while no round is armed and undecided (for example the
-    peer derived its key first) is held, at most one per call at a time (a further early MAC while one is held is
-    dropped silently), at most 512 characters of payload, and judged when the next round is armed. It is held for at
-    least `2 × CONFIRM_TIMEOUT` = 30 s from receipt (never shorter) and dropped silently after that. Holding never
-    fails the call by itself and never extends a window: the round's own window (`CONFIRM_TIMEOUT`, or the round-1
-    exception above) alone ends the call if the peer's MAC for it never verifies. The slot is one MAC; whoever can
-    fill it with a bogus MAC is a party that can already end the call (the server, or the peer user).
-  - A receiver MUST NOT use "the latest MAC seen" as the peer's MAC of the current round.
-  - A call in which a KCMAC context is required but missing (no armed context for the live round) ends with
-    `kcmac_mismatch` (R-EARBUD, §3.7.3).
-- **KCMAC fails closed.** Under v6 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: the call ends if
-  the peer's KCMAC does not verify, or does not arrive within the key-confirmation window (`CONFIRM_TIMEOUT` = 15 s;
-  for the two round-1 exceptions, caller 30 s and callee 15 s from its own REVEAL verified, see the Window rule
-  above). There is no observation-only mode and no hold-pending-SAS path for it. An expiry emits the telemetry event
-  of R-CONFIRM-TELEMETRY (§3.7.4).
+    window armed with the callee's own round-1 key would have ended. The ACCEPTOR of a rekey round (the signer of its
+    ACCEPT_v6) waits for the offerer's MAC no less than `2 × CONFIRM_TIMEOUT` = 30 s from arming, because the offerer
+    derives the round key and sends its MAC only after the ACCEPT reached it: one leg out (the ACCEPT) and one leg back
+    (the MAC), each of which may need a socket re-authentication and a re-send (R-ACCEPT-RESEND, R-KCMAC-RESEND). The
+    OFFERER of a rekey round keeps `CONFIRM_TIMEOUT` from arming: the acceptor's MAC follows the ACCEPT on the same
+    ordered path. All waits are minimums: a platform may wait longer, never shorter, and expiry is the same
+    `kcmac_mismatch`. A platform uses exactly these values unless it has a reason to wait longer: the wait is local and
+    no peer depends on its length. "Handed to the transport" is as defined for the ACCEPT in §3.7.4 (a message that is
+    queued behind a socket re-authentication counts from the moment it is queued). Why a long window is safe: delaying
+    a message only lets whoever delays it end the call, which the server can already do; every mismatch still ends the
+    call fail-closed, and media under a wrong key never decrypts (AEAD).
+  - **Sender device (caller, every round, R-COMMIT-KCMAC-DEVICE, §3.7.4):** a caller runs the format check, the
+    duplicate test, the attribution and the hold below only on a MAC whose opaque envelope `sender_device_id` equals the
+    `sender_device_id` of the opaque envelope that carried the ACCEPT it bound. A MAC from any other device, or without
+    that field, is dropped silently: no judgment, no `kcmac_mismatch`, no hold and no effect on any window. This test
+    comes BEFORE the format check and every step below.
+  - **Rounds are judged by content (R-KCMAC-ROUNDS).** Per call a receiver keeps:
+    - PENDING: every round it armed and has not decided, each with the expected peer MAC
+      `HMAC-SHA256(K_kc, peerRole ‖ kc_transcript)` of that round (a receiver MAY compute it at arming and keep only
+      it), the role byte the peer must carry for that round, and the round's own window (Window rule above). Arming a
+      round NEVER cancels, shortens, extends or decides another pending round: a round superseded by a later one stays
+      pending, with its own window, until it is decided. At most `MAX_PENDING_ROUNDS = 16` rounds are pending; a
+      device that would arm a 17th ends the call with `kcmac_mismatch`.
+    - DECIDED: the 32-byte peer MAC that verified each decided round, for the rest of the call (at least the most
+      recent 256).
+    - HELD: at most `MAX_HELD_MACS = 8` inbound MACs that matched no pending round, each with its time of receipt. An
+      entry received `2 × CONFIRM_TIMEOUT` = 30 s ago or more is stale: it is dropped silently, at step 4 and at
+      arming below, and a stale entry counts against no bound.
+  - **State is serialised per call (R-KCMAC-ATOMIC).** The state of one call (PENDING, DECIDED and HELD together) is
+    changed by one step at a time, in one order (one actor, one queue or one lock; on a platform with more than one
+    thread two steps never overlap). A step is exactly one of:
+    - the whole processing of ONE inbound MAC: the sender-device rule, the peer-user check and steps 1 to 4 below,
+      including the drop of stale held MACs and the insertion into HELD;
+    - the whole arming of ONE round: the overflow check, the insertion into PENDING, then the re-offer of the held MACs
+      (below), as one step, so that no inbound MAC is processed between the insertion and the end of the re-offer;
+    - the expiry of ONE round's window: the test "still pending" and the failure are one step.
+
+    When a decision and an expiry concern the same round, the step that runs first wins: a round decided first never
+    fails, a round that failed first is not decided afterwards. Why: without one order, a MAC that step 4 classifies as
+    unattributed after the re-offer of an arming has already looked at HELD is held and offered again only at the next
+    arming, and the round then fails at its window although its MAC arrived (an honest call ends).
+  - An inbound MAC is processed, after the sender-device rule (caller) and the peer-user check, in this order:
+    1. Format: the text after `KCMAC:` is not exactly the 44-character canonical base64 (§3.1) of 33 bytes
+       (`role ‖ MAC[32]`): dropped silently. It cannot be attributed to a round; it is never judged and never ends the
+       call by itself.
+    2. Duplicate: the 32-byte MAC part (the role byte is not compared) equals one in DECIDED (a retransmission, or a
+       re-send after a socket re-authentication, R-KCMAC-RESEND): dropped silently, never judged. The role is an input
+       of the HMAC, so a copy of a decided MAC with another role byte is no new MAC.
+    3. Attribution: the MAC is compared in constant time with the expected peer MAC of EVERY pending round, whatever
+       order they were armed in. If it equals round R's, R is decided: with R's peer role byte, R is verified (it
+       leaves PENDING, its window stops, the MAC joins DECIDED); with any other role byte, the call ends with
+       `kcmac_mismatch`.
+    4. Unattributed: a MAC that is not a duplicate and matches no pending round (the peer's MAC for a round this side
+       has not armed yet, whether or not other rounds are pending, or a MAC that will never verify) is held while HELD
+       has room, otherwise dropped silently. Before it is held, every stale held MAC (received 30 s ago or more) is
+       dropped silently, so that a stale entry never takes the place of a MAC that arrives later (the limit of 8
+       applies to the fresh entries that remain). It is never judged wrong, never ends the call and never shortens or
+       extends a window by itself. When a round is armed, it is first inserted into PENDING, then every held MAC
+       received less than `2 × CONFIRM_TIMEOUT` = 30 s ago is offered again from step 2 (it already passed the
+       sender-device rule, the peer-user check and step 1), keeping its original receipt time; an older held MAC is
+       dropped silently.
+  - A round fails when its window ends while it is pending: `kcmac_mismatch` with the event of R-CONFIRM-TELEMETRY,
+    whether or not later rounds were armed or verified meanwhile. A MAC that never verifies therefore ends the call at
+    the window of the round it should have confirmed, not on arrival.
+  - A receiver MUST NOT judge a MAC against "the live round" or "the latest round", and MUST NOT use "the latest MAC
+    seen" as the peer's MAC of a round.
+  - A call in which a KCMAC context is required but missing (a round whose key was derived but that could not be
+    armed) ends with `kcmac_mismatch` (R-EARBUD, §3.7.3).
+  - Why a MAC that matches nothing fails at the window and not on arrival: the message carries no round, so it cannot
+    be told apart from the peer's MAC for a round this side has not armed yet. Judging it against some pending round
+    ends honest calls, for example a rekey MAC that overtakes this side's processing of that round's ACCEPT while an
+    earlier round waits for a re-sent MAC. Waiting changes no verdict. A round is confirmed only by its exact expected
+    MAC, and every unconfirmed round still ends the call. A session key that differs between the legs decrypts no media
+    meanwhile (AEAD; every derived key covers the signed transcript). Whoever can put a bogus MAC on the wire (the
+    server, the peer user) can already end the call. Bounds: in an honest call a round is decided within one round
+    trip, so PENDING holds one or two rounds. `MAX_PENDING_ROUNDS = 16` and `MAX_HELD_MACS = 8` limit the state that a
+    bogus sender can make a device keep. They are not pacing rules: this specification fixes no rekey cadence and no
+    limit on rekeys in flight. A round leaves PENDING when it is decided or when its window ends (30 s from arming at
+    most), so a 17th pending round means 17 rounds armed on one device within one 30 s window, a sustained rate of
+    one round per 1.8 s or faster across both sides. No rekey schedule that serves a purpose comes near it. A device
+    that reaches it ends the call, the same fail-closed outcome as an unconfirmed round, and never drops a round
+    silently.
+- **KCMAC fails closed.** Under v6 a KCMAC failure ENDS the call with reason `kcmac_mismatch`: when a round's window
+  ends before a MAC equal to that round's expected peer MAC arrived (every round, superseded rounds included), when
+  such a MAC carries the wrong role byte, or when a 17th round would be pending (R-KCMAC-ROUNDS). The windows are
+  `CONFIRM_TIMEOUT` = 15 s, with the three exceptions of the Window rule (round-1 caller 30 s after its REVEAL, round-1
+  callee 15 s after its own REVEAL verified, rekey acceptor 30 s from arming). There is no observation-only mode and
+  no hold-pending-SAS path for it. An expiry emits the telemetry event of R-CONFIRM-TELEMETRY (§3.7.4).
 - Consequence for the DTLS binding: if anyone substitutes a fingerprint, even with the signatures stripped, the two
   legs build different `ACCEPT_v6` bytes and so derive different session keys. No media decrypts, the SAS differs and
   the KCMAC fails.
@@ -1007,7 +1087,7 @@ KCMAC (§3.7.1). There is no other way to set up a 1:1 call.
   capabilities that matter are the signed ones inside the bundle (CAPS9, §3.7).
 - A signalling field that the server, or anyone on the path, can add or change MUST NOT turn off or weaken any step
   of §3.7 or §3.8. In particular there is no "exempt" state of the DTLS binding.
-- If a KCMAC context is required for the live round (§3.7.1) and is missing, the call ends with reason
+- If a KCMAC context is required for a round whose key was derived (§3.7.1) and is missing, the call ends with reason
   `kcmac_mismatch`. A missing context is a failure, never a reason to skip the check.
 - The earbud GATT key-import family of §7 is a local BLE interface of the hardware earbud and is unaffected by this
   rule; it is not a call-handshake path.
@@ -1060,7 +1140,7 @@ Caller (offerer)                                      Callee device (acceptor)
   <--- <callId>|KCMAC:<...> ------------------------  (R-COMMIT-KCMAC-HOLD)
   caller waits >= 30 s after the REVEAL for this MAC;  callee waits >= 15 s after its REVEAL verified for the
   caller's MAC. After a socket re-authentication each side re-sends what the peer has not yet confirmed
-  (R-KCMAC-RESEND).
+  (R-KCMAC-RESEND, R-ACCEPT-RESEND).
 ```
 
 **Answer first (R-ANSWER-FIRST).** A callee device does nothing of the handshake before the user has answered the
@@ -1182,8 +1262,18 @@ replaced socket after the peer's MAC was verified, and the peer would then wait 
 MAC or already ended the call. A device re-sends only a MAC it has already sent once: a device that has no MAC of its
 own for a round (key not yet derived, or a callee whose REVEAL has not verified, R-COMMIT-KCMAC-HOLD) re-sends nothing
 for it and does not start sending it now. A callee whose REVEAL verified, and which sent its round-1 MAC, re-sends that
-MAC under the same rule. The receiver is unchanged: its duplicate rule (§3.7.1) drops an already-verified copy
-silently, and the sender-device rule is unaffected because the copy comes from the same device.
+MAC under the same rule. The receiver attributes every MAC by content (R-KCMAC-ROUNDS, §3.7.1): a re-sent MAC of an
+earlier round verifies that round while it is pending, is dropped as a duplicate once that round verified, and is never
+judged against a later round. The sender-device rule is unaffected because the copy comes from the same device.
+
+**ACCEPT re-send (R-ACCEPT-RESEND).** In the same re-send event, the acceptor of a round re-sends its ACCEPT of every
+round for which it has no proof yet that the ACCEPT arrived. Round 1 (callee): as long as its REVEAL has not verified.
+Rekey round: as long as the peer's MAC of that round has not verified. A REVEAL naming its ACCEPT, or a peer MAC that
+verifies for the round, is that proof. The copy is the exact bytes first handed to the transport, never re-signed or
+re-serialised, and it leaves BEFORE that round's MAC. A device re-sends only an ACCEPT it has already sent once; a
+callee whose ACCEPT is still held while ringing re-sends nothing. On the offerer, a copy of the bound round-1 ACCEPT
+follows the duplicate-ACCEPT rule above (the REVEAL is re-sent, one event of the offerer's budget), and a copy of a
+rekey ACCEPT follows R-REKEY-ACCEPT-WAIT (dropped).
 
 The budget is ONE counter per call and per device, shared by every re-send of the call: the REVEAL re-sent on a
 duplicate ACCEPT, the REVEAL and the KCMACs re-sent after a re-authentication. Only re-sends count: the first send of
@@ -1193,7 +1283,8 @@ duplicate that arrives while the caller is still verifying the first copy (befor
 it is no event and consumes nothing. An event consumes one unit of the budget and re-sends in that event everything
 that is due; it does not consume one unit per message. The two kinds
 of event are independent: a duplicate ACCEPT re-sends the REVEAL and nothing else (as above), a re-authentication
-re-sends everything due (the caller's REVEAL while the callee's round-1 MAC is unverified, and the MACs above). A
+re-sends everything due (the acceptor's ACCEPTs of R-ACCEPT-RESEND, the caller's REVEAL while the callee's round-1 MAC
+is unverified, and the MACs above; for each round its ACCEPT first, then its MAC). A
 fifth event re-sends nothing.
 
 **Telemetry for every confirmation expiry (R-CONFIRM-TELEMETRY).** When any confirmation timer ends a call, the
@@ -1227,7 +1318,7 @@ ACCEPT the caller bound.
   so no KCMAC will pass and the call ends at the KCMAC window: fail closed, never an unfiltered judgment.
 - From then on the caller judges only a KCMAC whose envelope `sender_device_id` equals the recorded value. A KCMAC from
   any other device, or one without the field, is dropped silently. It is never judged, never produces
-  `kcmac_mismatch`, is not held as an early MAC and does not shorten or extend any window (§3.7.1, sender-device rule).
+  `kcmac_mismatch`, is not held and does not shorten or extend any window (§3.7.1, sender-device rule).
 - The REVEAL's `acceptBinding` (the callee-side sibling test) is unchanged; this rule is its caller-side counterpart.
 
 **SAS scope (R-COMMIT-SAS).** The SAS of a call is the round-1 SAS of §4, held or not, before and after any rekey: no
@@ -1242,7 +1333,7 @@ The table also maps every confirmation timer of §3.7.1, §3.7.4 and §3.8.4 to 
 |---|---|
 | `sas_commit_mismatch` | ill-formed REVEAL naming this device's ACCEPT, a nonce that does not open the commitment, or a second different REVEAL |
 | `sas_reveal_timeout` | no verified REVEAL `CONFIRM_TIMEOUT` (15 s) after this device first sent its ACCEPT |
-| `kcmac_mismatch` | (existing) a KCMAC that does not verify, or no verified peer KCMAC within the round's window: 15 s from arming, round 1 caller 30 s after its REVEAL was handed to the transport, round 1 callee 15 s after its own REVEAL verified (§3.7.1) |
+| `kcmac_mismatch` | (existing) a MAC equal to a round's expected peer MAC with the wrong role byte; no verified peer KCMAC within a round's window, superseded rounds included: 15 s from arming, round 1 caller 30 s after its REVEAL was handed to the transport, round 1 callee 15 s after its own REVEAL verified, rekey acceptor 30 s from arming (§3.7.1); a 17th pending round (R-KCMAC-ROUNDS) |
 | `dtls_fp_mismatch` | (existing) a fingerprint mismatch, or no verdict of check (b) within `CONFIRM_TIMEOUT` (15 s) after `connected` (§3.8.4) |
 | `handshake_malformed` | (existing) now also: missing, misplaced, non-canonical or wrong-length `sasCommit`, a first OFFER whose round is not 1, and a callee call without a `callId` (R-ANSWER-FIRST) |
 
@@ -1268,7 +1359,10 @@ across reconnects.
 | REVEAL naming another ACCEPT | callee | sibling rule |
 | KCMAC whose envelope `sender_device_id` is not the bound ACCEPT's (or is absent) | caller | drop silently, no `kcmac_mismatch` (R-COMMIT-KCMAC-DEVICE) |
 | callee round-1 KCMAC before the callee's own REVEAL verified | callee | never sent (R-COMMIT-KCMAC-HOLD) |
-| KCMAC byte-identical to one already verified for a round (a re-send after a socket re-authentication) | either | drop silently, no judgment (§3.7.1 duplicate rule, R-KCMAC-RESEND) |
+| KCMAC whose 32-byte MAC part equals one already verified for a round (role byte not compared) | either | drop silently, no judgment (R-KCMAC-ROUNDS step 2) |
+| KCMAC of an earlier round that is still pending, arriving after a later round was armed | either | verifies THAT round (step 3), never judged against the later round |
+| KCMAC that matches no pending round, or malformed | either | held (at most 8, stale after 30 s, stale entries dropped before a new MAC is held) and offered again when a round is armed, or dropped if malformed; never ends the call by itself (steps 1, 4) |
+| any further ACCEPT for a rekey round already bound or abandoned (including one after the 30 s wait) | offerer | drop silently, no state, no event (R-REKEY-ACCEPT-WAIT) |
 | any message other than an OFFER (see the pending-OFFER rule above) for an ended or unknown callId | both | drop, create no state |
 
 **Logging (R-COMMIT-LOG).** Never log `sasNonce`, `sasCommit`, `acceptBinding`, transcript hashes or SAS words; at most
@@ -2572,7 +2666,19 @@ error code; and descriptor examples, three valid (file with thumbnail, voice not
 Multi-chunk negative vectors are given as a recipe on a named positive vector plus the SHA-256 of the resulting blob.
 All keys in the file are test keys derived from public labels.
 
-Latest: 2026-10-02 (night, four-way review of the T-round: R-KCMAC-RESEND also re-sends the own KCMAC of every round
+Latest: 2026-10-04 (K-round review: R-KCMAC-ATOMIC, the per-call KCMAC state (PENDING, DECIDED, HELD) is changed by one
+serialised step at a time, and arming is insert then re-offer as one step; stale held MACs (30 s or more) are dropped
+before a new MAC is held, not only at arming; the bounds of 16 pending rounds and 8 held MACs are stated as state
+limits, not pacing rules; R-REKEY-ACCEPT-WAIT says exactly what the offerer and the acceptor do when the ACCEPT is late
+(the call goes on only if the acceptor never armed the round); step 2 compares the 32-byte MAC part; wording and
+wrapping. KAT unchanged.)
+Previous: 2026-10-03 (K-round: R-KCMAC-ROUNDS, every receiver keeps each undecided round, superseded ones included, with
+its own window and attributes an inbound MAC by content; a MAC that matches no pending round is held (8, 30 s) and
+never ends the call by itself; every pending round is judged, which closes the superseded-round fail-open; at most 16
+pending rounds. The rekey acceptor waits 30 s for the offerer's MAC. R-REKEY-ACCEPT-WAIT, the rekey offerer waits 30 s
+for the ACCEPT and processes at most one per round. R-ACCEPT-RESEND, the acceptor re-sends its unconfirmed ACCEPT in
+the re-authentication re-send event. KAT unchanged.)
+Previous: 2026-10-02 (night, four-way review of the T-round: R-KCMAC-RESEND also re-sends the own KCMAC of every round
 first sent less than 30 s before the re-authentication, because a verified peer MAC does not show that the own MAC
 arrived; a duplicate ACCEPT before round 1 is bound is no re-send event; a callee stops retransmitting its ACCEPT once
 its REVEAL verified).
