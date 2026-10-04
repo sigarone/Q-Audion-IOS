@@ -347,9 +347,16 @@ public struct SasCommitCaller {
 /// - the CALLEE (round-1 `resp`) waits for the caller's MAC no earlier than `CONFIRM_TIMEOUT` after its OWN REVEAL
 ///   verified (A5, T3), because the REVEAL may arrive near the end of the REVEAL timer and the caller's MAC follows it
 ///   on the same ordered path.
-/// A wait may be longer, never shorter. Expiry without a verified MAC is `kcmac_mismatch`.
+/// Rekey rounds (K2): the OFFERER of a rekey round keeps `CONFIRM_TIMEOUT` from arming (the acceptor's MAC follows the
+/// ACCEPT on the same ordered path), but the ACCEPTOR (`resp`, the signer of the round's ACCEPT_v6) waits for the
+/// offerer's MAC no less than 2 x `CONFIRM_TIMEOUT` = 30 s from arming: the offerer derives the round key and sends its
+/// MAC only after the ACCEPT reached it, one leg out and one leg back, each of which may need a socket
+/// re-authentication and a re-send.
+/// A wait may be longer, never shorter. Expiry without a verified MAC is `kcmac_mismatch`. Every round has its own
+/// wait, a superseded round's included (R-KCMAC-ROUNDS): the app runs one timer per pending round.
 public enum KcMacWindow {
     public static let baseMs = ConfirmTimeout.confirmTimeoutMs
+    public static let rekeyAcceptorMs = ConfirmTimeout.rekeyAcceptorKcMacWaitMs
     public static let callerRound1AfterRevealMs = ConfirmTimeout.callerRound1KcMacWaitMs
     public static let calleeRound1AfterRevealVerifiedMs = ConfirmTimeout.confirmTimeoutMs
     /// Callee, round 1, REVEAL not verified yet: the wait is held open this long from arming. The REVEAL timer
@@ -369,6 +376,9 @@ public enum KcMacWindow {
             } else {
                 end = max(end, armedAtMs + calleeRound1PreRevealBackstopMs)
             }
+        } else if !isInitiator {
+            // K2: the acceptor of a rekey round waits for the offerer's MAC for 30 s from arming.
+            end = max(end, armedAtMs + rekeyAcceptorMs)
         }
         return max(0, end - nowMs)
     }
@@ -376,8 +386,8 @@ public enum KcMacWindow {
     /// The wait when no SAS book is reachable (the integration that carried the call is gone while its
     /// key-confirmation state is still alive): there is no REVEAL time to read, so a round-1 wait keeps the
     /// LONGEST value of its role instead of falling back to the base window (a wait may be longer, never
-    /// shorter): the initiator's 30 s from arming, the callee's pre-REVEAL backstop. A later round is the base
-    /// window as always.
+    /// shorter): the initiator's 30 s from arming, the callee's pre-REVEAL backstop. A later round keeps its own
+    /// window: the base window for its offerer, 30 s for its acceptor (K2).
     public static func remainingMsWithoutBook(isRound1: Bool, isInitiator: Bool, armedAtMs: Int, nowMs: Int) -> Int {
         remainingMs(isRound1: isRound1, isInitiator: isInitiator, armedAtMs: armedAtMs, nowMs: nowMs,
                     revealHandedAtMs: isInitiator ? armedAtMs : nil, revealVerifiedAtMs: nil)

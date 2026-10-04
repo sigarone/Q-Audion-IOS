@@ -27,6 +27,17 @@ public enum ConfirmTimeout {
     /// A peer KCMAC that arrives before this side's confirmation is armed is held this long (never shorter).
     public static let earlyKcMacHoldMs = 2 * confirmTimeoutMs
 
+    /// The ACCEPTOR of a rekey round (the signer of its ACCEPT_v6) waits for the offerer's KCMAC at least this long
+    /// from arming (K2, WIRE_SPEC §3.7.1 Window rule): the offerer derives the round key and sends its MAC only after
+    /// the ACCEPT reached it, one leg out and one leg back, each of which may need a socket re-authentication and a
+    /// re-send.
+    public static let rekeyAcceptorKcMacWaitMs = 2 * confirmTimeoutMs
+
+    /// The OFFERER of a rekey round waits for that round's ACCEPT this long after it handed the OFFER to the transport
+    /// (K3, R-REKEY-ACCEPT-WAIT), never shorter: an offerer that gives up earlier drops an ACCEPT the acceptor already
+    /// sent, and the acceptor's KCMAC window then ends an honest call. The round-1 wait is not this one.
+    public static let rekeyAcceptWaitMs = 2 * confirmTimeoutMs
+
     /// How often check (b) reads the transport statistics again while the certificate pair is incomplete.
     public static let dtlsStatsRetryMs = 250
 

@@ -70,6 +70,31 @@ public final class RuntimeLogSink: ObservableObject {
     private init() {}
 
     public func record(level: Level, tag: String, _ message: String) {
+        record(level: level, tag: tag, message, origin: .app)
+    }
+
+    /// Where a recorded line comes from. It decides one thing: whether the line is mirrored to the sink's own
+    /// `Logger` (`mirrorsToOSLog`).
+    enum Origin {
+        /// `RTLog.*` and every other line the app writes through the sink: mirrored to OSLog.
+        case app
+        /// A line the stdout/stderr tee read from the process's OWN stdout or stderr. Never mirrored: the tee's
+        /// input is already what the process printed, and a mirror line goes back to stderr whenever the process runs
+        /// with `OS_ACTIVITY_DT_MODE` set (every `xcodebuild test` run, a run from Xcode), straight into the tee
+        /// that read it. That loop is what flooded the CI job log (3.3 GB, the host app starved): see
+        /// `StdoutTeeLines`.
+        case stdoutTee
+    }
+
+    /// The one rule of the OSLog mirror: the tee's own lines are never written back to the stream the tee reads.
+    static func mirrorsToOSLog(_ origin: Origin) -> Bool {
+        switch origin {
+        case .app: return true
+        case .stdoutTee: return false
+        }
+    }
+
+    func record(level: Level, tag: String, _ message: String, origin: Origin) {
         // W-KEYSCRUB (2026-09-21) -- THE choke point for key material. Every line that enters the
         // app's log (RTLog from app code AND the stdout/stderr tee, i.e. whatever the native
         // library prints) passes here, so the ring, the on-screen viewer, the text export, the
@@ -103,11 +128,14 @@ public final class RuntimeLogSink: ObservableObject {
         // developer attached via Console.app (or the in-app dump)
         // still sees the full text. Prevents inadvertent leak of
         // app-authored diagnostics through OS-level log collection.
-        switch level {
-        case .debug: osLogger.debug("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
-        case .info:  osLogger.info("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
-        case .warn:  osLogger.warning("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
-        case .error: osLogger.error("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+        // A line the tee read from stdout/stderr is NOT mirrored (`Origin.stdoutTee`): see `mirrorsToOSLog`.
+        if Self.mirrorsToOSLog(origin) {
+            switch level {
+            case .debug: osLogger.debug("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            case .info:  osLogger.info("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            case .warn:  osLogger.warning("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            case .error: osLogger.error("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            }
         }
         // Bump observable count on main (we're already @MainActor).
         entryCount &+= 1
@@ -270,6 +298,15 @@ public final class RuntimeLogSink: ObservableObject {
     ///      with tag "stdout" so the buffer + diagnostic dump capture
     ///      every line that any code path emits.
     ///
+    /// **The sink never re-captures its own writes** (CI incident 2026-10-04: a 3.3 GB job log, the test host
+    /// starved for minutes): the sink's `Logger` mirror of a recorded line is echoed to stderr by a process that
+    /// runs with `OS_ACTIVITY_DT_MODE` (every `xcodebuild test` run, a run from Xcode), and stderr is this pipe,
+    /// so every recorded line came back as a new `[runtime] [stdout] ...` line, one level deeper on every pass,
+    /// cut at 4096-byte reads into more lines than before. Two independent defences: the tee records its lines
+    /// with `Origin.stdoutTee` (never mirrored), and it drops the echo of the sink's own mirror before it records
+    /// anything (`StdoutTeeLines.isOwnOSLogMirror`, on the raw line). Lines are assembled across reads
+    /// (`StdoutTeeLines.Assembler`), so a line cut at the end of a read is judged as one line.
+    ///
     /// **Cost:** ≈ 4KB transient buffer per read, one background
     /// dispatch source per process. No measurable overhead at typical
     /// log rates (< 100 lines/s).
@@ -303,6 +340,8 @@ public final class RuntimeLogSink: ObservableObject {
 
         let queue = DispatchQueue(label: "qaudion.runtime.stdout-tee", qos: .utility)
         let source = DispatchSource.makeReadSource(fileDescriptor: readFd, queue: queue)
+        // Complete lines out of the 4096-byte chunks: only this handler (one serial queue) touches it.
+        let assembler = StdoutTeeLines.Assembler()
         source.setEventHandler { [weak self] in
             guard let self = self else { return }
             var buf = [UInt8](repeating: 0, count: 4096)
@@ -316,20 +355,22 @@ public final class RuntimeLogSink: ObservableObject {
                 //    network); the parsed lines below are scrubbed by `redact` and `record`.
                 _ = write(self.origStdoutFd, buf, n)
                 // 2) Parse + record into the ring buffer.
-                if let chunk = String(bytes: buf[0..<n], encoding: .utf8) {
-                    let lines = chunk.split(separator: "\n", omittingEmptySubsequences: true)
-                    for line in lines {
-                        // SECURITY H-2 — scrub obvious secrets out of
-                        // captured stdout/stderr BEFORE they enter the
-                        // ring buffer (which can be uploaded by the
-                        // diagnostics dump). Redaction runs off-main.
-                        // W-KEYSCRUB: `redact` starts with the key-material scrub,
-                        // so the key bytes are already gone before the hop to the
-                        // main actor; `record` scrubs once more (idempotent).
-                        let safe: String = RuntimeLogSink.redact(String(line))
-                        Task { @MainActor [weak self] in
-                            self?.record(level: .info, tag: "stdout", safe)
-                        }
+                for line in assembler.lines(from: buf[0..<n]) {
+                    // The sink never re-captures its own writes: the console echo of its OSLog mirror
+                    // (a process run with OS_ACTIVITY_DT_MODE echoes every Logger line to stderr, i.e. into this
+                    // pipe) is dropped here, on the RAW line, before any redaction rewrites its prefix.
+                    if StdoutTeeLines.isOwnOSLogMirror(line) { continue }
+                    // SECURITY H-2 — scrub obvious secrets out of
+                    // captured stdout/stderr BEFORE they enter the
+                    // ring buffer (which can be uploaded by the
+                    // diagnostics dump). Redaction runs off-main.
+                    // W-KEYSCRUB: `redact` starts with the key-material scrub,
+                    // so the key bytes are already gone before the hop to the
+                    // main actor; `record` scrubs once more (idempotent).
+                    let safe: String = RuntimeLogSink.redact(line)
+                    Task { @MainActor [weak self] in
+                        // `.stdoutTee`: a captured line is never mirrored back to OSLog (second defence).
+                        self?.record(level: .info, tag: "stdout", safe, origin: .stdoutTee)
                     }
                 }
             }
@@ -375,6 +416,69 @@ public enum RTLog {
             Task { @MainActor in
                 RuntimeLogSink.shared.record(level: level, tag: tag, message)
             }
+        }
+    }
+}
+
+/// Pure helpers of the stdout/stderr tee (`RuntimeLogSink.attachStdoutTee`). They live outside the main-actor
+/// `RuntimeLogSink` because the tee reads on its own background queue.
+enum StdoutTeeLines {
+
+    /// The `Logger` category of the sink's own OSLog mirror (`RuntimeLogSink.osLogger`).
+    static let osLogCategory = "runtime"
+
+    /// `2026-10-04 02:11:05.328185+0000 QAudionApp[6733:26267] [runtime] ...`: the shape in which a process that runs
+    /// with `OS_ACTIVITY_DT_MODE` echoes a `Logger` line to stderr: date, time with fractional seconds and zone, the
+    /// process name, `[pid:tid]`, `[category]`, then the message. The category is the sink's own, so the echo of any
+    /// other subsystem's line is not matched. A subsystem before the category (`[subsystem:category]`) is accepted
+    /// too, in case another OS version prints it. Not anchored: XCTest writes the token `XCTestOutputBarrier` (no line
+    /// feed) after each of its outputs, so under `xcodebuild test` the next line the process writes, an echo included,
+    /// arrives with that token glued in front of it; an echo that is not at the very start of its line is still the
+    /// echo (see `isOwnOSLogMirror`, which looks at the head of the line only).
+    private static let ownMirrorPrefix: NSRegularExpression? = try? NSRegularExpression(
+        pattern: #"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4} [^\s\[\]]+\[\d+:\d+\] \[(?:[A-Za-z0-9._-]+:)?"#
+            + NSRegularExpression.escapedPattern(for: osLogCategory) + #"\](?: |$)"#)
+
+    /// True for a line that is the console echo of the sink's OWN OSLog mirror. The tee must drop it: recording it
+    /// would write it to OSLog again (the loop of the 2026-10-04 CI incident) or, with the mirror off, duplicate
+    /// every `RTLog` line in the ring. Judged on the RAW line, before `LogRedactor` rewrites the time and the
+    /// `[pid:tid]` of its prefix. Only the head of the line (its first 160 UTF-16 units) is looked at.
+    static func isOwnOSLogMirror(_ line: String) -> Bool {
+        guard let regex = ownMirrorPrefix else { return false }
+        let head = NSRange(location: 0, length: min(line.utf16.count, 160))
+        return regex.firstMatch(in: line, options: [], range: head) != nil
+    }
+
+    /// Turns the chunks read from the pipe into complete lines. A read ends wherever the pipe's buffer ends, so a
+    /// line (or a multi-byte character) can be cut between two reads: the unfinished tail is kept until its newline
+    /// arrives. A tail that grows past `maxPendingBytes` with no newline is flushed as a line, so unterminated
+    /// output cannot grow without bound. Empty lines are dropped. Used by ONE serial queue only.
+    final class Assembler: @unchecked Sendable {
+        static let maxPendingBytes = 8192
+        private var pending: [UInt8] = []
+
+        init() {}
+
+        func lines(from chunk: [UInt8]) -> [String] {
+            lines(from: chunk[...])
+        }
+
+        func lines(from chunk: ArraySlice<UInt8>) -> [String] {
+            pending.append(contentsOf: chunk)
+            var out: [String] = []
+            var start = 0
+            while let newline = pending[start...].firstIndex(of: 0x0A) {
+                if newline > start {
+                    out.append(String(decoding: pending[start..<newline], as: UTF8.self))
+                }
+                start = newline + 1
+            }
+            if start > 0 { pending.removeSubrange(0..<start) }
+            if pending.count > Self.maxPendingBytes {
+                out.append(String(decoding: pending, as: UTF8.self))
+                pending.removeAll(keepingCapacity: true)
+            }
+            return out
         }
     }
 }

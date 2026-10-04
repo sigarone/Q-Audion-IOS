@@ -47,7 +47,7 @@ public enum AudioAeadFailureRekeyPolicy {
     /// Minimum spacing between two fired triggers. A key that stays
     /// broken for a while should ask `ReKeyScheduler` once and then WAIT
     /// for that round (bounded by `QAudionCallIntegration.
-    /// performPqcReKey`'s own 8 s timeout) rather than hammering
+    /// performPqcReKey`'s own ACCEPT wait, 2 x CONFIRM_TIMEOUT = 30 s, R-REKEY-ACCEPT-WAIT) rather than hammering
     /// `forceReKey` on every subsequent failing frame while the round is
     /// still in flight.
     public static let retriggerCooldownMs: Int64 = 10_000

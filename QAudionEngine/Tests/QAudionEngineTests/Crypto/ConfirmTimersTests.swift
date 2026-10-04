@@ -63,7 +63,9 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertEqual(ConfirmTimeout.callerRound1KcMacWaitMs, 2 * ConfirmTimeout.confirmTimeoutMs, "caller round 1: 30 s")
         XCTAssertEqual(KcMacWindow.callerRound1AfterRevealMs, 30_000)
         XCTAssertEqual(ConfirmTimeout.earlyKcMacHoldMs, 30_000, "early-MAC hold: 30 s")
-        XCTAssertEqual(KcMacRoundRules.earlyHoldSeconds, 30)
+        XCTAssertEqual(KcMacRoundBook.heldFreshMs, 30_000, "a held MAC is offered again for 30 s")
+        XCTAssertEqual(ConfirmTimeout.rekeyAcceptorKcMacWaitMs, 30_000, "K2: the rekey acceptor's MAC wait")
+        XCTAssertEqual(ConfirmTimeout.rekeyAcceptWaitMs, 30_000, "K3: the rekey offerer's ACCEPT wait")
         XCTAssertEqual(ConfirmTimeout.dtlsStatsRetryMs, 250)
         XCTAssertEqual(ConfirmTimeout.maxResendEvents, 4)
     }
@@ -107,9 +109,19 @@ final class ConfirmTimersTests: XCTestCase {
         for isInitiator in [true, false] {
             XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 0,
                                                          nowMs: 14_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
-            XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: isInitiator, armedAtMs: 0,
-                                                   nowMs: 15_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
         }
+        // K2: the rekey OFFERER (init) still ends at 15 s from arming ...
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: true, armedAtMs: 0,
+                                               nowMs: 15_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        // ... the rekey ACCEPTOR (resp) waits 30 s from arming: 20 s still counts, 30 s ends it
+        XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                                     nowMs: 15_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                                     nowMs: 20_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        XCTAssertGreaterThan(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                                     nowMs: 29_999, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
+        XCTAssertEqual(KcMacWindow.remainingMs(isRound1: false, isInitiator: false, armedAtMs: 0,
+                                               nowMs: 30_000, revealHandedAtMs: nil, revealVerifiedAtMs: nil), 0)
     }
 
     /// Check (b) of the DTLS binding: statistics that are still incomplete 12 s after `connected` are retried, not failed.
@@ -133,7 +145,7 @@ final class ConfirmTimersTests: XCTestCase {
     }
 
     /// No other number lives on the confirmation paths: the REVEAL timer sleeps `confirmTimeoutMs`, the KCMAC window
-    /// reads `KcMacWindow`, the early hold reads `ConfirmTimeout`.
+    /// reads `KcMacWindow`, the held-MAC freshness reads `ConfirmTimeout`.
     func testNoOldValueIsLeftOnTheConfirmationPaths() throws {
         let sas = code(try sourceText("QAudionEngine/Sources/QAudionEngine/Crypto/SasCommit.swift"))
         XCTAssertFalse(sas.contains("revealTimeoutMs"))
@@ -144,10 +156,10 @@ final class ConfirmTimersTests: XCTestCase {
         let integration = code(try sourceText(integrationPath))
         XCTAssertTrue(integration.contains("Task.sleep(nanoseconds: UInt64(ConfirmTimeout.confirmTimeoutMs) * 1_000_000)"))
         XCTAssertFalse(integration.contains("revealTimeoutMs"))
-        let rules = code(try sourceText("QAudionEngine/Sources/QAudionEngine/Crypto/KcMacRoundRules.swift"))
-        XCTAssertTrue(rules.contains("TimeInterval(ConfirmTimeout.earlyKcMacHoldMs) / 1000"))
+        let rules = code(try sourceText("QAudionEngine/Sources/QAudionEngine/Crypto/KcMacRoundBook.swift"))
+        XCTAssertTrue(rules.contains("public static let heldFreshMs = ConfirmTimeout.earlyKcMacHoldMs"))
         let app = code(try sourceText(appPath))
-        XCTAssertTrue(app.contains("return self.kcWaitRemainingMs(callId: event.callId, state: cur)"),
+        XCTAssertTrue(app.contains("let left = self.kcWaitRemainingMs(callId: event.callId, state: cur)"),
                       "the KCMAC wait is `KcMacWindow`'s, not a fixed sleep")
     }
 
@@ -248,7 +260,7 @@ final class ConfirmTimersTests: XCTestCase {
         let app = try sourceText(appPath)
         let handler = code(try slice(app, from: "private func handleSocketReauthForConfirmation() {",
                                      to: "/// W-KCMAC — verify an inbound `KCMAC:` piggy-back"))
-        let dueAt = try XCTUnwrap(handler.range(of: "guard due.any || !olderWires.isEmpty else { return }"))
+        let dueAt = try XCTUnwrap(handler.range(of: "guard due.any || !olderWires.isEmpty || !acceptsDue.isEmpty else { return }"))
         let takeAt = try XCTUnwrap(handler.range(of: "integration.takeResendEvent(callId: cid)"))
         XCTAssertLessThan(dueAt.lowerBound, takeAt.lowerBound, "nothing due: no budget is consumed")
         let revealAt = try XCTUnwrap(handler.range(of: "await integration.resendRevealAfterReauth(callId: cid)"))
@@ -262,13 +274,13 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertTrue(handler.contains("sendOpaqueMessageString(recipientId: older.peerId, payload: older.wire)"))
         XCTAssertTrue(code(app).contains("state.ownMacSentAtMs = holdOwnMac ? nil : SasCommit.monotonicNowMs()"),
                       "the first send of an immediate MAC is timed")
-        XCTAssertTrue(code(app).contains("kcCallStates[key]?.ownMacSentAtMs = SasCommit.monotonicNowMs()"),
+        XCTAssertTrue(code(app).contains("kcCalls[key]?.states[1]?.ownMacSentAtMs = SasCommit.monotonicNowMs()"),
                       "the first send of the callee's held round-1 MAC is timed when it is released")
-        XCTAssertTrue(code(app).contains("recent.append((wire: prevWire, peerId: prev.peerId, sentAtMs: prevAt))"),
+        XCTAssertTrue(code(app).contains("recent.append((wire: wire, peerId: state.peerId, sentAtMs: sentAt))"),
                       "the MAC of a replaced round stays due while it is recent")
         XCTAssertTrue(code(app).contains("kcRecentOwnMacs.removeValue(forKey: key)"), "dropped with the call")
         XCTAssertTrue(code(app).contains("self?.handleSocketReauthForConfirmation()"), "called on every re-authentication")
-        XCTAssertTrue(code(app).contains("kcCallStates[key]?.ownMacSent = true"), "the held MAC counts once it was released")
+        XCTAssertTrue(code(app).contains("kcCalls[key]?.states[1]?.ownMacSent = true"), "the held MAC counts once it was released")
         XCTAssertTrue(code(app).contains("state.ownMacSent = !holdOwnMac"))
 
         let integration = code(try sourceText(integrationPath))
@@ -459,7 +471,7 @@ final class ConfirmTimersTests: XCTestCase {
         XCTAssertFalse(reject.contains("reportIncomingCall"), "no ring")
 
         let integration = try sourceText(integrationPath)
-        let emit = code(try slice(integration, from: "func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool, calleeToken: UInt64? = nil) async throws {",
+        let emit = code(try slice(integration, from: "func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool, calleeToken: UInt64? = nil, acceptRound: Int? = nil) async throws {",
                                   to: "/// Review fix — closes the check-then-store race of the two gates above"))
         let emptyAt = try XCTUnwrap(emit.range(of: "guard !cid.isEmpty else {"))
         let holdAt = try XCTUnwrap(emit.range(of: "if shouldHoldResponderAccept?(cid) == true {"))
