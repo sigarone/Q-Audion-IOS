@@ -236,7 +236,6 @@ public struct KcMacRoundBook {
         if decided.count > Self.maxDecidedMacs {
             decided.removeFirst(decided.count - Self.maxDecidedMacs)
         }
-        decidedRoundNumbers.append(round.round)
         if decidedRoundNumbers.count > Self.maxDecidedMacs {
             decidedRoundNumbers.removeFirst(decidedRoundNumbers.count - Self.maxDecidedMacs)
         }
