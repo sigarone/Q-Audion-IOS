@@ -426,8 +426,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// W574x — directional sealer keys are used only when BOTH peers advertise
     /// support. Read by AppState at relay-sealer install time.
+    ///
+    /// W-M15ORDER (2026-10-03) — ALSO read by `CallService` on the TX audio queue, once per
+    /// outgoing frame, to decide whether a frame may leave before the M-15 send sealer exists
+    /// (`RelaySealTxPolicy`). The value is written on the handshake thread when the OFFER/ACCEPT
+    /// bundle is received, which is before the engine holds a session key (so before any frame
+    /// can be encrypted), and the two threads now meet through `lock`.
     public var negotiatedSrtpDirKey: Bool {
-        Self.srtpDirKeysEnabled && peerAdvertisedSrtpDirKey
+        guard Self.srtpDirKeysEnabled else { return false }
+        return lock.withLock { peerAdvertisedSrtpDirKey }
     }
 
     /// MEDIA-3/4/5 — the inner sealed-audio wire's per-direction-key/AAD/
@@ -1714,8 +1721,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // downgraded by a later unauthenticated bundle that omits/strips the
         // field — additive-only (can only flip false→true), never gates on an
         // unauthenticated claim alone.
-        self.peerAdvertisedSrtpDirKey = (bundle.capabilities?.srtpDirKeyV1 ?? false)
+        let peerSrtpDirKeyAdvertised: Bool = (bundle.capabilities?.srtpDirKeyV1 ?? false)
             || (isPeerSrtpDirKeyV1Pinned?(callerId) ?? false)
+        lock.withLock { self.peerAdvertisedSrtpDirKey = peerSrtpDirKeyAdvertised }
         // Phase 18 — capture the peer's v4 advertisement so the v4 bootstrap is
         // gated on the negotiated AND (`negotiatedRatchetV4`). A bundle that omits
         // the field (older peer / un-opted-in) decodes nil → false → v4 stays off
@@ -2697,6 +2705,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                                    innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
                                    selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
             recordKeyRound(callId: callId, key: combined, round: innerAadEpochCaller, transcriptHash: acceptBinding)
+            // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
+            // W-M15ORDER (2026-10-03) — fired RIGHT HERE, straight after `engine.initSession` and
+            // BEFORE the awaited REVEAL send below (it used to follow it): the engine can encrypt
+            // mic frames from the moment it holds the session key, and the app installs the M-15
+            // send sealer synchronously inside this callback, so nothing may suspend in between.
+            // The REVEAL never depended on this callback (it only needs the key round recorded
+            // above and still leaves before this leg's KCMAC); `CallService` also holds outgoing
+            // frames until the sealer exists (`RelaySealTxPolicy`), this just keeps that window
+            // minimal.
+            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyAccept, generation: entryGeneration)
             // R-COMMIT-REVEAL: the REVEAL leaves right after the round-1 session is installed and BEFORE
             // this leg's KCMAC (`onKcMacReady` below), awaited so the two share the socket in this order;
             // it does not wait for `call_accepted` or any UI step.
@@ -2711,8 +2729,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if !isReKeyAccept, let startedAt = lock.withLock({ handshakeStartedAt }) {
                 logTiming("hs-derive-complete", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
             }
-            // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
-            fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyAccept, generation: entryGeneration)
             lock.withLock {
                 state = .active
                 // 7. Zero the stashed privs immediately — the session key is

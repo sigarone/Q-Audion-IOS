@@ -1157,6 +1157,41 @@ final class AppState: ObservableObject {
         RTLog.info("call", "saspin mark=\(written ? 1 : 0)")
     }
 
+    /// W-M15ORDER (2026-10-03) — install the M-15 relay sealers SYNCHRONOUSLY, on the handshake
+    /// thread, from inside `onRelaySessionReady` (the engine has just been given the session key,
+    /// and mic frames can be encrypted from that instant). They used to be installed only by the
+    /// `Task { @MainActor }` that closure queues, so the first outgoing frames could leave before
+    /// the send sealer existed (unsealed, and fatal to the peer's replay window: three live calls
+    /// of 28/9 and 3/10). `CallService` now also holds outgoing frames until the
+    /// sealer exists (`RelaySealTxPolicy`); this makes that window microseconds instead of a
+    /// main-actor hop (unbounded under a main-thread hang).
+    ///
+    /// Everything here is read without the main actor: `selfId` is captured when the handler is
+    /// wired, the negotiation and the identity hold come from the integration (lock-protected),
+    /// the install itself is `CallService.installRelaySealers` (lock-protected, idempotent per
+    /// callId+key, validates the call generation). Cases that are NOT installed here are left to
+    /// the queued main-actor path, unchanged: a re-key round (the outer pair is call-lifetime), a
+    /// call whose handshake identity verdict holds its media behind the SAS confirmation
+    /// (`pendingIdentityGatedMedia` keeps that gate; the sender stays held meanwhile), a call that
+    /// did not negotiate `srtpDirKeyV1`, and a wiring-time empty `selfId`.
+    nonisolated private static func installRelaySealersEarly(
+        callService: CallService?, integration: QAudionCallIntegration?,
+        sessionKey: Data, callId: String, selfId: String, peerId: String,
+        isReKeyRound: Bool, generation: Int
+    ) {
+        guard let callService = callService, !callId.isEmpty else { return }
+        guard !isReKeyRound else { return }
+        guard integration?.negotiatedSrtpDirKey == true else { return }
+        guard !selfId.isEmpty, !peerId.isEmpty else { return }
+        guard integration?.isMediaHeld(callId: callId) != true else { return }
+        let roleA: Bool = PqcRtpFrameSealer.selfIsRoleA(selfId, peerId)
+        callService.installRelaySealers(
+            sessionKey: sessionKey, callId: callId,
+            srtpDirKeyV1: true, selfIsRoleA: roleA,
+            isReKeyRound: false,
+            expectedGeneration: generation)
+    }
+
     /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both
     /// the responder (OFFER-verify) and caller (ACCEPT-verify) integration
     /// instances. MainActor-isolated like the sibling `onUnauthenticatedIdentityChange`
@@ -15307,6 +15342,9 @@ final class AppState: ObservableObject {
         // RX NACK tracker's key epoch synchronously on the handshake thread (weak: no
         // callService -> integration -> closure retain cycle).
         let nackEpochCallService: CallService = self.callService
+        // W-M15ORDER — this device's own user id, read here (main actor) for the synchronous
+        // relay-sealer install in the closure below, which must not touch the main actor.
+        let relayEarlySelfId: String = self.currentUserId ?? ""
         integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
             // W-NACKEPOCH (Copilot follow-up to #106) — FIRST, synchronously: the engine has
             // just installed this key, and new-key frames may already be queued on main. The
@@ -15329,6 +15367,13 @@ final class AppState: ObservableObject {
             // reasoning (this replaces the previous fix's firing-time read, which
             // closed the wiring-time-vs-reused-integration gap but not this one).
             let firedGeneration = generation
+            // W-M15ORDER — install the sealers NOW, before this closure returns to the handshake
+            // (which then goes on to the rest of the session-start work), not after a main-actor
+            // hop. The queued path below stays for everything this one does not cover.
+            AppState.installRelaySealersEarly(
+                callService: nackEpochCallService, integration: integration,
+                sessionKey: sessionKey, callId: cid, selfId: relayEarlySelfId, peerId: callerId,
+                isReKeyRound: isReKeyRound, generation: firedGeneration)
             Task { @MainActor [weak self, weak integration] in
                 guard let self = self, !cid.isEmpty else { return }
                 // W574x — directional relay-sealer keys when both peers
@@ -17802,6 +17847,8 @@ final class AppState: ObservableObject {
                 // W574g — race-free M-15 relay sealer install (caller side).
                 // W-NACKEPOCH — see the responder wiring's identical capture.
                 let nackEpochCallService: CallService = self.callService
+                // W-M15ORDER — see the responder wiring's identical capture.
+                let relayEarlySelfId: String = self.currentUserId ?? ""
                 integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
                     // W-NACKEPOCH — FIRST, synchronously (see the responder wiring).
                     nackEpochCallService?.noteSessionKeyInstalled()
@@ -17814,6 +17861,12 @@ final class AppState: ObservableObject {
                     // leg's identical comment / `QAudionCallIntegration
                     // .provideCallGeneration`'s doc for the full reasoning.
                     let firedGeneration = generation
+                    // W-M15ORDER — synchronous install, see the responder wiring and
+                    // `installRelaySealersEarly`. peerId = the callee (contactId).
+                    AppState.installRelaySealersEarly(
+                        callService: nackEpochCallService, integration: integration,
+                        sessionKey: sessionKey, callId: cid, selfId: relayEarlySelfId, peerId: contactId,
+                        isReKeyRound: isReKeyRound, generation: firedGeneration)
                     Task { @MainActor [weak self, weak integration] in
                         guard let self = self, !cid.isEmpty else { return }
                         // W574x — directional relay-sealer keys when both peers

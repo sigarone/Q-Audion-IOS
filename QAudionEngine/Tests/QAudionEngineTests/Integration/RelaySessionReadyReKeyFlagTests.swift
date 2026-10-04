@@ -41,6 +41,28 @@ final class RelaySessionReadyReKeyFlagTests: XCTestCase {
         XCTAssertEqual(got?.1, "call-1")
     }
 
+    func testCallbackRunsInlineBeforeFireReturns() {
+        // W-M15ORDER (2026-10-03) — the app installs the M-15 send sealer INSIDE this callback, on
+        // the handshake thread. That only closes the race with the first mic frame if the callback
+        // has completed by the time `fireRelaySessionReady` returns to the handshake (which goes
+        // on to its next step, e.g. the REVEAL send): no hop, no deferred execution.
+        let integ = QAudionCallIntegration()
+        var order: [String] = []
+        integ.onRelaySessionReady = { _, _, _ in order.append("installed") }
+
+        integ.fireRelaySessionReady(Data(repeating: 0x33, count: 32), callId: "call-3", isReKey: false, generation: 0)
+        order.append("handshake continues")
+
+        XCTAssertEqual(order, ["installed", "handshake continues"])
+    }
+
+    func testNegotiatedSrtpDirKeyIsFalseUntilAPeerBundleSaysOtherwise() {
+        // The relay sender reads this once per frame from the TX queue; before any bundle it must
+        // be false so a call with no M-15 negotiation never holds its audio.
+        let integ = QAudionCallIntegration()
+        XCTAssertFalse(integ.negotiatedSrtpDirKey)
+    }
+
     func testCallbackReceivesTheGenerationItWasFiredWith() {
         // W-STALESEALER (fix-3) — `fireRelaySessionReady`'s `generation` is a pure
         // pass-through to the callback; the integration itself never inspects it.
