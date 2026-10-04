@@ -14540,12 +14540,16 @@ final class AppState: ObservableObject {
                 // leaves nothing to fail and a failure that ran first is not decided afterwards.
                 let remainingMs: Int? = await MainActor.run { [weak self] () -> Int? in
                     guard let self, let cur = self.kcCalls[key]?.states[round], cur === state, !cur.resultRecorded else { return nil }
-                    let left = self.kcWaitRemainingMs(callId: event.callId, state: cur)
-                    guard left <= 0 else { return left }
-                    self.failKeyConfirmation(callId: event.callId, state: cur, expired: true)
-                    return nil
+                    return self.kcWaitRemainingMs(callId: event.callId, state: cur)
                 }
                 guard let remainingMs else { return }
+                if remainingMs <= 0 {
+                    await MainActor.run { [weak self] in
+                        guard let self, let cur = self.kcCalls[key]?.states[round], cur === state, !cur.resultRecorded else { return }
+                        self.failKeyConfirmation(callId: event.callId, state: cur, expired: true)
+                    }
+                    return
+                }
                 try? await Task.sleep(nanoseconds: UInt64(remainingMs) * 1_000_000)
             }
         }
