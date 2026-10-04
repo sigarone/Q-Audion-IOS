@@ -859,14 +859,57 @@ its `callId` follows the pending-OFFER rule of §3.7.4.
 **Rekey ACCEPT wait (R-REKEY-ACCEPT-WAIT).** The offerer of a rekey round (`round` >= 2) waits for that round's ACCEPT
 `2 × CONFIRM_TIMEOUT` = 30 s after it handed the OFFER to the transport, never shorter; a platform uses exactly this
 value unless it has a reason to wait longer. One leg is the OFFER, the other the ACCEPT, and each may need a socket
-re-authentication. The offerer processes at most one ACCEPT per rekey round. Any later ACCEPT for a round it already
-bound (keys installed or the round refused) or abandoned, byte-identical or not, is dropped silently: it touches no key,
-media or KCMAC state, is no re-send event and is no close reason. The round-1 wait is not this one: it includes the ring
-(§3.5).
+re-authentication. The offerer processes at most one ACCEPT per rekey round. The ACCEPT it processes is the first one
+from the call's peer user that reaches it for that round (Reach, below); every other ACCEPT it receives is sorted by the
+list below. The round-1 wait is not this one: it includes the ring (§3.5).
 
-The acceptor arms its KCMAC window for the round when it sends the ACCEPT (§3.7.1). Let T0 be the moment the offerer
-handed the OFFER to the transport, `d` the time the OFFER leg takes and `e` the time the ACCEPT leg takes. If the
-ACCEPT does not reach the offerer by T0 + 30 s, the round is abandoned and each side does the following:
+A rekey round is *waiting* from the moment its OFFER is handed to the transport until the first ACCEPT for it reaches the
+offerer or its wait expires, whichever comes first: it stops waiting when that ACCEPT reaches the offerer, not when
+its processing ends. T0 is the moment the OFFER of a waiting round was handed to the
+transport. This specification fixes no limit on rekeys in flight (R-KCMAC-ROUNDS), so several rounds may be waiting at
+once, each with its own T0 and its own wait.
+
+- **Reach.** An ACCEPT reaches the offerer when the offerer's signalling transport receives the envelope that carries
+  it (live, or replayed by the server at authentication), before any parsing, queueing or verification. T0 and the
+  moment of reaching are both read on the offerer's own clock. An ACCEPT reaches the offerer in time when it reaches it
+  before T0 + 30 s.
+- **Processed to completion.** An ACCEPT that reached the offerer in time is processed to completion, even when its
+  verification, decapsulation or key installation ends after T0 + 30 s: the deadline never aborts an ACCEPT that is
+  already being processed, and the round ends bound or refused as that ACCEPT decides. An ACCEPT that reaches the
+  offerer at T0 + 30 s or later is dropped silently.
+- **One order.** As in R-KCMAC-ATOMIC, the reaching of the ACCEPT and the expiry of the wait are two steps on the call's
+  state and never overlap: the step that runs first wins. If the reaching runs first, the wait is over and the expiry
+  does nothing; if the expiry runs first, the round is abandoned and an ACCEPT that arrives afterwards is dropped.
+
+**Every ACCEPT the offerer receives once round 1 is bound (the caller) or answered (a callee)** is sorted here, and
+nowhere else, in this order (an ACCEPT that is malformed, §3.1, ends the call as before):
+
+1. A byte-identical copy of the round-1 ACCEPT the caller bound (only the caller binds one, a callee never receives
+   one). The callee re-sends it (R-ACCEPT-RESEND) while its REVEAL has not verified. The duplicate-ACCEPT rule of
+   §3.7.4 applies unchanged, in every state of the call and whether or not a rekey round is waiting: the caller re-sends
+   the byte-identical REVEAL, as one re-send event of its budget of 4 (R-KCMAC-RESEND), and does nothing else; once the
+   budget is spent the copy is still dropped. Why: a callee that still misses the REVEAL has its 15 s REVEAL timer
+   running (§3.7.4), and dropping its copy because a rekey round is waiting would end an honest call at that timer.
+2. A well-formed ACCEPT (it parses and passes the malformed checks of §3.1) that echoes a waiting round: it is the
+   ACCEPT of that round, the first from the peer user that reached the offerer for it, processed as above. From that
+   moment the round is no longer waiting.
+3. Every other ACCEPT is dropped silently: a copy, byte-identical or not, of the ACCEPT of an earlier rekey round that
+   the offerer already bound, refused or abandoned (the acceptor's re-send, a replay by the server, a late arrival after
+   the 30 s wait); a second ACCEPT for a round whose ACCEPT already reached the offerer, whether that first ACCEPT is
+   still being processed or finished; an ACCEPT that echoes a round that is not waiting; any ACCEPT of a rekey round
+   (`round` >= 2) when no round is waiting; and any round-1 ACCEPT that case 1 does not cover (§3.7.4).
+   Dropped silently means: no key, media, KCMAC or REVEAL state changes, no re-send event, no unit of the budget, no
+   close reason and no hangup.
+
+Cases 1 and 3 never touch a rekey round of the call, whether it is waiting, being processed or done: a waiting round
+keeps its T0 and keeps running, and every round's OFFER, pending key material and KCMAC context, and every round in
+PENDING, stay as they were. Nothing is cleared, failed or closed, and no echo, binding, signature or fingerprint check of
+any round is run against such an ACCEPT. An echoed round that differs from the waiting one is never a reason to end the
+call.
+
+The acceptor arms its KCMAC window for the round when it sends the ACCEPT (§3.7.1). Let `d` be the time the OFFER leg
+takes and `e` the time the ACCEPT leg takes. If no ACCEPT for the round has reached the offerer by T0 + 30 s, the round
+is abandoned at T0 + 30 s, and each side does the following:
 
 - The offerer, at T0 + 30 s: it installs no key, arms no round (it arms a round on a verified ACCEPT), sends no MAC for
   it and keeps the current key. Its own call does not end by itself, and the next scheduled round retries.
@@ -1178,7 +1221,8 @@ acceptBinding = SHA-256(ACCEPT_v6) of the ACCEPT the caller bound (SHA-256 of th
   REVEAL. It never sends a REVEAL before binding, for an ACCEPT that failed parsing or the malformed checks, or after
   the call ended.
 - A byte-identical duplicate of the bound ACCEPT is dropped and answered by re-sending the byte-identical REVEAL (and
-  nothing else). A WS re-authentication also re-sends it, for as long as the caller has not verified the callee's round-1 KCMAC (a
+  nothing else), in every state of the call, a rekey round that is waiting for its ACCEPT included
+  (R-REKEY-ACCEPT-WAIT). A WS re-authentication also re-sends it, for as long as the caller has not verified the callee's round-1 KCMAC (a
   verified MAC proves the REVEAL arrived; a later copy is harmless and the callee drops it), together with the KCMAC
   re-send of R-KCMAC-RESEND. Re-sends of the REVEAL and of a KCMAC share one budget of 4 per call
   (R-KCMAC-RESEND).
@@ -1268,17 +1312,23 @@ judged against a later round. The sender-device rule is unaffected because the c
 
 **ACCEPT re-send (R-ACCEPT-RESEND).** In the same re-send event, the acceptor of a round re-sends its ACCEPT of every
 round for which it has no proof yet that the ACCEPT arrived. Round 1 (callee): as long as its REVEAL has not verified.
-Rekey round: as long as the peer's MAC of that round has not verified. A REVEAL naming its ACCEPT, or a peer MAC that
+Rekey round: as long as the round is armed and undecided, that is, still in PENDING (R-KCMAC-ROUNDS): the peer's MAC of
+that round has not verified and the round's window has not ended. A REVEAL naming its ACCEPT, or a peer MAC that
 verifies for the round, is that proof. The copy is the exact bytes first handed to the transport, never re-signed or
 re-serialised, and it leaves BEFORE that round's MAC. A device re-sends only an ACCEPT it has already sent once; a
-callee whose ACCEPT is still held while ringing re-sends nothing. On the offerer, a copy of the bound round-1 ACCEPT
-follows the duplicate-ACCEPT rule above (the REVEAL is re-sent, one event of the offerer's budget), and a copy of a
-rekey ACCEPT follows R-REKEY-ACCEPT-WAIT (dropped).
+callee whose ACCEPT is still held while ringing re-sends nothing. An acceptor re-sends a rekey ACCEPT only for a round
+it armed and has not decided: the test is membership in PENDING (R-KCMAC-ROUNDS), whatever else the acceptor recorded
+about the round. A rekey round that the acceptor refused, never armed, abandoned or whose window ended is forgotten (it
+is not in PENDING): its ACCEPT is never re-sent, even if the bytes are still stored, it adds no message to a re-send event, and
+it is never by itself a reason to spend a unit of the budget. On the offerer, a copy of the bound round-1 ACCEPT is
+answered by the REVEAL re-send of R-REKEY-ACCEPT-WAIT (case 1: one event of the offerer's budget, whether or not a
+rekey round is waiting), and a copy of a rekey ACCEPT is dropped silently (case 3).
 
 The budget is ONE counter per call and per device, shared by every re-send of the call: the REVEAL re-sent on a
 duplicate ACCEPT, the REVEAL and the KCMACs re-sent after a re-authentication. Only re-sends count: the first send of
 an ACCEPT, a REVEAL or a MAC is not an event and consumes nothing, so a call has 4 re-send events. An EVENT is a
-duplicate ACCEPT received by the caller after round 1 is bound, or a socket re-authentication of the device. A
+duplicate ACCEPT (a byte-identical copy of the bound round-1 ACCEPT) received by the caller after round 1 is bound,
+a rekey round waiting or not, or a socket re-authentication of the device. A
 duplicate that arrives while the caller is still verifying the first copy (before binding) has no REVEAL to re-send:
 it is no event and consumes nothing. An event consumes one unit of the budget and re-sends in that event everything
 that is due; it does not consume one unit per message. The two kinds
@@ -1352,7 +1402,7 @@ across reconnects.
 | OFFER for a callId without a call context yet (it overtook `call_incoming`) | callee | not a valid first OFFER (round != 1, no valid `sasCommit`): drop, create no state, no hangup. Valid: pending-OFFER rule above |
 | OFFER for a callId that ended or was answered elsewhere | callee | drop, create no state |
 | rekey OFFER carrying `sasCommit` | callee | `handshake_malformed` |
-| identical ACCEPT | caller | drop; once round 1 is bound, re-send the identical REVEAL (one re-send event); before binding, drop only (no event) |
+| byte-identical copy of the round-1 ACCEPT | caller | before binding, drop only (no event); once round 1 is bound, re-send the identical REVEAL (one re-send event of the budget of 4) and do nothing else, whether or not a rekey round is waiting (R-REKEY-ACCEPT-WAIT case 1) |
 | different round-1 ACCEPT after binding | caller | drop |
 | identical REVEAL after verification | callee | drop |
 | different REVEAL naming own ACCEPT after verification | callee | `sas_commit_mismatch` |
@@ -1362,7 +1412,10 @@ across reconnects.
 | KCMAC whose 32-byte MAC part equals one already verified for a round (role byte not compared) | either | drop silently, no judgment (R-KCMAC-ROUNDS step 2) |
 | KCMAC of an earlier round that is still pending, arriving after a later round was armed | either | verifies THAT round (step 3), never judged against the later round |
 | KCMAC that matches no pending round, or malformed | either | held (at most 8, stale after 30 s, stale entries dropped before a new MAC is held) and offered again when a round is armed, or dropped if malformed; never ends the call by itself (steps 1, 4) |
-| any further ACCEPT for a rekey round already bound or abandoned (including one after the 30 s wait) | offerer | drop silently, no state, no event (R-REKEY-ACCEPT-WAIT) |
+| ACCEPT of an earlier rekey round (bound, refused or abandoned), byte-identical or not, while another rekey round is waiting or none is | offerer | drop silently: no state, no event, no budget, no close reason, and a waiting round is not touched, cleared, failed or closed (R-REKEY-ACCEPT-WAIT case 3) |
+| second ACCEPT for a waiting rekey round, or an ACCEPT that reaches the offerer at T0 + 30 s or later | offerer | drop silently, as above (R-REKEY-ACCEPT-WAIT, Reach, case 3) |
+| ACCEPT of a waiting rekey round that reached the offerer before T0 + 30 s and is still being processed at T0 + 30 s | offerer | processed to completion, the deadline does not abort it (R-REKEY-ACCEPT-WAIT, Processed to completion) |
+| rekey ACCEPT of a round the acceptor refused, never armed, abandoned, decided, or whose window ended | acceptor | never re-sent, no message added to a re-send event, no budget use (R-ACCEPT-RESEND) |
 | any message other than an OFFER (see the pending-OFFER rule above) for an ended or unknown callId | both | drop, create no state |
 
 **Logging (R-COMMIT-LOG).** Never log `sasNonce`, `sasCommit`, `acceptBinding`, transcript hashes or SAS words; at most
@@ -2666,7 +2719,14 @@ error code; and descriptor examples, three valid (file with thumbnail, voice not
 Multi-chunk negative vectors are given as a recipe on a named positive vector plus the SHA-256 of the resulting blob.
 All keys in the file are test keys derived from public labels.
 
-Latest: 2026-10-04 (K-round review: R-KCMAC-ATOMIC, the per-call KCMAC state (PENDING, DECIDED, HELD) is changed by one
+Latest: 2026-10-04 (closing: R-REKEY-ACCEPT-WAIT defines when an ACCEPT reaches the offerer (received by its transport
+before T0 + 30 s) and says that an ACCEPT that reached it in time is processed to completion even if its verification
+ends after the deadline, while one that reaches it at T0 + 30 s or later is dropped; it sorts every ACCEPT the offerer
+receives once round 1 is bound in one place: a byte-identical copy of the bound round-1 ACCEPT is answered by the
+REVEAL re-send in every state of the call, a rekey round that is waiting included (one event of the budget of 4), and
+every other copy or late ACCEPT is dropped silently without touching a waiting round; R-ACCEPT-RESEND: a rekey ACCEPT
+is re-sent only for a round the acceptor armed and has not decided, any other round is forgotten. KAT unchanged.)
+Previous: 2026-10-04 (K-round review: R-KCMAC-ATOMIC, the per-call KCMAC state (PENDING, DECIDED, HELD) is changed by one
 serialised step at a time, and arming is insert then re-offer as one step; stale held MACs (30 s or more) are dropped
 before a new MAC is held, not only at arming; the bounds of 16 pending rounds and 8 held MACs are stated as state
 limits, not pacing rules; R-REKEY-ACCEPT-WAIT says exactly what the offerer and the acceptor do when the ACCEPT is late
