@@ -27,12 +27,14 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
             "2026-10-04 12:11:05.444368+0200 QAudionApp[12:345] [com.qaudion.app:runtime] [call] with the subsystem"))
     }
 
-    /// Lines of the tee on the CI host carried extra bytes in front of what the writer wrote: an echo with something
-    /// glued in front of it is still the echo.
-    func test_anEchoWithBytesInFrontOfIt_isStillRecognised() {
-        XCTAssertTrue(StdoutTeeLines.isOwnOSLogMirror("abcdefghijklmnopqrs" + echo))
-        XCTAssertTrue(StdoutTeeLines.isOwnOSLogMirror("Test Case started." + echo))
-        XCTAssertFalse(StdoutTeeLines.isOwnOSLogMirror("abcdefghijklmnopqrs 2026-10-04 12:11:05 no process and no category"))
+    /// XCTest writes the token `XCTestOutputBarrier` (no line feed) after each of its outputs, so under `xcodebuild
+    /// test` the next line the process writes arrives with it glued in front: the CI job showed a recorded line's echo
+    /// recorded a second time, with its date redacted together with the token (a run of 24 or more word characters).
+    /// An echo with something in front of it is still the echo.
+    func test_anEchoWithTheXCTestBarrierInFrontOfIt_isStillRecognised() {
+        XCTAssertTrue(StdoutTeeLines.isOwnOSLogMirror("XCTestOutputBarrier" + echo))
+        XCTAssertTrue(StdoutTeeLines.isOwnOSLogMirror("some bytes" + echo))
+        XCTAssertFalse(StdoutTeeLines.isOwnOSLogMirror("XCTestOutputBarrier 2026-10-04 12:11:05 no process and no category"))
     }
 
     /// A line that was already re-captured once starts with the same echo prefix, so even the nested form of the
@@ -116,6 +118,10 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
 
     private func lastSeq() -> Int64 { RuntimeLogSink.shared.snapshotEntries.last?.seq ?? 0 }
 
+    private func entries(containing marker: String) -> [RuntimeLogSink.Entry] {
+        RuntimeLogSink.shared.snapshotEntries.filter { $0.message.contains(marker) }
+    }
+
     /// The regression the incident was: a recorded line came back through the tee and was recorded again, on every
     /// pass, without end. After a pause that is long next to one pass, the ring has grown by the lines recorded here
     /// plus a handful (the test runner's own lines, an echo or two) and not by hundreds.
@@ -132,33 +138,39 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
         XCTAssertLessThan(grown, 60, "a feedback loop adds hundreds of lines a second; the ring grew by \(grown)")
     }
 
-    /// Observation only (no assertion): what the tee assembled and what the ring took, to see in the job log how the
-    /// echo of a recorded line and a line printed on stderr arrive. Printed as one line starting with TEEOBS.
-    func test_observation_rawTeeLinesAndRingEntries() async throws {
+    /// A line recorded through the sink is in the ring once: the console echo of its own OSLog mirror (present
+    /// whenever the process runs with `OS_ACTIVITY_DT_MODE`, as the CI test host does) is not recorded as a second
+    /// line. The count is taken before the assertion: a failure message is printed on the streams the tee reads.
+    func test_aLineRecordedThroughTheSink_isNotRecordedAgainFromItsConsoleEcho() async throws {
         RuntimeLogSink.shared.attachStdoutTee()
-        final class Box: @unchecked Sendable {
-            private let lock = NSLock()
-            private var items: [String] = []
-            func add(_ s: String) { lock.withLock { items.append(s) } }
-            var all: [String] { lock.withLock { items } }
-        }
-        let raw = Box()
-        StdoutTeeLines.rawLineObserver = { raw.add($0) }
-        let before = lastSeq()
         let marker = uniqueMarker()
-        fputs("\(marker) printed by the process" + "\n", stderr)
-        RuntimeLogSink.shared.record(level: .info, tag: "teeprobe", "\(marker) recorded")
+        RuntimeLogSink.shared.record(level: .info, tag: "teeprobe", "\(marker) written through the sink")
+        let immediately = entries(containing: marker).count
         try await Task.sleep(nanoseconds: 3_000_000_000)
-        StdoutTeeLines.rawLineObserver = nil
-        func hex(_ bytes: [UInt8]) -> String { bytes.map { String($0, radix: 16) }.joined(separator: ".") }
-        let rawText = raw.all.suffix(4).map {
-            "\($0.utf8.count)|\(StdoutTeeLines.isOwnOSLogMirror($0))|head \(hex(Array($0.utf8.prefix(30))))|tail \(hex(Array($0.utf8.suffix(30))))"
-        }.joined(separator: " ## ")
-        let ringText = RuntimeLogSink.shared.snapshotEntries.filter { $0.seq > before }
-            .map { "[\($0.tag)] \($0.message.utf8.count)/\($0.message.unicodeScalars.count)/\($0.message.count)|\($0.message.debugDescription.prefix(160))" }
-            .joined(separator: " ## ")
-        print("TEEOBS raw: \(rawText)")
-        print("TEEOBS ring: \(ringText)")
+        let after = entries(containing: marker)
+        XCTAssertEqual(immediately, 1, "recorded once, synchronously")
+        XCTAssertEqual(after.count, 1, "its echo on stderr must not be recorded again")
+        XCTAssertEqual(after.first?.tag, "teeprobe")
+    }
+
+    /// A line the process prints on stderr is recorded once by the tee. (The space in front keeps the token XCTest
+    /// glues to the line from forming a run of 24 or more word characters with the marker, which the redactor would
+    /// replace.)
+    func test_aLinePrintedOnStderr_isRecordedOnceByTheTee() async throws {
+        RuntimeLogSink.shared.attachStdoutTee()
+        let marker = uniqueMarker()
+        fputs(" \(marker) printed by the process" + "\n", stderr)
+        var waited = 0
+        while entries(containing: marker).isEmpty && waited < 200 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            waited += 1
+        }
+        let first = entries(containing: marker).count
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let after = entries(containing: marker)
+        XCTAssertEqual(first, 1, "captured")
+        XCTAssertEqual(after.count, 1, "captured once")
+        XCTAssertEqual(after.first?.tag, "stdout")
     }
 
     // MARK: - wiring

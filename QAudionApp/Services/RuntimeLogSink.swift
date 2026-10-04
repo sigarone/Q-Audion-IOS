@@ -356,7 +356,6 @@ public final class RuntimeLogSink: ObservableObject {
                 _ = write(self.origStdoutFd, buf, n)
                 // 2) Parse + record into the ring buffer.
                 for line in assembler.lines(from: buf[0..<n]) {
-                    StdoutTeeLines.rawLineObserver?(line)
                     // The sink never re-captures its own writes: the console echo of its OSLog mirror
                     // (a process run with OS_ACTIVITY_DT_MODE echoes every Logger line to stderr, i.e. into this
                     // pipe) is dropped here, on the RAW line, before any redaction rewrites its prefix.
@@ -428,16 +427,14 @@ enum StdoutTeeLines {
     /// The `Logger` category of the sink's own OSLog mirror (`RuntimeLogSink.osLogger`).
     static let osLogCategory = "runtime"
 
-    /// Test seam: called with every complete line the tee assembled, RAW, before the echo filter. `nil` in production.
-    static var rawLineObserver: ((String) -> Void)?
-
     /// `2026-10-04 02:11:05.328185+0000 QAudionApp[6733:26267] [runtime] ...`: the shape in which a process that runs
     /// with `OS_ACTIVITY_DT_MODE` echoes a `Logger` line to stderr: date, time with fractional seconds and zone, the
     /// process name, `[pid:tid]`, `[category]`, then the message. The category is the sink's own, so the echo of any
     /// other subsystem's line is not matched. A subsystem before the category (`[subsystem:category]`) is accepted
-    /// too, in case another OS version prints it. Not anchored: the CI test host showed lines of the tee that carry
-    /// extra bytes in front of what the writer wrote, and an echo that is not at the very start of its line is still
-    /// the echo (see `isOwnOSLogMirror`, which looks at the head of the line only).
+    /// too, in case another OS version prints it. Not anchored: XCTest writes the token `XCTestOutputBarrier` (no line
+    /// feed) after each of its outputs, so under `xcodebuild test` the next line the process writes, an echo included,
+    /// arrives with that token glued in front of it; an echo that is not at the very start of its line is still the
+    /// echo (see `isOwnOSLogMirror`, which looks at the head of the line only).
     private static let ownMirrorPrefix: NSRegularExpression? = try? NSRegularExpression(
         pattern: #"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4} [^\s\[\]]+\[\d+:\d+\] \[(?:[A-Za-z0-9._-]+:)?"#
             + NSRegularExpression.escapedPattern(for: osLogCategory) + #"\](?: |$)"#)
