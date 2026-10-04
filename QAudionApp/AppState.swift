@@ -1157,6 +1157,41 @@ final class AppState: ObservableObject {
         RTLog.info("call", "saspin mark=\(written ? 1 : 0)")
     }
 
+    /// W-M15ORDER (2026-10-03) — install the M-15 relay sealers SYNCHRONOUSLY, on the handshake
+    /// thread, from inside `onRelaySessionReady` (the engine has just been given the session key,
+    /// and mic frames can be encrypted from that instant). They used to be installed only by the
+    /// `Task { @MainActor }` that closure queues, so the first outgoing frames could leave before
+    /// the send sealer existed (unsealed, and fatal to the peer's replay window: three live calls
+    /// of 28/9 and 3/10). `CallService` now also holds outgoing frames until the
+    /// sealer exists (`RelaySealTxPolicy`); this makes that window microseconds instead of a
+    /// main-actor hop (unbounded under a main-thread hang).
+    ///
+    /// Everything here is read without the main actor: `selfId` is captured when the handler is
+    /// wired, the negotiation and the identity hold come from the integration (lock-protected),
+    /// the install itself is `CallService.installRelaySealers` (lock-protected, idempotent per
+    /// callId+key, validates the call generation). Cases that are NOT installed here are left to
+    /// the queued main-actor path, unchanged: a re-key round (the outer pair is call-lifetime), a
+    /// call whose handshake identity verdict holds its media behind the SAS confirmation
+    /// (`pendingIdentityGatedMedia` keeps that gate; the sender stays held meanwhile), a call that
+    /// did not negotiate `srtpDirKeyV1`, and a wiring-time empty `selfId`.
+    nonisolated private static func installRelaySealersEarly(
+        callService: CallService?, integration: QAudionCallIntegration?,
+        sessionKey: Data, callId: String, selfId: String, peerId: String,
+        isReKeyRound: Bool, generation: Int
+    ) {
+        guard let callService = callService, !callId.isEmpty else { return }
+        guard !isReKeyRound else { return }
+        guard integration?.negotiatedSrtpDirKey == true else { return }
+        guard !selfId.isEmpty, !peerId.isEmpty else { return }
+        guard integration?.isMediaHeld(callId: callId) != true else { return }
+        let roleA: Bool = PqcRtpFrameSealer.selfIsRoleA(selfId, peerId)
+        callService.installRelaySealers(
+            sessionKey: sessionKey, callId: callId,
+            srtpDirKeyV1: true, selfIsRoleA: roleA,
+            isReKeyRound: false,
+            expectedGeneration: generation)
+    }
+
     /// Wired to `QAudionCallIntegration.onHandshakeIdentityUnverified` on both
     /// the responder (OFFER-verify) and caller (ACCEPT-verify) integration
     /// instances. MainActor-isolated like the sibling `onUnauthenticatedIdentityChange`
@@ -1897,6 +1932,9 @@ final class AppState: ObservableObject {
     /// re-fragmenting/re-sealing. Co-lifecycled with videoPipeline — a
     /// fresh instance per call, same as `abrController`.
     private var videoNackCache: VideoNackFragmentCache?
+    /// Serial of the newest `startVideoPipeline`: a start whose camera returns after a newer one began (a redial) is
+    /// superseded and must not take over `videoPipeline`, the ABR loop or the NACK cache.
+    private var videoPipelineStartSerial: Int = 0
     // W533 — screen-share state. Mirrors the desktop client's
     // PeerConnectionManager.isScreenSharing flag and toggles a stub
     // `cameraFrameClosureSnapshot` so the camera-to-WebRTC pipe can
@@ -14584,9 +14622,10 @@ final class AppState: ObservableObject {
         let integration = state.isInitiator ? callService.callIntegration : responderCallIntegration
         let nowMs = SasCommit.monotonicNowMs()
         guard let book = integration?.sasCommit else {
-            return KcMacWindow.remainingMs(
-                isRound1: false, isInitiator: state.isInitiator, armedAtMs: state.armedAtMs, nowMs: nowMs,
-                revealHandedAtMs: nil, revealVerifiedAtMs: nil)
+            // No book to read a REVEAL time from: a round-1 wait keeps the longest value of its role (a wait may be
+            // longer, never shorter), not the base window.
+            return KcMacWindow.remainingMsWithoutBook(
+                isRound1: state.isRound1, isInitiator: state.isInitiator, armedAtMs: state.armedAtMs, nowMs: nowMs)
         }
         return book.kcWaitRemainingMs(
             callId: callId, isRound1: state.isRound1, isInitiator: state.isInitiator,
@@ -14735,8 +14774,17 @@ final class AppState: ObservableObject {
         // R-COMMIT-KCMAC-DEVICE (A1, every round, A6): a CALLER judges only a KCMAC whose opaque envelope carries the
         // `sender_device_id` of the ACCEPT it bound. Any other device, or none, is dropped silently: no judgment,
         // no `kcmac_mismatch`, no hold and no effect on any window. This comes BEFORE everything else below.
-        if callService.callIntegration?.sasCommit.callerKcMacSenderVerdict(
-            callId: callId, envelopeSenderDeviceId: senderDeviceId) == .dropSilently {
+        // When the caller's integration is gone while its round-1 key-confirmation state is still alive there is no
+        // bound device to compare with: the KCMAC is dropped too (fail closed), never judged.
+        let senderVerdict: SasCommitBook.KcMacSenderVerdict
+        if let book = callService.callIntegration?.sasCommit {
+            senderVerdict = book.callerKcMacSenderVerdict(callId: callId, envelopeSenderDeviceId: senderDeviceId)
+        } else {
+            let aliveState = kcCalls[key]?.states[1]
+            senderVerdict = SasCommitBook.callerKcMacSenderVerdictWithoutBook(
+                roundOneInitiatorStateAlive: aliveState?.isInitiator == true && aliveState?.isRound1 == true)
+        }
+        if senderVerdict == .dropSilently {
             print("[AppState] KCMAC dropped — not from the device whose ACCEPT was bound callId=\(callId.prefix(8))…")
             return
         }
@@ -15327,6 +15375,9 @@ final class AppState: ObservableObject {
         // RX NACK tracker's key epoch synchronously on the handshake thread (weak: no
         // callService -> integration -> closure retain cycle).
         let nackEpochCallService: CallService = self.callService
+        // W-M15ORDER — this device's own user id, read here (main actor) for the synchronous
+        // relay-sealer install in the closure below, which must not touch the main actor.
+        let relayEarlySelfId: String = self.currentUserId ?? ""
         integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
             // W-NACKEPOCH (Copilot follow-up to #106) — FIRST, synchronously: the engine has
             // just installed this key, and new-key frames may already be queued on main. The
@@ -15349,6 +15400,13 @@ final class AppState: ObservableObject {
             // reasoning (this replaces the previous fix's firing-time read, which
             // closed the wiring-time-vs-reused-integration gap but not this one).
             let firedGeneration = generation
+            // W-M15ORDER — install the sealers NOW, before this closure returns to the handshake
+            // (which then goes on to the rest of the session-start work), not after a main-actor
+            // hop. The queued path below stays for everything this one does not cover.
+            AppState.installRelaySealersEarly(
+                callService: nackEpochCallService, integration: integration,
+                sessionKey: sessionKey, callId: cid, selfId: relayEarlySelfId, peerId: callerId,
+                isReKeyRound: isReKeyRound, generation: firedGeneration)
             Task { @MainActor [weak self, weak integration] in
                 guard let self = self, !cid.isEmpty else { return }
                 // W574x — directional relay-sealer keys when both peers
@@ -17822,6 +17880,8 @@ final class AppState: ObservableObject {
                 // W574g — race-free M-15 relay sealer install (caller side).
                 // W-NACKEPOCH — see the responder wiring's identical capture.
                 let nackEpochCallService: CallService = self.callService
+                // W-M15ORDER — see the responder wiring's identical capture.
+                let relayEarlySelfId: String = self.currentUserId ?? ""
                 integration.onRelaySessionReady = { [weak self, weak integration, weak nackEpochCallService] sessionKey, cid, generation in
                     // W-NACKEPOCH — FIRST, synchronously (see the responder wiring).
                     nackEpochCallService?.noteSessionKeyInstalled()
@@ -17834,6 +17894,12 @@ final class AppState: ObservableObject {
                     // leg's identical comment / `QAudionCallIntegration
                     // .provideCallGeneration`'s doc for the full reasoning.
                     let firedGeneration = generation
+                    // W-M15ORDER — synchronous install, see the responder wiring and
+                    // `installRelaySealersEarly`. peerId = the callee (contactId).
+                    AppState.installRelaySealersEarly(
+                        callService: nackEpochCallService, integration: integration,
+                        sessionKey: sessionKey, callId: cid, selfId: relayEarlySelfId, peerId: contactId,
+                        isReKeyRound: isReKeyRound, generation: firedGeneration)
                     Task { @MainActor [weak self, weak integration] in
                         guard let self = self, !cid.isEmpty else { return }
                         // W574x — directional relay-sealer keys when both peers
@@ -18177,27 +18243,39 @@ final class AppState: ObservableObject {
                 // existed, so its `setVideoPaused(false)` did nothing, and a pipeline created paused here
                 // would stay paused for the whole call.
                 let finalizedInOfferWindow: Bool = callFinalizedCallId == nativeSrtpOutgoingCallId
-                let pipelineBeforeVideoStart = videoPipeline
-                await startVideoPipeline(
-                    for: contactId,
-                    startPaused: CallerOutgoingStatePolicy.videoStartsPaused(
-                        callAlreadyFinalized: finalizedInOfferWindow))
+                let videoStartedPaused: Bool = CallerOutgoingStatePolicy.videoStartsPaused(
+                    callAlreadyFinalized: finalizedInOfferWindow)
+                // The pipeline THIS start assigned (nil when none was, or a newer start took over meanwhile).
+                let startedPipeline = await startVideoPipeline(for: contactId, startPaused: videoStartedPaused)
                 // The camera start is a second suspension point: a hangup inside it ran `endCall()` with no
                 // pipeline to stop yet, so the pipeline just assigned (camera on) and the WebRTC controller
                 // below would belong to a call that no longer exists.
                 if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart(
                     callTornDown: callService.currentCallGeneration() != offerCallGeneration) {
                     RTLog.warn("call", "video start returned abandon=1 torndown=1")
-                    // A pipeline the start just assigned is this dead call's, whoever owns the call state now: a
-                    // redial's own camera start only runs after its OFFER and begins by stopping a leftover one.
-                    if videoPipeline !== pipelineBeforeVideoStart {
-                        abrController?.stop()
-                        abrController = nil
-                        videoPipeline?.stop()
-                        videoPipeline = nil
-                        videoNackCache = nil
+                    // Only the pipeline THIS start assigned is this dead call's: stop that one and nothing else, so a
+                    // redial's own pipeline (its camera start can complete before this one returns) is never touched.
+                    if let startedPipeline {
+                        startedPipeline.stop()
+                        if videoPipeline === startedPipeline {
+                            abrController?.stop()
+                            abrController = nil
+                            videoPipeline = nil
+                            videoNackCache = nil
+                        }
                     }
                     return
+                }
+                // The call may have finalized while the camera was starting (`call_accepted` + `call_answer` land
+                // during the permission prompt): `finalizeCallActive()` then found no pipeline to un-pause (it is only
+                // assigned once the start returns), so a pipeline created paused would stay paused for the whole call.
+                // Re-read the latch here, with nothing suspended in between.
+                if let startedPipeline,
+                   CallerOutgoingStatePolicy.shouldUnpauseAfterVideoStart(
+                       startedPaused: videoStartedPaused,
+                       callFinalizedNow: callFinalizedCallId == nativeSrtpOutgoingCallId) {
+                    RTLog.info("call", "video start unpaused finalized=1")
+                    startedPipeline.setVideoPaused(false)
                 }
             }
             // W347: also kick off a WebRTC outgoing call. This rides in
@@ -25461,14 +25539,24 @@ extension AppState {
     ///   - inbound `video_frame` WS events → `pipeline.acceptInboundFragment`
     /// Best-effort: a failure here doesn't abort the call (the audio
     /// path keeps working; the SwiftUI placeholders stay visible).
+    ///
+    /// Returns the pipeline this call assigned to `videoPipeline`, or `nil` when none was (the start failed, or a
+    /// NEWER `startVideoPipeline` began while the camera was starting, e.g. a redial: the newer one owns the state
+    /// and this one's pipeline is stopped here without touching it). A caller that has to undo its own start (the
+    /// call ended meanwhile) stops exactly this pipeline.
     @MainActor
+    @discardableResult
     func startVideoPipeline(
         for peerId: String,
         sourceMode: VideoCallPipeline.SourceMode = .camera,
         startPaused: Bool = false
-    ) async {
+    ) async -> VideoCallPipeline? {
         // Tear down any leftover pipeline from a previous call.
         videoPipeline?.stop()
+        // A newer start must win over this one if the two overlap: each start takes the next serial now and
+        // checks it once its camera start returns.
+        videoPipelineStartSerial &+= 1
+        let startSerial = videoPipelineStartSerial
 
         let pipeline = VideoCallPipeline()
         // media-consent v1:
@@ -25503,7 +25591,7 @@ extension AppState {
         // silently dropped (webSocketTask == nil → "DROPPED" log).
         guard let ws = liveProvider?.getWebSocketClient() else {
             print("[AppState] startVideoPipeline: no live WS provider, skipping")
-            return
+            return nil
         }
 
         // W525: capture a weak reference to the calling impl so each
@@ -25698,6 +25786,13 @@ extension AppState {
 
         do {
             try await pipeline.start()
+            // A newer start began while the camera was starting (a redial): it owns `videoPipeline`, the ABR loop and
+            // the NACK cache now. Assigning this pipeline would orphan the newer one with its camera running.
+            guard startSerial == videoPipelineStartSerial else {
+                RTLog.warn("call", "video start superseded by a newer start — stopping this pipeline")
+                pipeline.stop()
+                return nil
+            }
             self.videoPipeline = pipeline
             // W398: spin up ABR loop on the same lifecycle.
             let abr = AbrController(pipeline: pipeline)
@@ -25712,6 +25807,7 @@ extension AppState {
             abr.start()
             self.abrController = abr
             print("[AppState] video pipeline up for peer \(peerId.prefix(8))…, ABR active")
+            return pipeline
         } catch let err as VideoCallPipeline.PipelineError {
             // W393: user-visible error surfacing. The audio call keeps
             // running; only the video portion is degraded. Surface a
@@ -25726,9 +25822,11 @@ extension AppState {
                 errorMessage = "Impossibile inizializzare il flusso video."
             }
             print("[AppState] video pipeline start failed: \(err)")
+            return nil
         } catch {
             errorMessage = "Errore avvio video: \(error.localizedDescription)"
             print("[AppState] video pipeline start failed: \(error)")
+            return nil
         }
     }
 

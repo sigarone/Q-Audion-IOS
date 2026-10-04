@@ -891,7 +891,7 @@ final class SasCommitTests: XCTestCase {
         let tail = String(src[offerCase.upperBound...])
         let dropAt = try XCTUnwrap(tail.range(of: "if Self.isInvalidOfferWhileUnanswered("))
         let probeAt = try XCTUnwrap(tail.range(of: "if case .malformed = evaluateInbound("))
-        let supersedeAt = try XCTUnwrap(tail.range(of: "supersedeUnansweredRound1(callId: callId)"))
+        let supersedeAt = try XCTUnwrap(tail.range(of: "supersedeUnansweredRound1IfUnsent(callId: callId)"))
         let firstRuleAt = try XCTUnwrap(tail.range(of: "HandshakeSigningPolicy.firstRoundMalformedCode("))
         XCTAssertLessThan(dropAt.lowerBound, probeAt.lowerBound)
         XCTAssertLessThan(probeAt.lowerBound, supersedeAt.lowerBound)

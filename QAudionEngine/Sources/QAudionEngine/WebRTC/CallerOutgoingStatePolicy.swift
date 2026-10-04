@@ -105,4 +105,14 @@ public enum CallerOutgoingStatePolicy {
     public static func videoStartsPaused(callAlreadyFinalized: Bool) -> Bool {
         !callAlreadyFinalized
     }
+
+    /// The other half of the same race. `finalizeCallActive()` un-pauses `videoPipeline`, but that property is only
+    /// assigned once the camera start returns: a call that finalizes DURING the start (the first-time camera
+    /// permission prompt can last seconds) finds nothing to un-pause, and a pipeline created paused for a call that
+    /// had not finalized yet would stay paused for its whole life. True when the pipeline was started paused and the
+    /// call has finalized by the time the start returned: the caller (which has already dealt with a call torn down
+    /// meanwhile, `shouldContinueSetupAfterVideoStart`) un-pauses the pipeline it just got.
+    public static func shouldUnpauseAfterVideoStart(startedPaused: Bool, callFinalizedNow: Bool) -> Bool {
+        startedPaused && callFinalizedNow
+    }
 }
