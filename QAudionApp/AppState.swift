@@ -14763,7 +14763,6 @@ final class AppState: ObservableObject {
         // The REVEAL leaves before the KCMAC, on the same ordered path, exactly as the first sends did.
         Task {
             // The exact bytes of every ACCEPT first (the acceptor's MACs follow), then the REVEAL, then the MACs.
-            if !acceptsDue.isEmpty { await integration.resendAcceptsAfterReauth(acceptsDue, callId: cid) }
             if due.reveal { await integration.resendRevealAfterReauth(callId: cid) }
             if let wireToSend, let provider, !peerToSend.isEmpty {
                 try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerToSend, payload: wireToSend)
@@ -14771,6 +14770,7 @@ final class AppState: ObservableObject {
             for older in olderWires where !older.peerId.isEmpty {
                 try? await provider?.callingApi.sendOpaqueMessageString(recipientId: older.peerId, payload: older.wire)
             }
+            if !acceptsDue.isEmpty { await integration.resendAcceptsAfterReauth(acceptsDue, callId: cid) }
         }
         // `kcmac` counts the live round's own MAC, `older` the own MACs of other rounds re-sent in the same event.
         print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) older=\(olderWires.count) accepts=\(acceptsDue.count) callId=\(cid.prefix(8))…")
