@@ -2574,10 +2574,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // abandoned, landing while the next one is in flight) is dropped silently, BEFORE it is verified: it is
             // never checked against the in-flight OFFER's binding, never decapsulated with its keys, and touches no
             // key, media, identity or KCMAC state and no re-send budget.
-            if Self.isStaleRekeyAccept(attemptRound: rekeyAttempt?.round, echoedRound: bundle.rekeyRound) {
-                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round \(bundle.rekeyRound ?? 0) but round \(rekeyAttempt?.round ?? 0) is in flight — dropped")
-                return
-            }
             // A round-1 ACCEPT echoes the OFFER's round: anything else with no re-key attempt in flight is a
             // stale or forged round and is never bound.
             if !isReKeyAccept, bundle.rekeyRound != 1 {
