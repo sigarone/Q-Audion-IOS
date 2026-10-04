@@ -14,7 +14,7 @@ import Foundation
 ///   - the outgoing call record and the ring-back fallback timer were never closed either;
 ///   - nothing told the user: no tone, and `errorMessage` ("Occupato") is not read by any call screen while
 ///     `ContentView` switches to Home as soon as `isInCall` is false.
-/// The reference behaviour is Android's: a 425 Hz busy tone (0.5 s on / 0.5 s off, about 3 s), the word "Occupato"
+/// The reference behaviour is Android's: a 425 Hz busy tone (0.5 s on / 0.5 s off), the word "Occupato"
 /// on the outgoing screen, the history row closed as busy.
 ///
 /// ## What the outcome decides
@@ -58,16 +58,29 @@ public enum CallerTerminalOutcome: String, CaseIterable, Equatable, Sendable {
     /// `hangup(reason = "busy" | "peer_offline", notifyPeer = false)` sends nothing either.
     public var sendsHangupToPeer: Bool { false }
 
-    /// The busy tone plays for `call_busy` only. An unreachable callee gets the message on screen, no tone
-    /// (Android plays none for it either).
+    /// The busy tone plays for `call_busy` only (for the whole hold: `CallerBusyFeedback`). An unreachable callee
+    /// gets the message on screen, no tone (Android plays none for it either).
     public var playsBusyTone: Bool { self == .busy }
 
     /// How long the outgoing screen keeps the outcome on screen before returning to Home. Long enough to read the
-    /// word and to hear the whole tone (3 s) for a busy callee; a redial or the close button ends it sooner.
-    public var holdSeconds: TimeInterval {
+    /// word and, for a busy callee, to hear the whole tone: ``CallerBusyFeedback/holdMs`` (4000 ms, the owner
+    /// decision, same as Android) is the one constant the hold, the tone's length and the sound's disposal share.
+    /// A redial or the close button ends it sooner, nothing else does (`CallerOutcomeHold`).
+    public var holdMs: Int {
         switch self {
-        case .busy: return 3.0
-        case .peerOffline: return 2.5
+        case .busy: return CallerBusyFeedback.holdMs
+        case .peerOffline: return 2_500
+        }
+    }
+
+    /// `holdMs` in seconds.
+    public var holdSeconds: TimeInterval { TimeInterval(holdMs) / 1_000 }
+
+    /// The word the outcome's feedback log lines start with (`busy feedback shown call=... holdMs=...`).
+    public var feedbackLogLabel: String {
+        switch self {
+        case .busy: return "busy"
+        case .peerOffline: return "unreachable"
         }
     }
 

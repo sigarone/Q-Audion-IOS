@@ -158,6 +158,7 @@ jobs:
             -only-testing:QAudionAppTests/CallCloseReasonRedactionTests \
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \
+            -only-testing:QAudionAppTests/MissedCallsBadgeTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
@@ -192,7 +193,7 @@ jobs:
         if: always()
         run: |
           python3 ../scripts/ci/xcresult_test_list.py /tmp/app-tests.xcresult /tmp/app-test-cases.txt \
-            CallerBusyOutcomeTests PersistentCallRecordStoreTests || true
+            CallerBusyOutcomeTests MissedCallsBadgeTests PersistentCallRecordStoreTests || true
         working-directory: QAudionApp
 
       - name: Upload logs

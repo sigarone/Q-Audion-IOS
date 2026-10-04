@@ -213,6 +213,39 @@ public enum GhostCallPolicy {
         return hasActiveCallKitId && !callWasAnswered && incomingRingVisible
     }
 
+    /// The `call_cancel` reasons the server sends to the SIBLING devices of a user who took or refused a call on one
+    /// of them (`bcrypto-server` `cmd/bcrypto-lite/main.go`: `call_answer` on another device, and the callee's
+    /// decline). They say "stand down, this call is handled", never "the caller gave up".
+    public static let siblingDeviceCancelReasons: Set<String> = [
+        "answered_on_other_device",
+        "declined_on_other_device",
+    ]
+
+    /// Whether the ring that a remote hangup / cancel just ended must be written to the call history as a MISSED
+    /// call (the badge on the Calls tab counts every such row).
+    ///
+    /// W-MISSEDBADGE: a ring that ended because the user answered or declined on another of his devices is not a
+    /// missed call. That sibling gets a `call_cancel` carrying one of `siblingDeviceCancelReasons`; without this rule
+    /// the ring-ended-while-ringing branch recorded it as missed, so the owner of an iPhone and an iPad saw a number
+    /// on the tab of the device that did not take a call he had taken himself.
+    ///
+    /// `viaServerCancel` is `true` only for a `call_cancel` envelope (the one message the server itself sends with
+    /// these tokens). The `reason` of a `call_hangup` or of an in-band hangup frame is written by the PEER, so the
+    /// same words there carry no such authority: a caller must not be able to make a call vanish from the callee's
+    /// missed list by naming a sibling reason.
+    ///
+    /// Not covered, by design: the `call_cancelled` VoIP push (`shouldRecordMissedOnCancelPush`) has no reason in its
+    /// payload, so a sibling that is woken by it first still records the call as missed.
+    public static func shouldRecordMissedOnRemoteHangup(
+        wasRinging: Bool,
+        reason: String,
+        viaServerCancel: Bool
+    ) -> Bool {
+        guard wasRinging else { return false }
+        if viaServerCancel && siblingDeviceCancelReasons.contains(reason) { return false }
+        return true
+    }
+
     /// Whether the `call_cancelled` VoIP push must record the call as missed
     /// ITSELF, evaluated just before it clears the ring flag.
     ///

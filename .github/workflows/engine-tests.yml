@@ -372,7 +372,9 @@ jobs:
             python3 scripts/ci/xcresult_test_list.py "$bundle" "/tmp/engine-test-cases-$n.txt" \
               CallerBusyWiringTests OutgoingCallKitStartPolicyTests OutgoingCallKitFallbackTests \
               CallTeardownLatchTests CallKitLateActivationTests PeerNameScopeTests \
-              CallerBusyPeerSilenceTests CallerBusyTeardownTests BusyToneTests || true
+              CallerBusyPeerSilenceTests CallerBusyTeardownTests BusyToneTests \
+              CallerBusyHoldTests MissedCallsBadgeStateTests MissedCallAlertPolicyTests BadgeAndBusyHoldWiringTests \
+              GhostCallPolicyTests || true
             echo "::endgroup::"
           done
       - name: Upload the executed test case list

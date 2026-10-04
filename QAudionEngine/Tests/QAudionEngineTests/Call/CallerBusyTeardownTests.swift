@@ -64,12 +64,15 @@ final class CallerBusyTeardownTests: XCTestCase {
         XCTAssertFalse(CallerTerminalOutcome.peerOffline.playsBusyTone)
     }
 
-    /// The outcome stays long enough to read and to hear the whole 3 s tone, and short enough not to feel stuck.
+    /// The outcome stays long enough to read and to hear the whole tone, and short enough not to feel stuck. The busy
+    /// hold is the owner's 4000 ms (W-BUSYHOLD, same as Android); the unreachable one keeps its 2.5 s.
     func testHoldCoversTheToneAndStaysShort() {
         XCTAssertGreaterThanOrEqual(CallerTerminalOutcome.busy.holdSeconds, QAudionSynth.busyToneSeconds)
+        XCTAssertEqual(CallerTerminalOutcome.busy.holdMs, 4_000)
+        XCTAssertEqual(CallerTerminalOutcome.peerOffline.holdMs, 2_500)
         for outcome in CallerTerminalOutcome.allCases {
             XCTAssertGreaterThanOrEqual(outcome.holdSeconds, 2.0, "\(outcome)")
-            XCTAssertLessThanOrEqual(outcome.holdSeconds, 3.5, "\(outcome)")
+            XCTAssertLessThanOrEqual(outcome.holdSeconds, 4.0, "\(outcome)")
         }
     }
 

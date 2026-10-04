@@ -603,12 +603,20 @@ public final class PersistentCallRecordStore: ObservableObject {
         save()
     }
 
-    /// Transition an in-progress record to `.missed` direction.
-    /// Call when an incoming call is rejected or times out before being answered.
-    public func markMissed(id: String) {
+    /// Transition an in-progress INCOMING record to `.missed` direction.
+    /// Call when an incoming call times out or is cancelled before being answered.
+    ///
+    /// W-MISSEDBADGE: every `.missed` row is a number on the Calls tab, so only a row that really is an unanswered
+    /// incoming call may become one. An OUTGOING record (the caller whose callee declined or hung up while it rang)
+    /// is left as it is, and so is a record that is already missed (a second `markMissed` must not move its `endedAt`,
+    /// which is the date the badge counts it by). Returns `true` only when the row became missed now; on `false` the
+    /// caller keeps the record id and closes it with `endCall(id:)` like any other call.
+    @discardableResult
+    public func markMissed(id: String) -> Bool {
         retryDeferredLoad()
-        guard let idx = records.firstIndex(where: { $0.id == id }) else { return }
+        guard let idx = records.firstIndex(where: { $0.id == id }) else { return false }
         let old = records[idx]
+        guard old.direction == .incoming else { return false }
         let updated = CallRecord(
             id: old.id,
             peerUserId: old.peerUserId,
@@ -621,6 +629,7 @@ public final class PersistentCallRecordStore: ObservableObject {
         )
         records[idx] = updated
         save()
+        return true
     }
 
     /// Remove a single record by id.

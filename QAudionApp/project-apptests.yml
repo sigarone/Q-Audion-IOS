@@ -37,6 +37,7 @@ targets:
           - CallCloseReasonRedactionTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
+          - MissedCallsBadgeTests.swift
           - PersistentCallRecordStoreTests.swift
           - RuntimeLogSinkTeeTests.swift
           - TrustEvaluationModelTests.swift
