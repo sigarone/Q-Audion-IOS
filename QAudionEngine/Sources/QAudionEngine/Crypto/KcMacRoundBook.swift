@@ -22,6 +22,15 @@ import Foundation
 /// The new round is inserted FIRST, then every held MAC received less than `ConfirmTimeout.earlyKcMacHoldMs` (30 s)
 /// ago is offered again from step 2 with its original receipt time; an older one is dropped silently.
 ///
+/// Atomicity (R-KCMAC-ATOMIC): the book is changed by one step at a time, in one order. A step is the whole processing
+/// of ONE inbound MAC (`receive`, steps 1 to 4, including the drop of stale held MACs and the insertion into the held
+/// set), the whole arming of ONE round (`arm`: overflow check, insertion, re-offer of the held MACs) or the expiry of
+/// ONE round's window (`expire`: the test "still pending" and the removal are one call). Every method is one such
+/// step, a mutating method of a value type; the owner (the app, on the main actor) never interleaves two of them. When
+/// a decision and an expiry concern the same round, whichever step runs first wins: a round decided first never
+/// expires (`expire` returns false), a round that expired first is not decided afterwards (its MAC is held, never
+/// judged).
+///
 /// Pure value type: no clock, no timers, no I/O. Every time is monotonic milliseconds supplied by the caller. Never
 /// logs and never persists a MAC.
 public struct KcMacRoundBook {
@@ -104,6 +113,9 @@ public struct KcMacRoundBook {
     /// Pending rounds in arming order.
     public private(set) var pending: [PendingRound] = []
     private var decided: [Data] = []
+    /// The signed rounds decided by a verified peer MAC (the same bound as `decided`): the proof of arrival that
+    /// R-ACCEPT-RESEND reads for a rekey ACCEPT.
+    private var decidedRoundNumbers: [Int] = []
     private var held: [HeldMac] = []
 
     public init() {}
@@ -115,6 +127,11 @@ public struct KcMacRoundBook {
 
     public func isPending(round: Int) -> Bool {
         pending.contains(where: { $0.round == round })
+    }
+
+    /// True when the peer's MAC of `round` was verified (the round is decided).
+    public func isDecided(round: Int) -> Bool {
+        decidedRoundNumbers.contains(round)
     }
 
     /// `(role, MAC)` of a well-formed `KCMAC:` payload, `nil` otherwise: exactly 44 characters, canonical base64,
@@ -218,6 +235,10 @@ public struct KcMacRoundBook {
         decided.append(mac)
         if decided.count > Self.maxDecidedMacs {
             decided.removeFirst(decided.count - Self.maxDecidedMacs)
+        }
+        decidedRoundNumbers.append(round.round)
+        if decidedRoundNumbers.count > Self.maxDecidedMacs {
+            decidedRoundNumbers.removeFirst(decidedRoundNumbers.count - Self.maxDecidedMacs)
         }
         return .decided(.verified(round: round.round))
     }

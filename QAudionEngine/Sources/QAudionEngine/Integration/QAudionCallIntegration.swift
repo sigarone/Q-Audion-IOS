@@ -287,6 +287,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// clear `pendingReKeyAttempt` before calling `resume`.
     private struct PendingReKeyAttempt {
         let id: UUID
+        /// The signed round this attempt's OFFER carries: the only round whose ACCEPT it may take
+        /// (R-REKEY-ACCEPT-WAIT, one ACCEPT per round, bound to the round in flight).
+        let round: Int
         let localKeys: HybridLocalKeys
         let resume: (Data?) -> Void
     }
@@ -545,9 +548,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `calleeToken` is the serial (`SasCommitBook.beginCalleeOwned`) of the callee context the ACCEPT answers: the
     /// release sends it only if that context is still the call's current one (A2). `nil` for a rekey round's ACCEPT.
     enum HeldAccept {
-        case json(String, calleeToken: UInt64?)
+        /// `round` is the signed key round the held ACCEPT answers (R-ACCEPT-RESEND records it when it is released).
+        case json(String, calleeToken: UInt64?, round: Int? = nil)
     }
     private var heldAcceptByCall: [String: HeldAccept] = [:]
+    /// R-ACCEPT-RESEND (K4): the exact bytes of every ACCEPT this device handed to the transport, by lowercased callId and
+    /// signed round. A copy of an ACCEPT that has no proof of arrival yet is re-sent after a socket re-authentication
+    /// (`acceptsDueForResend`): the bytes are never re-signed or re-serialised. An ACCEPT is recorded when it is
+    /// handed to the transport, never while it is held (a round-1 ACCEPT held while ringing is not re-sent). Never
+    /// persisted, never logged, dropped with the call.
+    private var sentAcceptsByCall: [String: [Int: String]] = [:]
     /// A2: makes "this OFFER installs its session" (the tail of the `.offer` case, after its ACCEPT was emitted) and
     /// "a newer OFFER replaces the unanswered round" (`supersedeUnansweredRound1IfUnsent`) mutually exclusive. The
     /// tail checks that its callee context is still current and installs under it, so it either runs completely
@@ -1578,7 +1588,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let attemptId = UUID()
         let combined: Data? = await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
             lock.withLock {
-                pendingReKeyAttempt = PendingReKeyAttempt(id: attemptId, localKeys: localKeys) { value in
+                pendingReKeyAttempt = PendingReKeyAttempt(id: attemptId, round: Int(thisRound), localKeys: localKeys) { value in
                     cont.resume(returning: value)
                 }
             }
@@ -2226,7 +2236,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // replay must obey the SAME hold gate as the first
                     // send — "mentre trattiene, niente replay, solo log".
                     try await emitJsonAccept(callId: callId, wire: replay.wire, sendOpaqueRaw: sendOpaqueRaw, isRound1: round == 1,
-                                             calleeToken: replay.token)
+                                             calleeToken: replay.token, acceptRound: Int(round))
                 } else {
                     print("[QAudionCallIntegration] OFFER duplicate for callId=\(callId.prefix(8))… — session already initialised, skipping initSession")
                 }
@@ -2269,7 +2279,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // for this call. Held (not sent) until the human has answered; the derivation/session-init below is
             // UNCHANGED either way — only the wire send is gated.
             try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw,
-                                     isRound1: !isReKeyRound, calleeToken: calleeToken)
+                                     isRound1: !isReKeyRound, calleeToken: calleeToken, acceptRound: Int(round))
             // A2: from here this OFFER installs its session. Under `offerInstallLock` it checks that its callee context
             // is still the call's current one and installs: a newer OFFER that replaced it meanwhile
             // (`supersedeUnansweredRound1IfUnsent`) either ran before this block (this OFFER then installs nothing) or
@@ -2557,6 +2567,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // the re-key's keys), so it is dropped like every other non-bound round-1 ACCEPT.
             if Self.isStrayRound1Accept(isReKeyAccept: isReKeyAccept, echoedRound: bundle.rekeyRound) {
                 print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round 1 while a re-key is in flight — dropped")
+                return
+            }
+            // R-REKEY-ACCEPT-WAIT: the offerer processes at most one ACCEPT per rekey round, and only the round it
+            // has in flight. An ACCEPT that echoes any other round (the late ACCEPT of a round this side already
+            // abandoned, landing while the next one is in flight) is dropped silently, BEFORE it is verified: it is
+            // never checked against the in-flight OFFER's binding, never decapsulated with its keys, and touches no
+            // key, media, identity or KCMAC state and no re-send budget.
+            if Self.isStaleRekeyAccept(attemptRound: rekeyAttempt?.round, echoedRound: bundle.rekeyRound) {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round \(bundle.rekeyRound ?? 0) but round \(rekeyAttempt?.round ?? 0) is in flight — dropped")
                 return
             }
             // A round-1 ACCEPT echoes the OFFER's round: anything else with no re-key attempt in flight is a
@@ -3807,6 +3826,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         isReKeyAccept && echoedRound == 1
     }
 
+    /// R-REKEY-ACCEPT-WAIT: true for an ACCEPT that is not the answer to the rekey round in flight: a re-key attempt
+    /// is in flight (`attemptRound` is the signed round of its OFFER) and the ACCEPT echoes another round, or none.
+    /// The offerer processes at most one ACCEPT per round and only the in-flight one; the late ACCEPT of an abandoned
+    /// round is dropped silently, never verified against the next round's OFFER. With no attempt in flight the
+    /// ordinary round-1 rules decide (nothing here). `internal` so a unit test can pin the decision.
+    static func isStaleRekeyAccept(attemptRound: Int?, echoedRound: Int?) -> Bool {
+        guard let attemptRound else { return false }
+        return echoedRound != attemptRound
+    }
+
     /// A2: true for a round-1 OFFER that replaces the unanswered round-1 OFFER this callee already processed:
     /// round 1 with a valid commitment (`commitmentCode == nil`), for a call that has a context, which is not a
     /// retransmit of an OFFER already processed (that one re-sends the cached ACCEPT), and only while this device
@@ -3848,6 +3877,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 sessionInitializedByCall.remove(id)
                 processedOfferFingerprintsByCall = processedOfferFingerprintsByCall.filter { !$0.hasPrefix(prefix) }
                 acceptWireByOfferFingerprint = acceptWireByOfferFingerprint.filter { !$0.key.hasPrefix(prefix) }
+                sentAcceptsByCall.removeValue(forKey: id)
                 lastAcceptedRekeyRoundByCall.removeValue(forKey: id)
                 peerDtlsFingerprintByCall.removeValue(forKey: id)
                 keyRoundByCall.removeValue(forKey: id)
@@ -4148,6 +4178,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // fingerprints/cached ACCEPTs into the next call.
         processedOfferFingerprintsByCall.removeAll()
         acceptWireByOfferFingerprint.removeAll()
+        sentAcceptsByCall.removeAll()
         // I3 §5 — same reasoning; also resolve (never leak) an in-flight
         // re-key attempt's continuation if the call ends while one is
         // outstanding, so performPqcReKey's awaiter returns `false` instead
@@ -4362,7 +4393,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public func wipeSasCommitState(callId: String) {
         cancelSasRevealTimer(callId: callId)
         sasCommit.clear(callId: callId)
-        _ = lock.withLock { boundRound1AcceptKeyByCall.removeValue(forKey: callId.lowercased()) }
+        lock.withLock {
+            sentAcceptsByCall.removeValue(forKey: callId.lowercased())
+            boundRound1AcceptKeyByCall.removeValue(forKey: callId.lowercased())
+        }
     }
 
     /// False once this device left the call as a sibling (or ended on a SAS-commit failure): the app
@@ -4469,7 +4503,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `isRound1`: this is the round-1 ACCEPT. Its FIRST actual send freezes the answered commitment and
     /// starts the callee's REVEAL timer, `CONFIRM_TIMEOUT` = 15 s (`markRound1AcceptSent`); a held ACCEPT starts it when it
     /// is released, not before.
-    func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool, calleeToken: UInt64? = nil) async throws {
+    func emitJsonAccept(callId: String, wire: String, sendOpaqueRaw: @escaping (String) async throws -> Void, isRound1: Bool, calleeToken: UInt64? = nil, acceptRound: Int? = nil) async throws {
         let cid = callId.lowercased()
         // T2 / R-ANSWER-FIRST: the commitment binds the callId, so a call without one cannot run v6. No ACCEPT
         // is ever sent for it and there is no fallback: the call ends with `handshake_malformed`.
@@ -4485,7 +4519,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 if isRound1 {
                     guard let calleeToken, sasCommit.calleeIsCurrent(callId: cid, token: calleeToken) else { return false }
                 }
-                lock.withLock { heldAcceptByCall[cid] = .json(wire, calleeToken: calleeToken) }
+                lock.withLock { heldAcceptByCall[cid] = .json(wire, calleeToken: calleeToken, round: acceptRound) }
                 return true
             }
             guard stored else {
@@ -4503,7 +4537,59 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             print("[QAudionCallIntegration] ACCEPT not sent — its OFFER was replaced callId=\(cid.prefix(8))…")
             return
         }
+        // R-ACCEPT-RESEND: the exact bytes are kept from the hand-over on, before the write completes (a write into a
+        // socket that is replaced meanwhile is the loss the re-send after the re-authentication repairs).
+        recordSentAccept(callId: cid, round: acceptRound, wire: wire)
         try await sendOpaqueRaw(wire)
+    }
+
+    /// R-ACCEPT-RESEND: remember the exact bytes of the ACCEPT of `round` handed to the transport (a replay of the
+    /// same cached bytes records the same value again).
+    private func recordSentAccept(callId: String, round: Int?, wire: String) {
+        guard let round, round >= 1 else { return }
+        lock.withLock { sentAcceptsByCall[callId.lowercased(), default: [:]][round] = wire }
+    }
+
+    /// One ACCEPT this device sent, as the re-send after a socket re-authentication needs it: the signed round it
+    /// answers and the exact bytes first handed to the transport.
+    public struct SentAccept: Equatable {
+        public let round: Int
+        public let wire: String
+    }
+
+    /// R-ACCEPT-RESEND (K4): the ACCEPTs of `callId` that have no proof yet that they arrived, oldest round first.
+    /// Round 1: as long as this callee's REVEAL has not verified (`SasCommitBook.isWaitingForReveal`). A rekey round:
+    /// as long as the peer's MAC for that round has not verified (`roundDecided`, supplied by the app, which keeps the
+    /// KCMAC rounds). Only an ACCEPT that was handed to the transport once is listed: a round-1 ACCEPT still held while
+    /// ringing is not. Empty on a caller (it never sends an ACCEPT).
+    public func acceptsDueForResend(callId: String, roundDecided: (Int) -> Bool) -> [SentAccept] {
+        let sent: [Int: String] = lock.withLock { sentAcceptsByCall[callId.lowercased()] ?? [:] }
+        return sent.keys.sorted().compactMap { round -> SentAccept? in
+            guard let wire = sent[round] else { return nil }
+            if round == 1 {
+                return sasCommit.isWaitingForReveal(callId: callId) ? SentAccept(round: round, wire: wire) : nil
+            }
+            return roundDecided(round) ? nil : SentAccept(round: round, wire: wire)
+        }
+    }
+
+    /// R-ACCEPT-RESEND (K4): hand the exact bytes of `accepts` to the transport again, in the order given, through the
+    /// sender this call's ACCEPTs left through. The caller (the app) takes one unit of the re-send budget first and
+    /// sends each ACCEPT before the MAC of its round. A send failure is logged as a verdict and never throws.
+    public func resendAcceptsAfterReauth(_ accepts: [SentAccept], callId: String) async {
+        guard !accepts.isEmpty else { return }
+        guard let sender = lock.withLock({ retrySenderClosure }) else {
+            print("[QAudionCallIntegration] ACCEPT not re-sent (no sender) callId=\(callId.prefix(8))…")
+            return
+        }
+        for accept in accepts {
+            do {
+                try await sender(accept.wire)
+                print("[QAudionCallIntegration] ACCEPT re-sent after a socket re-authentication round=\(accept.round) callId=\(callId.prefix(8))…")
+            } catch {
+                print("[QAudionCallIntegration] ACCEPT re-send failed round=\(accept.round) callId=\(callId.prefix(8))…")
+            }
+        }
     }
 
     /// Review fix — closes the check-then-store race of the two gates above:
@@ -4538,7 +4624,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard let held = held else { return false }
         do {
             switch held {
-            case .json(let wire, let calleeToken):
+            case .json(let wire, let calleeToken, let acceptRound):
                 guard let sender = lock.withLock({ retrySenderClosure }) else {
                     print("[QAudionCallIntegration] W-MEDIAATACCEPT release(json) callId=\(cid.prefix(8))… no sender")
                     return false
@@ -4551,6 +4637,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     print("[QAudionCallIntegration] W-MEDIAATACCEPT held ACCEPT dropped — its OFFER was replaced callId=\(cid.prefix(8))…")
                     return false
                 }
+                // R-ACCEPT-RESEND: recorded at the hand-over, as for an ACCEPT that was never held.
+                recordSentAccept(callId: cid, round: acceptRound, wire: wire)
                 try await sender(wire)
             }
             print("[QAudionCallIntegration] W-MEDIAATACCEPT ACCEPT released callId=\(cid.prefix(8))…")

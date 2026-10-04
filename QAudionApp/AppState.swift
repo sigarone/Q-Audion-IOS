@@ -2230,6 +2230,13 @@ final class AppState: ObservableObject {
     /// peer MACs, the decided peer MACs, the held MACs that matched no round) and the app state of every round that is
     /// still pending, plus the LIVE one. Arming a round never cancels, shortens or decides another pending round: a
     /// superseded round keeps its state and its own deadline task until it is decided or its window ends.
+    ///
+    /// R-KCMAC-ATOMIC: the state of one call is changed by one step at a time, in one order. `AppState` is
+    /// `@MainActor`, and every step is ONE synchronous main-actor turn with no suspension inside it: the whole
+    /// processing of one inbound MAC (`handleInboundKcMac`, including the verdict it applies), the whole arming of one
+    /// round (`handleKcMacReady`: overflow check, insertion, re-offer of the held MACs, the verdicts they give) and the
+    /// expiry of one round's window (the deadline task's single `MainActor.run`, which tests "still pending" and fails
+    /// the round together). Whichever of a decision and an expiry of the same round runs first wins.
     private final class KeyConfirmationCall {
         var book = KcMacRoundBook()
         /// The state of each round that is pending, and of the live round, by signed round number.
@@ -14528,18 +14535,17 @@ final class AppState: ObservableObject {
         let round = state.round
         state.deadlineTask = Task { [weak self] in
             while !Task.isCancelled {
+                // R-KCMAC-ATOMIC: the expiry of ONE round's window is ONE main-actor step: the test "still pending, and
+                // the window is over" and the failure happen together, so a verdict that decides the round first
+                // leaves nothing to fail and a failure that ran first is not decided afterwards.
                 let remainingMs: Int? = await MainActor.run { [weak self] () -> Int? in
                     guard let self, let cur = self.kcCalls[key]?.states[round], cur === state, !cur.resultRecorded else { return nil }
-                    return self.kcWaitRemainingMs(callId: event.callId, state: cur)
+                    let left = self.kcWaitRemainingMs(callId: event.callId, state: cur)
+                    guard left <= 0 else { return left }
+                    self.failKeyConfirmation(callId: event.callId, state: cur, expired: true)
+                    return nil
                 }
                 guard let remainingMs else { return }
-                if remainingMs <= 0 {
-                    await MainActor.run { [weak self] in
-                        guard let self, let cur = self.kcCalls[key]?.states[round], cur === state, !cur.resultRecorded else { return }
-                        self.failKeyConfirmation(callId: event.callId, state: cur, expired: true)
-                    }
-                    return
-                }
                 try? await Task.sleep(nanoseconds: UInt64(remainingMs) * 1_000_000)
             }
         }
@@ -14682,7 +14688,9 @@ final class AppState: ObservableObject {
     /// that we first sent less than `ConfirmTimeout.recentOwnKcMacMs` ago (plus our own MAC of every earlier round that
     /// is still pending, a superseded round keeps its window, and such recent MACs of decided rounds:
     /// a verified peer MAC does not show that ours arrived; the log's `older` counts them), but only a MAC that was already sent once (a callee still holding its round-1 MAC re-sends nothing, R-COMMIT-
-    /// KCMAC-HOLD). The event takes one unit of the per-call budget of 4 shared with the duplicate-ACCEPT re-sends;
+    /// KCMAC-HOLD). The acceptor also re-sends the exact bytes of every ACCEPT it sent that has no proof of arrival
+    /// yet (R-ACCEPT-RESEND, K4: the round-1 ACCEPT while its REVEAL has not verified, a rekey ACCEPT while the
+    /// peer's MAC for that round has not verified; the log's `accepts` counts them), each before the MAC of its round. The event takes one unit of the per-call budget of 4 shared with the duplicate-ACCEPT re-sends;
     /// nothing due consumes none, and a fifth event re-sends nothing. The receiver drops an already-verified copy
     /// silently (duplicate rule), and the sender-device rule is unaffected (the copy comes from the same device).
     @MainActor
@@ -14736,7 +14744,13 @@ final class AppState: ObservableObject {
         for recent in recentWires where recent.wire != ownWire && !olderWires.contains(where: { $0.wire == recent.wire }) {
             olderWires.append(recent)
         }
-        guard due.any || !olderWires.isEmpty else { return }
+        // R-ACCEPT-RESEND (K4): the ACCEPTs of this device (it is their acceptor) that have no proof of arrival yet:
+        // the round-1 ACCEPT while the REVEAL has not verified, a rekey ACCEPT while the peer's MAC for that round has
+        // not verified. They take part in the SAME event (no extra budget) and each leaves BEFORE the MAC of its round.
+        let acceptsDue = integration.acceptsDueForResend(callId: cid) { round in
+            call?.book.isDecided(round: round) ?? false
+        }
+        guard due.any || !olderWires.isEmpty || !acceptsDue.isEmpty else { return }
         guard integration.takeResendEvent(callId: cid) else {
             print("[AppState] re-send budget spent — nothing re-sent after the re-authentication callId=\(cid.prefix(8))…")
             return
@@ -14748,6 +14762,8 @@ final class AppState: ObservableObject {
         for older in olderWires { OpaqueSelfEchoFilter.shared.markSent(older.wire) }
         // The REVEAL leaves before the KCMAC, on the same ordered path, exactly as the first sends did.
         Task {
+            // The exact bytes of every ACCEPT first (the acceptor's MACs follow), then the REVEAL, then the MACs.
+            if !acceptsDue.isEmpty { await integration.resendAcceptsAfterReauth(acceptsDue, callId: cid) }
             if due.reveal { await integration.resendRevealAfterReauth(callId: cid) }
             if let wireToSend, let provider, !peerToSend.isEmpty {
                 try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerToSend, payload: wireToSend)
@@ -14757,7 +14773,7 @@ final class AppState: ObservableObject {
             }
         }
         // `kcmac` counts the live round's own MAC, `older` the own MACs of other rounds re-sent in the same event.
-        print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) older=\(olderWires.count) callId=\(cid.prefix(8))…")
+        print("[AppState] re-sent after a socket re-authentication reveal=\(due.reveal ? 1 : 0) kcmac=\(due.ownKcMac ? 1 : 0) older=\(olderWires.count) accepts=\(acceptsDue.count) callId=\(cid.prefix(8))…")
     }
 
     /// W-KCMAC — verify an inbound `KCMAC:` piggy-back by attributing it to a key round BY CONTENT (R-KCMAC-ROUNDS, §3.7.1): the
