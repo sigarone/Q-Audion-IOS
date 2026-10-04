@@ -14750,7 +14750,7 @@ final class AppState: ObservableObject {
         let acceptsDue = integration.acceptsDueForResend(callId: cid) { round in
             call?.book.isDecided(round: round) ?? false
         }
-        guard due.any || !olderWires.isEmpty || !acceptsDue.isEmpty else { return }
+        guard due.any || !olderWires.isEmpty else { return }
         guard integration.takeResendEvent(callId: cid) else {
             print("[AppState] re-send budget spent — nothing re-sent after the re-authentication callId=\(cid.prefix(8))…")
             return
