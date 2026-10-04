@@ -107,31 +107,32 @@ final class KcMacKRoundFixTests: XCTestCase {
         XCTAssertFalse(book.isDecided(round: 2), "a superseded round is decided only by its own MAC")
     }
 
-    func testARekeyAcceptIsDueForResendUntilItsRoundIsDecided() async throws {
+    /// R-ACCEPT-RESEND: a rekey ACCEPT is due only while its round is armed and undecided, i.e. a member of PENDING.
+    func testARekeyAcceptIsDueForResendOnlyWhileItsRoundIsPending() async throws {
         let integ = QAudionCallIntegration()
         let wire = Wire()
         try await integ.emitJsonAccept(callId: callId, wire: "ACCEPT-R2", sendOpaqueRaw: { wire.add($0) },
                                        isRound1: false, calleeToken: nil, acceptRound: 2)
         try await integ.emitJsonAccept(callId: callId, wire: "ACCEPT-R3", sendOpaqueRaw: { wire.add($0) },
                                        isRound1: false, calleeToken: nil, acceptRound: 3)
-        var decided: Set<Int> = []
-        XCTAssertEqual(integ.acceptsDueForResend(callId: callId, roundDecided: { decided.contains($0) }).map { $0.round }, [2, 3])
-        decided.insert(2)
-        XCTAssertEqual(integ.acceptsDueForResend(callId: callId.uppercased(), roundDecided: { decided.contains($0) }).map { $0.round }, [3])
-        decided.insert(3)
-        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundDecided: { decided.contains($0) }).isEmpty)
+        var pending: Set<Int> = [2, 3]
+        XCTAssertEqual(integ.acceptsDueForResend(callId: callId, roundPending: { pending.contains($0) }).map { $0.round }, [2, 3])
+        pending.remove(2)   // the peer's MAC for round 2 verified, or its window ended
+        XCTAssertEqual(integ.acceptsDueForResend(callId: callId.uppercased(), roundPending: { pending.contains($0) }).map { $0.round }, [3])
+        pending.remove(3)
+        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundPending: { pending.contains($0) }).isEmpty)
     }
 
     /// An ACCEPT that was never handed to the transport (nothing sent, or held while ringing) is never re-sent.
     func testAnAcceptThatWasNeverSentIsNeverDue() async throws {
         let integ = QAudionCallIntegration()
         let token = try XCTUnwrap(integ.sasCommit.beginCalleeOwned(callId: callId, commit: commit(1), acceptHash: hashA))
-        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundDecided: { _ in false }).isEmpty, "nothing sent yet")
+        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundPending: { _ in true }).isEmpty, "nothing sent yet")
         integ.shouldHoldResponderAccept = { _ in true }
         try await integ.emitJsonAccept(callId: callId, wire: "ACCEPT-1", sendOpaqueRaw: { _ in XCTFail("held, not sent") },
                                        isRound1: true, calleeToken: token, acceptRound: 1)
         XCTAssertTrue(integ.sasCommit.isWaitingForReveal(callId: callId), "the callee context exists")
-        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundDecided: { _ in false }).isEmpty,
+        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundPending: { _ in true }).isEmpty,
                       "a round-1 ACCEPT held while ringing is not re-sent")
     }
 
@@ -149,7 +150,7 @@ final class KcMacKRoundFixTests: XCTestCase {
         let released = await integ.releaseHeldAccept(callId: callId)
         XCTAssertTrue(released)
         XCTAssertEqual(wire.all, ["ACCEPT-1"])
-        XCTAssertEqual(integ.acceptsDueForResend(callId: callId, roundDecided: { _ in true }),
+        XCTAssertEqual(integ.acceptsDueForResend(callId: callId, roundPending: { _ in false }),
                        [QAudionCallIntegration.SentAccept(round: 1, wire: "ACCEPT-1")],
                        "round 1 is not decided by a MAC: only the REVEAL is its proof")
 
@@ -157,7 +158,7 @@ final class KcMacKRoundFixTests: XCTestCase {
         integ.sasCommit.recordRound1(callId: callId, sessionKey: Data(repeating: 7, count: 32), acceptHash: hashA)
         let reveal = try XCTUnwrap(SasReveal.serialize(callId: callId, acceptBinding: hashA, nonce: Data(repeating: 1, count: 32)))
         XCTAssertEqual(integ.sasCommit.calleeOnReveal(callId: callId, data: reveal, nowMs: 10), .sasReady)
-        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundDecided: { _ in false }).isEmpty)
+        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundPending: { _ in true }).isEmpty)
     }
 
     /// The bytes that go out again are the bytes first handed to the transport, round by round, in order.
@@ -169,7 +170,7 @@ final class KcMacKRoundFixTests: XCTestCase {
                                        calleeToken: nil, acceptRound: 3)
         try await integ.emitJsonAccept(callId: callId, wire: "ACCEPT-R2", sendOpaqueRaw: { _ in }, isRound1: false,
                                        calleeToken: nil, acceptRound: 2)
-        let due = integ.acceptsDueForResend(callId: callId, roundDecided: { _ in false })
+        let due = integ.acceptsDueForResend(callId: callId, roundPending: { _ in true })
         XCTAssertEqual(due.map { $0.round }, [2, 3], "oldest round first")
         await integ.resendAcceptsAfterReauth(due, callId: callId)
         XCTAssertEqual(wire.all, ["ACCEPT-R2", "ACCEPT-R3"])
@@ -184,7 +185,7 @@ final class KcMacKRoundFixTests: XCTestCase {
                                        calleeToken: nil, acceptRound: 2)
         try await integ.emitJsonAccept(callId: callId, wire: "ACCEPT-R2", sendOpaqueRaw: { _ in }, isRound1: false,
                                        calleeToken: nil, acceptRound: 2)
-        XCTAssertEqual(integ.acceptsDueForResend(callId: callId, roundDecided: { _ in false }),
+        XCTAssertEqual(integ.acceptsDueForResend(callId: callId, roundPending: { _ in true }),
                        [QAudionCallIntegration.SentAccept(round: 2, wire: "ACCEPT-R2")])
     }
 
@@ -193,7 +194,7 @@ final class KcMacKRoundFixTests: XCTestCase {
         try await integ.emitJsonAccept(callId: callId, wire: "ACCEPT-R2", sendOpaqueRaw: { _ in }, isRound1: false,
                                        calleeToken: nil, acceptRound: 2)
         integ.wipeSasCommitState(callId: callId)
-        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundDecided: { _ in false }).isEmpty)
+        XCTAssertTrue(integ.acceptsDueForResend(callId: callId, roundPending: { _ in true }).isEmpty)
     }
 
     // MARK: - R-REKEY-ACCEPT-WAIT: the offerer takes only the ACCEPT of the round in flight
@@ -245,7 +246,7 @@ final class KcMacKRoundFixTests: XCTestCase {
     func testTheAcceptHandlerDropsAnAcceptOfAnotherRoundBeforeVerifyingIt() throws {
         let integration = try sourceText(integrationPath)
         let handler = code(try slice(integration, from: "case .accept:", to: "// 1. ML-KEM-1024 decapsulate with our local PQC priv."))
-        let staleAt = try XCTUnwrap(handler.range(of: "if Self.isStaleRekeyAccept(attemptRound: rekeyAttempt?.round, echoedRound: bundle.rekeyRound) {"))
+        let staleAt = try XCTUnwrap(handler.range(of: "if Self.isStaleRekeyAccept(attemptRound: waitingRekeyRound, echoedRound: bundle.rekeyRound) {"))
         let verifyAt = try XCTUnwrap(handler.range(of: "let acceptCheck = evaluateInbound("))
         XCTAssertLessThan(staleAt.lowerBound, verifyAt.lowerBound, "before verification, binding and any identity side effect")
         let after = String(handler[staleAt.lowerBound...].prefix(400))
@@ -280,7 +281,8 @@ final class KcMacKRoundFixTests: XCTestCase {
             app, from: "private func handleSocketReauthForConfirmation() {",
             to: "/// W-KCMAC — verify an inbound `KCMAC:` piggy-back"))
         XCTAssertEqual(handler.components(separatedBy: "takeResendEvent(").count - 1, 1, "one budget unit per event")
-        XCTAssertTrue(handler.contains("integration.acceptsDueForResend(callId: cid) { round in call?.book.isDecided(round: round) ?? false }"))
+        XCTAssertTrue(handler.contains("integration.acceptsDueForResend(callId: cid) { round in call?.book.isPending(round: round) ?? false }"),
+                      "a rekey ACCEPT is due only for a round in PENDING")
         XCTAssertTrue(handler.contains("guard due.any || !olderWires.isEmpty || !acceptsDue.isEmpty else { return }"))
         let budgetAt = try XCTUnwrap(handler.range(of: "guard integration.takeResendEvent(callId: cid) else {"))
         let dueAt = try XCTUnwrap(handler.range(of: "let acceptsDue = "))

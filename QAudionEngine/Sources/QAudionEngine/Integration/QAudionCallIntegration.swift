@@ -32,7 +32,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// avoid the race where two overlapping calls overwrite each other's
     /// privs and the first ACCEPT decapsulates with the wrong material.
     /// Cleared (and zeroized) after the session key is installed.
-    private struct HybridLocalKeys {
+    struct HybridLocalKeys {
         let pqcPair: PqcKeyExchange.KeyPair
         let x25519Priv: Curve25519.KeyAgreement.PrivateKey
     }
@@ -254,6 +254,38 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.withLock { isCaller = true; state = .active }
     }
 
+    /// Test seam (R-REKEY-ACCEPT-WAIT): a rekey attempt of round `round` WAITING for its ACCEPT, with fresh local keys:
+    /// the state `performPqcReKey` is in once it handed its OFFER to the transport. `resume` is what the awaiting
+    /// `performPqcReKey` would receive: the key (the round was installed) or `nil` (abandoned or refused). Returns the
+    /// attempt's id.
+    func installWaitingReKeyAttemptForTesting(round: Int, resume: @escaping (Data?) -> Void) throws -> UUID {
+        let keys = HybridLocalKeys(pqcPair: try pqc.generateKeyPair(), x25519Priv: Curve25519.KeyAgreement.PrivateKey())
+        let id = UUID()
+        lock.withLock { pendingReKeyAttempt = PendingReKeyAttempt(id: id, round: round, localKeys: keys, resume: resume) }
+        return id
+    }
+
+    /// Test seam: the rekey attempt in flight, if any, as `(id, round, acceptReached)`.
+    var reKeyAttemptForTesting: (id: UUID, round: Int, acceptReached: Bool)? {
+        lock.withLock { pendingReKeyAttempt.map { (id: $0.id, round: $0.round, acceptReached: $0.acceptReached) } }
+    }
+
+    /// Test seam (R-REKEY-ACCEPT-WAIT, case 1): the state of a caller that BOUND and PROCESSED the round-1 ACCEPT whose
+    /// ciphertext is `pqcCt` / `x25519Eph` (binding hash `acceptHash`): a byte-identical copy of that ACCEPT is what meets
+    /// it afterwards. False when the commitment could not be begun or the ACCEPT could not be bound.
+    func bindProcessedRound1AcceptForTesting(callId: String, pqcCt: Data, x25519Eph: Data,
+                                             acceptHash: Data, nonce: Data) -> Bool {
+        guard sasCommit.beginCaller(callId: callId, nonce: nonce) != nil else { return false }
+        let (decision, _) = sasCommit.callerOnAccept(callId: callId, acceptHash: acceptHash)
+        guard decision == .bindAndReveal else { return false }
+        let key = callId.lowercased() + "#" + Data(SHA256.hash(data: pqcCt + x25519Eph)).base64EncodedString()
+        lock.withLock {
+            boundRound1AcceptKeyByCall[callId.lowercased()] = key
+            processedAcceptFingerprintsByCall.insert(key)
+        }
+        return true
+    }
+
     /// True while the call's media is held pending the SAS confirmation.
     public func isMediaHeld(callId: String) -> Bool {
         lock.withLock { heldCalls.contains(callId.lowercased()) }
@@ -285,15 +317,65 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// exactly once — whichever of {a matching ACCEPT arrives, the attempt
     /// times out} fires first; the loser is a no-op because both paths
     /// clear `pendingReKeyAttempt` before calling `resume`.
-    private struct PendingReKeyAttempt {
+    ///
+    /// R-REKEY-ACCEPT-WAIT: the round WAITS from the hand-over of its OFFER until the first ACCEPT for it reaches this
+    /// offerer (`acceptReached`, set by `takeWaitingReKeyAttempt`) or its wait expires (`expireReKeyWait`), whichever
+    /// comes first: both are one step under `lock`, so the one that runs first wins. An attempt whose ACCEPT reached
+    /// stays here, no longer waiting, until the processing of that ACCEPT resolves it (`resolveReKeyAttempt`): its
+    /// deadline can no longer abandon it, no second ACCEPT can take it, and no new round starts meanwhile.
+    struct PendingReKeyAttempt {
         let id: UUID
         /// The signed round this attempt's OFFER carries: the only round whose ACCEPT it may take
         /// (R-REKEY-ACCEPT-WAIT, one ACCEPT per round, bound to the round in flight).
         let round: Int
         let localKeys: HybridLocalKeys
+        /// True once the first ACCEPT for this round reached this offerer: the round is no longer waiting.
+        var acceptReached = false
         let resume: (Data?) -> Void
     }
     private var pendingReKeyAttempt: PendingReKeyAttempt?
+
+    /// R-REKEY-ACCEPT-WAIT, reach: the first ACCEPT for the waiting rekey round `round` has reached this offerer. One
+    /// step under `lock`: the round stops waiting at once (its deadline can no longer abandon it, a second ACCEPT can
+    /// no longer take it) and the attempt is returned to the caller, who processes that ACCEPT to completion and
+    /// resolves it (`resolveReKeyAttempt`). `nil` when no round waits for `round` (none in flight, another round, its
+    /// ACCEPT already reached, or its wait expired first): the ACCEPT is dropped silently.
+    func takeWaitingReKeyAttempt(round: Int) -> PendingReKeyAttempt? {
+        lock.withLock {
+            guard var attempt = pendingReKeyAttempt, !attempt.acceptReached, attempt.round == round else { return nil }
+            attempt.acceptReached = true
+            pendingReKeyAttempt = attempt
+            return attempt
+        }
+    }
+
+    /// R-REKEY-ACCEPT-WAIT, expiry: the wait of attempt `attemptId` ran out (or its OFFER could not be sent). One step
+    /// under `lock`, the mirror of `takeWaitingReKeyAttempt`: the round is abandoned (no key is installed, the call
+    /// goes on) only if it is still waiting. True when it was; false when its ACCEPT already reached (the ACCEPT's
+    /// processing owns the round now and runs to completion) or the attempt is gone.
+    @discardableResult
+    func expireReKeyWait(attemptId: UUID) -> Bool {
+        let resume: ((Data?) -> Void)? = lock.withLock {
+            guard let attempt = pendingReKeyAttempt, attempt.id == attemptId, !attempt.acceptReached else { return nil }
+            pendingReKeyAttempt = nil
+            return attempt.resume
+        }
+        guard let resume else { return false }
+        resume(nil)
+        return true
+    }
+
+    /// The end of the processing of the ACCEPT that took attempt `id`: the awaiting `performPqcReKey` gets the new key
+    /// (`value`) or `nil` (the round was refused). Resolves at most once; a no-op when the attempt is already gone (the
+    /// call ended).
+    func resolveReKeyAttempt(id: UUID, with value: Data?) {
+        let resume: ((Data?) -> Void)? = lock.withLock {
+            guard let attempt = pendingReKeyAttempt, attempt.id == id else { return nil }
+            pendingReKeyAttempt = nil
+            return attempt.resume
+        }
+        resume?(value)
+    }
 
     private var transportSelector: TransportSelector?
     private var capabilityExchange: QAudionCapabilityExchange?
@@ -1598,28 +1680,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     try await sendOpaqueRaw(jsonWire)
                 } catch {
                     print("[QAudionCallIntegration] performPqcReKey send failed callId=\(callId.prefix(8))…: \(error)")
-                    let resume: ((Data?) -> Void)? = self.lock.withLock {
-                        guard self.pendingReKeyAttempt?.id == attemptId else { return nil }
-                        let r = self.pendingReKeyAttempt?.resume
-                        self.pendingReKeyAttempt = nil
-                        return r
-                    }
-                    resume?(nil)
+                    // The OFFER never left: the round is abandoned (a round whose ACCEPT already reached is not).
+                    self.expireReKeyWait(attemptId: attemptId)
                 }
             }
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSec * 1_000_000_000))
                 guard let self else { return }
-                let resume: ((Data?) -> Void)? = self.lock.withLock {
-                    guard self.pendingReKeyAttempt?.id == attemptId else { return nil }
-                    let r = self.pendingReKeyAttempt?.resume
-                    self.pendingReKeyAttempt = nil
-                    return r
-                }
-                if resume != nil {
+                // R-REKEY-ACCEPT-WAIT: the expiry and the reaching of the ACCEPT are two steps on the call's state, the
+                // one that runs first wins. If the ACCEPT reached first (`takeWaitingReKeyAttempt`) this does nothing:
+                // that ACCEPT is processed to completion, even when its verification ends after this deadline.
+                if self.expireReKeyWait(attemptId: attemptId) {
                     print("[QAudionCallIntegration] performPqcReKey timed out after \(timeoutSec)s callId=\(callId.prefix(8))… — keeping current key")
                 }
-                resume?(nil)
             }
         }
 
@@ -2280,6 +2353,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // UNCHANGED either way — only the wire send is gated.
             try await emitJsonAccept(callId: callId, wire: wire, sendOpaqueRaw: sendOpaqueRaw,
                                      isRound1: !isReKeyRound, calleeToken: calleeToken, acceptRound: Int(round))
+            // R-ACCEPT-RESEND: a rekey round that ends here WITHOUT arming its KCMAC round (refused: the session could not
+            // be installed, any error thrown below) never gets the peer's MAC, so no proof of arrival could come for its
+            // ACCEPT: it would stay due forever, every re-authentication would re-send it and spend a unit of the shared
+            // budget of 4. It is forgotten instead. (An ACCEPT is due only while its round is in PENDING, which a round
+            // that was never armed never is; this also drops the stored bytes.) The flag flips right before the arming
+            // event fires; from then on the app owns the round.
+            var rekeyRoundArmed = false
+            defer {
+                if isReKeyRound, !rekeyRoundArmed { forgetSentAccept(callId: callId, round: Int(round)) }
+            }
             // A2: from here this OFFER installs its session. Under `offerInstallLock` it checks that its callee context
             // is still the call's current one and installs: a newer OFFER that replaced it meanwhile
             // (`supersedeUnansweredRound1IfUnsent`) either ran before this block (this OFFER then installs nothing) or
@@ -2439,6 +2522,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // roles here are the PEER's, recovered from which preimage reproduced its
                 // tag rather than read off an array v3 does not send.
                 let kcPeerAdvertisedRoles = Array(resolvedAdvert.mutualPeerRoles)
+                rekeyRoundArmed = true
                 onKcMacReady?(KcMacReadyEvent(
                     peerId: callerId, callId: callId, isInitiator: false, sessionKey: combined,
                     kcKey: kcKeyForEvent, transcript: kcTranscriptForEvent, n: kcN,
@@ -2486,8 +2570,25 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // architecture — one integration instance handles one call at
             // a time, same invariant `localHybridKeysByCall`'s own lookup
             // already relies on).
-            let rekeyAttempt = lock.withLock { pendingReKeyAttempt }
-            let isReKeyAccept = rekeyAttempt != nil
+            // R-REKEY-ACCEPT-WAIT (WIRE_SPEC §3.7): every ACCEPT this offerer receives once round 1 is bound is sorted
+            // HERE and nowhere else, in this order:
+            //   1. a byte-identical copy of the round-1 ACCEPT this caller bound: the identical REVEAL goes again (one
+            //      event of the budget of 4) and NOTHING else happens, in every state of the call and whether or not a
+            //      rekey round is waiting (a callee that still misses the REVEAL has its REVEAL timer running);
+            //   2. a well-formed ACCEPT that echoes the rekey round that is WAITING: it is that round's ACCEPT. It is
+            //      TAKEN below, at once: from that moment the round no longer waits, its deadline can no longer abandon
+            //      it, and it is processed to completion;
+            //   3. every other ACCEPT (a copy of an ACCEPT already processed, the late ACCEPT of an earlier round, a
+            //      second ACCEPT for a round whose ACCEPT already reached, a rekey ACCEPT with no round waiting) is
+            //      dropped silently: no key, media, KCMAC or REVEAL state changes, no event, no budget, no close reason,
+            //      and a waiting round is never touched, cleared, failed or closed.
+            // The waiting round is read ONCE, here, before anything is verified or awaited: this is the moment the
+            // ACCEPT reaches this offerer's integration (the closest point the engine has to the transport's receipt).
+            let waitingRekeyRound: Int? = lock.withLock {
+                guard let pending = pendingReKeyAttempt, !pending.acceptReached else { return nil }
+                return pending.round
+            }
+            let isReKeyAccept = waitingRekeyRound != nil
             // W-HSROUNDTIMING — second breadcrumb: ACCEPT reached this
             // side's dispatch. Skipped for re-key rounds (`handshakeStartedAt`
             // times the ORIGINAL handshake only, not each re-key round) so
@@ -2496,14 +2597,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // derive-complete siblings.
             if !isReKeyAccept, let startedAt = lock.withLock({ handshakeStartedAt }) {
                 logTiming("hs-accept-received", msInt: Int(Date().timeIntervalSince(startedAt) * 1000), ok: true)
-            }
-            let localKeys = rekeyAttempt?.localKeys
-                         ?? localHybridKeysByCall[callId]
-                         ?? localHybridKeysByCall[callId.lowercased()]
-            guard let local = localKeys else {
-                let stashed: String = localHybridKeysByCall.keys.map { String($0.prefix(8)) }.joined(separator: ",")
-                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… but no local hybrid keys stashed (stashedCallIds=[\(stashed)]) — was onAndroidCallSetupStarted ever called?")
-                return
             }
             guard let ct = bundle.ciphertext else {
                 print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… missing ciphertext block")
@@ -2542,16 +2635,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let normalizedIdForDedup = callId.lowercased()
             let acceptFingerprint = Data(SHA256.hash(data: pqcCt + x25519EphPub)).base64EncodedString()
             let acceptDedupKey = normalizedIdForDedup + "#" + acceptFingerprint
-            if lock.withLock({ processedAcceptFingerprintsByCall.contains(acceptDedupKey) }) {
-                print("[QAudionCallIntegration] ACCEPT duplicate (pre-verify) for callId=\(callId.prefix(8))… — skipping verify + initSession")
-                // R-COMMIT-REVEAL: a byte-identical duplicate of the BOUND round-1 ACCEPT (a callee-side
-                // retransmit) means its REVEAL may have been lost: re-send the identical REVEAL. The duplicate
-                // is ONE event of the per-call re-send budget (R-KCMAC-RESEND), shared with the socket
-                // re-authentication re-sends. A duplicate of any other (rekey) ACCEPT never triggers one.
-                let isBoundAccept = lock.withLock { boundRound1AcceptKeyByCall[normalizedIdForDedup] == acceptDedupKey }
-                if !isReKeyAccept, isBoundAccept, let wire = sasCommit.callerRevealForDuplicateAccept(callId: callId) {
+            // Case 1 of the sort above. R-COMMIT-REVEAL: a byte-identical copy of the BOUND round-1 ACCEPT (a callee-side
+            // retransmit, K4's re-send after a re-authentication) means its REVEAL may have been lost: the identical
+            // REVEAL goes again. The copy is ONE event of the per-call re-send budget (R-KCMAC-RESEND), shared with the
+            // socket re-authentication re-sends; once the budget is spent the copy is still dropped. Decided before any
+            // key lookup or round check, so it holds in every state of the call: with a rekey round waiting or being
+            // processed, after round 1's keys were released, in a call with no rekey at all.
+            if lock.withLock({ boundRound1AcceptKeyByCall[normalizedIdForDedup] == acceptDedupKey }) {
+                print("[QAudionCallIntegration] ACCEPT is a copy of the bound round-1 ACCEPT for callId=\(callId.prefix(8))… — re-sending its REVEAL, nothing else")
+                if let wire = sasCommit.callerRevealForDuplicateAccept(callId: callId) {
                     await sendSasReveal(wire, callId: callId, resend: true)
                 }
+                return
+            }
+            // Case 3: any other copy of an ACCEPT already processed (a rekey ACCEPT re-sent by its acceptor, replayed by
+            // the server): dropped silently, a waiting round is not touched.
+            if lock.withLock({ processedAcceptFingerprintsByCall.contains(acceptDedupKey) }) {
+                print("[QAudionCallIntegration] ACCEPT duplicate (pre-verify) for callId=\(callId.prefix(8))… — skipping verify + initSession")
                 return
             }
             // R-COMMIT-BIND: once round 1 is bound to an ACCEPT, any OTHER round-1 ACCEPT (a sibling
@@ -2561,27 +2661,60 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… is a different round-1 ACCEPT after binding — dropped")
                 return
             }
-            // R-COMMIT-BIND: a re-key attempt in flight only ever answers a round >= 2. An ACCEPT that echoes
-            // round 1 while one is in flight is a sibling's or a forged round-1 ACCEPT arriving late: it must
-            // not be taken for the re-key's answer (verified against the wrong OFFER and decapsulated with
-            // the re-key's keys), so it is dropped like every other non-bound round-1 ACCEPT.
+            // R-COMMIT-BIND: a re-key round that is waiting only ever answers a round >= 2. An ACCEPT that echoes
+            // round 1 while one waits is a sibling's or a forged round-1 ACCEPT arriving late: it must not be taken
+            // for the re-key's answer (verified against the wrong OFFER and decapsulated with the re-key's keys), so
+            // it is dropped like every other non-bound round-1 ACCEPT. (A byte-identical copy of the BOUND round-1
+            // ACCEPT never gets here: case 1 above answered it.)
             if Self.isStrayRound1Accept(isReKeyAccept: isReKeyAccept, echoedRound: bundle.rekeyRound) {
                 print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round 1 while a re-key is in flight — dropped")
                 return
             }
-            // R-REKEY-ACCEPT-WAIT: the offerer processes at most one ACCEPT per rekey round, and only the round it
-            // has in flight. An ACCEPT that echoes any other round (the late ACCEPT of a round this side already
-            // abandoned, landing while the next one is in flight) is dropped silently, BEFORE it is verified: it is
-            // never checked against the in-flight OFFER's binding, never decapsulated with its keys, and touches no
-            // key, media, identity or KCMAC state and no re-send budget.
-            if Self.isStaleRekeyAccept(attemptRound: rekeyAttempt?.round, echoedRound: bundle.rekeyRound) {
-                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round \(bundle.rekeyRound ?? 0) but round \(rekeyAttempt?.round ?? 0) is in flight — dropped")
+            // R-REKEY-ACCEPT-WAIT: the offerer processes at most one ACCEPT per rekey round, and only the round that is
+            // waiting. An ACCEPT that echoes any other round (the late ACCEPT of a round this side already abandoned,
+            // landing while the next one waits) is dropped silently, BEFORE it is verified: it is never checked against
+            // the waiting OFFER's binding, never decapsulated with its keys, and touches no key, media, identity or
+            // KCMAC state, no re-send budget and not the waiting round itself.
+            if Self.isStaleRekeyAccept(attemptRound: waitingRekeyRound, echoedRound: bundle.rekeyRound) {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round \(bundle.rekeyRound ?? 0) but round \(waitingRekeyRound ?? 0) is waiting — dropped")
                 return
             }
-            // A round-1 ACCEPT echoes the OFFER's round: anything else with no re-key attempt in flight is a
-            // stale or forged round and is never bound.
+            // A round-1 ACCEPT echoes the OFFER's round: anything else with no re-key round waiting is a stale or
+            // forged round (an ACCEPT of a round already abandoned, bound or refused; a second ACCEPT of a round whose
+            // ACCEPT already reached) and is never bound.
             if !isReKeyAccept, bundle.rekeyRound != 1 {
-                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round \(bundle.rekeyRound ?? 0) with no re-key attempt in flight — dropped")
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… echoes round \(bundle.rekeyRound ?? 0) with no re-key round waiting — dropped")
+                return
+            }
+            // Case 2 of the sort above: this ACCEPT echoes the waiting round, so it TAKES it. One step under `lock`: the
+            // round stops waiting NOW (its deadline can no longer abandon it, nothing else can take it), and the ACCEPT is
+            // processed to completion even when its verification ends after the round's deadline. If the deadline ran
+            // first the round was abandoned and this ACCEPT is dropped (reaching and expiry never overlap).
+            let rekeyAttempt: PendingReKeyAttempt?
+            if let waitingRekeyRound {
+                guard let taken = takeWaitingReKeyAttempt(round: waitingRekeyRound) else {
+                    print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… arrived after the wait of round \(waitingRekeyRound) ended — dropped")
+                    return
+                }
+                rekeyAttempt = taken
+            } else {
+                rekeyAttempt = nil
+            }
+            // Whatever happens from here (a refusal, an error, the end of the call), the awaiting `performPqcReKey` is
+            // resolved exactly once: with the key on success, with `nil` otherwise. The attempt is no longer waiting, so
+            // nothing else would ever resume it.
+            var takenAttemptResolved = false
+            defer {
+                if let rekeyAttempt, !takenAttemptResolved {
+                    resolveReKeyAttempt(id: rekeyAttempt.id, with: nil)
+                }
+            }
+            let localKeys = rekeyAttempt?.localKeys
+                         ?? localHybridKeysByCall[callId]
+                         ?? localHybridKeysByCall[callId.lowercased()]
+            guard let local = localKeys else {
+                let stashed: String = localHybridKeysByCall.keys.map { String($0.prefix(8)) }.joined(separator: ",")
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… but no local hybrid keys stashed (stashedCallIds=[\(stashed)]) — was onAndroidCallSetupStarted ever called?")
                 return
             }
 
@@ -2714,29 +2847,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 transcriptHash: acceptBinding
             )
 
-            // I3 §5 — stale-attempt guard, found by adversarial review
-            // (2026-08-21): `rekeyAttempt` above was snapshotted BEFORE the
-            // crypto work this case just did, some of which can suspend. If this
-            // round's OWN timeout fires WHILE this function is suspended there,
-            // `pendingReKeyAttempt` gets cleared and performPqcReKey already
-            // returned `false` to its caller — but this ACCEPT, still
-            // in-flight, would otherwise reach `engine.initSession()` below
-            // and install ITS key anyway (ML-KEM decapsulation doesn't throw
-            // on a stale-but-structurally-valid ciphertext, it just returns
-            // SOME shared secret), silently overriding the "never brick"
-            // property `performPqcReKey`'s deferred-swap design was supposed
-            // to guarantee. Worse: if a NEW re-key round had already started
-            // in the meantime, this stale ACCEPT's resolution would grab and
-            // wrongly resolve THAT round's continuation (see the resolve-time
-            // `.id` check below) with THIS round's key. Bail out before
-            // touching the engine or any dedup/session state — a stale
-            // ACCEPT for an attempt that's no longer the live one is
-            // discarded, exactly like a lost/never-arriving ACCEPT is
-            // (performPqcReKey already returned false for it).
+            // I3 §5 — stale-attempt guard (adversarial review 2026-08-21), reworked for R-REKEY-ACCEPT-WAIT. The
+            // liveness of the round is decided at the moment the ACCEPT REACHED this offerer (`takeWaitingReKeyAttempt`
+            // above), not here: an ACCEPT that reached in time is processed to completion even when its verification and
+            // decapsulation end after the round's deadline, because the deadline can no longer abandon a round whose
+            // ACCEPT reached. (The old check here compared the attempt with the one in flight NOW and dropped such an
+            // ACCEPT after the deadline had cleared it.) What is left to guard is the end of the call: its teardown
+            // clears the attempt (`onCallEnded`), and an ACCEPT still in flight then must not install a key on a dead
+            // call. Nothing else can clear a taken attempt, and no other round can start while it is here (one rekey in
+            // flight), so this ACCEPT can never resolve another round's continuation.
             if isReKeyAccept {
                 let stillLive = lock.withLock { pendingReKeyAttempt?.id == rekeyAttempt?.id }
                 guard stillLive else {
-                    print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… arrived for a re-key attempt that already resolved/timed out — discarding stale ACCEPT")
+                    print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… its re-key attempt ended with the call before the ACCEPT was installed — discarding")
                     return
                 }
             }
@@ -2826,24 +2949,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 localHybridKeysByCall.removeValue(forKey: callId)
             }
             // I3 §5 — resolve performPqcReKey's awaiting continuation now
-            // that the new key is installed. The `stillLive` gate above
-            // already guarantees `pendingReKeyAttempt?.id == rekeyAttempt?.id`
-            // at this point (nothing between there and here can start a NEW
-            // re-key round — that only happens from a fresh
-            // performPqcReKey call, and the glare guard there requires
-            // `pendingReKeyAttempt == nil`, which isn't true again until
-            // THIS resolution clears it a few lines down). The `.id` check
-            // is repeated here anyway, matching the send-failure/timeout
-            // paths' own pattern exactly, rather than relying on that
-            // invariant holding across a future edit to either function.
-            if isReKeyAccept {
-                let resume: ((Data?) -> Void)? = lock.withLock {
-                    guard pendingReKeyAttempt?.id == rekeyAttempt?.id else { return nil }
-                    let r = pendingReKeyAttempt?.resume
-                    pendingReKeyAttempt = nil
-                    return r
-                }
-                resume?(combined)
+            // that the new key is installed. The attempt is the one this ACCEPT
+            // took at receipt (`takeWaitingReKeyAttempt`): its deadline cannot
+            // have abandoned it and no other round can have started meanwhile
+            // (one rekey in flight), so this resolves exactly the round this
+            // ACCEPT answers. `resolveReKeyAttempt` checks the attempt's id
+            // again and is a no-op if the call ended in between. The `defer`
+            // above resolves with `nil` on every other way out of this case.
+            if let rekeyAttempt {
+                takenAttemptResolved = true
+                resolveReKeyAttempt(id: rekeyAttempt.id, with: combined)
             }
             onStateChanged?(.active)
             onPqcSessionKeyEstablished?(combined)
@@ -4559,17 +4674,32 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// R-ACCEPT-RESEND (K4): the ACCEPTs of `callId` that have no proof yet that they arrived, oldest round first.
     /// Round 1: as long as this callee's REVEAL has not verified (`SasCommitBook.isWaitingForReveal`). A rekey round:
-    /// as long as the peer's MAC for that round has not verified (`roundDecided`, supplied by the app, which keeps the
-    /// KCMAC rounds). Only an ACCEPT that was handed to the transport once is listed: a round-1 ACCEPT still held while
-    /// ringing is not. Empty on a caller (it never sends an ACCEPT).
-    public func acceptsDueForResend(callId: String, roundDecided: (Int) -> Bool) -> [SentAccept] {
+    /// only for a round this device ARMED and has not decided, i.e. that is still in PENDING (`roundPending`, supplied
+    /// by the app, which keeps the KCMAC rounds): the peer's MAC for it has not verified and its window has not ended.
+    /// That membership is the whole test, whatever else is stored about the round: a round that was refused, never
+    /// armed, abandoned, decided or whose window ended is not in PENDING, so its ACCEPT is never listed (no re-send,
+    /// no unit of the budget). Only an ACCEPT that was handed to the transport once is listed: a round-1 ACCEPT still
+    /// held while ringing is not. Empty on a caller (it never sends an ACCEPT).
+    public func acceptsDueForResend(callId: String, roundPending: (Int) -> Bool) -> [SentAccept] {
         let sent: [Int: String] = lock.withLock { sentAcceptsByCall[callId.lowercased()] ?? [:] }
         return sent.keys.sorted().compactMap { round -> SentAccept? in
             guard let wire = sent[round] else { return nil }
             if round == 1 {
                 return sasCommit.isWaitingForReveal(callId: callId) ? SentAccept(round: round, wire: wire) : nil
             }
-            return roundDecided(round) ? nil : SentAccept(round: round, wire: wire)
+            return roundPending(round) ? SentAccept(round: round, wire: wire) : nil
+        }
+    }
+
+    /// R-ACCEPT-RESEND: forget the ACCEPT of rekey `round` of `callId`: the round was refused, never armed, abandoned,
+    /// decided or its window ended. Round 1 is never forgotten here (its proof of arrival is the REVEAL, not a MAC).
+    /// A no-op when nothing is stored.
+    public func forgetSentAccept(callId: String, round: Int) {
+        guard round >= 2 else { return }
+        let id = callId.lowercased()
+        lock.withLock {
+            sentAcceptsByCall[id]?.removeValue(forKey: round)
+            if sentAcceptsByCall[id]?.isEmpty == true { sentAcceptsByCall.removeValue(forKey: id) }
         }
     }
 

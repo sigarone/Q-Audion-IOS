@@ -14585,6 +14585,9 @@ final class AppState: ObservableObject {
         guard let call = kcCalls[key] else { return }
         switch verdict {
         case .verified(let round):
+            // R-ACCEPT-RESEND: the peer's MAC of this round verified, which is the proof of arrival of this device's rekey
+            // ACCEPT for it (when it is the acceptor): the stored bytes are forgotten. Round 1 is never forgotten here.
+            if round >= 2 { sasIntegration(forCallId: key)?.forgetSentAccept(callId: key, round: round) }
             guard let state = call.states[round], !state.resultRecorded else { return }
             state.kcStatus = .verified
             state.resultRecorded = true
@@ -14745,10 +14748,12 @@ final class AppState: ObservableObject {
             olderWires.append(recent)
         }
         // R-ACCEPT-RESEND (K4): the ACCEPTs of this device (it is their acceptor) that have no proof of arrival yet:
-        // the round-1 ACCEPT while the REVEAL has not verified, a rekey ACCEPT while the peer's MAC for that round has
-        // not verified. They take part in the SAME event (no extra budget) and each leaves BEFORE the MAC of its round.
+        // the round-1 ACCEPT while the REVEAL has not verified, a rekey ACCEPT only for a round this device armed and has not
+        // decided, i.e. that is still in PENDING (a round that was refused, never armed, abandoned, decided or whose window
+        // ended is forgotten: it adds no message to the event and is never by itself a reason to spend a unit of the budget).
+        // They take part in the SAME event (no extra budget) and each leaves BEFORE the MAC of its round.
         let acceptsDue = integration.acceptsDueForResend(callId: cid) { round in
-            call?.book.isDecided(round: round) ?? false
+            call?.book.isPending(round: round) ?? false
         }
         guard due.any || !olderWires.isEmpty || !acceptsDue.isEmpty else { return }
         guard integration.takeResendEvent(callId: cid) else {
