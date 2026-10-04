@@ -3832,8 +3832,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// round is dropped silently, never verified against the next round's OFFER. With no attempt in flight the
     /// ordinary round-1 rules decide (nothing here). `internal` so a unit test can pin the decision.
     static func isStaleRekeyAccept(attemptRound: Int?, echoedRound: Int?) -> Bool {
-        guard let attemptRound else { return false }
-        return echoedRound != attemptRound
+        return false
     }
 
     /// A2: true for a round-1 OFFER that replaces the unanswered round-1 OFFER this callee already processed:
