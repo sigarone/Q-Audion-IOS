@@ -188,7 +188,6 @@ public struct KcMacRoundBook {
             return .decided(verdict)
         case .unattributed:
             // A held MAC that is too old can never be offered again: it does not take a slot.
-            held.removeAll(where: { nowMs - $0.atMs >= Self.heldFreshMs })
             if held.contains(where: { CryptoConstants.constantTimeEquals($0.mac, parsed.mac) }) {
                 return .heldDropped
             }
