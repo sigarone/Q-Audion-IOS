@@ -4569,7 +4569,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if round == 1 {
                 return sasCommit.isWaitingForReveal(callId: callId) ? SentAccept(round: round, wire: wire) : nil
             }
-            return roundDecided(round) ? nil : SentAccept(round: round, wire: wire)
+            return SentAccept(round: round, wire: wire)
         }
     }
 
