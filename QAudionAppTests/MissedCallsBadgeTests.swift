@@ -212,6 +212,55 @@ final class MissedCallsBadgeTests: XCTestCase {
         XCTAssertEqual(badge.unreadCount, 0)
     }
 
+    // MARK: - a call that is not an unread incoming missed call adds nothing (review of #196)
+
+    /// The numbers on the Calls tab through the REAL store and the same markMissed call the remote-hangup path makes
+    /// while a call rings. The caller whose callee declined or hung up while it rang gets no number (its outgoing row
+    /// stays outgoing and is closed); a call that rang on this device and was not answered gets one.
+    @MainActor
+    func test_aDeclinedOutgoingCallAddsNothing_anUnansweredIncomingCallAddsOne() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missedbadge-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let suite = "missedbadge-store-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let store = PersistentCallRecordStore(
+            keyProvider: PersistentCallRecordStoreTests.FakeKeyProvider(),
+            fileURL: dir.appendingPathComponent("call_history.enc"),
+            notificationCenter: NotificationCenter(), retryNotifications: [], defaults: defaults)
+        // The store announces a change before it makes it; the test announces by hand after each step, so the count
+        // is read without waiting for the main queue.
+        let changes = PassthroughSubject<Void, Never>()
+        let badge = MissedCallsBadge(
+            records: { store.records },
+            changes: changes.eraseToAnyPublisher(),
+            loadSeenUpTo: { nil },
+            saveSeenUpTo: { _ in },
+            clock: { Date(timeIntervalSinceNow: -60) })
+        XCTAssertEqual(badge.unreadCount, 0)
+
+        // The caller: dials, the callee declines while it rings (the remote-hangup path asks markMissed, then endCall).
+        store.beginCall(id: "dialled", peerUserId: "callee", peerDisplayName: "Callee", direction: .outgoing, isVideo: false)
+        XCTAssertFalse(store.markMissed(id: "dialled"))
+        store.endCall(id: "dialled", closeReason: nil)
+        changes.send()
+        XCTAssertEqual(badge.unreadCount, 0, "a call the user placed is never a missed call")
+        XCTAssertEqual(store.records.first(where: { $0.id == "dialled" })?.direction, .outgoing)
+
+        // The callee: the call rings here and the caller gives up.
+        store.beginCall(id: "rang", peerUserId: "caller", peerDisplayName: "Caller", direction: .incoming, isVideo: false)
+        XCTAssertTrue(store.markMissed(id: "rang"))
+        changes.send()
+        XCTAssertEqual(badge.unreadCount, 1)
+
+        // The same call reported missed again (the cancel push, then the WS hangup): still one.
+        XCTAssertFalse(store.markMissed(id: "rang"))
+        changes.send()
+        XCTAssertEqual(badge.unreadCount, 1)
+    }
+
     // MARK: - the real store
 
     /// The convenience initialiser the app uses is wired to the real history store: a missed call recorded through

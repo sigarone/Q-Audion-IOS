@@ -794,6 +794,77 @@ final class PersistentCallRecordStoreTests: XCTestCase {
         XCTAssertEqual(onDisk.first(where: { $0.id == "c2" })?.closeReason, "peer_offline")
     }
 
+    // MARK: - W-MISSEDBADGE: only an unanswered INCOMING call becomes a missed call (review of #196)
+
+    @MainActor
+    private func beginIncoming(_ store: PersistentCallRecordStore, _ id: String) {
+        store.beginCall(id: id, peerUserId: "peer-\(id)", peerDisplayName: "Peer \(id)",
+                        direction: .incoming, isVideo: false)
+        Thread.sleep(forTimeInterval: 0.01)
+    }
+
+    /// The call that rings on this device and is not answered becomes a missed row, dated by when it became missed.
+    @MainActor
+    func test_markMissed_turnsAnIncomingRingIntoAMissedCall() throws {
+        let dir = try makeDirectory()
+        let url = dir.appendingPathComponent("call_history.enc")
+        let provider = FakeKeyProvider()
+        let store = makeStore(provider, at: url)
+        beginIncoming(store, "in1")
+
+        XCTAssertTrue(store.markMissed(id: "in1"))
+        let row = try XCTUnwrap(store.records.first(where: { $0.id == "in1" }))
+        XCTAssertEqual(row.direction, .missed)
+        XCTAssertNotNil(row.endedAt)
+        let onDisk = try readRecords(at: url, key: try XCTUnwrap(provider.key))
+        XCTAssertEqual(onDisk.first(where: { $0.id == "in1" })?.direction, .missed, "and it is saved")
+    }
+
+    /// The caller whose callee declined or hung up while it rang is NOT a missed call: the outgoing row stays outgoing
+    /// (it was a number on the Calls tab of the person who placed the call), and it is closed like any other call.
+    @MainActor
+    func test_markMissed_neverTouchesAnOutgoingCall_whichEndCallStillCloses() throws {
+        let dir = try makeDirectory()
+        let store = makeStore(FakeKeyProvider(), at: dir.appendingPathComponent("call_history.enc"))
+        begin(store, "out1")                       // .outgoing
+
+        XCTAssertFalse(store.markMissed(id: "out1"))
+        var row = try XCTUnwrap(store.records.first(where: { $0.id == "out1" }))
+        XCTAssertEqual(row.direction, .outgoing)
+        XCTAssertNil(row.endedAt, "markMissed changed nothing: the call is still open for endCall to close")
+
+        store.endCall(id: "out1")
+        row = try XCTUnwrap(store.records.first(where: { $0.id == "out1" }))
+        XCTAssertEqual(row.direction, .outgoing)
+        XCTAssertNotNil(row.endedAt, "AppState keeps the record id when markMissed answers false, so endCall closes it")
+    }
+
+    /// A second markMissed (the cancel push and the WS hangup both arrive) does not move endedAt: the badge dates a
+    /// missed call by it, and a later date would count the same call again after the user has looked.
+    @MainActor
+    func test_markMissed_aSecondCallLeavesEndedAtUnchanged() throws {
+        let dir = try makeDirectory()
+        let store = makeStore(FakeKeyProvider(), at: dir.appendingPathComponent("call_history.enc"))
+        beginIncoming(store, "in1")
+        XCTAssertTrue(store.markMissed(id: "in1"))
+        let first = try XCTUnwrap(store.records.first(where: { $0.id == "in1" })?.endedAt)
+
+        Thread.sleep(forTimeInterval: 0.05)
+        XCTAssertFalse(store.markMissed(id: "in1"))
+        XCTAssertEqual(store.records.first(where: { $0.id == "in1" })?.endedAt, first)
+        XCTAssertEqual(store.records.first(where: { $0.id == "in1" })?.direction, .missed)
+    }
+
+    /// An id the history does not hold (wiped meanwhile) changes nothing and says so.
+    @MainActor
+    func test_markMissed_anUnknownIdChangesNothing() throws {
+        let dir = try makeDirectory()
+        let store = makeStore(FakeKeyProvider(), at: dir.appendingPathComponent("call_history.enc"))
+        beginIncoming(store, "in1")
+        XCTAssertFalse(store.markMissed(id: "nope"))
+        XCTAssertEqual(store.records.map(\.direction), [.incoming])
+    }
+
     @MainActor
     func test_aFreeFormCloseReason_isStillDropped_andBusyHasNoDuration() throws {
         let dir = try makeDirectory()

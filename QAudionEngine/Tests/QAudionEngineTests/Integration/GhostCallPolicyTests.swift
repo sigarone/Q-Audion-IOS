@@ -259,6 +259,49 @@ final class GhostCallPolicyTests: XCTestCase {
         }
     }
 
+    // MARK: - shouldRecordMissedOnRemoteHangup (the user's other device took or refused the call)
+
+    private func recordsMissedOnHangup(ringing: Bool, reason: String, viaCancel: Bool) -> Bool {
+        Policy.shouldRecordMissedOnRemoteHangup(wasRinging: ringing, reason: reason, viaServerCancel: viaCancel)
+    }
+
+    /// The two reasons the server sends to the sibling devices of a callee, byte for byte
+    /// (`bcrypto-server` `cmd/bcrypto-lite/main.go`): a typo here would silently bring the false badge back.
+    func test_hangupMissed_siblingReasons_areTheServersTwoTokens() {
+        XCTAssertEqual(Policy.siblingDeviceCancelReasons, ["answered_on_other_device", "declined_on_other_device"])
+    }
+
+    /// Review of #196: the owner has an iPhone and an iPad, answers on the iPhone; the iPad's `call_cancel` carries
+    /// `answered_on_other_device` and its ring must end WITHOUT a missed row (it was a number on the tab).
+    func test_hangupMissed_answeredOrDeclinedOnAnotherDevice_isNotMissed() {
+        XCTAssertFalse(recordsMissedOnHangup(ringing: true, reason: "answered_on_other_device", viaCancel: true))
+        XCTAssertFalse(recordsMissedOnHangup(ringing: true, reason: "declined_on_other_device", viaCancel: true))
+    }
+
+    /// Every other ring that ends is still a missed call: the caller gave up, the ring timed out, the empty-reason
+    /// default the router sends (`timeout`), a lost peer, whatever the carrier (cancel or hangup).
+    func test_hangupMissed_everyOtherRingThatEnds_isStillMissed() {
+        for reason in ["timeout", "timeout_no_answer", "cancelled", "peer_disconnected", "recall", "error", "", "busy"] {
+            XCTAssertTrue(recordsMissedOnHangup(ringing: true, reason: reason, viaCancel: true), reason)
+            XCTAssertTrue(recordsMissedOnHangup(ringing: true, reason: reason, viaCancel: false), reason)
+        }
+    }
+
+    /// The reason of a `call_hangup` (and of an in-band hangup frame) is written by the PEER: naming a sibling reason
+    /// there must not make the callee's missed call disappear.
+    func test_hangupMissed_aPeerWrittenSiblingReason_isNotTrusted() {
+        XCTAssertTrue(recordsMissedOnHangup(ringing: true, reason: "answered_on_other_device", viaCancel: false))
+        XCTAssertTrue(recordsMissedOnHangup(ringing: true, reason: "declined_on_other_device", viaCancel: false))
+    }
+
+    /// Not ringing: nothing is ever missed, whatever the reason or the carrier.
+    func test_hangupMissed_notRinging_isNeverMissed() {
+        for reason in ["timeout", "answered_on_other_device", ""] {
+            XCTAssertFalse(recordsMissedOnHangup(ringing: false, reason: reason, viaCancel: true), reason)
+            XCTAssertFalse(recordsMissedOnHangup(ringing: false, reason: reason, viaCancel: false), reason)
+        }
+    }
+
     // MARK: - shouldRecordMissedOnCancelPush (push beats the WS hangup)
 
     private func recordsMissed(

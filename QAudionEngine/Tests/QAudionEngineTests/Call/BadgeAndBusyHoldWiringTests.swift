@@ -163,9 +163,9 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
             to: "func promoteToGroupCall(newPeerIds:")
         let cancel = try slice(
             code, from: "private func routeCallCancel(envelopeCallId: String, reason: String?) {",
-            to: "private func handleRemoteCallHangup(reasonString: String) {")
+            to: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {")
         let remote = try slice(
-            code, from: "private func handleRemoteCallHangup(reasonString: String) {",
+            code, from: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {",
             to: "private func wireIncomingChatHandlers(on ws: BCryptoWebSocketClient) {")
         for (name, text) in [("endCall", end), ("routeCallCancel", cancel), ("handleRemoteCallHangup", remote)] {
             for forbidden in ["callerBusyTone", "callerOutcome"] {
@@ -257,6 +257,38 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
         XCTAssertTrue(service.contains("case missedCall = \"QAUDION_MISSED_CALL\""))
         XCTAssertTrue(service.contains("case messageDelivered = \"QAUDION_MESSAGE_DELIVERED\""))
         XCTAssertTrue(service.contains("content.threadIdentifier = category.rawValue"), "each category is its own thread")
+    }
+
+    // MARK: - what is a missed call (review of #196)
+
+    /// A remote hangup / cancel asks the policy before it writes a missed row: a ring ended by the user's OTHER device
+    /// (`answered_on_other_device` / `declined_on_other_device`) is not a missed call, and the record id is released
+    /// only when `markMissed` really turned the row missed (an outgoing record stays, and `endCall` closes it).
+    func testRemoteHangupAsksThePolicyBeforeItMarksAMissedCall() throws {
+        let code = try appCode()
+        let remote = try slice(
+            code, from: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {",
+            to: "private func wireIncomingChatHandlers(on ws: BCryptoWebSocketClient) {")
+        XCTAssertTrue(remote.contains(
+            "let recordMissed: Bool = GhostCallPolicy.shouldRecordMissedOnRemoteHangup( wasRinging: wasRinging, reason: reasonString, viaServerCancel: viaServerCancel )"))
+        XCTAssertTrue(remote.contains(
+            "if recordMissed, let rid = missedRecordId, PersistentCallRecordStore.shared.markMissed(id: rid) { self.activeOutgoingRecordId = nil }"),
+                      "the id is released only when the row became missed, so endCall still closes an outgoing record")
+        XCTAssertFalse(remote.contains("if wasRinging, let rid"), "the ring flag alone no longer decides")
+        XCTAssertEqual(occurrences(of: "markMissed(id:", in: code), 2,
+                       "the two known writers: the remote hangup and the cancel push; a third must be reviewed")
+    }
+
+    /// Only the `call_cancel` router vouches for a sibling-device reason; the peer-written reason of a `call_hangup` or
+    /// of an in-band hangup frame never does.
+    func testOnlyTheCancelRouterVouchesForASiblingDeviceReason() throws {
+        let code = try appCode()
+        XCTAssertEqual(occurrences(of: "viaServerCancel: true", in: code), 1)
+        let cancel = try slice(
+            code, from: "private func routeCallCancel(envelopeCallId: String, reason: String?) {",
+            to: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {")
+        XCTAssertTrue(cancel.contains(
+            "handleRemoteCallHangup(reasonString: r.isEmpty ? \"timeout\" : r, viaServerCancel: true)"))
     }
 
     // MARK: - the quiet notification

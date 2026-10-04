@@ -373,7 +373,8 @@ jobs:
               CallerBusyWiringTests OutgoingCallKitStartPolicyTests OutgoingCallKitFallbackTests \
               CallTeardownLatchTests CallKitLateActivationTests PeerNameScopeTests \
               CallerBusyPeerSilenceTests CallerBusyTeardownTests BusyToneTests \
-              CallerBusyHoldTests MissedCallsBadgeStateTests MissedCallAlertPolicyTests BadgeAndBusyHoldWiringTests || true
+              CallerBusyHoldTests MissedCallsBadgeStateTests MissedCallAlertPolicyTests BadgeAndBusyHoldWiringTests \
+              GhostCallPolicyTests || true
             echo "::endgroup::"
           done
       - name: Upload the executed test case list

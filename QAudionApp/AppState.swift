@@ -9496,7 +9496,9 @@ final class AppState: ObservableObject {
     ///   - it names the current outgoing call: the latch has been reset, tear that call down;
     ///   - an outgoing call is live and the cancel names another one: ignored, whatever call it was;
     ///   - otherwise it is the incoming-call cancel: `handleRemoteCallHangup`, the same teardown as `call_hangup`
-    ///     (W474), unless it names a call other than the one that is active now.
+    ///     (W474), unless it names a call other than the one that is active now. It is flagged `viaServerCancel`:
+    ///     `answered_on_other_device` / `declined_on_other_device` (the sibling-device stand-down) end the ring
+    ///     without writing a missed call.
     private func routeCallCancel(envelopeCallId: String, reason: String?) {
         switch acceptLatch.cancelArrived(
             envelopeCallId: envelopeCallId, phase: callState.latchPhase, dialling: originalCallRole == .caller
@@ -9520,7 +9522,7 @@ final class AppState: ObservableObject {
                 return
             }
             let r: String = reason ?? ""
-            handleRemoteCallHangup(reasonString: r.isEmpty ? "timeout" : r)
+            handleRemoteCallHangup(reasonString: r.isEmpty ? "timeout" : r, viaServerCancel: true)
         }
     }
 
@@ -9529,7 +9531,11 @@ final class AppState: ObservableObject {
     /// `activeCallKitId == nil`, leaving isInCall/callState stuck on a
     /// not-yet-answered spurious call). The CallKit notification is the
     /// only part gated on having a live UUID.
-    private func handleRemoteCallHangup(reasonString: String) {
+    ///
+    /// `viaServerCancel` is `true` only when the teardown comes from a `call_cancel` envelope (`routeCallCancel`),
+    /// the one message the server itself sends with the sibling-device reasons; see
+    /// `GhostCallPolicy.shouldRecordMissedOnRemoteHangup`.
+    private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {
         let reason: CallEndReason
         switch reasonString {
         case "busy":      reason = .declined
@@ -9581,8 +9587,17 @@ final class AppState: ObservableObject {
             callWasAnswered: self.callWasAnswered,
             incomingRingVisible: self.incomingCallRingVisible
         )
+        // W-MISSEDBADGE — a ring that ended because this user's OTHER device answered or declined is not a missed call
+        // (the badge on the Calls tab counts every missed row). The record is then closed like any ended call by
+        // `endCall` below.
+        let recordMissed: Bool = GhostCallPolicy.shouldRecordMissedOnRemoteHangup(
+            wasRinging: wasRinging, reason: reasonString, viaServerCancel: viaServerCancel
+        )
         let missedRecordId = self.activeOutgoingRecordId
-        if wasRinging && missedRecordId == nil {
+        if wasRinging && !recordMissed {
+            RTLog.info("call", "hangup-while-ringing missed=0 sibling=1 rsn=" + reasonString)
+        }
+        if recordMissed && missedRecordId == nil {
             RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")
         }
         let uuid = self.activeCallKitId
@@ -9601,8 +9616,11 @@ final class AppState: ObservableObject {
                 await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
             }
             await MainActor.run {
-                if wasRinging, let rid = missedRecordId {
-                    PersistentCallRecordStore.shared.markMissed(id: rid)
+                // `markMissed` answers `false` for a record that is not an unanswered INCOMING call (the caller's
+                // own outgoing record when the callee declined or hung up while it rang): that record id is kept
+                // here, so `endCall` below still stamps its end like any ended call.
+                if recordMissed, let rid = missedRecordId,
+                   PersistentCallRecordStore.shared.markMissed(id: rid) {
                     self.activeOutgoingRecordId = nil
                 }
                 // W-DCHANGUP — remote-initiated teardown: the peer already
@@ -16454,10 +16472,14 @@ final class AppState: ObservableObject {
             incomingRingVisible: self.incomingCallRingVisible
         )
         guard shouldRecord, let recordId = self.activeOutgoingRecordId else { return }
-        PersistentCallRecordStore.shared.markMissed(id: recordId)
-        self.activeOutgoingRecordId = nil
+        // W-MISSEDBADGE: this push has no reason (a sibling that took the call elsewhere can reach it first, see
+        // `GhostCallPolicy.shouldRecordMissedOnRemoteHangup`), and a record that did not become missed keeps its id so
+        // the teardown closes it like any ended call.
+        let marked: Bool = PersistentCallRecordStore.shared.markMissed(id: recordId)
+        if marked { self.activeOutgoingRecordId = nil }
         let missedId8: String = String(callId.uuidString.prefix(8))
-        let missedLine: String = "cancelpush missed=1 id=" + missedId8
+        let markedFlag: String = marked ? "1" : "0"
+        let missedLine: String = "cancelpush missed=" + markedFlag + " id=" + missedId8
         RTLog.info("call", missedLine)
     }
 
