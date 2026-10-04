@@ -27,6 +27,14 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
             "2026-10-04 12:11:05.444368+0200 QAudionApp[12:345] [com.qaudion.app:runtime] [call] with the subsystem"))
     }
 
+    /// Lines of the tee on the CI host carried extra bytes in front of what the writer wrote: an echo with something
+    /// glued in front of it is still the echo.
+    func test_anEchoWithBytesInFrontOfIt_isStillRecognised() {
+        XCTAssertTrue(StdoutTeeLines.isOwnOSLogMirror("abcdefghijklmnopqrs" + echo))
+        XCTAssertTrue(StdoutTeeLines.isOwnOSLogMirror("Test Case started." + echo))
+        XCTAssertFalse(StdoutTeeLines.isOwnOSLogMirror("abcdefghijklmnopqrs 2026-10-04 12:11:05 no process and no category"))
+    }
+
     /// A line that was already re-captured once starts with the same echo prefix, so even the nested form of the
     /// incident is dropped, whatever its depth.
     func test_aLineThatWasAlreadyRecapturedOnce_isStillRecognised() {
@@ -142,8 +150,10 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
         RuntimeLogSink.shared.record(level: .info, tag: "teeprobe", "\(marker) recorded")
         try await Task.sleep(nanoseconds: 3_000_000_000)
         StdoutTeeLines.rawLineObserver = nil
-        let rawText = raw.all.map { "\($0.utf8.count)|\(StdoutTeeLines.isOwnOSLogMirror($0))|\($0.debugDescription.prefix(160))" }
-            .joined(separator: " ## ")
+        func hex(_ bytes: [UInt8]) -> String { bytes.map { String($0, radix: 16) }.joined(separator: ".") }
+        let rawText = raw.all.suffix(4).map {
+            "\($0.utf8.count)|\(StdoutTeeLines.isOwnOSLogMirror($0))|head \(hex(Array($0.utf8.prefix(30))))|tail \(hex(Array($0.utf8.suffix(30))))"
+        }.joined(separator: " ## ")
         let ringText = RuntimeLogSink.shared.snapshotEntries.filter { $0.seq > before }
             .map { "[\($0.tag)] \($0.message.utf8.count)/\($0.message.unicodeScalars.count)/\($0.message.count)|\($0.message.debugDescription.prefix(160))" }
             .joined(separator: " ## ")

@@ -433,21 +433,23 @@ enum StdoutTeeLines {
 
     /// `2026-10-04 02:11:05.328185+0000 QAudionApp[6733:26267] [runtime] ...`: the shape in which a process that runs
     /// with `OS_ACTIVITY_DT_MODE` echoes a `Logger` line to stderr: date, time with fractional seconds and zone, the
-    /// process name, `[pid:tid]`, `[category]`, then the message. Anchored at the start of the line; the category is
-    /// the sink's own, so the echo of any other subsystem's line is not matched. A subsystem before the category
-    /// (`[subsystem:category]`) is accepted too, in case another OS version prints it.
+    /// process name, `[pid:tid]`, `[category]`, then the message. The category is the sink's own, so the echo of any
+    /// other subsystem's line is not matched. A subsystem before the category (`[subsystem:category]`) is accepted
+    /// too, in case another OS version prints it. Not anchored: the CI test host showed lines of the tee that carry
+    /// extra bytes in front of what the writer wrote, and an echo that is not at the very start of its line is still
+    /// the echo (see `isOwnOSLogMirror`, which looks at the head of the line only).
     private static let ownMirrorPrefix: NSRegularExpression? = try? NSRegularExpression(
-        pattern: #"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4} [^\s\[\]]+\[\d+:\d+\] \[(?:[A-Za-z0-9._-]+:)?"#
+        pattern: #"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+[+-]\d{4} [^\s\[\]]+\[\d+:\d+\] \[(?:[A-Za-z0-9._-]+:)?"#
             + NSRegularExpression.escapedPattern(for: osLogCategory) + #"\](?: |$)"#)
 
     /// True for a line that is the console echo of the sink's OWN OSLog mirror. The tee must drop it: recording it
     /// would write it to OSLog again (the loop of the 2026-10-04 CI incident) or, with the mirror off, duplicate
     /// every `RTLog` line in the ring. Judged on the RAW line, before `LogRedactor` rewrites the time and the
-    /// `[pid:tid]` of its prefix. Only the head of the line is looked at.
+    /// `[pid:tid]` of its prefix. Only the head of the line (its first 160 UTF-16 units) is looked at.
     static func isOwnOSLogMirror(_ line: String) -> Bool {
         guard let regex = ownMirrorPrefix else { return false }
         let head = NSRange(location: 0, length: min(line.utf16.count, 160))
-        return regex.firstMatch(in: line, options: [.anchored], range: head) != nil
+        return regex.firstMatch(in: line, options: [], range: head) != nil
     }
 
     /// Turns the chunks read from the pipe into complete lines. A read ends wherever the pipe's buffer ends, so a
