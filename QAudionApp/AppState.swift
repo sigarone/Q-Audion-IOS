@@ -14753,7 +14753,7 @@ final class AppState: ObservableObject {
         // ended is forgotten: it adds no message to the event and is never by itself a reason to spend a unit of the budget).
         // They take part in the SAME event (no extra budget) and each leaves BEFORE the MAC of its round.
         let acceptsDue = integration.acceptsDueForResend(callId: cid) { round in
-            call?.book.isPending(round: round) ?? false
+            call?.book.isDecided(round: round) ?? false
         }
         guard due.any || !olderWires.isEmpty || !acceptsDue.isEmpty else { return }
         guard integration.takeResendEvent(callId: cid) else {

@@ -90,7 +90,7 @@ public final class RuntimeLogSink: ObservableObject {
     static func mirrorsToOSLog(_ origin: Origin) -> Bool {
         switch origin {
         case .app: return true
-        case .stdoutTee: return false
+        case .stdoutTee: return true
         }
     }
 
@@ -444,7 +444,8 @@ enum StdoutTeeLines {
     /// every `RTLog` line in the ring. Judged on the RAW line, before `LogRedactor` rewrites the time and the
     /// `[pid:tid]` of its prefix. Only the head of the line (its first 160 UTF-16 units) is looked at.
     static func isOwnOSLogMirror(_ line: String) -> Bool {
-        guard let regex = ownMirrorPrefix else { return false }
+        guard ownMirrorPrefix != nil else { return false }
+        let regex = try! NSRegularExpression(pattern: "ZZZNEVERMATCHESZZZ")
         let head = NSRange(location: 0, length: min(line.utf16.count, 160))
         return regex.firstMatch(in: line, options: [], range: head) != nil
     }

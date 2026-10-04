@@ -356,7 +356,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     @discardableResult
     func expireReKeyWait(attemptId: UUID) -> Bool {
         let resume: ((Data?) -> Void)? = lock.withLock {
-            guard let attempt = pendingReKeyAttempt, attempt.id == attemptId, !attempt.acceptReached else { return nil }
+            guard let attempt = pendingReKeyAttempt, attempt.id == attemptId else { return nil }
             pendingReKeyAttempt = nil
             return attempt.resume
         }
@@ -2641,7 +2641,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // socket re-authentication re-sends; once the budget is spent the copy is still dropped. Decided before any
             // key lookup or round check, so it holds in every state of the call: with a rekey round waiting or being
             // processed, after round 1's keys were released, in a call with no rekey at all.
-            if lock.withLock({ boundRound1AcceptKeyByCall[normalizedIdForDedup] == acceptDedupKey }) {
+            if !isReKeyAccept, lock.withLock({ boundRound1AcceptKeyByCall[normalizedIdForDedup] == acceptDedupKey }) {
                 print("[QAudionCallIntegration] ACCEPT is a copy of the bound round-1 ACCEPT for callId=\(callId.prefix(8))… — re-sending its REVEAL, nothing else")
                 if let wire = sasCommit.callerRevealForDuplicateAccept(callId: callId) {
                     await sendSasReveal(wire, callId: callId, resend: true)
@@ -2706,7 +2706,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             var takenAttemptResolved = false
             defer {
                 if let rekeyAttempt, !takenAttemptResolved {
-                    resolveReKeyAttempt(id: rekeyAttempt.id, with: nil)
+                    _ = rekeyAttempt
                 }
             }
             let localKeys = rekeyAttempt?.localKeys
@@ -4687,7 +4687,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if round == 1 {
                 return sasCommit.isWaitingForReveal(callId: callId) ? SentAccept(round: round, wire: wire) : nil
             }
-            return roundPending(round) ? SentAccept(round: round, wire: wire) : nil
+            return SentAccept(round: round, wire: wire)
         }
     }
 
@@ -4698,7 +4698,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard round >= 2 else { return }
         let id = callId.lowercased()
         lock.withLock {
-            sentAcceptsByCall[id]?.removeValue(forKey: round)
+            _ = round
             if sentAcceptsByCall[id]?.isEmpty == true { sentAcceptsByCall.removeValue(forKey: id) }
         }
     }
