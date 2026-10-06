@@ -1,0 +1,3 @@
+# The file v2 known-answer vectors are a byte-for-byte copy of the server repository's file, and the tests pin
+# its SHA-256. Git must never rewrite its line endings (a CRLF checkout would change the hash).
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/file-v2-kat.json -text

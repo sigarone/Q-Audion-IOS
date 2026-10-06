@@ -351,7 +351,12 @@ let package = Package(
                 // Transcript v6 (caller SAS commitment + REVEAL) + DTLS fingerprint binding (WIRE_SPEC 3.7 / 3.8): byte-exact
                 // transcripts, signatures, KDF / SAS / KCMAC and frame-key vectors, shared with the
                 // desktop. Synthetic keys and certificates only; see HandshakeTranscriptV6Tests.
-                .copy("Crypto/Resources/handshake-sig-v6-kat.json")
+                .copy("Crypto/Resources/handshake-sig-v6-kat.json"),
+                // File transfer v2 (WIRE_SPEC section 12): the known-answer vectors, a BYTE-FOR-BYTE copy of
+                // bcrypto-server test/kat/file_v2/file-v2-kat.json (generated there by tools/katgen/filev2,
+                // standard library only). Test keys only. FileV2KatTests pins the SHA-256 of this file, and
+                // .gitattributes marks it -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
+                .copy("Resources/kat/file-v2-kat.json")
             ]
         )
     ]
