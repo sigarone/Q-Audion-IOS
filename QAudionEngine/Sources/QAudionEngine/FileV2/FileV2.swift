@@ -12,9 +12,13 @@ import Foundation
 ///  - `FileV2` (this file): the constants of section 12.1, Padme (12.3), random key material (12.2)
 ///  - `FileV2Error`: the common error codes of section 12.9
 ///  - `FileV2Header`: the 64-byte header (12.4)
-///  - `FileV2Descriptor`: descriptor parsing and validation (12.7, 12.9 steps 1 and 2)
-///  - `FileV2Encryptor`: the sender, per chunk and file to file (12.5, 12.8)
-///  - `FileV2TagLedger`: the anti-nonce-reuse rule (12.8)
+///  - `FileV2JSON` (internal): the strict JSON profile, integers and canonical base64 (12.7.2, 12.7.3), on bytes
+///  - `FileV2Descriptor`: descriptor parsing and validation (12.7.2 to 12.7.5, 12.9 steps 1 and 2)
+///  - `FileV2Message`: recognition by byte prefix and the control messages `qa_file_src` and `qa_file_cancel`
+///    (12.7.1, 12.7.6)
+///  - `FileV2DescriptorBuilder`: the canonical builders of the descriptor and of the control messages (12.7.1)
+///  - `FileV2Encryptor`: the sender, per chunk and file to file (12.5, 12.8), owner of the nonce ledger
+///    (`FileV2TagLedger`, the anti-nonce-reuse rule of 12.8)
 ///  - `FileV2Decryptor`: the receiver, per chunk and file to file (12.6, 12.9)
 ///
 /// Memory: nothing in this library holds a whole file. The streaming entry points work one chunk
@@ -49,6 +53,22 @@ public enum FileV2 {
     public static let maxMimeBytes: Int = 128
     /// Largest decoded preview, in bytes.
     public static let maxPreviewBytes: Int = 2048
+    /// The only version of a file message this format defines (`qa_file`, `qa_file_src`, `qa_file_cancel`).
+    public static let descriptorVersion: Int64 = 2
+    /// Most nested containers (objects and arrays) a descriptor may hold, the top-level object being depth 1
+    /// (section 12.7.2 rule 4): `th` holding `src` holding `tok`, or `th`, `m`, `wave`.
+    public static let maxDescriptorDepth: Int = 4
+    /// The largest integer of the format, 2^53 - 1 (not exact beyond it in a JavaScript number; section 12.7.3).
+    public static let maxJSONInteger: Int64 = (1 << 53) - 1
+    /// Smallest and largest `ex` (`-1` view once, `0` no timer, `N` seconds): section 12.7.4.
+    public static let minEx: Int64 = -1
+    public static let maxEx: Int64 = (1 << 31) - 1
+    /// Largest `src.tok.max`: the server keeps it in an int32.
+    public static let maxTokenMax: Int64 = (1 << 31) - 1
+    /// Length of `src.tok.v`: lowercase hex of an HMAC-SHA-256.
+    public static let tokenValueHexLength: Int = 64
+    /// Length of `src.obj`: a lowercase hyphenated UUID in the server's format.
+    public static let objectIDLength: Int = 36
 
     // MARK: Padme (section 12.3)
 
@@ -116,15 +136,21 @@ public enum FileV2Error: Error, Equatable, Sendable, CustomStringConvertible {
     case sizeMismatch
     /// The sender cancelled.
     case cancelled
+    /// A recognised file message (`qa_file`, `qa_file_src`, `qa_file_cancel`) whose version is a plain integer
+    /// other than 2 (section 12.7.1). The rest of the body is not examined.
+    case unsupportedVersion
     /// Sender side, section 12.8 rule 1 and 2: the source changed under the transfer (its size, or the
     /// tag of a chunk that was already encrypted once). Nothing is transmitted; the transfer is cancelled
     /// with a new `K` and `file_id`, and the sender sends `qa_file_cancel`. Wire/telemetry code: `cancelled`.
     case contentChanged
+    /// The sealer or the receiver was used after `close()`: its key material is gone, so it neither seals nor
+    /// opens anything any more. Local condition, not a wire code.
+    case closed
     /// A programmer or caller error that is not a protocol condition (a size out of range, a destination
     /// that already exists, a stale resume state). Not a wire code.
     case invalidArgument(String)
 
-    /// The code of section 12.9, or `invalid_argument` for the local-only case.
+    /// The code of section 12.9, or `invalid_argument` / `closed` for the local-only cases.
     public var code: String {
         switch self {
         case .badDescriptor: return "bad_descriptor"
@@ -135,6 +161,8 @@ public enum FileV2Error: Error, Equatable, Sendable, CustomStringConvertible {
         case .badPadding: return "bad_padding"
         case .sizeMismatch: return "size_mismatch"
         case .cancelled, .contentChanged: return "cancelled"
+        case .unsupportedVersion: return "unsupported_version"
+        case .closed: return "closed"
         case .invalidArgument: return "invalid_argument"
         }
     }

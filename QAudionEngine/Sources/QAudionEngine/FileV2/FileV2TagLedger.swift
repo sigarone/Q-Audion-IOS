@@ -14,44 +14,50 @@ import Foundation
 ///    transfer is cancelled (`FileV2Error.contentChanged`, wire code `cancelled`; the sender sends
 ///    `qa_file_cancel`, with a new `K` and `file_id` for whatever comes next).
 ///
-/// `FileV2Encryptor` consults the ledger inside `sealChunk`, so a sealed chunk is only ever returned after
-/// the check. The ledger is thread safe: parallel workers, one index each, share one.
+/// The ledger is OWNED by the `FileV2Encryptor` that seals with it: it is created inside the encryptor, loaded at
+/// construction from the persisted tags of a resume (`FileV2Encryptor.resume`), and never handed out or injected, so
+/// no caller can start a resume with an empty ledger, share one ledger between two encryptors or edit it behind the
+/// encryptor's back. `FileV2Encryptor` consults it inside every seal, so a sealed chunk is only ever returned after the
+/// check. It is thread safe: parallel workers, one index each, share the encryptor.
 ///
-/// Persistence is the pipeline's job: `entries` is what the local transfer state stores (at most 80 KiB:
-/// 16 bytes for each of at most 5 120 chunks), `init(entries:)` restores it on resume. The state is local
-/// to the device and never goes into a backup.
-public final class FileV2TagLedger: @unchecked Sendable {
+/// Persistence is the pipeline's job: `FileV2Encryptor.tagEntries` is what the local transfer state stores (at most
+/// 80 KiB: 16 bytes for each of at most 5 120 chunks). The state is local to the device and never goes into a backup.
+final class FileV2TagLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var tags: [Int: Data]
 
-    public init() {
+    /// An empty ledger: a new file, nothing encrypted yet.
+    init() {
         tags = [:]
     }
 
-    /// Restores a persisted ledger. Every index must be in `0..<maxChunks` and every tag exactly 16 bytes:
-    /// a corrupted state is an error, never silently ignored (an ignored entry is an unchecked nonce).
-    public init(entries: [Int: Data]) throws {
+    /// Restores a persisted ledger for a file of `chunkCount` chunks. Every index must be in `0..<chunkCount` and
+    /// every tag exactly 16 bytes: a corrupted state is an error, never silently ignored (an ignored entry is an
+    /// unchecked nonce).
+    init(entries: [Int: Data], chunkCount: Int) throws {
+        var restored: [Int: Data] = [:]
         for (index, tag) in entries {
-            guard index >= 0, index < FileV2.maxChunks, tag.count == FileV2.tagSize else {
+            guard index >= 0, index < chunkCount, index < FileV2.maxChunks, tag.count == FileV2.tagSize else {
                 throw FileV2Error.invalidArgument("invalid tag ledger entry")
             }
+            restored[index] = Data([UInt8](tag))      // an own copy of the bytes
         }
-        tags = entries
+        tags = restored
     }
 
     /// The tag of every chunk encrypted so far, by index.
-    public var entries: [Int: Data] {
+    var entries: [Int: Data] {
         lock.lock(); defer { lock.unlock() }
         return tags
     }
 
     /// The number of chunks whose tag is recorded.
-    public var count: Int {
+    var count: Int {
         lock.lock(); defer { lock.unlock() }
         return tags.count
     }
 
-    public func tag(at index: Int) -> Data? {
+    func tag(at index: Int) -> Data? {
         lock.lock(); defer { lock.unlock() }
         return tags[index]
     }

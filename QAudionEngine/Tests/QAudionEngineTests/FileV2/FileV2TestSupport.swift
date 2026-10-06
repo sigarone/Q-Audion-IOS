@@ -85,6 +85,61 @@ struct FileV2Kat: Decodable {
         let expect: String
         let serialized: String
     }
+    /// A chat BODY judged by recognition (`recognition`): `class` is `text`, `descriptor`, `src` or `cancel`,
+    /// `expect` is `text`, `ok` or an error code. A body is `serialized` (text) or, when it is not valid UTF-8 or a
+    /// text tool could alter it, `serialized_b64` (its bytes, base64): exactly one of the two.
+    struct RecognitionVector: Decodable {
+        let name: String, rule: String, context: String, `class`: String, expect: String, why: String
+        let serialized: String?
+        let serialized_b64: String?
+    }
+    /// A descriptor TEXT that goes straight to the validator (`descriptor_rules`), with the normalised result of an
+    /// accepted one.
+    struct RuleVector: Decodable {
+        let name: String, topic: String, rule: String, expect: String, why: String
+        let serialized: String?
+        let serialized_b64: String?
+        let normalized: Normalized?
+    }
+    struct Normalized: Decodable {
+        struct Token: Decodable { let v: String, exp: Int64, max: Int64 }
+        struct Source: Decodable { let via: String, obj: String?, tok: Token? }
+        struct Media: Decodable { let w: Int64?, h: Int64?, dur: Int64?, wave: [Int64]? }
+        let sz: UInt64, kind: String
+        let nm: String?, mt: String?, pv_len: Int?
+        let src: Source
+        let media: Media?
+        let thumbnail: String
+        let ex: Int64?, xp: Int64?
+    }
+    /// Structured input of a builder and the exact text it must write (`builder_cases`).
+    struct BuilderVector: Decodable {
+        let name: String, message: String, why: String, expected: String
+        let input: BuilderInput
+    }
+    struct BuilderSource: Decodable {
+        struct Token: Decodable { let v: String, exp: Int64, max: Int64 }
+        let via: String
+        let obj: String?
+        let tok: Token?
+    }
+    struct BuilderMedia: Decodable {
+        let w: Int64?, h: Int64?, dur: Int64?
+        let wave: [Int64]?      // present and empty is a written empty array: absent is nil
+    }
+    /// A class, because a thumbnail is the same shape again (a struct cannot contain itself).
+    final class BuilderInput: Decodable {
+        let id_hex: String
+        let k_hex: String?, h_hex: String?
+        let sz: UInt64?
+        let kind: String?
+        let nm: String?, nm_utf16: [UInt16]?, mt: String?, mt_utf16: [UInt16]?
+        let src: BuilderSource?
+        let m: BuilderMedia?
+        let pv_hex: String?
+        let th: BuilderInput?
+        let ex: Int64?, xp: Int64?
+    }
 
     let format: String
     let version: Int
@@ -97,8 +152,27 @@ struct FileV2Kat: Decodable {
     let negative_blobs: [NegativeBlob]
     let negative_chunks: [NegativeChunk]
     let descriptors: [DescriptorVector]
+    let descriptor_constants: [String: FileV2KatValue]
+    let recognition: [RecognitionVector]
+    let descriptor_rules: [RuleVector]
+    let builder_cases: [BuilderVector]
     let error_codes: [String]
     let receive_order: [String]
+}
+
+/// The values of `descriptor_constants`: integers (`EX_MIN` is negative) and strings.
+enum FileV2KatValue: Decodable, Equatable {
+    case int(Int64)
+    case text(String)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Int64.self) {
+            self = .int(number)
+        } else {
+            self = .text(try container.decode(String.self))
+        }
+    }
 }
 
 /// Helpers shared by the file v2 test classes. No test skips silently: a missing resource fails.
@@ -106,8 +180,8 @@ enum FileV2TestSupport {
 
     /// SHA-256 of the KAT file, pinned: the file in this repository must stay a byte-for-byte copy of the one
     /// in the server repository (`test/kat/file_v2/file-v2-kat.json`).
-    static let pinnedKatSHA256 = "dfd9774dd37feef2c71f9399b0c708c43fdacd0dab410cc3a347777f31f611ad"
-    static let pinnedKatLength = 78_448
+    static let pinnedKatSHA256 = "ab975b6aa0d6e9196ef48ada18aaf730abe0226affa8ef080e1349d360de2811"
+    static let pinnedKatLength = 578_564
 
     // MARK: Hex and hashing
 
@@ -171,8 +245,24 @@ enum FileV2TestSupport {
         try JSONDecoder().decode(FileV2Kat.self, from: try katBytes())
     }
 
+    /// The BYTES of a body vector: `serialized` as the UTF-8 of the text, or `serialized_b64` decoded. Exactly one of
+    /// the two must be present.
+    static func bodyBytes(name: String, serialized: String?, serializedB64: String?) throws -> Data {
+        switch (serialized, serializedB64) {
+        case (let text?, nil): return Data(text.utf8)
+        case (nil, let encoded?):
+            guard let bytes = Data(base64Encoded: encoded) else { throw FileV2TestError.badBody(name) }
+            return bytes
+        default: throw FileV2TestError.badBody(name)
+        }
+    }
+
+    /// Bytes, compared as bytes: Swift compares `String`s by canonical equivalence, so a precomposed and a decomposed
+    /// text, or the Kelvin sign and `K`, would be "equal". A test of a byte-exact format must not use that.
+    static func utf8(_ text: String?) -> [UInt8]? { text.map { Array($0.utf8) } }
+
     /// A missing KAT resource FAILS the test that needs it: nothing here skips silently.
-    enum FileV2TestError: Error { case missingKat }
+    enum FileV2TestError: Error { case missingKat, badBody(String) }
 
     // MARK: Deterministic plaintext (byte j = j mod 251) and temporary files
 

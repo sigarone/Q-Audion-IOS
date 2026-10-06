@@ -4,13 +4,36 @@ import CryptoKit
 /// Everything derived from (`K`, `file_id`) with HKDF-SHA256 (section 12.2).
 struct FileV2DerivedKeys {
     /// `HKDF-Extract(salt = file_id, IKM = K)`. Exposed to the known-answer tests only.
-    let prk: Data
-    /// `K_enc`: the AES-256 key of the chunks. `K` itself is never used as an AES key.
+    private(set) var prk: Data
+    /// `K_enc`: the AES-256 key of the chunks. `K` itself is never used as an AES key. CryptoKit keeps its bytes
+    /// and clears them when the last reference goes away: dropping the struct is how it is "zeroed".
     let encryptionKey: SymmetricKey
     /// The first 8 bytes of every chunk nonce.
-    let noncePrefix: Data
-    /// The 32-byte key commitment stored in the header.
+    private(set) var noncePrefix: Data
+    /// The 32-byte key commitment stored in the header (public: it is in the header).
     let commitment: Data
+
+    /// Overwrites the `Data` copies of the secret material held here (the PRK and the nonce prefix). The
+    /// `SymmetricKey` cannot be overwritten from outside CryptoKit: drop the struct after this call.
+    mutating func wipe() {
+        FileV2Secret.wipe(&prk)
+        FileV2Secret.wipe(&noncePrefix)
+    }
+}
+
+/// Best-effort erasure of key material held in a `Data`.
+enum FileV2Secret {
+    /// Overwrites the bytes of `data` with zeros and leaves it empty. Best effort, as the platform allows: the storage
+    /// is cleared in place before it is released. A `Data` is a value: copies handed out earlier (COW) keep their own
+    /// storage and are the holder's to erase; only this storage is cleared.
+    static func wipe(_ data: inout Data) {
+        guard !data.isEmpty else { return }
+        data.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            _ = memset(base, 0, raw.count)
+        }
+        data = Data()
+    }
 }
 
 /// The primitives of sections 12.2, 12.5 and 12.6: key derivation, nonce, AAD, per-chunk

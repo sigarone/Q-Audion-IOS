@@ -1648,6 +1648,12 @@ Rules 1-3 above apply from the first public release on. The signed transcript v6
 and the SAS commitment, §3.7, §3.7.4, §3.8), the frame IV counter change (§11) and the file format v2 (§12) are hard
 switches of this kind.
 
+A new version of a file message (the `qa_file` member of §12.7.1) is a binary-incompatible change. Until a signed
+per-device announcement of the highest file message version it reads is defined in this specification, a sender MUST
+emit version 2 only; a group sender uses the lowest version announced by every current member device; a device that has announced nothing
+is taken to read version 2 only. A receiver that meets a version it does not know follows §12.7.1
+(`unsupported_version`).
+
 ---
 
 ## 7. Earbud key-import GATT family (0xc0–0xca)
@@ -2579,7 +2585,7 @@ no dedicated signature. If the channel cannot send a text message to a contact i
   "kind": "file | image | video | voice | avatar | thumb",
   "nm":   "report.pdf",
   "mt":   "application/pdf",
-  "src":  { "via": "srv", "obj": "<server object id>", "tok": { "v": "<hex>", "exp": 0, "max": 0 } },
+  "src":  { "via": "srv", "obj": "<lowercase UUID>", "tok": { "v": "<64 lowercase hex>", "exp": 0, "max": 0 } },
   "m":    { "w": 1920, "h": 1080, "dur": 5234, "wave": [] },
   "pv":   "<b64 preview, at most 2048 B>",
   "th":   { "qa_file": 2, "kind": "thumb", "...": "complete descriptor of the thumbnail" },
@@ -2588,20 +2594,220 @@ no dedicated signature. If the channel cannot send a text message to a contact i
 }
 ```
 
+The example above is expanded for readability: builders emit compact JSON in the canonical form of §12.7.1.
+
 - `id` MUST equal the header's `file_id`; `padme(sz)` MUST equal `stream_len`; `sz` is 1..`MAX_SIZE`.
 - `nm` is at most 255 UTF-8 bytes and `mt` at most 128; the receiver still sanitises them (canonical path, no
   overwriting).
 - `src.via = "direct"` means the direct path with no copy on the server; `src.via = "srv"` carries the server object
   and the download token.
-- `m` carries only the fields of its own `kind`. `pv` is a tiny preview (decoded length at most 2048 bytes). The real
-  thumbnail is a separate v2 file (`kind: "thumb"`, own key) described in `th`.
-- `ex` and `xp` keep their current meaning (ephemeral-message lifetime, export permission).
-- The serialised descriptor MUST stay under 8 KiB (the server limits WebSocket frames to 32 KiB and the descriptor
-  travels encrypted and base64-encoded).
+- `m` carries only display hints (dimensions, duration, waveform) of its own `kind`. `pv` is a tiny preview (decoded
+  length at most 2048 bytes). The real thumbnail is a separate v2 file (`kind: "thumb"`, own key) described in `th`.
+- `ex` and `xp` keep their current meaning: `ex` is the ephemeral-message lifetime (`-1` view once, `0` no timer, `N`
+  seconds), `xp` the export permission (`0` blocked, `1` allowed).
+- The serialised descriptor MUST stay under 8 KiB, 8192 bytes (the server limits WebSocket frames to 32 KiB and the
+  descriptor travels encrypted and base64-encoded).
 
-Control messages on the same channel: `{"qa_file_src": 2, "id": ..., "src": {...}}` adds a source (for example the
-server after a failed direct path); `{"qa_file_cancel": 2, "id": ...}` means the sender cancelled and the receiver
-discards the chunks received. Delivery receipts keep their current form, keyed by `id`.
+The sub-sections below fix, for every point where a lenient JSON library and a strict one would disagree, exactly one
+behaviour. The three platforms implement them as written and test them with the vectors of §12.13; the vectors state
+the expected result for each rule, so a library that is stricter or more lenient than this section fails a test.
+The numbers of this section (limits, prefixes, patterns) are also published as `descriptor_constants` in the vector
+file.
+
+#### 12.7.1 Recognition, builders and the canonical form (MUST)
+
+The body of a file message is a sequence of bytes, the UTF-8 text decrypted from the channel. Recognition and
+validation run on those bytes exactly as decrypted: no decoder that strips a byte order mark, normalises the text or
+substitutes U+FFFD runs before them (JavaScript: `new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })`), and a
+platform string that holds an unpaired UTF-16 surrogate is not valid UTF-8, so a body made of it is rejected for
+version 2 (§12.7.2). Every comparison of this section is on bytes: in Swift `body.utf8.starts(with:)`, never `hasPrefix`, which
+compares grapheme clusters and would take a colon followed by a combining mark for a different character.
+
+A chat message body (1:1), or the content of a group payload 0xE4 with `msg_type = 1`, is a file message if and only
+if its bytes begin with one of these three strings, the compact form up to and including the colon, whatever the
+version that follows:
+
+| Prefix | Message |
+|---|---|
+| `{"qa_file":` | file descriptor |
+| `{"qa_file_src":` | source message (§12.7.6) |
+| `{"qa_file_cancel":` | cancel message (§12.7.6) |
+
+No leading whitespace is skipped and none is allowed inside the prefix: `{ "qa_file":2,`, `{"qa_file" :2,` and a body
+that begins with a byte order mark are not recognised. Recognition is a prefix test on the bytes and needs no JSON
+parsing; it is the same in a 1:1 chat and in a group.
+
+- A body that does not begin with one of the prefixes is ordinary chat text, whatever else it contains, including a
+  valid descriptor whose first member is another member. It is displayed as text and creates no transfer.
+- The version is the text after the prefix up to the first `,`, `}` or JSON whitespace, or up to the end of the body.
+  It is read before anything else. The plain integer 2 (§12.7.3): the body is validated (§12.7.2 to §12.7.6). Another
+  plain integer (`1`, `3`, `0`, `-1`): the body is rejected with `unsupported_version` and the rest of it is not
+  examined, because a later version may have another shape. Anything else (empty, `2.0`, `"2"`, `02`, `1e0`, a
+  magnitude above 2^53 - 1): `bad_descriptor`.
+- Digits are the ASCII characters 0 to 9; a routine that accepts other Unicode digits MUST NOT be used on the version
+  text (the Arabic-Indic and fullwidth digits two are not a 2).
+- The checks of §12.7.2 apply to version 2 only: a body with a recognised prefix and another plain integer version is
+  `unsupported_version` whatever follows, invalid UTF-8 or a length of 8192 bytes or more included.
+- A recognised body that is rejected, with any code, MUST NOT be displayed as text, ever. A rejected descriptor
+  becomes ONE placeholder in the conversation; for `unsupported_version` with a version greater than 2 the placeholder
+  text is 'update the app' (the sender may also resend). Its content is never displayed, quoted (reply, forward), put
+  in a notification, indexed for search, or written in the clear to backups or logs. A client that receives an
+  `unsupported_version` message SHOULD keep the raw body sealed, with the same at-rest protection as any other message
+  of the conversation, so that an app update can process it; if it cannot, the placeholder tells the user that the
+  sender must resend it. A rejected CONTROL message (§12.7.6) produces no placeholder at all: it is dropped silently and
+  keeps nothing.
+- Text supplied by the user through any entry point (typing, paste, share sheet, intents, dictation) that begins with a
+  prefix MUST be refused as an ordinary message; only the builders of this section produce such a body.
+- Forward compatibility. A later incompatible change of a file message MUST bump the version (§6). Until a signed
+  per-device announcement of the highest file message version it reads is defined in this specification, a sender MUST
+  emit version 2 only; a group sender uses the lowest version announced by every current member device. Within
+  version 2, an unknown `kind` or `via` stays `bad_descriptor`, and unknown members are ignored (§12.7.2).
+
+Builders (MUST). A builder takes structured input and writes the canonical form, so that every platform can be tested
+byte for byte against the `builder_cases` of §12.13:
+
+- compact JSON (no whitespace outside strings), the members in this fixed order: `qa_file`, `id`, `k`, `h`, `sz`,
+  `kind`, `nm`, `mt`, `src` (`via`, `obj`, `tok` (`v`, `exp`, `max`)), `m` (`w`, `h`, `dur`, `wave`), `pv`, `th`, `ex`,
+  `xp`; the thumbnail in `th` is built by the same rules;
+- an absent optional member is omitted, and `null` is NEVER written; an empty `nm`, `mt` or `pv` counts as absent, `m`
+  is omitted when none of its members is set, and `ex` and `xp` are written only when the sender set them;
+- integers in plain decimal form (§12.7.3); `id`, `k`, `h` and `pv` in canonical base64;
+- `nm` and `mt`: every unpaired surrogate of a UTF-16 platform string is replaced by U+FFFD, then the text is cut to at
+  most 255 (`nm`) or 128 (`mt`) UTF-8 bytes at a character boundary, a Unicode scalar value never being split;
+- escaping: only the quote, the backslash and the C0 controls (U+0000 to U+001F) are escaped, with the short forms
+  `\b`, `\f`, `\n`, `\r`, `\t` and the form `\u00xx` with lowercase hex for the others; `/` is not escaped, and every
+  other character (DEL, U+2028 and all non-ASCII included) is written raw as UTF-8. A general-purpose JSON encoder is
+  not enough: many of them also escape U+2028, `<`, `>` and `&`, or write non-ASCII as escapes;
+- control messages are built the same way: compact JSON, the members `qa_file_src` (or `qa_file_cancel`), `id`, and for
+  `qa_file_src` then `src`, built as in a descriptor; the text begins `{"qa_file_src":2,"id":` or
+  `{"qa_file_cancel":2,"id":`;
+- `src.obj` and `src.tok.v` are written exactly as the server returned them, never re-formatted through a UUID or a
+  number type (Swift's `uuidString`, for one, is upper case);
+- size: if the canonical text would reach 8192 bytes, the builder drops `m.wave`, then `pv`, then `th`, of the file
+  descriptor, in that order, stopping as soon as the text fits; the thumbnail is dropped whole, never trimmed, and a
+  dropped `m.wave` leaves `m` omitted if it has no other member. It refuses to send the message if the text still does
+  not fit. The cut of `nm` and `mt` counts the raw UTF-8 bytes, not the escaped ones;
+- a builder refuses to send a value outside §12.7.4 (for example a `pv` over 2048 decoded bytes or an out-of-range `sz`)
+  instead of writing it.
+
+The output of a builder MUST be accepted by the receiver rules of §12.7.2 to §12.7.6, and a descriptor begins with
+`{"qa_file":2,"id":`.
+
+#### 12.7.2 JSON profile (MUST)
+
+The text of a file message is parsed with this profile. A text that fails any rule is `bad_descriptor` and none of its
+fields is used.
+
+1. The text is the body as decrypted (§12.7.1), valid UTF-8, and shorter than 8192 bytes. Bytes are counted, not
+   characters or UTF-16 units, over the whole serialised text: unknown members and the thumbnail count too.
+2. It is exactly one JSON object (RFC 8259), optionally surrounded by JSON whitespace (space, tab, LF, CR). No byte
+   order mark, no comments, no trailing comma, no data after the object.
+3. Member names are unique within every object. Names are compared as sequences of Unicode code points after
+   unescaping, WITHOUT any normalisation or case folding: the precomposed and the decomposed form of a letter are two
+   names, the Kelvin sign U+212A is not `K`, and a name written with an escape equals the same name written raw.
+   Implementations compare code points or UTF-8 bytes (Swift: `unicodeScalars` or UTF-8 bytes, never `String`
+   equality or a `[String: _]` key, which compare canonically equivalent texts as equal; JavaScript: a `Map`, so that
+   `__proto__` and `constructor` are ordinary names). A repeated name is rejected at every depth and in known and
+   unknown members alike: there is no "last one wins" and no "first one wins".
+4. At most 4 nested containers (objects and arrays), the top-level object being depth 1. The deepest legitimate
+   descriptor is `th` holding `src` holding `tok` (depth 4), or `th`, `m`, `wave` (depth 4); the token object holds
+   scalar members only (§12.7.4).
+5. A string escape that denotes a lone surrogate (a high surrogate not followed by a low surrogate, or a low surrogate
+   on its own) is rejected, so that every string has one and the same UTF-8 length on every platform. A valid
+   surrogate pair is one character.
+6. Unknown members are ignored, at every level and whatever their JSON type (forward compatibility), including the
+   `scope` member the server adds to a download token. They count for the 8 KiB limit and obey rules 1 to 5 like
+   everything else. Numbers inside unknown members are checked against the JSON grammar of RFC 8259 only and are never
+   converted: `1e400`, an integer of 400 digits and `-0` are accepted there, so a library must not turn them into a
+   double or an integer.
+
+#### 12.7.3 Integers and base64 (MUST)
+
+Integers. Every number that the format reads (`qa_file`, `sz`, `ex`, `xp`, `src.tok.exp`, `src.tok.max` and the numbers
+inside `m`) is an integer written in plain decimal form: `0`, or an optional minus sign followed by a digit 1 to 9
+followed by zero or more digits 0 to 9 (so `2` and `-1` are integers). A fraction (`2.0`), an exponent (`1e0`), a plus
+sign, a leading zero and `-0` are not integers of the format, and neither is a magnitude above 2^53 - 1 =
+9 007 199 254 740 991 (not exact in a JavaScript number). A string, a boolean, `null`, an array or an object is not an
+integer. A required integer that is not one makes the descriptor `bad_descriptor`; in `m` it makes `m` malformed
+(§12.7.4).
+
+Base64. `id`, `k`, `h` and `pv` are base64 in the standard alphabet of RFC 4648 section 4, with the mandatory `=`
+padding, in canonical form: no CR, LF or other whitespace anywhere in the text, no character of the URL-safe alphabet,
+no missing or surplus padding, and zero in the unused trailing bits of the last character. One byte string has exactly
+one accepted text; a receiver can check this by decoding the text, encoding the bytes again and comparing with the
+original. Anything else is `bad_descriptor`.
+
+#### 12.7.4 Fields (MUST)
+
+Every violation in this table is `bad_descriptor`. The fields are checked before the header (§12.9, step 1 before
+step 2): a descriptor with a bad field and a wrong header is `bad_descriptor`.
+
+| Member | Rule |
+|---|---|
+| `qa_file` | required, the integer 2 |
+| `id`, `k`, `h` | required; canonical base64 (§12.7.3) of exactly 16, 32 and 64 bytes |
+| `sz` | required; integer 1..`MAX_SIZE` |
+| `kind` | required; string, one of `file`, `image`, `video`, `voice`, `avatar`, `thumb` |
+| `nm` | optional; string of at most 255 UTF-8 bytes (bytes, not characters) |
+| `mt` | optional; string of at most 128 UTF-8 bytes |
+| `pv` | optional; canonical base64 of at most 2048 decoded bytes (the empty string is valid) |
+| `src` | required object |
+| `src.via` | required; `"srv"` or `"direct"` |
+| `src.obj` | string of exactly 36 characters in the format of the server's object ids, `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` (lowercase hex, hyphens at 8, 13, 18 and 23, no version check). Required when `via` is `"srv"`; on a `"direct"` source it is checked the same way and not used |
+| `src.tok` | optional object whose members are scalars only (a member that is an object or an array is invalid, so that `th.src.tok` stays at depth 4; unknown scalar members are ignored); when present: `v` required, exactly 64 lowercase hex characters (an HMAC-SHA-256); `exp` required, integer 0..2^53 - 1, epoch milliseconds; `max` required, integer 0..2^31 - 1 |
+| `ex` | optional integer: `-1` (view once), `0` (no timer) or a lifetime of 1..2^31 - 1 seconds; absent means no timer |
+| `xp` | optional integer: `0` (export blocked) or `1` (export allowed); absent means allowed |
+
+`null` is accepted as "absent" for `nm`, `mt` and `pv` only. For every other member, `null` is a value of the wrong
+type, which is `bad_descriptor` (`src.obj: null`, `src.tok: null`, `ex: null`, `xp: null` included), except for `m`
+(below) and `th` (§12.7.5). `ex` and `xp` carry the ephemeral timer and the export permission, so a wrong type or an
+out-of-range value fails closed instead of falling back to a default (a reader that tests `xp != 0` would otherwise
+allow the export of a file marked `xp: 2`).
+
+A `"srv"` source without `tok` is valid, but the receiver cannot download from the server with it: it never requests
+the object without a token, it keeps the transfer pending ("waiting for the sender") until a `qa_file_src` message of
+the same transfer brings a source it can use (§12.7.6), and the user can discard it. The format sets no timeout.
+
+`m` is cosmetic and never makes a descriptor invalid. It is well typed when it is an object in which `w`, `h` and
+`dur`, if present, are integers (§12.7.3) and `wave`, if present, is an array of integers; unknown members of `m` are
+ignored. A well-typed `m` is used as it is and the format does not check its ranges (a value may be negative or larger
+than 32 bits; the user interface MUST clamp whatever it draws or allocates from `m`). A malformed or wrongly typed `m`
+(not an object, a member of the wrong type, `null` included, a non-integer number such as `1920.0`, an element of
+`wave` that is not an integer) is IGNORED: the receiver treats `m` as absent and keeps the file. A violation of the
+JSON profile inside `m` (§12.7.2, for example a repeated name) is still `bad_descriptor` for the whole descriptor.
+
+#### 12.7.5 Thumbnail (`th`)
+
+`th`, when present, MUST be a complete descriptor: it satisfies §12.7.3 and §12.7.4 exactly as a file descriptor does,
+with its own `id`, `k`, `h`, `sz`, its own `src`, and the header checks of §12.9 step 2 against its own key, and its
+`kind` is `"thumb"`. Its `id` MUST differ from the `id` of the file (a thumbnail is another file). A thumbnail
+descriptor carries no `th` of its own: a descriptor of kind `thumb` that has a `th` member is invalid, and at the top
+level it is rejected with `bad_descriptor`. `th` set to `null`, or to anything other than such a descriptor, is
+invalid.
+
+An invalid `th` does not invalidate the file. The file descriptor stays valid and is processed as if `th` were absent,
+with one difference: the receiver MUST NOT use the thumbnail (it neither downloads nor displays it) and reports
+`bad_descriptor` for the thumbnail only. Every failure of the thumbnail, including its header checks, is reported with
+this one code. The thumbnail is a file of its own, with its own key, transfer and errors; its result never changes the
+result of the file. The JSON profile (§12.7.2) applies to the whole text: a repeated member name, a nesting depth over
+4 or a text of 8192 bytes or more inside `th` rejects the entire descriptor, not only the thumbnail.
+
+#### 12.7.6 Control messages
+
+`{"qa_file_src":2,"id":...,"src":{...}}` adds a source (for example the server after a failed direct path);
+`{"qa_file_cancel":2,"id":...}` means the sender cancelled and the receiver discards the chunks received. Both are
+recognised by their prefix and version (§12.7.1) and follow the JSON profile and the number and base64 rules (§12.7.2,
+§12.7.3). In both, the version member is the integer 2 and `id` is canonical base64 of 16 bytes; in `qa_file_src`,
+`src` is required and follows the rules of §12.7.4. Other members are ignored. A control message that begins with its
+prefix and fails these checks (`bad_descriptor`, or `unsupported_version`) is rejected: it is dropped silently, with no
+placeholder, and never shown as text.
+
+A control message applies only to a transfer whose descriptor came from the SAME sender ACCOUNT, from any of its
+devices, in the SAME conversation (the same 1:1 chat, or the same group). If the sender account or the conversation
+differs, or if no transfer with that `id` exists, the message is dropped silently: it neither adds a source, nor cancels, nor creates a transfer. No vector can state
+this, because it depends on the state of the receiver; it is a requirement of the platform behaviour tests.
+
+Delivery receipts keep their current form, keyed by `id`.
 
 ### 12.8 Resume, retries, parallelism: the nonce-reuse rule
 
@@ -2629,7 +2835,10 @@ the receiver gets `qa_file_cancel` on the encrypted channel.
 
 Checks, in this mandatory order:
 
-1. the descriptor is valid (fields, lengths, `kind`), `sz` between 1 and `MAX_SIZE`;
+1. the body is recognised as a file message of version 2 (§12.7.1; another plain integer version is
+   `unsupported_version`) and the descriptor is valid: the JSON profile, the integer and base64 rules and the fields of
+   §12.7.2 to §12.7.4 (lengths, `kind`, `src`, `ex`, `xp`), `sz` between 1 and `MAX_SIZE`. `th` is judged on its own
+   (§12.7.5) and never changes the result of the file;
 2. the header of the descriptor: magic, `file_id == id`, `stream_len` in range, `total_chunks == ceil(stream_len /
    CHUNK)` and in range, `stream_len == padme(sz)`, `commitment` equal to the one derived from `K`;
 3. the header of the source (the first 64 bytes of the blob, or the `HELLO` frame of the direct channel) equals the
@@ -2639,24 +2848,34 @@ Checks, in this mandatory order:
    tags are rejected). On failure the chunk is discarded and requested again, from the same or another source, at
    most 3 times, then error. A chunk already verified that arrives again is ignored: completion is counted on the map
    of verified chunks, never on the number of messages received;
-5. at the end: all `total_chunks` chunks verified, padding all zero, truncation to `sz`.
+5. at the end: all `total_chunks` chunks verified, padding all zero, truncation to `sz`. The padding check stays last:
+   it runs only on a complete stream.
+
+Incomplete transfer. When the source ends the stream before the last chunk (the server's object ends, or the direct
+channel sends `DONE`, with chunks of the map still missing), the transfer is incomplete and the result is
+`size_mismatch`, whether the stream ends at a chunk boundary or inside a chunk. There is no separate error code for it,
+and `bad_padding` is never reported for it (the padding is checked at step 5 only). A connection that fails or times
+out is not an end of stream: the receiver resumes from the map of verified chunks (below).
 
 The receiver writes verified chunks at their position (`i × CHUNK`), keeps the map of verified chunks, may resume from
 any point and from any source, and checks it has room for `stream_len` before starting. No plaintext byte is shown to
 the user before its chunk is verified; progressive playback may use verified chunks in order.
 
 Error codes common to the three platforms (telemetry and negative vectors): `bad_descriptor`, `bad_header`,
-`commit_mismatch`, `header_mismatch`, `chunk_auth`, `bad_padding`, `size_mismatch`, `cancelled`. The mapping of the
-checks above, as the reference receiver of the vector generator applies it:
+`commit_mismatch`, `header_mismatch`, `chunk_auth`, `bad_padding`, `size_mismatch`, `cancelled`, `unsupported_version`.
+The mapping of the checks above, as the reference receiver of the vector generator applies it:
 
 | Check | Code |
 |---|---|
-| descriptor fields, lengths, `kind`, `sz` range | `bad_descriptor` |
+| recognised file message whose version is a plain integer other than 2 (§12.7.1), before step 1 | `unsupported_version` |
+| version that is not a plain integer, JSON profile, integers, base64, descriptor fields, lengths, `kind`, `src`, `ex`, `xp`, `sz` range (§12.7.1 to §12.7.4) | `bad_descriptor` |
+| `th` invalid (§12.7.5) | `bad_descriptor` for the thumbnail only; the file is processed |
 | magic, `file_id != id`, `stream_len` or `total_chunks` out of range or inconsistent | `bad_header` |
 | `stream_len != padme(sz)` | `size_mismatch` |
 | commitment differs from the derived one | `commit_mismatch` |
 | source header differs from the descriptor header | `header_mismatch` |
 | blob length differs from `64 + stream_len + 16 × total_chunks` (including a missing last chunk) | `size_mismatch` |
+| the source ends the stream before the last chunk (incomplete transfer) | `size_mismatch` |
 | chunk of the wrong length, or GCM open fails | `chunk_auth` |
 | chunk index `>= total_chunks` | discarded, no error |
 | non-zero padding | `bad_padding` |
@@ -2717,9 +2936,68 @@ duplicated, removed and foreign chunks, wrong `final` flag, non-zero padding, `s
 `total_chunks`, source header differing from the descriptor, truncated and extended blobs), each with its expected
 error code; and descriptor examples, three valid (file with thumbnail, voice note, group image) and invalid ones.
 Multi-chunk negative vectors are given as a recipe on a named positive vector plus the SHA-256 of the resulting blob.
+A blob that ends before the last chunk is covered by `last_chunk_removed` (at a chunk boundary) and `blob_tag_truncated`
+(inside a chunk): both `size_mismatch`, §12.9.
+The strict descriptor profile of §12.7.1 to §12.7.6 has four more sections, and `error_codes` lists `unsupported_version`
+after the eight earlier codes.
+
+- `descriptor_constants`: the limits, the version, the object id pattern and the three recognition prefixes.
+- `recognition`: a chat BODY is judged by recognition (§12.7.1) and, if it is a file message, by the validator. A vector
+  gives `class` (`text`, `descriptor`, `src` or `cancel`) and `expect`: `text` (not a file message, shown as text), `ok`
+  (a valid file message) or an error code (recognised and rejected, never shown as text; `unsupported_version` among
+  them), and `rule`, the reason of a rejection. Only these texts go through recognition.
+- `descriptor_rules`: a descriptor TEXT goes straight to the validator (§12.7.2 to §12.7.5), WITHOUT the recognition
+  step of §12.7.1; the earlier `descriptors` section works the same way. The validator checks `qa_file` itself, so
+  `{"qa_file":1,...}` is `bad_descriptor` there and `unsupported_version` only through recognition. A vector gives
+  `expect` (`ok` or an error code), `rule`, and for `ok` the `normalized` result described below.
+- `builder_cases`: structured input for a builder and the exact text it MUST write (§12.7.1). `message` says what is
+  built: `descriptor`, `src` or `cancel`. For a descriptor the input has `id_hex`, `k_hex`, `h_hex`, `sz`, `kind`, `nm` and
+  `mt` (text, or UTF-16 code units in `nm_utf16` and `mt_utf16` for the platforms whose strings can hold an unpaired
+  surrogate; the others skip those cases), `src`, `m`, `pv_hex`, `th`, `ex` and `xp`; a member absent from the input is
+  absent for the builder. For `src` and `cancel` the input has `id_hex` and, for `src`, `src`. `expected` is also
+  accepted by the receiver. The cases pin the escaping, the cut of `nm` and `mt` on raw bytes, the size rule (`m.wave`,
+  then `pv`, then `th` are dropped) and that `src.obj` and `tok.v` are copied as given.
+
+`receive_order` keeps its eight lines: recognition and the `unsupported_version` row are covered by the `recognition`
+section, not by `receive_order`.
+
+A body is carried as `serialized` (text) or, when it is not valid UTF-8 or a text tool could alter it (a byte order
+mark), as `serialized_b64`, the base64 of its bytes; exactly one of the two is present, and a library compares and
+parses BYTES. Together the sections pin recognition and versions, the JSON profile (size at exactly 8191, 8192 and 8193
+bytes, duplicate names compared as code points, depth, surrogates, invalid UTF-8), integers, canonical base64, every
+typed field (`src.obj`, `src.tok`, `ex`, `xp`, `nm`, `mt`, `pv`), the ignored `m`, the thumbnail rules, the order of the
+checks and the canonical serialisation; every rule has at least one accepted and one rejected case. The earlier
+`descriptors` section keeps its names and results (the object ids in it are now lowercase UUIDs, as §12.7.4 requires).
+
+The `normalized` result of an accepted descriptor has: `sz` and `kind`; `nm` and `mt`, the strings or `null` when absent;
+`pv_len`, the decoded length of the preview or `null`; `src`, with `via`, `obj` (kept when present, on a `direct` source
+too, else `null`) and `tok` (`v`, `exp`, `max`, or `null`); `media`, `null` when `m` is absent or ignored, else an object
+with `w`, `h`, `dur` and `wave`, each `null` when that member is absent (an empty `wave` stays an empty array);
+`thumbnail`, `absent` (no `th`), `valid`, or `bad_descriptor` (an invalid `th`: the file stays valid); `ex` and `xp`,
+the integers or `null` when absent (the defaults then apply). Integers compare as integers.
 All keys in the file are test keys derived from public labels.
 
-Latest: 2026-10-04 (closing: R-REKEY-ACCEPT-WAIT defines when an ACCEPT reaches the offerer (received by its transport
+Latest: 2026-10-06 (file transfer v2, descriptor hardening: §12.7 gains §12.7.1 to §12.7.6, one behaviour for every point where
+the three client libraries diverged. Recognition is a byte-prefix test on the compact `{"qa_file":` (and the two control
+prefixes), any version, on the body exactly as decrypted; a plain integer version other than 2 is the new error code
+`unsupported_version` whatever follows (invalid UTF-8 and a length of 8192 bytes or more included), any other malformed
+version and every other rejection is `bad_descriptor`; a rejected descriptor is one placeholder, never shown, quoted,
+notified or indexed, a rejected control message is dropped silently; a sender emits version 2 only until a signed
+per-device announcement exists (§6). Builders emit the canonical form for descriptors and control messages (fixed
+member order, no `null`, escaping, cut of `nm` and `mt` on raw bytes at a character boundary, `src.obj` and `tok.v` as
+the server returned them, `m.wave` then `pv` then `th` dropped when the text would reach 8192 bytes). JSON profile: UTF-8,
+under 8192 bytes, one object, no duplicate member names (compared as code points without normalisation), depth at most 4,
+no lone surrogates, unknown members ignored but counted and their numbers never converted. Integers in plain decimal form
+only, at most 2^53 - 1; base64 canonical. Typed fields: `src.obj` the server's lowercase UUID, `src.tok` scalars only with
+`v` 64 lowercase hex and integer `exp` and `max`, `ex` -1, 0 or seconds up to 2^31 - 1, `xp` 0 or 1, all failing closed with
+`bad_descriptor`; `nm`, `mt` and `pv` accept `null` as absent; a malformed `m` is ignored; an invalid `th` (or one with the
+id of the file) makes the thumbnail unusable and the file stays valid, a thumbnail carries no `th`; a control message
+applies only to a transfer of the same sender account and conversation. §12.9: a stream that ends before the last chunk is
+`size_mismatch`, the padding check staying last. KAT: new sections `descriptor_constants`, `recognition`,
+`descriptor_rules` and `builder_cases`, bodies that are not UTF-8 carried as `serialized_b64`, `error_codes` gains
+`unsupported_version`; the other earlier sections keep their results, the object ids of the `descriptors` vectors are now
+UUIDs.)
+Previous: 2026-10-04 (closing: R-REKEY-ACCEPT-WAIT defines when an ACCEPT reaches the offerer (received by its transport
 before T0 + 30 s) and says that an ACCEPT that reached it in time is processed to completion even if its verification
 ends after the deadline, while one that reaches it at T0 + 30 s or later is dropped; it sorts every ACCEPT the offerer
 receives once round 1 is bound in one place: a byte-identical copy of the bound round-1 ACCEPT is answered by the
