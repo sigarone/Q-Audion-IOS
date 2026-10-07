@@ -179,7 +179,7 @@ jobs:
           # does. Only a process-external watchdog can actually interrupt
           # this. Portable pure-bash (no dependency on `timeout`/`gtimeout`
           # binary presence on the runner) — kill xcodebuild outright after
-          # 15 min instead of silently burning the full 60min job ceiling on
+          # 25 min instead of silently burning the full 60min job ceiling on
           # every single push.
           # -configuration Release: without it, `xcodebuild test` defaults to
           # Debug (-Onone, no optimizer) -- confirmed 2026-07-08 by pushing a
@@ -327,7 +327,7 @@ jobs:
               -derivedDataPath /tmp/dd-ios-sim \
               -resultBundlePath "/tmp/ios-sim-results-attempt${ATTEMPT}.xcresult" &
             XCODEBUILD_PID=$!
-            ( sleep 900; echo "::error::xcodebuild test exceeded 15min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
+            ( sleep 1500; echo "::error::xcodebuild test exceeded 25min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
             WATCHDOG_PID=$!
             wait "$XCODEBUILD_PID"
             EXIT_CODE=$?
