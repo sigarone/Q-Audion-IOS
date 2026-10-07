@@ -39,8 +39,10 @@ enum FileV2OutboundRunner {
     /// (the engine does it), so nothing is left that counts against the account's quota.
     ///
     /// When the server says the account has no room for another object (too many unfinished uploads, or the quota) and this is
-    /// the only send running, the account's unfinished objects (the leftovers of a send that was killed) are deleted and the send
-    /// is tried once more: they hold quota and slots for hours otherwise. A completed object is never touched.
+    /// the only send running here, the leftovers of a send that was killed (unfinished objects idle for 30 minutes or more, deleted
+    /// one by one) are deleted and the send is tried once more: they hold quota and slots for hours otherwise. A younger unfinished
+    /// object may be the live upload of another device of the account and is left alone, and a completed object is never touched;
+    /// if the room is still not there, the failure (with the numbers of the quota) is what the user reads.
     static func run(
         _ context: Context,
         sendService: ChatMessageSendService,
