@@ -411,7 +411,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
         } else {
             if reassembly[key] == nil {
                 let prefix = "\(identifier.uuidString):"
-                let pendingForDevice = reassembly.keys.filter { $0.hasPrefix(prefix) }.count
+                let pendingForDevice = reassembly.keys.count(where: { $0.hasPrefix(prefix) })
                 guard pendingForDevice < Self.maxPendingReassemblyPerDevice else {
                     return // over cap — drop silently, not itself malformed input
                 }

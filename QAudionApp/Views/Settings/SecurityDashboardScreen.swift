@@ -39,7 +39,7 @@ final class SecurityDashboardContainer: ObservableObject {
 
         // Use the AppState cache rather than a fresh ContactsStore decode.
         let storedContacts = appState.cachedContacts
-        let unverifiedCount = storedContacts.filter { !$0.isVerified }.count
+        let unverifiedCount = storedContacts.count(where: { !$0.isVerified })
 
         // 2026-08-06 fix: keyHealth/lastKeyRotation/activeThreatReports used
         // to just copy whatever `viewModel` already held — which starts as

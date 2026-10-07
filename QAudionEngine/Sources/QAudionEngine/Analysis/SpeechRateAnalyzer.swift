@@ -21,7 +21,7 @@ public final class SpeechRateAnalyzer {
 
         let durationSec = Float(speechSegments.count) * 0.02
         let rate = durationSec > 0 ? Float(syllableCount) / durationSec : 0
-        let pauseFrames = speechSegments.filter { !$0 }.count
+        let pauseFrames = speechSegments.count(where: { !$0 })
         let pauseRatio = Float(pauseFrames) / max(1, Float(speechSegments.count))
 
         return VoiceAnalysisResult.SpeechRate(syllablesPerSec: rate, pauseRatio: pauseRatio, isSpeaking: isSpeaking)

@@ -461,7 +461,7 @@ struct ContactsScreen: View {
 
         // I2: same fix as the sort above — the header used to read the
         // hardcoded `item.isOnline` and always rendered "ONLINE · 0/N".
-        let onlineCount = sortedContacts.filter { appState.presenceService.isOnline($0.userId) }.count
+        let onlineCount = sortedContacts.count(where: { appState.presenceService.isOnline($0.userId) })
         let totalCount  = sortedContacts.count
 
         return List {
