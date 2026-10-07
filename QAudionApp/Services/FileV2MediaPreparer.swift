@@ -1,12 +1,15 @@
 import Foundation
 import UIKit
+import ImageIO
 import AVFoundation
 import QAudionEngine
 
 /// Makes ready what the v2 sender needs to send an image, a voice note or a video: the file to upload (which the sender's own bubble
 /// also shows), the display hints (`m`), the tiny preview (`pv`) and the thumbnail (a small JPEG that becomes a v2 file of its own).
-/// UIKit and AVFoundation do the decoding and drawing here; the geometry and the limits are the engine's
-/// (`FileV2ThumbnailPlan`, `FileV2MediaHints`), so they have tests.
+/// UIKit, ImageIO and AVFoundation do the decoding and drawing here; the geometry and the limits are the engine's
+/// (`FileV2ThumbnailPlan`, `FileV2MediaHints`), and so is the removal of the metadata of a picture (`ImageMetadataStripper`), so they
+/// have tests. An image never leaves the device as the user picked or shot it: what is uploaded is a cleaned COPY
+/// (`FileV2ImageCleaner`), and so are its thumbnail and its tiny preview.
 ///
 /// Nothing here touches the network, a key or a token, and nothing prints a name or a path.
 enum FileV2MediaPreparer {
@@ -35,6 +38,9 @@ enum FileV2MediaPreparer {
         case tooLarge
         /// The file could not be read or copied.
         case unreadable
+        /// The metadata of the picture (location, device, time) cannot be removed: its format is not understood, or the file is
+        /// damaged. Nothing is sent, and the original is never sent instead.
+        case notCleanable
     }
 
     /// The most an image weighs after it was downscaled and re-encoded (the cap the chat always had).
@@ -44,51 +50,76 @@ enum FileV2MediaPreparer {
 
     // MARK: An image
 
-    /// An image of any format the device decodes, normalised the way the chat always did (re-encoded as JPEG, which drops the EXIF:
-    /// geolocation, device serial, dates; downscaled to 2048 px on the long side) and saved in `Caches/images/<key>.jpg`.
+    /// A photo of the chat (library, camera, clipboard) as the bytes the picker gave, of any format the device decodes. What is saved
+    /// in `Caches/images/<key>.<ext>` and uploaded is a CLEANED COPY (`FileV2ImageCleaner`): without location, device identifiers or
+    /// time, the Orientation the only tag left. JPEG, PNG, WEBP and GIF are copied without re-encoding when they are within the
+    /// limits of the chat (2048 px on the long side, 10 MB); everything else is re-encoded. The original bytes are never sent.
     static func prepareImage(rawData: Data, key: String) throws -> Prepared {
-        guard let image = UIImage(data: rawData), let normalised = normalised(image) else { throw PrepareError.undecodable }
-        guard normalised.count <= maxImageBytes else { throw PrepareError.tooLarge }
-        let directory = try cachesSubdirectory("images")
-        let url = directory.appendingPathComponent("\(key).jpg")
+        let cleaned = try cleanedImage(rawData, policy: .chatPhoto)
+        return try storeCleanImage(cleaned, key: key, name: nil)
+    }
+
+    /// A picture picked as a FILE (the document picker): the same cleaned copy, kept at its size and named after the picked file (with
+    /// the extension of the copy). The picked file is only read: it is never changed, moved or deleted. The caller holds the
+    /// security-scoped access to `fileURL` until this returns.
+    static func prepareImage(fileURL: URL, key: String, pickedName: String) throws -> Prepared {
+        let data: Data
         do {
-            try? FileManager.default.removeItem(at: url)
-            try normalised.write(to: url, options: [.atomic])
+            data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
         } catch {
             throw PrepareError.unreadable
         }
-        return try describeImage(fileURL: url, key: key)
+        let cleaned = try cleanedImage(data, policy: .pickedFile)
+        return try storeCleanImage(cleaned, key: key, name: FileV2ImageCleaner.name(for: pickedName, format: cleaned.format))
     }
 
-    /// The pieces of an image that is already in its normalised form on disk (a first send, or the retry of a failed one): the
-    /// dimensions, the preview and the thumbnail. The file itself is not re-encoded.
-    static func describeImage(fileURL: URL, key: String) throws -> Prepared {
-        guard let image = UIImage(contentsOfFile: fileURL.path) else { throw PrepareError.undecodable }
-        let media = FileV2MediaHints.media(width: Int(image.size.width.rounded()), height: Int(image.size.height.rounded()))
-        let thumbnail = jpeg(of: image, maxSide: FileV2ThumbnailPlan.thumbnailMaxSide, quality: 0.7)
-        return Prepared(
-            kind: .image, sourceURL: fileURL, name: imageName(), mimeType: "image/jpeg", media: media,
-            preview: tinyPreview(of: image), thumbnailURL: thumbnail.flatMap { writeThumbnail($0, key: key) }, durationMs: nil)
-    }
-
-    private static func normalised(_ image: UIImage) -> Data? {
-        let original = image.size
-        guard original.width.isFinite, original.height.isFinite, original.width > 0, original.height > 0 else { return nil }
-        let longest = max(original.width, original.height)
-        let scale: CGFloat = longest > CGFloat(maxImageSide) ? CGFloat(maxImageSide) / longest : 1.0
-        let target = CGSize(width: max(1, floor(original.width * scale)), height: max(1, floor(original.height * scale)))
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0
-        format.opaque = true
-        let drawn = UIGraphicsImageRenderer(size: target, format: format).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: target))
+    private static func cleanedImage(_ data: Data, policy: FileV2ImageCleaner.Policy) throws -> FileV2CleanImage {
+        do {
+            return try FileV2ImageCleaner.clean(data, policy: policy)
+        } catch FileV2ImageCleaner.CleanError.tooLarge {
+            throw PrepareError.tooLarge
+        } catch {
+            throw PrepareError.notCleanable
         }
-        return drawn.jpegData(compressionQuality: 0.85)
     }
 
-    private static func imageName() -> String {
+    /// Writes the cleaned copy under a name of its own (the key is a random UUID, never the name of the picked file) and describes it.
+    private static func storeCleanImage(_ cleaned: FileV2CleanImage, key: String, name: String?) throws -> Prepared {
+        let directory = try cachesSubdirectory("images")
+        let url = directory.appendingPathComponent("\(key).\(cleaned.fileExtension)")
+        do {
+            try? FileManager.default.removeItem(at: url)
+            try cleaned.data.write(to: url, options: [.atomic])
+        } catch {
+            throw PrepareError.unreadable
+        }
+        return try describeImage(fileURL: url, key: key, name: name)
+    }
+
+    /// The pieces of an image that is already in its cleaned form on disk (a first send, or the retry of a failed one): the
+    /// dimensions, the preview and the thumbnail. The file itself is not touched. ImageIO decodes a small version of the picture, so
+    /// a large one is never held in memory at full size for this.
+    static func describeImage(fileURL: URL, key: String, name: String? = nil) throws -> Prepared {
+        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil),
+              let info = FileV2ImageCleaner.readInfo(of: source) else { throw PrepareError.undecodable }
+        let format = FileV2ImageCleaner.format(ofCopyAt: fileURL)
+        let media = FileV2MediaHints.media(width: info.displayWidth, height: info.displayHeight)
+        var thumbnailURL: URL?
+        var preview: Data?
+        if let small = FileV2ImageCleaner.decodedImage(of: source, maxSide: FileV2ThumbnailPlan.thumbnailMaxSide) {
+            let image = UIImage(cgImage: small)
+            let thumbnail = jpeg(of: image, maxSide: FileV2ThumbnailPlan.thumbnailMaxSide, quality: 0.7)
+            thumbnailURL = thumbnail.flatMap { writeThumbnail($0, key: key) }
+            preview = tinyPreview(of: image)
+        }
+        return Prepared(
+            kind: .image, sourceURL: fileURL, name: name ?? imageName(format), mimeType: format.mimeType, media: media,
+            preview: preview, thumbnailURL: thumbnailURL, durationMs: nil)
+    }
+
+    private static func imageName(_ format: PictureFormat) -> String {
         let stamp = Int(Date().timeIntervalSince1970)
-        return "IMG-\(stamp).jpg"
+        return "IMG-\(stamp).\(format.fileExtension)"
     }
 
     // MARK: A voice note
@@ -196,7 +227,7 @@ enum FileV2MediaPreparer {
                 width = Int(image.size.width.rounded())
                 height = Int(image.size.height.rounded())
             }
-            if let data = image.jpegData(compressionQuality: 0.7) { thumbnailURL = writeThumbnail(data, key: key) }
+            if let data = image.jpegData(compressionQuality: 0.7).flatMap(scrubbed) { thumbnailURL = writeThumbnail(data, key: key) }
             preview = tinyPreview(of: image)
         }
         let mime = FileV2AppServices.mimeType(for: fileURL)
@@ -213,7 +244,13 @@ enum FileV2MediaPreparer {
 
     // MARK: Pictures
 
-    /// `image` scaled to fit a square of `maxSide` pixels (never enlarged) and encoded as JPEG.
+    /// A JPEG this code made from pixels (a thumbnail, the tiny preview) goes through the stripper too: nothing leaves the device
+    /// unchecked. What the stripper cannot read is dropped (these pictures are cosmetic), never sent as it is.
+    private static func scrubbed(_ jpeg: Data) -> Data? {
+        try? ImageMetadataStripper.strip(jpeg).data
+    }
+
+    /// `image` scaled to fit a square of `maxSide` pixels (never enlarged), encoded as JPEG and cleaned.
     private static func jpeg(of image: UIImage, maxSide: Int, quality: CGFloat) -> Data? {
         guard let fit = FileV2ThumbnailPlan.fitted(width: Double(image.size.width), height: Double(image.size.height),
                                                    maxSide: maxSide) else { return nil }
@@ -224,7 +261,7 @@ enum FileV2MediaPreparer {
         let drawn = UIGraphicsImageRenderer(size: target, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
         }
-        return drawn.jpegData(compressionQuality: quality)
+        return drawn.jpegData(compressionQuality: quality).flatMap(scrubbed)
     }
 
     /// The tiny preview of a descriptor (`pv`): a JPEG of a few hundred bytes, never more than 2048. `nil` if even the smallest
@@ -261,6 +298,28 @@ enum FileV2MediaPreparer {
             return directory
         } catch {
             throw PrepareError.unreadable
+        }
+    }
+}
+
+extension FileV2MediaPreparer.PrepareError {
+    /// How a picture that was refused is told when it was sent as a file (the failure text of `FileV2FailureText`). A photo of the chat
+    /// that fails is told by the snackbars of the screens, which count the photos of a batch.
+    var failure: FileV2Failure {
+        switch self {
+        case .undecodable, .notCleanable: return FileV2Failure(.imageNotCleanable)
+        case .tooLarge: return FileV2Failure(.fileTooLarge)
+        case .unreadable: return FileV2Failure(.unreadable)
+        }
+    }
+
+    /// Telemetry string: no identifier, no name, no path.
+    var code: String {
+        switch self {
+        case .undecodable: return "undecodable"
+        case .tooLarge: return "too_large"
+        case .unreadable: return "unreadable"
+        case .notCleanable: return "image_not_cleanable"
         }
     }
 }

@@ -133,7 +133,12 @@ enum GroupFileV2Send {
             do {
                 prepared = try FileV2MediaPreparer.prepareImage(rawData: data, key: rowId)
             } catch {
-                onFailure(FileV2FailureText.imageMessage)
+                // A picture whose metadata cannot be removed is told as such; the rest as before (not a picture, above 10 MB).
+                if (error as? FileV2MediaPreparer.PrepareError) == .notCleanable {
+                    onFailure(FileV2FailureText.message(for: FileV2Failure(.imageNotCleanable)))
+                } else {
+                    onFailure(FileV2FailureText.imageMessage)
+                }
                 continue
             }
             if let failure = start(prepared, target: target, rowId: rowId, overrideSeconds: overrideSeconds,
@@ -184,6 +189,19 @@ enum GroupFileV2Send {
         if case .failure(let failure) = FileV2AppServices.sendableSize(of: url) {
             scopedURL?.stopAccessingSecurityScopedResource()
             return failure
+        }
+        // A picture picked as a file is sent as an image, from a copy without its location and device data (never as the picked file).
+        if FileV2ImageCleaner.isPicture(at: url) {
+            defer { scopedURL?.stopAccessingSecurityScopedResource() }
+            let rowId = UUID().uuidString
+            let picture: FileV2MediaPreparer.Prepared
+            do {
+                picture = try FileV2MediaPreparer.prepareImage(fileURL: url, key: rowId, pickedName: url.lastPathComponent)
+            } catch {
+                return (error as? FileV2MediaPreparer.PrepareError)?.failure ?? FileV2Failure(.unreadable)
+            }
+            return start(picture, target: target, rowId: rowId, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked,
+                         keepsLocalCopy: true, appState: appState, scoped: nil, onFailure: { _ in })
         }
         let prepared = FileV2MediaPreparer.Prepared(
             kind: .file, sourceURL: url, name: url.lastPathComponent, mimeType: FileV2AppServices.mimeType(for: url), media: nil,

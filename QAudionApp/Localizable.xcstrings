@@ -33995,6 +33995,24 @@
           }
         }
       }
+    },
+    "file_v2.fail.image_not_cleanable": {
+      "extractionState": "manual",
+      "comment": "File transfer error: the picture was not sent because its location and device data could not be removed from its format (nothing was uploaded).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immagine non inviata: da questo formato non si possono togliere la posizione e i dati del dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image not sent: the location and device data cannot be removed from this format."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

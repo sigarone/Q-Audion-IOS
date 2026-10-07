@@ -26,6 +26,9 @@ public struct FileV2Failure: Error, Equatable, Sendable, CustomStringConvertible
         case unavailable
         /// The server dropped the object while it was being uploaded.
         case objectGone
+        /// A picture could not be cleaned of its metadata (location, device, time: `ImageMetadataStripper`, or the re-encoding of the
+        /// platform codec for the formats it does not handle). Nothing was uploaded, and the original is never sent instead.
+        case imageNotCleanable
         /// A failure of the transport layer (`FileV2TransferError`: quota, server full, network, ...).
         case transfer(FileV2TransferError)
         /// A failure of the format (WIRE_SPEC 12.9): the code of `FileV2Error` (`chunk_auth`, `bad_padding`, ...).
@@ -54,6 +57,7 @@ public struct FileV2Failure: Error, Equatable, Sendable, CustomStringConvertible
         case .noSecureChannel: return "no_secure_channel"
         case .unavailable: return "unavailable"
         case .objectGone: return "object_gone"
+        case .imageNotCleanable: return "image_not_cleanable"
         case .transfer(let error): return error.code
         case .format(let code): return code
         }

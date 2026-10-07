@@ -39,6 +39,7 @@ targets:
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
           - ConfidenceToneTests.swift
+          - FileV2ImageCleanerTests.swift
           - MissedCallsBadgeTests.swift
           - PersistentCallRecordStoreTests.swift
           - RuntimeLogSinkTeeTests.swift

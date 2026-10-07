@@ -1237,6 +1237,12 @@ final class ChatContainer: ObservableObject {
             scopedURL?.stopAccessingSecurityScopedResource()
             return failure
         }
+        // A picture picked as a file is still a picture: it is sent as an image, from a copy without its location and device data
+        // (never as the file the user picked, which holds them). The copy is the app's own, so the picked file is not needed after it.
+        if FileV2ImageCleaner.isPicture(at: url) {
+            defer { scopedURL?.stopAccessingSecurityScopedResource() }
+            return sendPickedPicture(url: url, overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked)
+        }
         // The name that is shown is cut to one safe line; the descriptor carries the picked name (the engine cuts it to 255 bytes).
         let pickedName = url.lastPathComponent
         let prepared = FileV2MediaPreparer.Prepared(
@@ -1252,9 +1258,26 @@ final class ChatContainer: ObservableObject {
         return started
     }
 
-    /// Sends a photo (any format the device decodes) in this 1:1 chat as a v2 image: re-encoded as JPEG (which drops the EXIF),
-    /// downscaled to 2048 px, with a thumbnail and a tiny preview. Nothing is created when the bytes are not an image or the
-    /// result is above 10 MB, or when the chat cannot seal a message for the contact yet.
+    /// A picture picked as a file, sent as a v2 image from its cleaned copy (`FileV2MediaPreparer.prepareImage(fileURL:...)`): no
+    /// location, no device data, the picked file is only read. A picture that cannot be cleaned is refused with `imageNotCleanable`:
+    /// it is never sent as the picked file. A failure to start the send is told by `startPreparedMedia`.
+    private func sendPickedPicture(url: URL, overrideTimerSeconds: Int?, exportBlocked: Bool) -> FileV2Failure? {
+        let msgId = UUID()
+        let prepared: FileV2MediaPreparer.Prepared
+        do {
+            prepared = try FileV2MediaPreparer.prepareImage(fileURL: url, key: msgId.uuidString, pickedName: url.lastPathComponent)
+        } catch {
+            let refusal = error as? FileV2MediaPreparer.PrepareError
+            RTLog.warn("chat", "filev2 picked picture refused code=\(refusal?.code ?? "unknown")")
+            return refusal?.failure ?? FileV2Failure(.unreadable)
+        }
+        _ = startPreparedMedia(prepared, msgId: msgId, overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked)
+        return nil
+    }
+
+    /// Sends a photo (any format the device decodes) in this 1:1 chat as a v2 image from a CLEANED COPY (no location, no device data:
+    /// `FileV2ImageCleaner`), within 2048 px and 10 MB, with a thumbnail and a tiny preview. Nothing is created when the bytes are not
+    /// a picture that can be cleaned or the result is above 10 MB, or when the chat cannot seal a message for the contact yet.
     /// - Returns: `false` when the image was rejected before any local echo was created; `true` once a row was appended and the
     ///   send started.
     @discardableResult
@@ -1264,7 +1287,7 @@ final class ChatContainer: ObservableObject {
         do {
             prepared = try FileV2MediaPreparer.prepareImage(rawData: rawImageData, key: msgId.uuidString)
         } catch {
-            RTLog.warn("chat", "filev2 image prepare failed")
+            RTLog.warn("chat", "filev2 image prepare failed code=\((error as? FileV2MediaPreparer.PrepareError)?.code ?? "unknown")")
             return false
         }
         return startPreparedMedia(prepared, msgId: msgId, overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked)
