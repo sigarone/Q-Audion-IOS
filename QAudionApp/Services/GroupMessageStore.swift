@@ -54,8 +54,13 @@ public final class GroupMessageStore: ObservableObject {
         /// front; receiver stamps it after the async download completes).
         public var mediaLocalPath: String?
         /// The raw 0xE4 descriptor JSON, retained so a failed download can
-        /// be retried without re-fetching the group frame.
-        public let descriptorJson: String?
+        /// be retried without re-fetching the group frame. For a file transfer v2 row it is the descriptor message (the key of
+        /// the file is in it: it is never shown as text); a row of the sender that is still uploading has none yet.
+        public var descriptorJson: String?
+        /// File transfer v2 (WIRE_SPEC section 12): `true` for a row whose attachment is a v2 file (a document, an image, a voice
+        /// note, a video), received or sent; `attachmentKind` is then the kind of the descriptor. nil for every row of the old
+        /// attachment format and every text row (additive optional field, decodes unchanged like the others above).
+        public var fileV2: Bool?
         // Fase 2 — per-member receipt tracking, meaningful ONLY on our own
         // (`mine == true`) outbound rows: the userIds of OTHER members who
         // have ACKed `group_msg_delivered` / `group_msg_read` for this
@@ -112,7 +117,7 @@ public final class GroupMessageStore: ObservableObject {
                     deliveredBy: [String]? = nil, readBy: [String]? = nil,
                     expiresAt: Date? = nil, isViewOnce: Bool? = nil,
                     viewOnceOpened: Bool? = nil, exportBlocked: Bool? = nil,
-                    sendFailed: Bool? = nil) {
+                    sendFailed: Bool? = nil, fileV2: Bool? = nil) {
             self.id = id
             self.serverMessageId = serverMessageId
             self.senderId = senderId
@@ -132,6 +137,7 @@ public final class GroupMessageStore: ObservableObject {
             self.viewOnceOpened = viewOnceOpened
             self.exportBlocked = exportBlocked
             self.sendFailed = sendFailed
+            self.fileV2 = fileV2
         }
     }
 
@@ -358,6 +364,26 @@ public final class GroupMessageStore: ObservableObject {
         postDidChange(groupHex)
     }
 
+    /// File transfer v2 — the descriptor of a row that was uploading is built: the row now carries it (a retry of the send, or a
+    /// restart, finds it there). Matched by `id` (clientMsgId). No-op if unknown or already set.
+    public func setDescriptor(groupHex: String, id: String, descriptorJson: String) {
+        guard var arr = byGroup[groupHex],
+              let idx = arr.firstIndex(where: { $0.id == id }),
+              arr[idx].descriptorJson != descriptorJson else { return }
+        arr[idx].descriptorJson = descriptorJson
+        byGroup[groupHex] = arr
+        persist()
+        postDidChange(groupHex)
+    }
+
+    /// The directories of the v2 files of `rows` (`Caches/files_v2/<row id>/`: the decrypted file, the thumbnail, the copy of a
+    /// video being sent). Removed together with the rows, so that nothing of an expired or deleted message stays on the device.
+    private static func fileV2Directories(of rows: [Stored]) -> [URL] {
+        rows.filter { $0.fileV2 == true }.map {
+            FileV2LocalFiles.directory(base: FileV2DownloadCenter.cachesBase, rowKey: $0.id)
+        }
+    }
+
     /// Fase 1B — mark this group as read up to its newest message (called
     /// when a `GroupChatScreen` for the group is open / receives). Idempotent:
     /// a no-op (no persist / no didChange) when already current, so the
@@ -396,6 +422,7 @@ public final class GroupMessageStore: ObservableObject {
     public func deleteExpiredMessages() {
         let now = Date()
         var cachedPathsToRemove: [String] = []
+        var fileV2DirectoriesToRemove: [URL] = []
         var changedGroupHexes: [String] = []
         // Snapshot the keys first — mutating `byGroup` while iterating
         // it directly is unnecessary risk to reason about; iterating a
@@ -408,6 +435,7 @@ public final class GroupMessageStore: ObservableObject {
             }
             guard !expired.isEmpty else { continue }
             cachedPathsToRemove.append(contentsOf: expired.compactMap { $0.mediaLocalPath }.filter { !$0.isEmpty })
+            fileV2DirectoriesToRemove.append(contentsOf: Self.fileV2Directories(of: expired))
             let remaining = arr.filter { msg in
                 guard let exp = msg.expiresAt else { return true }
                 return exp > now
@@ -432,6 +460,7 @@ public final class GroupMessageStore: ObservableObject {
                 print("[GroupMessageStore] deleteExpiredMessages: cache cleanup failed: \(error)")
             }
         }
+        for directory in fileV2DirectoriesToRemove { try? FileManager.default.removeItem(at: directory) }
         // Notify every open GroupChatScreen/GroupCallChatPanel so a
         // swept row disappears from the currently-visible list — same
         // notification `append`/`bindServerId`/etc. already post, no new
@@ -466,6 +495,7 @@ public final class GroupMessageStore: ObservableObject {
             return
         }
         let cachedPathsToRemove = rows.compactMap { $0.mediaLocalPath }.filter { !$0.isEmpty }
+        let fileV2DirectoriesToRemove = Self.fileV2Directories(of: rows)
         byGroup.removeValue(forKey: groupHex)
         unreadCountCache.removeValue(forKey: groupHex)
         if lastRead.removeValue(forKey: groupHex) != nil { persistReadMarkers() }
@@ -481,6 +511,7 @@ public final class GroupMessageStore: ObservableObject {
                 RTLog.warn("groupdel", "blob cleanup failed g=" + gShort)
             }
         }
+        for directory in fileV2DirectoriesToRemove { try? FileManager.default.removeItem(at: directory) }
         let rowCount: String = String(describing: rows.count)
         let blobCount: String = String(describing: reclaimed)
         let line: String = "history purged g=" + gShort + " rows=" + rowCount + " blobs=" + blobCount

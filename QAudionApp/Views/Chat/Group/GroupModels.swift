@@ -94,13 +94,18 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
     /// `ImageBubbleContent`/`FileBubbleContent`'s save/share affordances
     /// in `GroupMessageBubble`, same as the 1:1 bubble.
     public let exportBlocked: Bool?
+    /// File transfer v2: `true` for a row whose attachment is a v2 file (`attachmentKind` is then the kind of the descriptor).
+    public let fileV2: Bool
+    /// The descriptor message of a v2 row (it holds the key of the file: it is only read to build the bubble, never shown as text);
+    /// nil for a row of the sender that is still uploading.
+    public let descriptorJson: String?
 
     public init(id: String, text: String, senderLabel: String,
                 timestamp: String, mine: Bool,
                 attachmentKind: String? = nil, mediaMime: String? = nil,
                 mediaLocalPath: String? = nil, fileName: String? = nil,
                 byteLength: Int64? = nil, delivery: MessageDelivery? = nil,
-                exportBlocked: Bool? = nil) {
+                exportBlocked: Bool? = nil, fileV2: Bool = false, descriptorJson: String? = nil) {
         self.id = id; self.text = text; self.senderLabel = senderLabel
         self.timestamp = timestamp; self.mine = mine
         self.attachmentKind = attachmentKind
@@ -110,6 +115,8 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
         self.byteLength = byteLength
         self.delivery = delivery
         self.exportBlocked = exportBlocked
+        self.fileV2 = fileV2
+        self.descriptorJson = descriptorJson
     }
 }
 

@@ -89,6 +89,11 @@ enum FileV2FailureText {
         }
     }
 
+    /// A photo that is not an image the device can read, or that is above 10 MB after it was downscaled: nothing is sent.
+    static var imageMessage: String {
+        String(localized: "file_v2.fail.image", defaultValue: "Immagine non valida o troppo grande.", comment: "File transfer error: the picked photo cannot be decoded, or is too large to send.")
+    }
+
     private static func message(for error: FileV2TransferError, server: FileV2ServerError?) -> String {
         switch error {
         case .entitlement:

@@ -51,6 +51,9 @@ enum FileV2OutboundRunner {
 
     static func isInFlight(_ messageId: UUID) -> Bool { inFlight.contains(messageId.uuidString) }
 
+    /// The same for a send named by a key (the id of a group row).
+    static func isInFlight(key: String) -> Bool { inFlight.contains(key) }
+
     /// Runs the 1:1 send to its end. Returns `nil` when the descriptor was handed to the chat (sent, or queued in the outbox for the
     /// moment the connection is back), otherwise the failure. A failure after the upload has deleted the objects on the server (the
     /// engine does it), so nothing is left that counts against the account's quota.

@@ -33744,42 +33744,6 @@
         }
       }
     },
-    "file_v2.group_attach_unavailable": {
-      "extractionState": "manual",
-      "comment": "Snackbar shown when the user tries to attach a document in a group chat.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "L'invio di documenti nei gruppi non è ancora disponibile in questa versione."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sending documents in groups is not available yet in this version."
-          }
-        }
-      }
-    },
-    "file_v2.group_unavailable": {
-      "extractionState": "manual",
-      "comment": "Row for a file message received in a group, which this version cannot open; %@ is the file name line.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ (non ancora disponibile nei gruppi)"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ (not available in groups yet)"
-          }
-        }
-      }
-    },
     "file_v2.cancel": {
       "extractionState": "manual",
       "comment": "Button that cancels the download of a received file.",
@@ -33938,6 +33902,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Play video"
+          }
+        }
+      }
+    },
+    "file_v2.fail.image": {
+      "extractionState": "manual",
+      "comment": "File transfer error: the picked photo cannot be decoded, or is too large to send.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immagine non valida o troppo grande."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image is not valid or is too large."
           }
         }
       }
