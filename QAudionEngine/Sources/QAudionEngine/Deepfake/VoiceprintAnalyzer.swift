@@ -29,6 +29,10 @@ public final class VoiceprintAnalyzer: @unchecked Sendable {
         _ = modelManager.loadModel()
     }
 
+    /// Whether `score` can ever return a value. Fixed once `init` returns: the model loads synchronously there
+    /// and is never unloaded by this class (never on the Simulator, which has no ONNX Runtime).
+    public var isModelLoaded: Bool { modelManager.isLoaded() }
+
     /// Confidence [0.0 = fake, 1.0 = genuine] for one 48 kHz window, or `nil` when there is no real score:
     /// model not loaded (always the case on the Simulator) or an inference error. Never a fabricated
     /// placeholder — `GuardianMode` skips the EMA update on `nil` (2026-08-21: a placeholder 0.5 used to anchor

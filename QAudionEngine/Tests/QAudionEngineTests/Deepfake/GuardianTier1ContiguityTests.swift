@@ -69,7 +69,8 @@ final class GuardianTier1ContiguityTests: XCTestCase {
     }
 
     private func makeGuardian(
-        probe: ScorerProbe, clock: TestClock = TestClock(), executor: ManualExecutor? = nil
+        probe: ScorerProbe, clock: TestClock = TestClock(), executor: ManualExecutor? = nil,
+        scorerAvailable: Bool = true
     ) -> GuardianMode {
         let exec: GuardianMode.Executor
         if let executor {
@@ -83,6 +84,7 @@ final class GuardianTier1ContiguityTests: XCTestCase {
                 probe.firstSamples.append(w[0])
                 return probe.next
             },
+            scorerAvailable: scorerAvailable,
             executor: exec,
             nowMs: { clock.ms }
         )
@@ -314,5 +316,43 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         }
         XCTAssertEqual(alerts, 0)
         XCTAssertEqual(guardian.getConfidenceIndex().scoreHistory.count, 16)
+    }
+
+    // MARK: - no model, diagnostic line
+
+    /// Without a model (always on the Simulator) the scorer can never score: `processFrame` does no per-chunk
+    /// work at all, no VAD, no copy, no hand-off, as before W-GUARDIAN1CONTIG.
+    func testNoModelMeansNoPerChunkWork() {
+        let probe = ScorerProbe()
+        let guardian = makeGuardian(probe: probe, scorerAvailable: false)
+        var g = 0
+        for _ in 0..<1000 {                        // 480 000 voiced samples, more than two windows
+            guardian.processFrame(chunk(from: g, samples: 480))
+            g += 480
+        }
+        XCTAssertTrue(probe.lengths.isEmpty)
+        XCTAssertEqual(guardian.tier1Stats, GuardianMode.Tier1Stats())
+    }
+
+    /// Exact text of the diagnostic line; `scripts/test_ship_ios_guardian_vocab.py` checks that this shape goes
+    /// through the phone-log shipper verbatim (keep both in sync).
+    func testDiagnosticLineShape() {
+        var s = GuardianMode.Tier1Stats()
+        s.inferences = 10
+        s.windowsReady = 19
+        s.windowsSkipped = 9
+        s.windowsDropped = 0
+        s.nilScores = 0
+        XCTAssertEqual(GuardianMode.diagnosticLine(s, ms: 412),
+                       "[Guardian] count=10 ms=412 windows=19 skipped=9 dropped=0 nil=0")
+        s.inferences = 0
+        s.nilScores = 1
+        XCTAssertEqual(GuardianMode.diagnosticLine(s, ms: 3),
+                       "[Guardian] count=0 ms=3 windows=19 skipped=9 dropped=0 nil=1")
+    }
+
+    /// First occurrence, then every 10th; the nil path uses the same rule on its own counter.
+    func testDiagnosticThrottle() {
+        XCTAssertEqual((0...31).filter(GuardianMode.isLogged), [1, 10, 20, 30])
     }
 }

@@ -43,6 +43,10 @@ public final class GuardianMode: @unchecked Sendable {
     }
 
     private let scorer: Scorer
+    /// False when the scorer can never produce a score (model not loaded: always on the Simulator). Decided once
+    /// at construction — the model loads synchronously in `VoiceprintAnalyzer.init` — so `processFrame` reads a
+    /// constant and does no per-chunk work at all, as the pre-W-GUARDIAN1CONTIG path did.
+    private let scorerAvailable: Bool
     private let executor: Executor
     private let nowMs: @Sendable () -> Int64
     private let confidence = ConfidenceIndex()
@@ -76,6 +80,7 @@ public final class GuardianMode: @unchecked Sendable {
         let queue = DispatchQueue(label: "qaudion.guardian.tier1", qos: .utility)
         self.init(
             scorer: { analyzer.score(window48k: $0) },
+            scorerAvailable: analyzer.isModelLoaded,
             executor: { job in queue.async { job() } },
             nowMs: { Int64(Date().timeIntervalSince1970 * 1000) }
         )
@@ -83,11 +88,13 @@ public final class GuardianMode: @unchecked Sendable {
 
     init(
         scorer: @escaping Scorer,
+        scorerAvailable: Bool = true,
         executor: @escaping Executor,
         nowMs: @escaping @Sendable () -> Int64,
         windowSamples: Int = GuardianWindowAccumulator.defaultWindowSamples
     ) {
         self.scorer = scorer
+        self.scorerAvailable = scorerAvailable
         self.executor = executor
         self.nowMs = nowMs
         self.windowSamples = windowSamples
@@ -97,6 +104,7 @@ public final class GuardianMode: @unchecked Sendable {
     /// One decoded RX chunk (little-endian Int16 mono 48 kHz, any length). Cheap: VAD + copy, and at most one
     /// hand-off to the inference queue per `minVoicedMsBetweenInferences` of voiced audio.
     public func processFrame(_ pcmFrame: Data) {
+        guard scorerAvailable else { return }
         lock.lock()
         guard enabled else { lock.unlock(); return }
         let windows = accumulator.append(int16LE: pcmFrame)
@@ -139,7 +147,10 @@ public final class GuardianMode: @unchecked Sendable {
             lock.lock()
             stats.nilScores += 1
             stats.inferenceInFlight = false
+            let s = stats
             lock.unlock()
+            // A Tier 1 that never manages to score must be visible too: first nil, then every 10th.
+            if Self.isLogged(s.nilScores) { print(Self.diagnosticLine(s, ms: elapsedMs)) }
             return
         }
         let level = confidence.update(score)
@@ -164,13 +175,24 @@ public final class GuardianMode: @unchecked Sendable {
         let s = stats
         lock.unlock()
 
-        // Measured cost of the Tier 1 inference, throttled (first, then every 10th): counts and milliseconds
-        // only, never audio or scores of individual windows.
-        if s.inferences == 1 || s.inferences % 10 == 0 {
-            print("[GuardianMode] tier1 inf n=\(s.inferences) ms=\(elapsedMs) windows=\(s.windowsReady) skipped=\(s.windowsSkipped) dropped=\(s.windowsDropped) nil=\(s.nilScores)")
-        }
+        // Measured cost of the Tier 1 inference, throttled (first, then every 10th).
+        if Self.isLogged(s.inferences) { print(Self.diagnosticLine(s, ms: elapsedMs)) }
         callback?(.red, score)
     }
+
+    /// The throttled diagnostic line: counts and milliseconds only, never audio or the score of a window.
+    ///
+    /// Shape chosen to survive the phone-log shipper's fail-closed vocabulary gate VERBATIM
+    /// (`scripts/ship-ios-logs.py`, at most 2 unknown words per body; pinned by
+    /// `scripts/test_ship_ios_guardian_vocab.py`, keep in sync). The first form, "[GuardianMode] tier1 inf n=",
+    /// was dropped whole: four unknown words, and the 12-letter "GuardianMode" matches the base64-blob rule.
+    static func diagnosticLine(_ s: Tier1Stats, ms: Int) -> String {
+        "[Guardian] count=\(s.inferences) ms=\(ms) windows=\(s.windowsReady) skipped=\(s.windowsSkipped)"
+            + " dropped=\(s.windowsDropped) nil=\(s.nilScores)"
+    }
+
+    /// First occurrence, then every 10th.
+    static func isLogged(_ count: Int) -> Bool { count == 1 || (count > 0 && count % 10 == 0) }
 
     public func setEnabled(_ enabled: Bool) { lock.lock(); self.enabled = enabled; lock.unlock() }
     public func setSensitivity(redThreshold: Float, yellowThreshold: Float) {
