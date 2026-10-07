@@ -79,6 +79,42 @@ final class FileV2LibraryTests: XCTestCase {
         XCTAssertEqual(encryptor.sealedChunkLength(0), FileV2.stride)
     }
 
+    /// The public geometry helpers are total: an index outside the file, negative included, never traps (no
+    /// `UInt64(index)` of a negative number, no overflow): lengths are 0 and the offset is `nil`.
+    func testGeometryNeverTrapsOnAnIndexOutsideTheFile() throws {
+        let size = UInt64(2 * chunk + 5)
+        let encryptor = try FileV2Encryptor(fileKey: Data(count: 32), fileID: Data(count: 16), plaintextSize: size)
+        let receiver = try FileV2Decryptor(fileID: encryptor.fileID, fileKey: encryptor.fileKey,
+                                           header: encryptor.header.bytes, size: size)
+        XCTAssertEqual(encryptor.totalChunks, 3)
+        let outside = [-1, -2, Int.min, Int.min + 1, Int.max, Int.max - 1, 3, 4, 5120, 1 << 40]
+        for index in outside {
+            XCTAssertEqual(encryptor.chunkStreamLength(index), 0, "chunkStreamLength(\(index))")
+            XCTAssertEqual(encryptor.chunkFileLength(index), 0, "chunkFileLength(\(index))")
+            XCTAssertEqual(encryptor.sealedChunkLength(index), 0, "sealedChunkLength(\(index))")
+            XCTAssertNil(encryptor.blobOffset(ofChunk: index), "blobOffset(\(index))")
+            XCTAssertEqual(receiver.chunkStreamLength(index), 0, "receiver chunkStreamLength(\(index))")
+            XCTAssertEqual(receiver.sealedChunkLength(index), 0, "receiver sealedChunkLength(\(index))")
+            XCTAssertNil(receiver.blobOffset(ofChunk: index), "receiver blobOffset(\(index))")
+            XCTAssertFalse(receiver.isVerified(chunk: index))
+        }
+        // Inside the file they are the real numbers.
+        XCTAssertEqual(encryptor.chunkStreamLength(0), chunk)
+        // 2 MiB + 5 bytes pad to 2 MiB + 64 KiB (Padme): the last chunk holds 5 real bytes and the padding.
+        XCTAssertEqual(encryptor.streamLength, UInt64(2 * chunk + 65_536))
+        XCTAssertEqual(encryptor.chunkStreamLength(2), 65_536)
+        XCTAssertEqual(encryptor.chunkFileLength(2), 5)
+        XCTAssertEqual(encryptor.sealedChunkLength(2), 65_536 + FileV2.tagSize)
+        XCTAssertEqual(encryptor.blobOffset(ofChunk: 2), 64 + 2 * UInt64(FileV2.stride))
+        XCTAssertEqual(receiver.sealedChunkLength(1), FileV2.stride)
+        XCTAssertEqual(receiver.blobOffset(ofChunk: 1), 64 + UInt64(FileV2.stride))
+        // The calls that take an index refuse it without a trap too.
+        XCTAssertThrowsError(try encryptor.sealChunk(index: Int.min, fileBytes: Data()))
+        XCTAssertNil(try receiver.openChunk(index: Int.min, sealed: Data()))
+        XCTAssertNil(try receiver.openChunk(index: Int.max, sealed: Data()))
+        XCTAssertFalse(receiver.markUnverified(chunk: Int.min))
+    }
+
     func testEncryptorRefusesSizesAndKeysOutOfRange() {
         XCTAssertThrowsError(try FileV2Encryptor(fileKey: Data(count: 32), fileID: Data(count: 16), plaintextSize: 0))
         XCTAssertThrowsError(try FileV2Encryptor(fileKey: Data(count: 32), fileID: Data(count: 16),
@@ -87,6 +123,9 @@ final class FileV2LibraryTests: XCTestCase {
         XCTAssertThrowsError(try FileV2Encryptor(fileKey: Data(count: 32), fileID: Data(count: 15), plaintextSize: 1))
         XCTAssertNoThrow(try FileV2Encryptor(fileKey: Data(count: 32), fileID: Data(count: 16),
                                              plaintextSize: FileV2.maxSize))
+        XCTAssertThrowsError(try FileV2Encryptor.makeNew(plaintextSize: 0))
+        XCTAssertThrowsError(try FileV2Encryptor.resume(fileKey: Data(count: 31), fileID: Data(count: 16),
+                                                        plaintextSize: 1, persistedTags: [:]))
     }
 
     func testFreshKeyMaterialIsRandomAndNeverReused() throws {
@@ -101,6 +140,7 @@ final class FileV2LibraryTests: XCTestCase {
         XCTAssertNotEqual(first.fileKey, second.fileKey)
         XCTAssertNotEqual(first.fileID, second.fileID)
         XCTAssertNotEqual(first.header.commitment, second.header.commitment)
+        XCTAssertTrue(first.tagEntries.isEmpty, "a new file has encrypted nothing")
     }
 
     // MARK: The header
@@ -179,6 +219,7 @@ final class FileV2LibraryTests: XCTestCase {
         let first = try encryptor.sealChunk(index: 1, fileBytes: content)
         // The same content again: identical bytes, deterministic, accepted (a retry or a resume).
         XCTAssertEqual(try encryptor.sealChunk(index: 1, fileBytes: content), first)
+        XCTAssertFalse(encryptor.isCancelled)
 
         // A different content at the same index would reuse the nonce under the same key: refused.
         var changed = content
@@ -187,44 +228,136 @@ final class FileV2LibraryTests: XCTestCase {
             XCTAssertEqual(error as? FileV2Error, .contentChanged)
             XCTAssertEqual((error as? FileV2Error)?.code, "cancelled")
         }
-        // The ledger still holds the tag of the original, so the original still seals; one entry only.
-        XCTAssertEqual(try encryptor.sealChunk(index: 1, fileBytes: content), first)
+        // Nothing was recorded for the changed content: the ledger still holds the tag of the original, one entry.
         XCTAssertEqual(encryptor.tagLedger.count, 1)
         XCTAssertEqual(encryptor.tagLedger.tag(at: 1), Data(first.suffix(FileV2.tagSize)))
-        // A chunk never sealed before has no recorded tag and is accepted.
-        let zero = Support.plaintextBlock(offset: 0, count: chunk)
-        XCTAssertNoThrow(try encryptor.sealChunk(index: 0, fileBytes: zero))
-        XCTAssertEqual(encryptor.tagLedger.count, 2)
+        XCTAssertEqual(encryptor.tagEntries, [1: Data(first.suffix(FileV2.tagSize))])
     }
 
-    func testRuleSurvivesAResumeThroughThePersistedLedger() throws {
+    /// CANCELLED is sticky: after the first conflict the transfer is over, whatever is asked next. The sender sends
+    /// `qa_file_cancel` and starts a NEW file with a new `K` and `file_id`; nothing more is ever sealed under this one,
+    /// not even a chunk whose content is unchanged, and the key is gone.
+    func testCancelledIsStickyAfterTheFirstConflict() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let size = UInt64(2 * chunk + 100)
+        let encryptor = try FileV2Encryptor(fileKey: FileV2.generateFileKey(), fileID: FileV2.generateFileID(),
+                                            plaintextSize: size)
+        let content0 = Support.plaintextBlock(offset: 0, count: chunk)
+        let sealed0 = try encryptor.sealChunk(index: 0, fileBytes: content0)
+        var edited = content0
+        edited[0] ^= 0xFF
+        XCTAssertThrowsError(try encryptor.sealChunk(index: 0, fileBytes: edited)) {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+        XCTAssertTrue(encryptor.isCancelled)
+
+        // Every later seal is refused, by every path: the unchanged chunk, a chunk never sealed, a handle, a whole file.
+        XCTAssertThrowsError(try encryptor.sealChunk(index: 0, fileBytes: content0), "the original chunk") {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+        XCTAssertThrowsError(try encryptor.sealChunk(index: 1, fileBytes: Support.plaintextBlock(offset: UInt64(chunk),
+                                                                                                count: chunk)),
+                             "a chunk never sealed") {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+        let plain = directory.appendingPathComponent("plain")
+        try Support.writePlaintextFile(size: size, to: plain)
+        let handle = try FileHandle(forReadingFrom: plain)
+        defer { try? handle.close() }
+        XCTAssertThrowsError(try encryptor.sealChunk(index: 0, from: handle), "from a handle") {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+        let blob = directory.appendingPathComponent("blob")
+        XCTAssertThrowsError(try encryptor.encryptFile(from: plain, to: blob), "file to file") {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: blob.path))
+        // The sticky state still says "cancelled" (wire code), not "closed", and the ledger did not move.
+        XCTAssertEqual(FileV2Error.contentChanged.code, "cancelled")
+        XCTAssertEqual(encryptor.tagLedger.count, 1)
+        XCTAssertEqual(encryptor.tagEntries[0], Data(sealed0.suffix(FileV2.tagSize)))
+        // The key is wiped: there is nothing left to reuse.
+        XCTAssertTrue(encryptor.fileKey.isEmpty)
+        // Closing does not clear the cancellation.
+        encryptor.close()
+        XCTAssertTrue(encryptor.isCancelled)
+        XCTAssertThrowsError(try encryptor.sealChunk(index: 0, fileBytes: content0)) {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+    }
+
+    /// A source that changed size is the same rule (section 12.8 rule 1): it cancels for good too.
+    func testASourceThatChangedCancelsTheEncryptorForGood() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let plain = directory.appendingPathComponent("plain")
+        try Support.writePlaintextFile(size: UInt64(chunk + 100), to: plain)
+        // Declares more than there is: a short read inside the handle path.
+        let shrunk = try FileV2Encryptor.makeNew(plaintextSize: UInt64(chunk + 4000))
+        let handle = try FileHandle(forReadingFrom: plain)
+        defer { try? handle.close() }
+        XCTAssertNoThrow(try shrunk.sealChunk(index: 0, from: handle))
+        XCTAssertThrowsError(try shrunk.sealChunk(index: 1, from: handle)) { XCTAssertEqual($0 as? FileV2Error, .contentChanged) }
+        XCTAssertTrue(shrunk.isCancelled)
+        XCTAssertThrowsError(try shrunk.sealChunk(index: 0, from: handle), "chunk 0 is refused now too") {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+        // A file of another size at the start of encryptFile.
+        let wrongSize = try FileV2Encryptor.makeNew(plaintextSize: 3000)
+        XCTAssertThrowsError(try wrongSize.encryptFile(from: plain, to: directory.appendingPathComponent("blob"))) {
+            XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+        }
+        XCTAssertTrue(wrongSize.isCancelled)
+    }
+
+    func testRuleSurvivesAResumeThroughThePersistedTags() throws {
         let key = FileV2.generateFileKey(), id = FileV2.generateFileID()
         let size = UInt64(2 * chunk + 100)
         let firstRun = try FileV2Encryptor(fileKey: key, fileID: id, plaintextSize: size)
         let content0 = Support.plaintextBlock(offset: 0, count: chunk)
         let sealed0 = try firstRun.sealChunk(index: 0, fileBytes: content0)
 
-        // The pipeline stores `entries` in the local transfer state and restores it on resume.
-        let restored = try FileV2TagLedger(entries: firstRun.tagLedger.entries)
-        let resumed = try FileV2Encryptor(fileKey: key, fileID: id, plaintextSize: size, tagLedger: restored)
+        // The pipeline stores `tagEntries` in the local transfer state and hands it back on resume: the encryptor owns
+        // the ledger and loads it AT CONSTRUCTION, before anything can be sealed.
+        let persisted = firstRun.tagEntries
+        XCTAssertEqual(persisted.count, 1)
+        let resumed = try FileV2Encryptor.resume(fileKey: key, fileID: id, plaintextSize: size, persistedTags: persisted)
+        XCTAssertEqual(resumed.tagEntries, persisted)
+        XCTAssertEqual(resumed.header, firstRun.header)
         XCTAssertEqual(try resumed.sealChunk(index: 0, fileBytes: content0), sealed0)
         var edited = content0
         edited[0] ^= 0xFF
         XCTAssertThrowsError(try resumed.sealChunk(index: 0, fileBytes: edited)) {
             XCTAssertEqual($0 as? FileV2Error, .contentChanged)
         }
-        // Without the persisted ledger the same edit would go through: that is why the state must be kept.
+        XCTAssertTrue(resumed.isCancelled)
+        // Without the persisted tags the same edit would go through: that is why no public initialiser can start a
+        // resume with an empty ledger (the initialiser for given key material is internal; `makeNew` draws fresh
+        // material, and `resume` takes the tags).
         let forgetful = try FileV2Encryptor(fileKey: key, fileID: id, plaintextSize: size)
         XCTAssertNoThrow(try forgetful.sealChunk(index: 0, fileBytes: edited))
     }
 
-    func testLedgerRefusesACorruptedPersistedState() throws {
+    func testResumeRefusesACorruptedPersistedState() throws {
+        let key = FileV2.generateFileKey(), id = FileV2.generateFileID()
+        let size = UInt64(2 * chunk + 100)        // 3 chunks
         let tag = Data(count: FileV2.tagSize)
-        XCTAssertNoThrow(try FileV2TagLedger(entries: [0: tag, FileV2.maxChunks - 1: tag]))
-        XCTAssertThrowsError(try FileV2TagLedger(entries: [-1: tag]))
-        XCTAssertThrowsError(try FileV2TagLedger(entries: [FileV2.maxChunks: tag]))
-        XCTAssertThrowsError(try FileV2TagLedger(entries: [0: Data(count: 15)]))
-        XCTAssertThrowsError(try FileV2TagLedger(entries: [0: Data(count: 17)]))
+        XCTAssertNoThrow(try FileV2Encryptor.resume(fileKey: key, fileID: id, plaintextSize: size,
+                                                    persistedTags: [0: tag, 2: tag]))
+        XCTAssertNoThrow(try FileV2Encryptor.resume(fileKey: key, fileID: id, plaintextSize: size, persistedTags: [:]),
+                         "a transfer that sealed nothing")
+        let corrupted: [[Int: Data]] = [[-1: tag], [3: tag], [FileV2.maxChunks: tag], [Int.max: tag],
+                                        [0: Data(count: 15)], [0: Data(count: 17)], [0: Data()]]
+        for entries in corrupted {
+            XCTAssertThrowsError(try FileV2Encryptor.resume(fileKey: key, fileID: id, plaintextSize: size,
+                                                            persistedTags: entries), "\(entries.keys)") { error in
+                guard case FileV2Error.invalidArgument = error else { return XCTFail("\(error)") }
+            }
+        }
+        // The ledger itself.
+        XCTAssertNoThrow(try FileV2TagLedger(entries: [0: tag, FileV2.maxChunks - 1: tag], chunkCount: FileV2.maxChunks))
+        XCTAssertThrowsError(try FileV2TagLedger(entries: [-1: tag], chunkCount: FileV2.maxChunks))
+        XCTAssertThrowsError(try FileV2TagLedger(entries: [FileV2.maxChunks: tag], chunkCount: FileV2.maxChunks))
+        XCTAssertThrowsError(try FileV2TagLedger(entries: [5: tag], chunkCount: 5))
     }
 
     func testSealChunkRefusesAWrongIndexOrLength() throws {
@@ -234,6 +367,86 @@ final class FileV2LibraryTests: XCTestCase {
         XCTAssertThrowsError(try encryptor.sealChunk(index: 0, fileBytes: Data(count: chunk - 1)))
         XCTAssertThrowsError(try encryptor.sealChunk(index: 1, fileBytes: Data(count: 11)))
         XCTAssertEqual(encryptor.tagLedger.count, 0, "a refused call records nothing")
+        XCTAssertFalse(encryptor.isCancelled, "a malformed call is not a conflict")
+        XCTAssertNoThrow(try encryptor.sealChunk(index: 0, fileBytes: Data(count: chunk)))
+    }
+
+    // MARK: Closing: no sealing, no opening with a zeroed key
+
+    func testAClosedEncryptorNeverSealsAndHoldsNoKey() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let plain = directory.appendingPathComponent("plain")
+        try Support.writePlaintextFile(size: 100, to: plain)
+        let encryptor = try FileV2Encryptor.makeNew(plaintextSize: 100)
+        let copyOfKey = encryptor.fileKey
+        XCTAssertEqual(copyOfKey.count, 32)
+        XCTAssertNoThrow(try encryptor.sealChunk(index: 0, fileBytes: Support.plaintextBlock(offset: 0, count: 100)))
+
+        encryptor.close()
+        XCTAssertTrue(encryptor.fileKey.isEmpty, "the key is wiped")
+        XCTAssertFalse(encryptor.isCancelled, "closing is not a conflict")
+        let handle = try FileHandle(forReadingFrom: plain)
+        defer { try? handle.close() }
+        XCTAssertThrowsError(try encryptor.sealChunk(index: 0, fileBytes: Support.plaintextBlock(offset: 0, count: 100))) {
+            XCTAssertEqual($0 as? FileV2Error, .closed)
+        }
+        XCTAssertThrowsError(try encryptor.sealChunk(index: 0, from: handle)) { XCTAssertEqual($0 as? FileV2Error, .closed) }
+        XCTAssertThrowsError(try encryptor.encryptFile(from: plain, to: directory.appendingPathComponent("blob"))) {
+            XCTAssertEqual($0 as? FileV2Error, .closed)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("blob").path))
+        XCTAssertEqual(FileV2Error.closed.code, "closed")
+        encryptor.close()   // idempotent
+        // The header (public) and the tags already recorded are still readable: a closed encryptor only stops sealing.
+        XCTAssertEqual(encryptor.tagEntries.count, 1)
+        XCTAssertEqual(encryptor.header.bytes.count, FileV2.headerLength)
+        // The copy of K handed out earlier is the caller's own value.
+        XCTAssertEqual(copyOfKey.count, 32)
+    }
+
+    func testWipeOverwritesTheSecretBytes() {
+        var secret = Data((1...32).map { UInt8($0) })
+        FileV2Secret.wipe(&secret)
+        XCTAssertTrue(secret.isEmpty)
+        var empty = Data()
+        FileV2Secret.wipe(&empty)
+        XCTAssertTrue(empty.isEmpty)
+        var keys = FileV2Crypto.derive(fileKey: Data(repeating: 5, count: 32), fileID: Data(repeating: 6, count: 16))
+        XCTAssertEqual(keys.prk.count, 32)
+        XCTAssertEqual(keys.noncePrefix.count, 8)
+        keys.wipe()
+        XCTAssertTrue(keys.prk.isEmpty)
+        XCTAssertTrue(keys.noncePrefix.isEmpty)
+    }
+
+    func testAClosedReceiverNeitherOpensNorWritesNorFinalizes() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let plain = directory.appendingPathComponent("plain")
+        let blob = directory.appendingPathComponent("blob")
+        try Support.writePlaintextFile(size: 500, to: plain)
+        let sender = try FileV2Encryptor.makeNew(plaintextSize: 500)
+        try sender.encryptFile(from: plain, to: blob)
+        let sealed = try Data(contentsOf: blob).dropFirst(FileV2.headerLength)
+
+        let receiver = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
+                                           header: sender.header.bytes, size: 500)
+        XCTAssertNotNil(try receiver.openChunk(index: 0, sealed: Data(sealed)))
+        receiver.close()
+        let outURL = directory.appendingPathComponent("out")
+        XCTAssertTrue(FileManager.default.createFile(atPath: outURL.path, contents: nil))
+        let output = try FileHandle(forUpdating: outURL)
+        defer { try? output.close() }
+        XCTAssertThrowsError(try receiver.openChunk(index: 0, sealed: Data(sealed))) { XCTAssertEqual($0 as? FileV2Error, .closed) }
+        XCTAssertThrowsError(try receiver.receive(index: 0, sealed: Data(sealed), writingTo: output)) {
+            XCTAssertEqual($0 as? FileV2Error, .closed)
+        }
+        XCTAssertThrowsError(try receiver.finalize(output: output)) { XCTAssertEqual($0 as? FileV2Error, .closed) }
+        XCTAssertThrowsError(try receiver.decryptFile(from: blob, to: directory.appendingPathComponent("out2"))) {
+            XCTAssertEqual($0 as? FileV2Error, .closed)
+        }
+        XCTAssertEqual(try Data(contentsOf: outURL).count, 0, "nothing was written after close")
+        XCTAssertEqual(receiver.verifiedCount, 0)
+        receiver.close()    // idempotent
     }
 
     func testPartsSealedInParallelEqualTheSequentialBlob() throws {
@@ -248,7 +461,7 @@ final class FileV2LibraryTests: XCTestCase {
         try sequential.encryptFile(from: plain, to: sequentialBlob)
         let expected = try Data(contentsOf: sequentialBlob)
 
-        // Several workers, one index each, a handle each, one shared ledger. Every index is sealed twice (a retry).
+        // Several workers, one index each, a handle each, one shared encryptor. Every index is sealed twice (a retry).
         let parallel = try FileV2Encryptor(fileKey: key, fileID: id, plaintextSize: size)
         let count = parallel.totalChunks
         var results = [Data?](repeating: nil, count: count)
@@ -272,7 +485,51 @@ final class FileV2LibraryTests: XCTestCase {
         for index in 0..<count { assembled.append(try XCTUnwrap(results[index], "chunk \(index) missing")) }
         XCTAssertEqual(assembled, expected)
         XCTAssertEqual(parallel.tagLedger.count, count)
-        XCTAssertEqual(parallel.tagLedger.entries, sequential.tagLedger.entries)
+        XCTAssertEqual(parallel.tagEntries, sequential.tagEntries)
+        XCTAssertFalse(parallel.isCancelled)
+    }
+
+    /// One worker hits the conflict while others seal: the cancellation is seen by all of them, nothing is returned after
+    /// it and the encryptor never "un-cancels".
+    func testAConflictInOneWorkerCancelsTheOthers() throws {
+        let size = UInt64(8 * chunk)
+        let encryptor = try FileV2Encryptor.makeNew(plaintextSize: size)
+        let contents = (0..<8).map { Support.plaintextBlock(offset: UInt64($0 * chunk), count: chunk) }
+        // Record every tag once.
+        for index in 0..<8 { _ = try encryptor.sealChunk(index: index, fileBytes: contents[index]) }
+        var tampered = contents[3]
+        tampered[1] ^= 1
+        var conflicts = 0, refused = 0, sealedAfter = 0
+        let counters = NSLock()
+        DispatchQueue.concurrentPerform(iterations: 9) { worker in
+            if worker == 8 {
+                // The conflicting worker.
+                do {
+                    _ = try encryptor.sealChunk(index: 3, fileBytes: tampered)
+                } catch {
+                    counters.lock(); conflicts += 1; counters.unlock()
+                }
+                return
+            }
+            // The other workers keep sealing unchanged content; whatever they get is either valid or a refusal.
+            for _ in 0..<5 {
+                do {
+                    _ = try encryptor.sealChunk(index: worker, fileBytes: contents[worker])
+                    counters.lock(); sealedAfter += 1; counters.unlock()
+                } catch {
+                    counters.lock(); refused += 1; counters.unlock()
+                }
+            }
+        }
+        XCTAssertEqual(conflicts, 1)
+        XCTAssertTrue(encryptor.isCancelled)
+        XCTAssertEqual(refused + sealedAfter, 8 * 5)
+        // After the dust settles nothing seals any more.
+        for index in 0..<8 {
+            XCTAssertThrowsError(try encryptor.sealChunk(index: index, fileBytes: contents[index]), "chunk \(index)") {
+                XCTAssertEqual($0 as? FileV2Error, .contentChanged)
+            }
+        }
     }
 
     // MARK: Streaming: the source
@@ -288,6 +545,7 @@ final class FileV2LibraryTests: XCTestCase {
                 XCTAssertEqual($0 as? FileV2Error, .contentChanged)
             }
             XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            XCTAssertTrue(encryptor.isCancelled)
         }
     }
 
@@ -315,6 +573,7 @@ final class FileV2LibraryTests: XCTestCase {
             XCTAssertEqual($0 as? FileV2Error, .invalidArgument("destination exists"))
         }
         XCTAssertEqual(try Data(contentsOf: existing), Data("keep me".utf8))
+        XCTAssertFalse(encryptor.isCancelled, "a refused destination is not a conflict")
     }
 
     // MARK: Streaming: the receiver
@@ -340,6 +599,14 @@ final class FileV2LibraryTests: XCTestCase {
         }
     }
 
+    /// The sealed chunks of a blob, in order.
+    private func sealedChunks(of blob: Data, sender: FileV2Encryptor) throws -> [Data] {
+        try (0..<sender.totalChunks).map { index in
+            let offset = Int(try XCTUnwrap(sender.blobOffset(ofChunk: index)))
+            return blob.subdata(in: offset..<offset + sender.sealedChunkLength(index))
+        }
+    }
+
     /// Chunks in any order, a duplicate, an index past the end, a tampered chunk and an early finalize.
     func testReceiverCountsOnTheMapOfVerifiedChunks() throws {
         let directory = try Support.makeTempDirectory(for: self)
@@ -349,11 +616,8 @@ final class FileV2LibraryTests: XCTestCase {
         try Support.writePlaintextFile(size: size, to: plain)
         let sender = try FileV2Encryptor.makeNew(plaintextSize: size)
         try sender.encryptFile(from: plain, to: blobURL)
-        let blob = try Data(contentsOf: blobURL)
-        func sealed(_ index: Int) -> Data {
-            let offset = Int(sender.blobOffset(ofChunk: index))
-            return blob.subdata(in: offset..<offset + sender.sealedChunkLength(index))
-        }
+        let chunks = try sealedChunks(of: try Data(contentsOf: blobURL), sender: sender)
+        func sealed(_ index: Int) -> Data { chunks[index] }
 
         let receiver = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
                                            header: sender.header.bytes, size: size)
@@ -412,6 +676,51 @@ final class FileV2LibraryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: outURL), try Data(contentsOf: plain))
     }
 
+    /// Chunks delivered from several threads at once (parallel parts, several sources): every chunk offered four times
+    /// concurrently ends with exactly one `written` and three `alreadyVerified`, the map is exact, and the output is the file.
+    func testConcurrentDeliveryOfTheSameChunksFromManyThreads() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let size = UInt64(11 * chunk + 777)
+        let plain = directory.appendingPathComponent("plain")
+        let blobURL = directory.appendingPathComponent("blob")
+        try Support.writePlaintextFile(size: size, to: plain)
+        let sender = try FileV2Encryptor.makeNew(plaintextSize: size)
+        try sender.encryptFile(from: plain, to: blobURL)
+        let chunks = try sealedChunks(of: try Data(contentsOf: blobURL), sender: sender)
+
+        let receiver = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
+                                           header: sender.header.bytes, size: size)
+        let outURL = directory.appendingPathComponent("out")
+        XCTAssertTrue(FileManager.default.createFile(atPath: outURL.path, contents: nil))
+        let output = try FileHandle(forUpdating: outURL)
+        defer { try? output.close() }
+
+        let total = receiver.totalChunks
+        let copies = 4
+        var outcomes: [FileV2Decryptor.ChunkOutcome] = []
+        var errors = 0
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: total * copies) { iteration in
+            // Every chunk is offered by `copies` workers, interleaved by the scheduler.
+            let index = iteration % total
+            do {
+                let outcome = try receiver.receive(index: index, sealed: chunks[index], writingTo: output)
+                lock.lock(); outcomes.append(outcome); lock.unlock()
+            } catch {
+                lock.lock(); errors += 1; lock.unlock()
+            }
+        }
+        XCTAssertEqual(errors, 0)
+        XCTAssertEqual(outcomes.count, total * copies)
+        XCTAssertEqual(outcomes.filter { $0 == .written }.count, total, "exactly one writer per chunk")
+        XCTAssertEqual(outcomes.filter { $0 == .alreadyVerified }.count, total * (copies - 1))
+        XCTAssertTrue(receiver.isComplete)
+        XCTAssertEqual(receiver.verifiedCount, total)
+        XCTAssertEqual(receiver.missingChunks, [])
+        try receiver.finalize(output: output)
+        XCTAssertEqual(try Data(contentsOf: outURL), try Data(contentsOf: plain))
+    }
+
     func testResumeFromAPersistedMapOfVerifiedChunks() throws {
         let directory = try Support.makeTempDirectory(for: self)
         let size = UInt64(3 * chunk + 5000)
@@ -420,11 +729,8 @@ final class FileV2LibraryTests: XCTestCase {
         try Support.writePlaintextFile(size: size, to: plain)
         let sender = try FileV2Encryptor.makeNew(plaintextSize: size)
         try sender.encryptFile(from: plain, to: blobURL)
-        let blob = try Data(contentsOf: blobURL)
-        func sealed(_ index: Int) -> Data {
-            let offset = Int(sender.blobOffset(ofChunk: index))
-            return blob.subdata(in: offset..<offset + sender.sealedChunkLength(index))
-        }
+        let chunks = try sealedChunks(of: try Data(contentsOf: blobURL), sender: sender)
+        func sealed(_ index: Int) -> Data { chunks[index] }
         let outURL = directory.appendingPathComponent("out")
         XCTAssertTrue(FileManager.default.createFile(atPath: outURL.path, contents: nil))
 
@@ -444,6 +750,8 @@ final class FileV2LibraryTests: XCTestCase {
         let second = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
                                          header: sender.header.bytes, size: size, verifiedChunks: persisted)
         XCTAssertEqual(second.missingChunks, [1, 3])
+        // The output still holds the restored chunks: nothing is dropped.
+        XCTAssertEqual(try second.dropVerifiedChunksMissing(in: secondOutput), [])
         for index in [3, 2, 1, 0] {
             let outcome = try second.receive(index: index, sealed: sealed(index), writingTo: secondOutput)
             XCTAssertEqual(outcome, persisted.contains(index) ? .alreadyVerified : .written, "chunk \(index)")
@@ -453,6 +761,91 @@ final class FileV2LibraryTests: XCTestCase {
 
         XCTAssertThrowsError(try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
                                                  header: sender.header.bytes, size: size, verifiedChunks: [9]))
+        XCTAssertThrowsError(try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
+                                                 header: sender.header.bytes, size: size, verifiedChunks: [-1]))
+    }
+
+    /// A restored map is the receiver's own local state and is trusted as such, but not blindly: a chunk whose bytes are
+    /// no longer in the output file is unmarked (`dropVerifiedChunksMissing`), and any chunk the pipeline distrusts can be
+    /// unmarked by hand (`markUnverified`), so it is requested and verified again.
+    func testARestoredMapIsCheckedAgainstTheOutputFile() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let size = UInt64(3 * chunk + 5000)
+        let plain = directory.appendingPathComponent("plain")
+        let blobURL = directory.appendingPathComponent("blob")
+        try Support.writePlaintextFile(size: size, to: plain)
+        let sender = try FileV2Encryptor.makeNew(plaintextSize: size)
+        try sender.encryptFile(from: plain, to: blobURL)
+        let chunks = try sealedChunks(of: try Data(contentsOf: blobURL), sender: sender)
+        let outURL = directory.appendingPathComponent("out")
+        XCTAssertTrue(FileManager.default.createFile(atPath: outURL.path, contents: nil))
+
+        let firstOutput = try FileHandle(forUpdating: outURL)
+        let first = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
+                                        header: sender.header.bytes, size: size)
+        for index in [0, 2, 3] { _ = try first.receive(index: index, sealed: chunks[index], writingTo: firstOutput) }
+        try firstOutput.close()
+        XCTAssertEqual(first.verifiedChunks, [0, 2, 3])
+
+        // The output file lost its tail (a crash, a partial restore): it now holds a little more than chunk 0.
+        let handle = try FileHandle(forUpdating: outURL)
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: UInt64(chunk) + 10)
+        let second = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
+                                         header: sender.header.bytes, size: size, verifiedChunks: first.verifiedChunks)
+        XCTAssertEqual(try second.dropVerifiedChunksMissing(in: handle), [2, 3])
+        XCTAssertEqual(second.verifiedChunks, [0])
+        XCTAssertEqual(second.missingChunks, [1, 2, 3])
+        XCTAssertEqual(try second.dropVerifiedChunksMissing(in: handle), [], "idempotent")
+
+        // By hand.
+        XCTAssertTrue(second.markUnverified(chunk: 0))
+        XCTAssertFalse(second.markUnverified(chunk: 0), "already unmarked")
+        XCTAssertFalse(second.markUnverified(chunk: 1), "never verified")
+        XCTAssertFalse(second.markUnverified(chunk: -1))
+        XCTAssertFalse(second.markUnverified(chunk: 99))
+        XCTAssertEqual(second.verifiedCount, 0)
+        XCTAssertEqual(second.missingChunks, [0, 1, 2, 3])
+        // And everything can be delivered again and the file comes out right.
+        for index in [3, 1, 0, 2] { _ = try second.receive(index: index, sealed: chunks[index], writingTo: handle) }
+        try second.finalize(output: handle)
+        XCTAssertEqual(try Data(contentsOf: outURL), try Data(contentsOf: plain))
+    }
+
+    /// Section 12.9, incomplete transfer: a stream that ends with chunks missing is `size_mismatch`, at a chunk
+    /// boundary or inside a chunk, and never `bad_padding` (the padding check stays last, on a complete stream only).
+    func testAnIncompleteStreamIsSizeMismatchAndNeverBadPadding() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let size = UInt64(2 * chunk + 100)        // a padded last chunk
+        let plain = directory.appendingPathComponent("plain")
+        let blobURL = directory.appendingPathComponent("blob")
+        try Support.writePlaintextFile(size: size, to: plain)
+        let sender = try FileV2Encryptor.makeNew(plaintextSize: size)
+        try sender.encryptFile(from: plain, to: blobURL)
+        let chunks = try sealedChunks(of: try Data(contentsOf: blobURL), sender: sender)
+        let receiver = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
+                                           header: sender.header.bytes, size: size)
+        let outURL = directory.appendingPathComponent("out")
+        XCTAssertTrue(FileManager.default.createFile(atPath: outURL.path, contents: nil))
+        let output = try FileHandle(forUpdating: outURL)
+        defer { try? output.close() }
+
+        // Nothing received, then the first chunk only: the source ended early (at a chunk boundary).
+        XCTAssertThrowsError(try receiver.endOfStream()) { XCTAssertEqual($0 as? FileV2Error, .sizeMismatch) }
+        XCTAssertEqual(try receiver.receive(index: 0, sealed: chunks[0], writingTo: output), .written)
+        XCTAssertThrowsError(try receiver.endOfStream()) { XCTAssertEqual($0 as? FileV2Error, .sizeMismatch) }
+        XCTAssertThrowsError(try receiver.finalize(output: output)) { XCTAssertEqual($0 as? FileV2Error, .sizeMismatch) }
+        // The last chunk ends inside its tag: those bytes are not a chunk, the caller does not deliver them, and the
+        // answer is the same.
+        XCTAssertEqual(try receiver.receive(index: 1, sealed: chunks[1], writingTo: output), .written)
+        XCTAssertThrowsError(try receiver.endOfStream()) { XCTAssertEqual($0 as? FileV2Error, .sizeMismatch) }
+        XCTAssertEqual(receiver.missingChunks, [2])
+        // Complete: the end of the stream is fine, and the padding is checked by finalize.
+        XCTAssertEqual(try receiver.receive(index: 2, sealed: chunks[2], writingTo: output), .written)
+        XCTAssertNoThrow(try receiver.endOfStream())
+        XCTAssertNoThrow(try receiver.finalize(output: output))
+        receiver.close()
+        XCTAssertThrowsError(try receiver.endOfStream()) { XCTAssertEqual($0 as? FileV2Error, .closed) }
     }
 
     func testDecryptFileRefusesAUsedDecryptorAndAnExistingDestination() throws {
@@ -475,6 +868,37 @@ final class FileV2LibraryTests: XCTestCase {
         XCTAssertThrowsError(try fresh.decryptFile(from: blob, to: out)) {
             XCTAssertEqual($0 as? FileV2Error, .invalidArgument("destination exists"))
         }
+    }
+
+    /// A failed `decryptFile` removes the destination AND empties the map of verified chunks: the chunks it claimed are
+    /// gone with the file, so a later delivery into another output must not skip them as "already verified". The
+    /// decryptor stays open and fresh: the pipeline may try another source.
+    func testAFailedDecryptFileLeavesAFreshDecryptor() throws {
+        let directory = try Support.makeTempDirectory(for: self)
+        let size = UInt64(3 * chunk + 5000)
+        let plain = directory.appendingPathComponent("plain")
+        let blob = directory.appendingPathComponent("blob")
+        try Support.writePlaintextFile(size: size, to: plain)
+        let sender = try FileV2Encryptor.makeNew(plaintextSize: size)
+        try sender.encryptFile(from: plain, to: blob)
+        var corrupted = try Data(contentsOf: blob)
+        corrupted[Int(try XCTUnwrap(sender.blobOffset(ofChunk: 2))) + 1000] ^= 0x01     // chunk 2 fails after 0 and 1 pass
+        let corruptedURL = directory.appendingPathComponent("corrupted")
+        try corrupted.write(to: corruptedURL)
+
+        let receiver = try FileV2Decryptor(fileID: sender.fileID, fileKey: sender.fileKey,
+                                           header: sender.header.bytes, size: size)
+        let failedOutput = directory.appendingPathComponent("failed")
+        XCTAssertThrowsError(try receiver.decryptFile(from: corruptedURL, to: failedOutput)) {
+            XCTAssertEqual($0 as? FileV2Error, .chunkAuth)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: failedOutput.path), "no partial plaintext stays on disk")
+        XCTAssertEqual(receiver.verifiedCount, 0, "the chunks of the removed file are not claimed any more")
+        XCTAssertEqual(receiver.missingChunks, [0, 1, 2, 3])
+        // Fresh and open: the good blob decrypts completely into another output.
+        let output = directory.appendingPathComponent("output")
+        try receiver.decryptFile(from: blob, to: output)
+        XCTAssertEqual(try Data(contentsOf: output), try Data(contentsOf: plain))
     }
 
     func testBlobShorterThanItsHeaderIsAHeaderMismatch() throws {
@@ -571,7 +995,9 @@ final class FileV2LibraryTests: XCTestCase {
         XCTAssertEqual(FileV2Error.badPadding.code, "bad_padding")
         XCTAssertEqual(FileV2Error.sizeMismatch.code, "size_mismatch")
         XCTAssertEqual(FileV2Error.cancelled.code, "cancelled")
+        XCTAssertEqual(FileV2Error.unsupportedVersion.code, "unsupported_version")
         XCTAssertEqual(FileV2Error.contentChanged.code, "cancelled")
+        XCTAssertEqual(FileV2Error.closed.code, "closed")
         XCTAssertEqual(FileV2Error.invalidArgument("x").code, "invalid_argument")
     }
 }
