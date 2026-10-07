@@ -97,6 +97,22 @@ final class FileV2ParallelismTests: XCTestCase {
         }
     }
 
+    /// `parallelism` and `max_parallelism` of a create are the server's JSON numbers: whatever they are, the rule starts from a
+    /// sane value and does not trap.
+    func testHostileServerNumbersNeverTrapTheStartingPoint() {
+        let numbers = [Int.min, Int.min + 1, -1, 0, 1, 6, 8, Int.max - 1, Int.max]
+        for p0 in numbers {
+            for serverMax in numbers {
+                for memory in [Int.min, 0, 1, 6, Int.max] {
+                    let value = FileV2AdaptiveParallelism(serverParallelism: p0, serverMaxParallelism: serverMax, memoryCap: memory,
+                                                          startMs: 0)
+                    XCTAssertTrue((1...FileV2AdaptiveParallelism.hardCeiling).contains(value.ceiling), "\(p0) \(serverMax) \(memory)")
+                    XCTAssertTrue((1...value.ceiling).contains(value.current), "\(p0) \(serverMax) \(memory)")
+                }
+            }
+        }
+    }
+
     func testTheNamedCeilings() {
         XCTAssertEqual(FileV2AdaptiveParallelism.hardCeiling, 8)
         XCTAssertEqual(FileV2AdaptiveParallelism.meteredCeiling, 3)

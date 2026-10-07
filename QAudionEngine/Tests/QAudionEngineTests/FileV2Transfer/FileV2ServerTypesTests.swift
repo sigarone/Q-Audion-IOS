@@ -52,6 +52,13 @@ final class FileV2ServerTypesTests: XCTestCase {
         XCTAssertEqual(Int64(sum), blob - 64)
         let max = Int64(FileV2.maxBlob)
         XCTAssertEqual(FileV2Wire.partLength(blobLength: max, part: 639), FileV2Wire.partSize)
+        // the server's numbers can be anything: no trap at either end of the range
+        XCTAssertEqual(FileV2Wire.partLength(blobLength: Int64.max, part: Int(Int32.max) - 1), FileV2Wire.partSize)
+        XCTAssertEqual(FileV2Wire.partLength(blobLength: Int64.max, part: Int(Int32.max)), 0)
+        XCTAssertEqual(FileV2Wire.partLength(blobLength: Int64.max, part: Int.max), 0)
+        XCTAssertEqual(FileV2Wire.partLength(blobLength: Int64.min, part: 0), 0)
+        XCTAssertNotNil(FileV2Wire.partOffset(Int(Int32.max)))
+        XCTAssertNil(FileV2Wire.partOffset(Int.max / 2), "the product overflows: nil, not a trap")
     }
 
     // MARK: Parts map
