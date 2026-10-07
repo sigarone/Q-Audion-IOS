@@ -160,6 +160,7 @@ jobs:
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \
             -only-testing:QAudionAppTests/ConfidenceToneTests \
+            -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \

@@ -80,6 +80,8 @@ enum FileV2FailureText {
             return String(localized: "file_v2.fail.no_channel", defaultValue: "Il canale cifrato con questo contatto non è ancora pronto. Riprova tra un momento.", comment: "File transfer error: no encrypted session with the contact yet, so the file message cannot be sealed.")
         case .unavailable:
             return String(localized: "file_v2.fail.unavailable", defaultValue: "Il file non è più disponibile sul server (scaduto o rimosso).", comment: "File transfer error: the server no longer has the file the contact sent.")
+        case .imageNotCleanable:
+            return String(localized: "file_v2.fail.image_not_cleanable", defaultValue: "Immagine non inviata: da questo formato non si possono togliere la posizione e i dati del dispositivo.", comment: "File transfer error: the picture was not sent because its location and device data could not be removed from its format (nothing was uploaded).")
         case .objectGone:
             return String(localized: "file_v2.fail.object_gone", defaultValue: "Il server ha interrotto il caricamento. Riprova.", comment: "File transfer error: the server dropped the object while it was being uploaded.")
         case .format:
