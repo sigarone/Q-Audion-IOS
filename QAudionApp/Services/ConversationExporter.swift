@@ -82,6 +82,12 @@ enum ConversationExporter {
         let body: String
         if m.deletedAt != nil {
             body = "<messaggio eliminato>"
+        } else if let shown = FileV2ChatBody.classify(text: m.plaintext).displayText {
+            // A file message (WIRE_SPEC 12.7.1): its one-line preview, never the descriptor (it holds the key of the file).
+            body = shown
+        } else if m.mediaMimeType == FileV2ChatBody.pendingMime {
+            // A file still being sent: its row already is the one-line name.
+            body = m.plaintext
         } else if let mime = m.mediaMimeType, !mime.isEmpty {
             // Attachment placeholder — voice notes (audio/mp4) /
             // images (image/jpeg) etc. The actual binary stays in the

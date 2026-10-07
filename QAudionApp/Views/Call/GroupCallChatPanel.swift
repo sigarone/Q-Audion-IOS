@@ -78,7 +78,6 @@ struct GroupCallChatPanel: View {
     @State private var showingAttachChoice = false
     @State private var showingPhotoPicker = false
     @State private var photoPickerItems: [PhotosPickerItem] = []
-    @State private var showingFileImporter = false
     /// W-XPTTL — pending group attachment awaiting the pre-send options
     /// choice. See `GroupChatScreen`'s identical field for the full
     /// reasoning (shared `PendingAttachmentSend` enum, `.voiceNote`
@@ -142,7 +141,12 @@ struct GroupCallChatPanel: View {
                 Label("Galleria", systemImage: "photo.on.rectangle")
             }
             Button {
-                showingFileImporter = true
+                // File transfer v2 (WIRE_SPEC 12.7.1) does not travel in groups yet: the old group file format is gone, so the
+                // option says so instead of doing anything half way.
+                snackbar?.show(.init(
+                    text: String(localized: "file_v2.group_attach_unavailable", defaultValue: "L'invio di documenti nei gruppi non è ancora disponibile in questa versione.", comment: "Snackbar shown when the user tries to attach a document in a group chat."),
+                    severity: .warning,
+                    durationSeconds: 4))
             } label: {
                 Label("File", systemImage: "doc")
             }
@@ -154,11 +158,6 @@ struct GroupCallChatPanel: View {
                       matching: .images)
         .onChange(of: photoPickerItems) { newItems in
             handlePickedPhotos(newItems)
-        }
-        .fileImporter(isPresented: $showingFileImporter,
-                      allowedContentTypes: [.item],
-                      allowsMultipleSelection: false) { result in
-            handlePickedFile(result)
         }
         // W-XPTTL — pre-send options for group attachments. Same pattern
         // as `GroupChatScreen`.
@@ -473,13 +472,6 @@ struct GroupCallChatPanel: View {
         await MainActor.run { pendingGroupAttachmentSend = .multiImage(loaded) }
     }
 
-    /// File picked — defer the actual read to `performGroupAttachmentSend`,
-    /// mirroring `GroupChatScreen.handlePickedFile`.
-    private func handlePickedFile(_ result: Result<[URL], Swift.Error>) {
-        guard case .success(let urls) = result, let url = urls.first, !groupHex.isEmpty else { return }
-        pendingGroupAttachmentSend = .file(url)
-    }
-
     /// Fires the actual group attachment send once the pre-send options
     /// are confirmed. `.voiceNote` is unreachable here (no group
     /// voice-note send flow) — kept only for the shared enum's
@@ -506,21 +498,9 @@ struct GroupCallChatPanel: View {
                         timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
                 }
             }
-        case .file(let url):
-            Task {
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                guard let data = try? Data(contentsOf: url) else {
-                    snackbar?.show(.init(text: String(localized: "group_chat.file_unreadable", defaultValue: "File non leggibile", comment: "Snackbar warning in group chat / in-call chat panel when a picked file's contents could not be read from disk before sending."), severity: .warning))
-                    return
-                }
-                let ext = url.pathExtension
-                let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
-                await sendAttachmentOverWire(
-                    data: data, mime: mime, kind: GroupAttachmentEnvelope.kindFile,
-                    filename: url.lastPathComponent, width: nil, height: nil,
-                    timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
-            }
+        case .file:
+            // Not reachable: the group attach menu no longer offers documents (file transfer v2 does not travel in groups yet).
+            break
         case .voiceNote:
             break
         }

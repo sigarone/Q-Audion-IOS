@@ -81,6 +81,8 @@ struct ChatDetailScreen: View {
     @State private var replyTarget: MessageComposer.ReplyTarget? = nil
     @State private var editingTarget: MessageComposer.EditingTarget? = nil
     @State private var actionTargetId: UUID? = nil
+    /// Downloads of received v2 documents (progress and failures of the file cards).
+    @ObservedObject private var fileV2Downloads: FileV2DownloadCenter = .shared
     /// W446: which media row (identified by message id) should act on
     /// the next `BubbleActionSheet` "Salva in Foto" / "Condividi"
     /// tap. `BubbleActionSheet` itself is media-agnostic — it only
@@ -316,7 +318,8 @@ struct ChatDetailScreen: View {
             // string interpolation `\(obj.field)` inside a closure that builds a
             // SwiftUI struct literal trips Swift 6 / Xcode 26.4 type-checker
             // timeouts. See CLAUDE.md §13. Keep this pattern.
-            let reasonText: String = reason.localizedDescription
+            // A file that failed says why (`FileV2FailureText`); every other failure has its generic reason.
+            let reasonText: String = container.failureDetail ?? reason.localizedDescription
             let snackbarText: String = String(localized: "chat_detail.message_send_failed", defaultValue: "Messaggio non inviato — \(reasonText)", comment: "Snackbar shown when a message fails to send; %@ is the localized failure reason description.")
             snackbar?.show(.init(
                 text: snackbarText,
@@ -325,6 +328,13 @@ struct ChatDetailScreen: View {
                 onAction: { container.retryFailedMessage() },
                 durationSeconds: 6
             ))
+        }
+        // One-line notices of the container (a file that cannot be retried, a text that cannot be sent, a forward that is not
+        // available): shown once, then cleared.
+        .onChange(of: container.transientNotice) { notice in
+            guard let notice else { return }
+            snackbar?.show(.init(text: notice, severity: .warning, durationSeconds: 4))
+            container.clearTransientNotice()
         }
         // W59: PhotosPicker per image attachment. Usa il system out-of-
         // process picker (no NSPhotoLibraryUsageDescription required,
@@ -403,7 +413,7 @@ struct ChatDetailScreen: View {
         .sheet(item: actionSheetBinding) { msgIdWrapper in
             BubbleActionSheet(
                 isOwn: messageIsOwn(msgIdWrapper.id),
-                isText: true,  // all messages are text in current model
+                isText: !isFileMessage(msgIdWrapper.id),  // a file message is not text: no edit, no copy
                 onReact: { emoji in
                     // W87: toggle a qa_ctl:1 reaction. ChatContainer
                     // applies the local toggle immediately + emits the
@@ -1119,6 +1129,14 @@ struct ChatDetailScreen: View {
                         .qaudionStyle(type.labelSmall)
                 }
                 .foregroundStyle(scheme.onSurfaceVariant)
+            } else if let fileInfo = FileV2ChatBody.bubbleInfo(for: msg) {
+                // File transfer v2: the body of such a message is a descriptor, never shown as text (WIRE_SPEC 12.7.1).
+                FileV2BubbleContent(
+                    message: msg,
+                    info: fileInfo,
+                    downloads: fileV2Downloads,
+                    onDownload: { fileV2Downloads.start(message: msg, appState: appState) }
+                )
             } else if let mime = msg.mediaMimeType, mime.hasPrefix("audio/") {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
@@ -1292,6 +1310,14 @@ struct ChatDetailScreen: View {
         guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else {
             return
         }
+        // A forwarded file would be a new file (new key): not in this version, and the descriptor itself is never forwarded.
+        guard FileV2ChatBody.bubbleInfo(for: msg) == nil else {
+            snackbar?.show(.init(
+                text: String(localized: "file_v2.forward_unavailable", defaultValue: "Gli allegati non si possono inoltrare in questa versione.", comment: "Shown when the user tries to forward a file message."),
+                severity: .warning,
+                durationSeconds: 3))
+            return
+        }
         forwardingMessage = msg
         showingForwardPicker = true
     }
@@ -1405,7 +1431,14 @@ struct ChatDetailScreen: View {
                     durationSeconds: 3))
             }
         case .file(let url):
-            container.sendFileAttachment(url: url, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked)
+            // File transfer v2: a file that cannot be sent at all (empty, unreadable, above 5 GiB, no encrypted channel yet) is
+            // refused here with the reason, before any row is shown.
+            if let failure = container.sendFileAttachment(url: url, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked) {
+                snackbar?.show(.init(
+                    text: FileV2FailureText.message(for: failure),
+                    severity: .warning,
+                    durationSeconds: 4))
+            }
         case .voiceNote(let recording):
             container.sendVoiceNote(recording, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked)
         }
@@ -1556,6 +1589,12 @@ struct ChatDetailScreen: View {
         #if canImport(UIKit)
         UIPasteboard.general.string = msg.plaintext
         #endif
+    }
+
+    /// A message of the file transfer v2 format (a document received, or being sent / sent): its body is a descriptor, not text.
+    private func isFileMessage(_ id: UUID) -> Bool {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == id }) else { return false }
+        return FileV2ChatBody.bubbleInfo(for: msg) != nil
     }
 
     private func messageIsOwn(_ id: UUID) -> Bool {

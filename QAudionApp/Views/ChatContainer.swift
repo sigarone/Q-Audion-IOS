@@ -39,6 +39,8 @@ final class ChatContainer: ObservableObject {
         case networkError    = "network_error"
         case notAuthenticated = "not_authenticated"
         case uploadFailure   = "upload_failure"
+        /// A file (document) failed to send; the sentence that says why is `ChatContainer.failureDetail`.
+        case fileTransfer    = "file_transfer"
         case generic         = "send_error"
         /// 2026-09-19 service-message root fix — a SERVICE payload has no
         /// CONTROL session to be sealed on. Typed so the caller can hold it
@@ -61,6 +63,8 @@ final class ChatContainer: ObservableObject {
                 return String(localized: "chat.send_error.not_authenticated", defaultValue: "Sessione scaduta. Effettua di nuovo l'accesso.", comment: "Message-send failure banner — session expired")
             case .uploadFailure:
                 return String(localized: "chat.send_error.upload_failure", defaultValue: "Caricamento allegato fallito. Riprova.", comment: "Message-send failure banner — attachment upload failed")
+            case .fileTransfer:
+                return String(localized: "chat.send_error.file_transfer", defaultValue: "Invio del file non riuscito. Riprova.", comment: "Message-send failure banner — a file could not be sent")
             case .generic, .noControlSession:
                 return String(localized: "chat.send_error.generic", defaultValue: "Invio fallito. Riprova più tardi.", comment: "Message-send failure banner — generic send failure")
             }
@@ -72,6 +76,19 @@ final class ChatContainer: ObservableObject {
 
     @Published private(set) var failedMessageId: UUID? = nil
     @Published private(set) var failureReason: SendFailureReason? = nil
+    /// The sentence that says WHY a file failed (`FileV2FailureText`), shown instead of the generic text of `failureReason`; nil for
+    /// every other failure.
+    @Published private(set) var failureDetail: String? = nil
+    /// A one-line notice for the screen to show once (a snackbar), then clear with `clearTransientNotice()`.
+    @Published private(set) var transientNotice: String? = nil
+    /// What it takes to send a failed file again: the picked file (the app does not keep a copy; a row that outlives the app
+    /// cannot be retried, the user attaches the file again) and the choices made in the pre-send dialog.
+    private struct FileV2RetrySource {
+        let url: URL
+        let overrideTimerSeconds: Int?
+        let exportBlocked: Bool
+    }
+    private var fileV2Retry: [UUID: FileV2RetrySource] = [:]
     /// When true, the NEXT message sent will be flagged as view-once.
     /// Mirrors conversation.screenshotGrantedByPeer for reactive UI.
     @Published private(set) var screenshotGrantedByPeer: Bool? = nil
@@ -164,6 +181,14 @@ final class ChatContainer: ObservableObject {
                 pinned: false
             )
             store.upsertConversation(conv)
+        }
+
+        // File transfer v2: a file that is still "sending" and that no send of this process owns belongs to an upload the system
+        // ended (the app was closed or killed while it ran). It will never finish: show it as failed rather than waiting for ever.
+        for stale in store.loadMessages(conversationId: conversationId)
+        where stale.mediaMimeType == FileV2ChatBody.pendingMime && stale.status == .sending
+            && !FileV2OutboundRunner.isInFlight(stale.id) {
+            store.updateMessageStatus(id: stale.id, conversationId: conversationId, newStatus: .failed)
         }
 
         let messages = store.loadMessages(conversationId: conversationId)
@@ -313,6 +338,12 @@ final class ChatContainer: ObservableObject {
     func sendMessage() {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        // WIRE_SPEC 12.7.1: text the user supplies that begins like a file message is refused as an ordinary message; only the
+        // file builders of the engine produce such a body.
+        guard FileV2ChatBody.isUserTextAllowed(text) else {
+            transientNotice = String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused.")
+            return
+        }
 
         // W114: soft haptic tap so the user feels the send fire.
         HapticFeedback.messageSent()
@@ -845,6 +876,8 @@ final class ChatContainer: ObservableObject {
         guard !trimmed.isEmpty else { return }
         guard message.direction == .outgoing else { return }
         guard let cmid = message.clientMsgId, !cmid.isEmpty else { return }
+        // A file message is not text (it cannot be edited), and an edit cannot turn text into one (WIRE_SPEC 12.7.1).
+        guard FileV2ChatBody.classify(text: message.plaintext) == .text, FileV2ChatBody.isUserTextAllowed(trimmed) else { return }
         // Cap body at the cross-platform limit (8 KiB).
         guard trimmed.utf8.count <= ChatControlEnvelope.editBodyCapBytes else {
             print("[ChatContainer] editMessage rejected: body > 8 KiB")
@@ -1322,6 +1355,18 @@ final class ChatContainer: ObservableObject {
         // Clear failure flags so the snackbar dismisses.
         failedMessageId = nil
         failureReason = nil
+        failureDetail = nil
+
+        // File transfer v2: a file that failed before it had a descriptor starts again from the picked file; one that failed
+        // after (the descriptor could not be sent) sends the same descriptor again, the upload is still on the server.
+        if msg.mediaMimeType == FileV2ChatBody.pendingMime {
+            retryFileV2Send(msg)
+            return
+        }
+        if msg.direction == .outgoing, case .file = FileV2ChatBody.classify(text: msg.plaintext) {
+            resendFileV2Descriptor(msg)
+            return
+        }
 
         let mime = msg.mediaMimeType ?? ""
 
@@ -1679,6 +1724,11 @@ final class ChatContainer: ObservableObject {
     func clearFailureFlag() {
         failedMessageId = nil
         failureReason = nil
+        failureDetail = nil
+    }
+
+    func clearTransientNotice() {
+        transientNotice = nil
     }
 
     /// W82: ship an image attachment via the same qfile v3 pipeline as
@@ -1954,6 +2004,12 @@ final class ChatContainer: ObservableObject {
         // We send directly via the send service to keep the implementation
         // self-contained — no need to spin up a full ChatContainer.
         let text = message.plaintext
+        // A forwarded file is a NEW file (WIRE_SPEC 12.2: a key is never reused), which this version does not do: never forward the
+        // descriptor itself, it carries the key of the original.
+        guard FileV2ChatBody.classify(text: text) == .text, message.mediaMimeType != FileV2ChatBody.pendingMime else {
+            transientNotice = String(localized: "file_v2.forward_unavailable", defaultValue: "Gli allegati non si possono inoltrare in questa versione.", comment: "Shown when the user tries to forward a file message.")
+            return
+        }
         guard !text.isEmpty, let sendService = self.sendService else {
             print("[ChatContainer] forwardMessage: no sendService or empty plaintext")
             return
@@ -2019,41 +2075,57 @@ final class ChatContainer: ObservableObject {
         }
     }
 
-    // MARK: - W445: Generic file attachment
+    // MARK: - Document attachment (file transfer v2)
 
-    /// Send a generic file attachment selected from UIDocumentPickerViewController.
-    /// Reads the file data and sends via the existing qfile v3 upload pipeline
-    /// (same path as voice notes and images).
+    /// Sends a document picked with the document picker in this 1:1 chat, in the file transfer v2 format (WIRE_SPEC section 12):
+    /// AES-256-GCM chunks uploaded to the server in parts, and the key, the header and the download token travelling in the
+    /// descriptor that is the body of an ordinary end-to-end encrypted chat message. The file is streamed from disk (its size is
+    /// not held in memory), up to 5 GiB.
     ///
-    /// - Parameter overrideTimerSeconds: W447 — per-attachment timer
-    ///   chosen in the pre-send dialog. `nil` (default) means "no
-    ///   override, use the conversation default" — identical behavior
-    ///   to before this parameter existed.
-    /// - Parameter exportBlocked: export-permission choice from the
-    ///   pre-send dialog. `false` (default) = export allowed, stamped
-    ///   onto the local echo `Message.exportBlocked`. Same wire-reach
-    ///   caveat as `sendImage` — this path also routes through the
-    ///   legacy qfile marker, which never carries `xp`.
-    func sendFileAttachment(url: URL, overrideTimerSeconds: Int? = nil, exportBlocked: Bool = false) {
+    /// Nothing is shown or created when the file cannot be sent at all (empty, unreadable, above 5 GiB, or no encrypted channel
+    /// to the contact yet): the failure is returned and the caller tells the user. Otherwise a row with the file's name appears at
+    /// once, its bubble shows the upload progress, and when the descriptor has been handed to the chat the row IS that message
+    /// (the outbox re-sends it like any text); if anything fails the row turns to the failed state with the reason and a retry.
+    ///
+    /// - Parameter overrideTimerSeconds: per-attachment timer chosen in the pre-send dialog (`nil` = the conversation default;
+    ///   -1 view once, N seconds); it becomes the descriptor's `ex`.
+    /// - Parameter exportBlocked: export-permission choice from the pre-send dialog; `true` becomes the descriptor's `xp: 0`.
+    /// - Returns: `nil` when the send started; the failure that says why it did not otherwise.
+    @discardableResult
+    func sendFileAttachment(url: URL, overrideTimerSeconds: Int? = nil, exportBlocked: Bool = false) -> FileV2Failure? {
+        // Security-scoped access for files outside the app sandbox, held for the whole send (the pipeline reads the file again for
+        // every part) and released when it ends.
+        let scoped = url.startAccessingSecurityScopedResource()
+        if case .failure(let failure) = FileV2AppServices.sendableSize(of: url) {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return failure
+        }
+        guard let sendService = self.sendService, let appState = self.appState else {
+            // Preview / unit-test fallback: no backend to send with.
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return nil
+        }
+        // "View once" (-1) would remove the receiver's row seconds after the reveal tap, before any download ends: refused, not broken.
+        let effectiveTimer = AttachmentTimerResolver.resolve(
+            overrideSeconds: overrideTimerSeconds,
+            conversationDefault: viewModel.conversation.ephemeralTimerSeconds)
+        if effectiveTimer == -1 {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return FileV2Failure(.viewOnceUnsupported)
+        }
+        // The descriptor is a TEXT message: if the channel cannot seal one for this contact now, nothing is uploaded for it.
+        guard sendService.canSendText(peerUserId: peerUserId) else {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return FileV2Failure(.noSecureChannel)
+        }
+
         let peerId = peerUserId
         let convId = conversationId
         let msgId = UUID()
-        let filename = url.lastPathComponent
-        // Security-scoped access for files outside the app sandbox.
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else {
-            // I8 FIX: `filename` is the user's original document name (can
-            // reveal personal/financial/identity content) — log only the
-            // extension, never the name.
-            print("[ChatContainer] sendFileAttachment: could not read file (ext=\(url.pathExtension))")
-            return
-        }
-        let mime = Self.mimeType(for: url)
-        let displayText: String = "📎 " + filename
-        // W447: resolve this send's effective timer (override wins over
-        // conversation default) and stamp the local echo the same way
-        // sendMessage() does for text.
+        // The name that is shown is cut to one safe line; the descriptor carries the picked name (the engine cuts it to 255 bytes).
+        let pickedName = url.lastPathComponent
+        let displayText = FileV2ChatBody.glyph + FileV2LocalName.sanitised(pickedName)
+        // W447: resolve this send's effective timer (override wins over conversation default) and stamp the local echo.
         let (ephExpiry, isViewOnce) = resolveOutboundAttachmentTimer(
             overrideSeconds: overrideTimerSeconds, now: Date()
         )
@@ -2066,6 +2138,7 @@ final class ChatContainer: ObservableObject {
             deliveredAt: nil,
             readAt: nil,
             status: .sending,
+            mediaMimeType: FileV2ChatBody.pendingMime,
             clientMsgId: msgId.uuidString,
             expiresAt: ephExpiry,
             isViewOnce: isViewOnce ? true : nil,
@@ -2078,134 +2151,90 @@ final class ChatContainer: ObservableObject {
             lastActivity: Date(),
             incrementUnread: false
         )
+        fileV2Retry[msgId] = FileV2RetrySource(url: url, overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked)
+        uploadProgress[msgId] = 0
         refreshFromStore()
-        guard let sendService = self.sendService,
-              let appState = self.appState else {
-            // Preview / unit-test fallback.
-            Task { @MainActor [weak self, msgId, convId] in
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                self?.store.updateMessageStatus(
-                    id: msgId, conversationId: convId,
-                    newStatus: .delivered, deliveredAt: Date()
-                )
-                self?.refreshFromStore()
-            }
-            return
-        }
+
+        // The descriptor's own timer: the pre-send choice, else the conversation default (N seconds, nothing when 0).
+        let timerValue: Int64? = effectiveTimer.flatMap { (seconds: Int) -> Int64? in seconds == 0 ? nil : Int64(seconds) }
+        let context = FileV2OutboundRunner.Context(
+            messageId: msgId, conversationId: convId, peerUserId: peerId, displayText: displayText, sourceURL: url,
+            name: pickedName, mimeType: FileV2AppServices.mimeType(for: url),
+            ex: timerValue, xp: exportBlocked ? 0 : nil)
         Task { [weak self] in
-            await ChatContainer.sendFileAttachmentAsync(
-                weakContainer: Weak(self), data: data, mime: mime, filename: filename,
-                peerId: peerId, convId: convId, msgId: msgId,
-                overrideTimerSeconds: overrideTimerSeconds,
-                sendService: sendService, appState: appState
-            )
+            await BackgroundUploadTask.run(name: "file-v2-upload") {
+                let failure = await FileV2OutboundRunner.run(
+                    context, sendService: sendService, appState: appState,
+                    onProgress: { done, total in
+                        self?.updateUploadProgress(messageId: msgId, bytesUploaded: done, totalBytes: total)
+                    })
+                if scoped { url.stopAccessingSecurityScopedResource() }
+                if failure != nil {
+                    // Recorded in the store even when the screen is gone, so the row never stays "sending" for ever.
+                    ConversationStore().updateMessageStatus(id: msgId, conversationId: convId, newStatus: .failed)
+                }
+                self?.finishFileV2Send(messageId: msgId, failure: failure)
+            }
         }
+        return nil
     }
 
-    /// Extracted body of the `sendFileAttachment` upload `Task` — same
-    /// rationale as `sendVoiceNoteAsync` (weak-self semantics preserved via
-    /// the `Weak<ChatContainer>` box + SWIFT6_PATTERNS.md rule 5
-    /// closure-depth avoidance). Files can be the largest attachments sent
-    /// (up to the 10 MB app-level cap enforced elsewhere), making the
-    /// background-execution grace period especially relevant here.
-    private static func sendFileAttachmentAsync(
-        weakContainer: Weak<ChatContainer>,
-        data: Data,
-        mime: String,
-        filename: String,
-        peerId: String,
-        convId: UUID,
-        msgId: UUID,
-        overrideTimerSeconds: Int? = nil,
-        sendService: ChatMessageSendService,
-        appState: AppState
-    ) async {
-        // W-BGUP: see sendVoiceNote — buys the process extra time so an
-        // in-flight file upload survives brief backgrounding instead of
-        // being silently killed mid-chunk.
-        await BackgroundUploadTask.run(name: "attachment-upload") {
-            await ChatContainer.completeFileAttachmentSend(
-                weakContainer: weakContainer, data: data, mime: mime, filename: filename,
-                peerId: peerId, convId: convId, msgId: msgId,
-                overrideTimerSeconds: overrideTimerSeconds,
-                sendService: sendService, appState: appState
-            )
-        }
-    }
-
-    private static func completeFileAttachmentSend(
-        weakContainer: Weak<ChatContainer>,
-        data: Data,
-        mime: String,
-        filename: String,
-        peerId: String,
-        convId: UUID,
-        msgId: UUID,
-        overrideTimerSeconds: Int? = nil,
-        sendService: ChatMessageSendService,
-        appState: AppState
-    ) async {
-        // SEC-WIREUNIFY (2026-08-03): see completeVoiceNoteSend's
-        // identical comment — generic files now ship over
-        // `qa_fa_announce:1`.
-        let sender = ChatFileAttachmentSender(appState: appState)
-        do {
-            let fileId = try await sender.send(
-                data: data,
-                mime: mime,
-                filename: filename,
-                recipientUserId: peerId,
-                ephemeralSpecSec: overrideTimerSeconds.map(Int64.init)
-            )
-            // Bug found live 2026-08-18 — see ChatFileAttachmentSender.send's
-            // doc: without this, the tick never leaves grey no matter what
-            // the recipient does.
-            ConversationStore().setWireAttachmentId(id: msgId, wireAttachmentId: fileId)
-        } catch let e as ChatFileAttachmentSender.SendError {
-            print("[ChatContainer] sendFileAttachment failed: \(e.localizedDescription)")
-            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
-            return
-        } catch {
-            print("[ChatContainer] sendFileAttachment failed: \(error)")
-            await MainActor.run { weakContainer.value?.markFailed(messageId: msgId, reason: .uploadFailure) }
+    /// The end of a file send, on the main actor: clears the progress and, on a failure, shows why and offers the retry.
+    private func finishFileV2Send(messageId: UUID, failure: FileV2Failure?) {
+        clearUploadProgress(messageId: messageId)
+        guard let failure else {
+            fileV2Retry.removeValue(forKey: messageId)
+            refreshFromStore()
             return
         }
-        await MainActor.run {
-            guard let self = weakContainer.value else { return }
-            self.clearUploadProgress(messageId: msgId)
-            // W-OPTIMISTICTICK (2026-08-20) — see the identical fix on the
-            // voice-note send completion above for the full rationale.
-            self.store.updateMessageStatus(
-                id: msgId, conversationId: convId,
-                newStatus: .sent
-            )
-            self.refreshFromStore()
+        RTLog.warn("chat", "filev2 send failed code=\(failure.code)")
+        failureDetail = FileV2FailureText.message(for: failure)
+        markFailed(messageId: messageId, reason: .fileTransfer)
+    }
+
+    /// "Riprova" on a file that failed before it had a descriptor: the row goes, and the picked file is sent again as a new
+    /// message. The app keeps no copy of the file: if it was closed in between, the user attaches the file again.
+    private func retryFileV2Send(_ msg: Message) {
+        store.removeMessage(id: msg.id, conversationId: conversationId)
+        let source = fileV2Retry.removeValue(forKey: msg.id)
+        refreshFromStore()
+        guard let source else {
+            transientNotice = String(localized: "file_v2.retry_source_gone", defaultValue: "Il file non è più disponibile: allegalo di nuovo.", comment: "Shown when a failed file cannot be retried because the app no longer has the picked file.")
+            return
+        }
+        if let failure = sendFileAttachment(url: source.url, overrideTimerSeconds: source.overrideTimerSeconds,
+                                            exportBlocked: source.exportBlocked) {
+            transientNotice = FileV2FailureText.message(for: failure)
         }
     }
 
-    /// Infer MIME type from a file URL extension. Falls back to
-    /// "application/octet-stream" for unknown extensions.
-    private static func mimeType(for url: URL) -> String {
-        let ext = url.pathExtension.lowercased()
-        switch ext {
-        case "pdf":   return "application/pdf"
-        case "doc":   return "application/msword"
-        case "docx":  return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        case "xls":   return "application/vnd.ms-excel"
-        case "xlsx":  return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        case "ppt":   return "application/vnd.ms-powerpoint"
-        case "pptx":  return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        case "zip":   return "application/zip"
-        case "txt":   return "text/plain"
-        case "csv":   return "text/csv"
-        case "png":   return "image/png"
-        case "jpg", "jpeg": return "image/jpeg"
-        case "gif":   return "image/gif"
-        case "mp4":   return "video/mp4"
-        case "mov":   return "video/quicktime"
-        case "mp3":   return "audio/mpeg"
-        case "m4a":   return "audio/mp4"
-        default:      return "application/octet-stream"
+    /// "Riprova" on a file whose descriptor could not be sent: the same message again (same row, same id), the file is still on
+    /// the server. It goes through the durable text send, exactly like any text.
+    private func resendFileV2Descriptor(_ msg: Message) {
+        guard let sendService = self.sendService else { return }
+        let convId = conversationId
+        let peerId = peerUserId
+        let msgId = msg.id
+        let body = msg.plaintext
+        store.updateMessageStatus(id: msgId, conversationId: convId, newStatus: .sending)
+        refreshFromStore()
+        ChatOutboxDrain.shared.beginLiveSend(clientMsgId: msgId.uuidString)
+        Task { [weak self] in
+            let outcome = await sendService.sendEncryptedDurable(
+                messageId: msgId, conversationId: convId, peerUserId: peerId, plaintext: body)
+            ChatOutboxDrain.shared.endLiveSend(clientMsgId: msgId.uuidString)
+            let store = ConversationStore()
+            switch outcome {
+            case .delivered(let serverMessageId):
+                store.setServerMessageId(localId: msgId, conversationId: convId, serverMessageId: serverMessageId)
+                store.updateMessageStatus(id: msgId, conversationId: convId, newStatus: .delivered, deliveredAt: Date())
+            case .queued:
+                ChatOutboxDrain.shared.kick(reason: "file-v2-resend")
+            case .failed(let reason):
+                store.updateMessageStatus(id: msgId, conversationId: convId, newStatus: .failed)
+                self?.markFailed(messageId: msgId, reason: reason)
+            }
+            self?.refreshFromStore()
         }
     }
 

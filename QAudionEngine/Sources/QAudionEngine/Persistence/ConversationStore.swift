@@ -348,6 +348,20 @@ public final class ConversationStore {
         incrementUnread: Bool,
         kind: InboundUserMessageKind
     ) -> InboundRecordResult {
+        var message = message
+        var preview = preview
+        if kind != .placeholder {
+            // File transfer v2 (WIRE_SPEC 12.7.1): a recognised file message is NEVER shown as the text it is. A control
+            // message (`qa_file_src`, `qa_file_cancel`) has no row at all; a valid descriptor keeps its body (the download
+            // needs it) and gets a preview of its own; a rejected one becomes its neutral placeholder. Every path that
+            // records an inbound user message (live, buffered retry, pending sync, mesh) goes through here.
+            guard let applied = FileV2ChatBody.applyInboundBoundary(message, preview: preview) else {
+                print("[ConversationStore] recordInboundUserMessage refused=1 reason=file_control")
+                return .refusedServiceShaped
+            }
+            message = applied.message
+            preview = applied.preview
+        }
         if kind != .placeholder {
             // Anything that is not plain text is refused, an attachment announce included:
             // callers pass the friendly text ("Nota vocale"), never the announce JSON.
@@ -607,6 +621,42 @@ public final class ConversationStore {
         }
     }
 
+    /// File transfer v2 (send side): the row of a file being sent first shows its name (`pendingMime`, so it stays out of the text
+    /// outbox), and once the descriptor is built it becomes the message that carries it (the outbox re-seals the row's text, so the
+    /// row must hold the descriptor before the send, and go back to its name if the send is refused). Replaces `plaintext` and sets
+    /// `mediaMimeType` EXACTLY (`nil` clears it, unlike `setMediaInfo`); every other field is carried over.
+    public func replaceContent(id: UUID, plaintext: String, mediaMimeType: String?) {
+        do {
+            try db.writer.write { db in
+                if let msg = try Message.fetchOne(db, key: id) {
+                    try Message(
+                        id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
+                        plaintext: plaintext, sentAt: msg.sentAt,
+                        deliveredAt: msg.deliveredAt, readAt: msg.readAt,
+                        status: msg.status, senderUserId: msg.senderUserId,
+                        serverMessageId: msg.serverMessageId,
+                        mediaLocalPath: msg.mediaLocalPath,
+                        mediaDurationMs: msg.mediaDurationMs,
+                        mediaMimeType: mediaMimeType,
+                        clientMsgId: msg.clientMsgId,
+                        edited: msg.edited,
+                        deletedAt: msg.deletedAt,
+                        reactions: msg.reactions,
+                        expiresAt: msg.expiresAt,
+                        isViewOnce: msg.isViewOnce,
+                        viewOnceOpened: msg.viewOnceOpened,
+                        exportBlocked: msg.exportBlocked,
+                        viaMesh: msg.viaMesh,
+                        wireAttachmentId: msg.wireAttachmentId,
+                        isPlaceholder: msg.isPlaceholder
+                    ).save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] replaceContent failed: \(error)")
+        }
+    }
+
     public func setServerMessageId(localId: UUID, conversationId: UUID, serverMessageId: String) {
         do {
             try db.writer.write { db in
@@ -764,6 +814,12 @@ public final class ConversationStore {
     @discardableResult
     public func applyEditByClientMsgId(_ clientMsgId: String,
                                        newPlaintext: String) -> Bool {
+        // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message is never ordinary text, so an edit cannot
+        // turn a row into one (a peer's `qa_ctl` edit would otherwise show a descriptor, key included, as text).
+        guard FileV2ChatBody.classify(text: newPlaintext) == .text else {
+            print("[ConversationStore] applyEditByClientMsgId refused=1 reason=file_message")
+            return false
+        }
         do {
             return try db.writer.write { db in
                 if var msg = try Message.filter(Column("clientMsgId") == clientMsgId).fetchOne(db) {

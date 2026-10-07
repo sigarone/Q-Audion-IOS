@@ -264,6 +264,27 @@ final class ChatMessageSendService {
         }
     }
 
+    /// File transfer v2 preflight — can a TEXT message (the file descriptor) be sealed for this peer RIGHT NOW? The same
+    /// two doors as `encryptForWire` on the CHAT ladder (a v4 session, else a pairwise PSK) checked without sealing
+    /// anything, so a file is never uploaded for a message that the send would then refuse. With neither, it starts the same
+    /// key exchange a refused text send does and answers `false`. The network is not part of the question: a descriptor
+    /// that cannot go out because the socket is down is queued by `sendEncryptedDurable`, not refused.
+    func canSendText(peerUserId: String) -> Bool {
+        guard let token = appState.authService.loadToken(), !token.isEmpty, appState.currentUserId != nil else {
+            return false
+        }
+        if AppState.sharedV4Ratchet.hasV4Session(peerUserId) { return true }
+        if let newest = PairwiseChainKeyResolver.orderedPskCandidates(peerId: peerUserId, vault: vault).first,
+           !newest.isEmpty {
+            return true
+        }
+        let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
+        if let stored = try? vault.loadPsk(name: "auto:\(prefix):\(peerUserId)"), !stored.isEmpty { return true }
+        if let stored = try? vault.loadPsk(name: peerUserId), !stored.isEmpty { return true }
+        appState.triggerKeyExchange(with: peerUserId)
+        return false
+    }
+
     /// Encrypts `plaintext` the SAME way `sendEncrypted` does (v4 native
     /// ratchet -> v3.1 forward-secrecy ratchet -> legacy PSK-AEAD, chosen by
     /// per-peer capability) but stops short of the WebSocket network send.
