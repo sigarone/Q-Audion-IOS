@@ -356,7 +356,13 @@ let package = Package(
                 // bcrypto-server test/kat/file_v2/file-v2-kat.json (generated there by tools/katgen/filev2,
                 // standard library only). Test keys only. FileV2KatTests pins the SHA-256 of this file, and
                 // .gitattributes marks it -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
-                .copy("Resources/kat/file-v2-kat.json")
+                .copy("Resources/kat/file-v2-kat.json"),
+                // File transfer v2, the server conformance transcript: a BYTE-FOR-BYTE copy of bcrypto-server
+                // test/kat/file_v2_server/transcript.json at commit f541653b (a golden file generated from the real handlers of the
+                // parts protocol; docs/FILES_V2_SERVER_TRANSCRIPT.md there describes it). The tests replay every scenario against the
+                // in-memory fake of the server, FileV2ServerTranscriptTests pins its SHA-256, and .gitattributes marks it -text so a
+                // CRLF checkout cannot change it. Re-copy it, never edit it.
+                .copy("Resources/kat/file-v2-server-transcript.json")
             ]
         )
     ]

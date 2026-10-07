@@ -5,3 +5,7 @@ QAudionEngine/Tests/QAudionEngineTests/Resources/kat/file-v2-kat.json -text
 # WIRE_SPEC.md is a byte-for-byte copy of the server repository file (the wire-spec-lock workflow pins its SHA-256 and every repo
 # holds the same bytes): git must never rewrite its line endings either.
 WIRE_SPEC.md -text
+
+# The file transfer v2 server conformance transcript is a byte-for-byte copy of the server repository's file
+# (test/kat/file_v2_server/transcript.json) and the tests pin its SHA-256: git must never rewrite its line endings.
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/file-v2-server-transcript.json -text
