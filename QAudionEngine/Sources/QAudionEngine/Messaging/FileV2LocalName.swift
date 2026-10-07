@@ -94,6 +94,22 @@ public enum FileV2LocalFiles {
             .appendingPathComponent(thumbnailFileName, isDirectory: false)
     }
 
+    /// Removes everything the device keeps of the v2 files of a row (the decrypted file, its thumbnail, the copy of a video that was
+    /// being sent): its directory under `base` (the caches directory by default). Used when a message is deleted for everyone or
+    /// expires, so that nothing of it stays on the device. `true` when there was a directory and it is gone.
+    @discardableResult
+    public static func removeRowDirectory(rowKey: String, base: URL? = nil) -> Bool {
+        guard let root = base ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return false }
+        let target = directory(base: root, rowKey: rowKey)
+        guard FileManager.default.fileExists(atPath: target.path) else { return false }
+        do {
+            try FileManager.default.removeItem(at: target)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// The decrypted file of a row: `<base>/files_v2/<row key>/<file name>`.
     public static func fileURL(base: URL, rowKey: String, fileName: String) -> URL {
         directory(base: base, rowKey: rowKey).appendingPathComponent(fileName, isDirectory: false)

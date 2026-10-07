@@ -28,12 +28,13 @@ public enum FileV2AutoDownloadPolicy {
         }
     }
 
-    /// The thumbnail of a descriptor is always fetched on arrival: it is the preview of a card that is waiting for a tap (a video,
-    /// a large image) or of an image that is still coming. `kind` is the kind of the FILE the thumbnail belongs to.
+    /// The thumbnail of an image or a video is always fetched on arrival: it is the preview of a card that is waiting for a tap (a
+    /// video, a large image) or of an image that is still coming. A document shows no picture, so the thumbnail some sender may
+    /// attach to one is not fetched. `kind` is the kind of the FILE the thumbnail belongs to.
     public static func fetchesThumbnail(of kind: FileV2Descriptor.Kind) -> Bool {
         switch kind {
-        case .image, .video, .file: return true
-        case .voice, .avatar, .thumb: return false
+        case .image, .video: return true
+        case .file, .voice, .avatar, .thumb: return false
         }
     }
 }

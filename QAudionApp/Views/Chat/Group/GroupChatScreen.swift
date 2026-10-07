@@ -712,6 +712,15 @@ struct GroupChatScreen: View {
     private func handleSend() {
         let trimmed = state.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // WIRE_SPEC 12.7.1: text the user supplies that begins like a file message is refused as an ordinary message; only the
+        // file builders of the engine produce such a body.
+        guard FileV2ChatBody.isUserTextAllowed(trimmed) else {
+            snackbar?.show(.init(
+                text: String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused."),
+                severity: .warning,
+                durationSeconds: 3))
+            return
+        }
         state.composerText = ""
 
         let memberRows = makeInfoState().members

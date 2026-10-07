@@ -874,6 +874,7 @@ public final class ConversationStore {
                                          tombstone: String = "Messaggio eliminato",
                                          at deletedAt: Date = Date()) -> Bool {
         var cachedPathToRemove: String?
+        var rowKeyToRemove: String?
         let applied: Bool
         do {
             applied = try db.writer.write { db in
@@ -881,6 +882,7 @@ public final class ConversationStore {
                     // Capture the pre-tombstone path now — msg.mediaLocalPath
                     // is about to be wiped from the row below.
                     cachedPathToRemove = msg.mediaLocalPath
+                    rowKeyToRemove = msg.id.uuidString
                     msg = Message(
                         id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
                         plaintext: tombstone,
@@ -922,6 +924,8 @@ public final class ConversationStore {
                 }
             }
         }
+        // File transfer v2: the thumbnail and the rest of the row's files go with it.
+        if applied, let key = rowKeyToRemove { FileV2LocalFiles.removeRowDirectory(rowKey: key) }
         return applied
     }
 
@@ -997,12 +1001,14 @@ public final class ConversationStore {
         do {
             let now = Date()
             var cachedPathsToRemove: [String] = []
+            var rowKeysToRemove: [String] = []
             _ = try db.writer.write { db in
                 let expired = try Message
                     .filter(Column("expiresAt") != nil)
                     .filter(Column("expiresAt") <= now)
                     .fetchAll(db)
                 cachedPathsToRemove = expired.compactMap { $0.mediaLocalPath }.filter { !$0.isEmpty }
+                rowKeysToRemove = expired.map { $0.id.uuidString }
                 try Message
                     .filter(Column("expiresAt") != nil)
                     .filter(Column("expiresAt") <= now)
@@ -1019,6 +1025,8 @@ public final class ConversationStore {
                     print("[ConversationStore] deleteExpiredMessages: cache cleanup failed for \(path): \(error)")
                 }
             }
+            // File transfer v2: the thumbnails and the rest of the expired rows' files go too.
+            for key in rowKeysToRemove { FileV2LocalFiles.removeRowDirectory(rowKey: key) }
         } catch {
             print("[ConversationStore] deleteExpiredMessages failed: \(error)")
         }

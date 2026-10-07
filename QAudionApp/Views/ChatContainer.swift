@@ -1093,7 +1093,7 @@ final class ChatContainer: ObservableObject {
             let durationMs = msg.mediaDurationMs
             let exportBlocked = msg.exportBlocked ?? false
             Task { [weak self] in
-                await self?.resendPreparedFile(kind: kind, url: url, durationMs: durationMs, exportBlocked: exportBlocked)
+                await self?.resendPreparedFile(kind: kind, url: url, durationMs: durationMs, key: UUID(), exportBlocked: exportBlocked)
             }
             return
         }
@@ -1326,7 +1326,7 @@ final class ChatContainer: ObservableObject {
 
     /// The common tail of an image or a voice note: the row, the progress and the run. A failure to start is told to the user.
     private func startPreparedMedia(_ prepared: FileV2MediaPreparer.Prepared, msgId: UUID, overrideTimerSeconds: Int?,
-                                    exportBlocked: Bool) -> Bool {
+                                    exportBlocked: Bool, discardsOnFailure: Bool = true) -> Bool {
         let label: String
         switch prepared.kind {
         case .voice: label = FileV2ChatBody.kindLabelText(.voice)
@@ -1336,7 +1336,8 @@ final class ChatContainer: ObservableObject {
         if let failure = startMediaSend(prepared, msgId: msgId, displayText: label, overrideTimerSeconds: overrideTimerSeconds,
                                         exportBlocked: exportBlocked, keepsLocalCopy: true, scoped: nil) {
             transientNotice = FileV2FailureText.message(for: failure)
-            discardPrepared(msgId: msgId)
+            // A retry keeps what it was asked to send again (the copy of a video lives in the row's directory).
+            if discardsOnFailure { discardPrepared(msgId: msgId) }
             return false
         }
         return true
@@ -1470,15 +1471,17 @@ final class ChatContainer: ObservableObject {
             return
         }
         let url = URL(fileURLWithPath: localPath)
+        // The row never had a descriptor, so nothing was announced under its id: the new row takes it, and the copy of the file and
+        // the thumbnail stay where the row's other files are.
+        let rowId = msg.id
         Task { [weak self] in
-            await self?.resendPreparedFile(kind: kind, url: url, durationMs: durationMs, exportBlocked: exportBlocked)
+            await self?.resendPreparedFile(kind: kind, url: url, durationMs: durationMs, key: rowId, exportBlocked: exportBlocked)
         }
     }
 
     /// The retry of an image, a voice note or a video from its copy in the caches directory: the pieces (dimensions, preview,
     /// thumbnail) are made again and a new row is sent.
-    private func resendPreparedFile(kind: String, url: URL, durationMs: Int64?, exportBlocked: Bool) async {
-        let key = UUID()
+    private func resendPreparedFile(kind: String, url: URL, durationMs: Int64?, key: UUID, exportBlocked: Bool) async {
         let prepared: FileV2MediaPreparer.Prepared
         do {
             switch kind {
@@ -1493,7 +1496,8 @@ final class ChatContainer: ObservableObject {
             transientNotice = FileV2FailureText.message(for: FileV2Failure(.unreadable))
             return
         }
-        _ = startPreparedMedia(prepared, msgId: key, overrideTimerSeconds: nil, exportBlocked: exportBlocked)
+        _ = startPreparedMedia(prepared, msgId: key, overrideTimerSeconds: nil, exportBlocked: exportBlocked,
+                               discardsOnFailure: false)
     }
 
     /// "Riprova" on a file whose descriptor could not be sent: the same message again (same row, same id), the file is still on

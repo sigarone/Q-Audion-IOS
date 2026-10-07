@@ -86,6 +86,7 @@ final class FileV2MediaPolicyTests: XCTestCase {
     func test_theThumbnailOfAnImageOrAVideoIsAlwaysFetched() {
         XCTAssertTrue(FileV2AutoDownloadPolicy.fetchesThumbnail(of: .image))
         XCTAssertTrue(FileV2AutoDownloadPolicy.fetchesThumbnail(of: .video))
+        XCTAssertFalse(FileV2AutoDownloadPolicy.fetchesThumbnail(of: .file), "a document shows no picture")
         XCTAssertFalse(FileV2AutoDownloadPolicy.fetchesThumbnail(of: .voice))
         XCTAssertFalse(FileV2AutoDownloadPolicy.fetchesThumbnail(of: .avatar))
     }
@@ -213,5 +214,24 @@ final class FileV2MediaPolicyTests: XCTestCase {
         XCTAssertEqual(FileV2LocalFiles.fileName(name: nil, mimeType: nil, kind: "file"), "allegato")
         XCTAssertEqual(FileV2LocalFiles.fileName(name: "../../x.jpg", mimeType: "image/jpeg", kind: "image"), ".._.._x.jpg")
         XCTAssertEqual(FileV2LocalFiles.fileName(name: "x.JPG", mimeType: "image/png", kind: "image"), "x.JPG", "the name wins over the mime type")
+    }
+
+    func test_removingARowRemovesItsFilesAndNothingElse() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("rows-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        for key in ["ROW-1", "ROW-2", "a/b"] {
+            let thumb = FileV2LocalFiles.thumbnailURL(base: base, rowKey: key)
+            try FileManager.default.createDirectory(at: thumb.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([1]).write(to: thumb)
+            try Data([2]).write(to: FileV2LocalFiles.fileURL(base: base, rowKey: key, fileName: "f.bin"))
+        }
+        XCTAssertTrue(FileV2LocalFiles.removeRowDirectory(rowKey: "ROW-1", base: base))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: FileV2LocalFiles.directory(base: base, rowKey: "ROW-1").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: FileV2LocalFiles.thumbnailURL(base: base, rowKey: "ROW-2").path))
+        XCTAssertFalse(FileV2LocalFiles.removeRowDirectory(rowKey: "ROW-1", base: base), "nothing left to remove")
+
+        // a hostile key is cut to its own safe directory: only that one goes
+        XCTAssertTrue(FileV2LocalFiles.removeRowDirectory(rowKey: "a/b", base: base))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: FileV2LocalFiles.fileURL(base: base, rowKey: "ROW-2", fileName: "f.bin").path))
     }
 }
