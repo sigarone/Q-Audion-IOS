@@ -68,7 +68,7 @@ final class FileV2SendJournalOrderTests: XCTestCase {
         let store = try rig.makeStore()
         store.failNextTagAppends(1)                                  // the disk refuses the first tags record
         let result = await (try rig.makePipeline(store: store)).send(rig.makeRequest(source, id: "disk-full"))
-        assertFailure(result, .storage)
+        assertSendFailure(result, .storage)
         XCTAssertEqual(rig.server.puts.count, 0, "no PUT without durable tags")
         XCTAssertEqual(try rig.makeStore().load("disk-full").tags.count, 0)
 

@@ -61,7 +61,7 @@ final class FileV2SendRetryTests: XCTestCase {
         let source = GeneratedSource(size: 700_000)
         rig.fake.injectFailure(.putPart, error: error(429, "part_busy", retryAfter: 301), times: 1)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "long-wait"))
-        let failure = assertFailure(result, .rateLimited)
+        let failure = assertSendFailure(result, .rateLimited)
         XCTAssertTrue(failure?.keepsState ?? false)
         XCTAssertEqual(rig.sleeper.delays, [], "no automatic wait for 301 seconds: not cut down to 300 either")
         XCTAssertEqual(rig.server.puts.count, 1, "no hammering")
@@ -77,7 +77,7 @@ final class FileV2SendRetryTests: XCTestCase {
         let source = GeneratedSource(size: 700_000)
         rig.fake.injectFailure(.putPart, error: error(503, "files_unavailable"), times: 5)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "paused"))
-        let failure = assertFailure(result, .network)
+        let failure = assertSendFailure(result, .network)
         XCTAssertTrue(failure?.keepsState ?? false)
         XCTAssertEqual(rig.sleeper.delays, [1000, 2000, 4000, 8000], "four waits for five failed attempts")
         XCTAssertEqual(try rig.journalNames(), ["paused.qsj"])
@@ -95,7 +95,7 @@ final class FileV2SendRetryTests: XCTestCase {
         let rig = try sequentialRig()
         rig.fake.injectFailure(.putPart, error: error(429, "too_many_parts_in_flight", retryAfter: 1), times: 5)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000)))
-        assertFailure(result, .rateLimited)
+        assertSendFailure(result, .rateLimited)
     }
 
     // MARK: A part PUT that fails the transfer
@@ -122,7 +122,7 @@ final class FileV2SendRetryTests: XCTestCase {
             let rig = try sequentialRig()
             rig.fake.injectFailure(.putPart, error: item.failure, times: 1)
             let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000), id: "fails"))
-            let failure = assertFailure(result, item.reason)
+            let failure = assertSendFailure(result, item.reason)
             XCTAssertEqual(failure?.keepsState, item.keepsState, item.name)
             XCTAssertEqual(rig.sleeper.delays, [], "\(item.name): no retry")
             XCTAssertEqual(rig.server.puts.count, 1, item.name)
@@ -148,18 +148,18 @@ final class FileV2SendRetryTests: XCTestCase {
         let without = try sequentialRig()
         without.fake.injectFailure(.putPart, error: error(401, "unauthorized"), times: 1)
         let failed = await (try without.makePipeline()).send(without.makeRequest(GeneratedSource(size: 700_000)))
-        assertFailure(failed, .auth)
+        assertSendFailure(failed, .auth)
 
         let refuses = try sequentialRig()
         refuses.refreshAuth = { false }
         refuses.fake.injectFailure(.putPart, error: error(401, "unauthorized"), times: 1)
-        assertFailure(await (try refuses.makePipeline()).send(refuses.makeRequest(GeneratedSource(size: 700_000))), .auth)
+        assertSendFailure(await (try refuses.makePipeline()).send(refuses.makeRequest(GeneratedSource(size: 700_000))), .auth)
 
         let loops = try sequentialRig()
         let calls = FileV2Locked(0)
         loops.refreshAuth = { calls.withValue { $0 += 1 }; return true }
         loops.fake.injectFailure(.putPart, error: error(401, "unauthorized"), times: 10)
-        assertFailure(await (try loops.makePipeline()).send(loops.makeRequest(GeneratedSource(size: 700_000))), .auth)
+        assertSendFailure(await (try loops.makePipeline()).send(loops.makeRequest(GeneratedSource(size: 700_000))), .auth)
         XCTAssertEqual(calls.withValue { $0 }, 2, "a token that keeps being refused is refreshed twice and then it is an auth failure")
     }
 
@@ -179,7 +179,7 @@ final class FileV2SendRetryTests: XCTestCase {
         let rig = try sequentialRig()
         rig.fake.injectFailure(.putPart, error: error(404, "not_found"), times: 100)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000)))
-        assertFailure(result, .network)
+        assertSendFailure(result, .network)
         XCTAssertEqual(rig.telemetry.count { $0 == .objectRecreated }, rig.configuration.maxObjectRecreations)
     }
 
@@ -207,7 +207,7 @@ final class FileV2SendRetryTests: XCTestCase {
             rig.fake.injectFailure(.create, error: item.failure, times: item.times)
             let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000), id: "create-error"))
             if let reason = item.outcome {
-                assertFailure(result, reason)
+                assertSendFailure(result, reason)
                 try rig.assertNothingIsLeftBehind()
                 XCTAssertEqual(rig.fake.objectCount, 0, item.name)
                 XCTAssertEqual(rig.server.puts.count, 0, item.name)
@@ -224,7 +224,7 @@ final class FileV2SendRetryTests: XCTestCase {
         // The create reaches the server and its answer is lost every time: the object may exist, and the header is what finds it again.
         rig.fake.injectFailure(.create, error: URLError(.networkConnectionLost), times: 5, when: .afterEffect)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "create-lost"))
-        assertFailure(result, .network)
+        assertSendFailure(result, .network)
         XCTAssertEqual(try rig.journalNames(), ["create-lost.qsj"])
         XCTAssertEqual(rig.fake.objectCount, 1)
         let resumed = await (try rig.makePipeline()).resume(transferID: "create-lost")
@@ -266,7 +266,7 @@ final class FileV2SendRetryTests: XCTestCase {
                                           sources: rig.sources, channel: rig.channel, clock: rig.clock, sleeper: rig.sleeper)
         let result = await FileV2SendPipeline(dependencies: deps, configuration: rig.configuration)
             .send(rig.makeRequest(GeneratedSource(size: 700_000)))
-        assertFailure(result, .badRequest)
+        assertSendFailure(result, .badRequest)
         XCTAssertEqual(rig.server.puts.count, 0)
     }
 
@@ -287,7 +287,7 @@ final class FileV2SendRetryTests: XCTestCase {
         let rig = try sequentialRig()
         rig.fake.injectFailure(.complete, error: FileV2ServerError(status: 409, code: "incomplete", missing: [0]), times: 100)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000)))
-        assertFailure(result, .badRequest)
+        assertSendFailure(result, .badRequest)
         XCTAssertEqual(rig.fake.calls.filter { $0.op == .complete }.count, rig.configuration.maxCompleteRounds + 1)
     }
 
@@ -320,7 +320,7 @@ final class FileV2SendRetryTests: XCTestCase {
         let rig = try sequentialRig()
         rig.channel.setOutcomes([.unavailable, .sent])
         let first = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000), id: "stale-token"))
-        assertFailure(first, .announceNotSent)
+        assertSendFailure(first, .announceNotSent)
         let oldToken = try rig.lastDescriptor().source.token?.v
 
         // Six days and twenty-three and a half hours later: the 7-day token has 30 minutes left, under the hour of margin. The create of the

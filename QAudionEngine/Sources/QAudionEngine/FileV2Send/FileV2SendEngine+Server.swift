@@ -111,13 +111,13 @@ extension FileV2SendEngine {
         state.withValue { $0.objectAcknowledged = true }
         if let token = created.token { try accept(token) }
         let clock = ctx.clock
-        let budget = ctx.budget
+        let memoryCap = ctx.maxParallelismByMemory
         let metered = ctx.config.metered
         state.withValue { current in
             if current.parallelism == nil {
                 current.parallelism = FileV2AdaptiveParallelism(
                     serverParallelism: created.parallelism, serverMaxParallelism: created.maxParallelism,
-                    memoryCap: budget.maxParallelism, metered: metered, startMs: clock.monotonicMs())
+                    memoryCap: memoryCap, metered: metered, startMs: clock.monotonicMs())
             }
         }
     }

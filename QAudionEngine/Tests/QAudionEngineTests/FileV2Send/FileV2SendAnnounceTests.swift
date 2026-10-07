@@ -33,7 +33,7 @@ final class FileV2SendAnnounceTests: XCTestCase {
         rig.channel.setOutcomes([.unavailable, .sent])
         let collector = StateCollector()
         let first = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "announce-later"), onState: collector.sink)
-        let failure = assertFailure(first, .announceNotSent)
+        let failure = assertSendFailure(first, .announceNotSent)
         XCTAssertTrue(failure?.keepsState ?? false)
         XCTAssertFalse(collector.states.contains(.sentOk), "never sent: the chat said it could not")
         XCTAssertEqual(rig.server.puts.count, 3)
@@ -104,7 +104,7 @@ final class FileV2SendAnnounceTests: XCTestCase {
         _ = await pipeline.send(rig.makeRequest(GeneratedSource(size: 700_000), id: "refused-chat"))
         for _ in 0..<3 {
             let again = await (try rig.makePipeline()).resume(transferID: "refused-chat")
-            assertFailure(again, .announceNotSent)
+            assertSendFailure(again, .announceNotSent)
             XCTAssertEqual(try rig.journalNames(), ["refused-chat.qsj"])
             XCTAssertEqual(rig.wrapper.count, 2, "no new secret piles up: each token replaces the one before")
         }
@@ -130,6 +130,32 @@ final class FileV2SendAnnounceTests: XCTestCase {
         XCTAssertNotEqual(after.source.obj, first.source.obj, "a new object")
         try rig.assertBlobEqualsOneShot(descriptor: after, source: source)
         rig.assertEveryPartWasAlwaysSentWithTheSameBytes()
+    }
+
+    func testAChangedSourceAfterADescriptorMayHaveGoneOutTellsTheReceiverToDiscardTheTransfer() async throws {
+        // The descriptor was handed over and the chat said it could not carry it: it MAY have gone out (the answer is all that was lost).
+        // The object is then gone from the server and the source changed: the resume re-seals a chunk, the tag differs, nothing is sent, and
+        // the cancel message follows the descriptor.
+        let rig = try sequentialRig()
+        let source = GeneratedSource(size: SendTestSizes.threeParts)
+        rig.channel.setOutcomes([.unavailable])
+        _ = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "cancel-after-change"))
+        let descriptor = try FileV2Descriptor.parse(rig.channel.announced[0].body)
+        rig.clock.advance(ms: 31 * 86_400_000)
+        rig.fake.cleanup()
+        XCTAssertEqual(rig.fake.objectCount, 0)
+        let putsBefore = rig.server.puts.count
+        source.mutate(chunk: 4)
+
+        let result = await (try rig.makePipeline()).resume(transferID: "cancel-after-change")
+        assertSendFailure(result, .sourceChanged)
+        XCTAssertEqual(rig.server.puts.count, putsBefore, "the changed chunk is not transmitted")
+        XCTAssertEqual(rig.channel.controls.count, 1)
+        guard case .cancel(let message) = FileV2Message.recognize(try XCTUnwrap(rig.channel.controls.first).body) else {
+            return XCTFail("not a cancel message")
+        }
+        XCTAssertEqual(message.fileID, descriptor.fileID)
+        try rig.assertNothingIsLeftBehind()
     }
 
     func testTelemetryIsCountersOnly() async throws {

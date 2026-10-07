@@ -24,7 +24,9 @@ enum FileV2RequestResult<Value: Sendable>: Sendable {
 final class FileV2SendContext: @unchecked Sendable {
     let deps: FileV2SendDependencies
     let config: FileV2SendConfiguration
-    let budget: FileV2MemBudget
+    /// How many parts the memory budget lets one transfer hold at once (at least 1), and the budget itself in bytes: `FileV2MemBudget`.
+    let maxParallelismByMemory: Int
+    let memoryBudgetBytes: Int64
     let gate = FileV2AsyncGate()
     let gauge = FileV2SendGauge()
     /// Test seam: told of the encryptor of every transfer that runs, so a test can check that its key material is zeroed when the run ends.
@@ -36,10 +38,11 @@ final class FileV2SendContext: @unchecked Sendable {
     init(dependencies: FileV2SendDependencies, configuration: FileV2SendConfiguration) {
         self.deps = dependencies
         self.config = configuration
-        // `FileV2MemBudget` throws only for a negative number, which is clamped here.
-        self.budget = (try? FileV2MemBudget(memoryMiB: max(0, configuration.availableMemoryMiB),
-                                            perWorkerExtraBytes: FileV2SendContext.perWorkerExtraBytes))
-            ?? (try! FileV2MemBudget(memoryMiB: 0)) // swiftlint:disable:this force_try
+        // `FileV2MemBudget` throws only for a negative number, which is clamped here; if it ever did, one worker and no budget is the safe answer.
+        let budget = try? FileV2MemBudget(memoryMiB: max(0, configuration.availableMemoryMiB),
+                                          perWorkerExtraBytes: FileV2SendContext.perWorkerExtraBytes)
+        self.maxParallelismByMemory = budget?.maxParallelism ?? 1
+        self.memoryBudgetBytes = budget?.budgetBytes ?? 0
     }
 
     var server: FileV2Server { deps.server }
@@ -257,4 +260,3 @@ final class FileV2SendContext: @unchecked Sendable {
         }
     }
 }
-

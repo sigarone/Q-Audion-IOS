@@ -37,7 +37,7 @@ extension XCTestCase {
     /// The state is a failure with this reason (and, when given, this server code). The numbers in `details` are compared by the tests that
     /// care about them.
     @discardableResult
-    func assertFailure(_ state: FileV2SendState, _ reason: FileV2SendFailure.Reason, code: String? = nil, file: StaticString = #filePath,
+    func assertSendFailure(_ state: FileV2SendState, _ reason: FileV2SendFailure.Reason, code: String? = nil, file: StaticString = #filePath,
                        line: UInt = #line) -> FileV2SendFailure? {
         guard case .failed(let failure) = state else {
             XCTFail("expected a failure (\(reason.rawValue)), got \(state)", file: file, line: line)

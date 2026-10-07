@@ -135,9 +135,10 @@ extension FileV2SendEngine {
         if Task.isCancelled { return .interrupted }
 
         let digest = Data(SHA256.hash(data: sealed.data))
-        let result: FileV2RequestResult<FileV2PutResult> = await ctx.request(.putPart, onRetryableFailure: { self.partFailed(startedMs: startedMs) }) {
+        let attempt: @Sendable () async throws -> FileV2PutResult = {
             try await self.putOnce(obj: obj, part: part, body: sealed.data, digest: digest)
         }
+        let result = await ctx.request(.putPart, onRetryableFailure: { self.partFailed(startedMs: startedMs) }, attempt)
         switch result {
         case .value(let put):
             guard put.part == part else { return .failed(FileV2SendFailure(.badRequest)) }

@@ -144,7 +144,7 @@ final class FileV2SendResumeTests: XCTestCase {
         rig.channel.setHangs(true)
         let pipeline = try rig.makePipeline()
         let running = Task { await pipeline.send(rig.makeRequest(source, id: "crash-announce")) }
-        try await waitUntil { !rig.channel.announced.isEmpty }
+        try await pollUntilTrue { !rig.channel.announced.isEmpty }
         running.cancel()                                           // the process dies with the handover unanswered
         let first = await running.value
         XCTAssertEqual(first, .interrupted)
@@ -173,7 +173,7 @@ final class FileV2SendResumeTests: XCTestCase {
         rig.channel.setHangs(true)
         let pipeline = try rig.makePipeline()
         let running = Task { await pipeline.send(rig.makeRequest(source, id: "cancel-after-crash")) }
-        try await waitUntil { !rig.channel.announced.isEmpty }
+        try await pollUntilTrue { !rig.channel.announced.isEmpty }
         running.cancel()
         _ = await running.value
         let descriptor = try FileV2Descriptor.parse(rig.channel.announced[0].body)

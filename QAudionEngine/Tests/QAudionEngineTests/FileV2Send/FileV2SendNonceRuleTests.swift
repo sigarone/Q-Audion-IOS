@@ -113,12 +113,12 @@ final class FileV2SendNonceRuleTests: XCTestCase {
         rig.channel.setOutcomes([.unavailable, .sent])
         let source = GeneratedSource(size: SendTestSizes.oneChunkOver)
         let first = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "announce-only"))
-        assertFailure(first, .announceNotSent)
+        assertSendFailure(first, .announceNotSent)
         XCTAssertEqual(rig.fake.objectCount, 1)
 
         source.touch()
         let second = await (try rig.makePipeline()).resume(transferID: "announce-only")
-        assertFailure(second, .sourceChanged)
+        assertSendFailure(second, .sourceChanged)
         XCTAssertEqual(rig.fake.objectCount, 0, "cancelled: the object is deleted")
         XCTAssertEqual(rig.channel.announced.count, 1, "no descriptor goes out after the change")
         try rig.assertNothingIsLeftBehind()
@@ -251,7 +251,7 @@ final class FileV2SendNonceRuleTests: XCTestCase {
         // The server holds part 1 with other bytes: for a deterministic sender this can only mean the source changed.
         rig.fake.injectFailure(.putPart, error: FileV2ServerError(status: 409, code: "part_conflict"), times: 1, part: 1)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "conflict"))
-        assertFailure(result, .sourceChanged, code: "part_conflict")
+        assertSendFailure(result, .sourceChanged, code: "part_conflict")
         XCTAssertEqual(rig.fake.objectCount, 0, "cancelled: the object is deleted")
         try rig.assertNothingIsLeftBehind()
     }

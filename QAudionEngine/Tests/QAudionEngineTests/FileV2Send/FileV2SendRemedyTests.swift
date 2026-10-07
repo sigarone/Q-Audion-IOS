@@ -69,7 +69,7 @@ final class FileV2SendRemedyTests: XCTestCase {
         rig.clock.advance(ms: 5 * 60_000)                                    // only 5 minutes: they may be live uploads of another device
 
         let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 900_000), id: "refused"))
-        let failure = assertFailure(result, .userRemedy, code: "too_many_uploads")
+        let failure = assertSendFailure(result, .userRemedy, code: "too_many_uploads")
         XCTAssertEqual(failure?.transferError, .quota)
         XCTAssertEqual(failure?.details?.limit, 2, "the number the user interface shows")
         let remaining = try await unfinishedObjects(rig)
@@ -86,7 +86,7 @@ final class FileV2SendRemedyTests: XCTestCase {
         rig.fake.injectFailure(.create, error: FileV2ServerError(status: 429, code: "too_many_uploads", retryAfter: 30,
                                                                   details: FileV2ErrorDetails(limit: 10)), times: 2)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 900_000)))
-        assertFailure(result, .userRemedy, code: "too_many_uploads")
+        assertSendFailure(result, .userRemedy, code: "too_many_uploads")
         XCTAssertEqual(rig.server.callCount(.create), 2, "the create and its single repeat")
         XCTAssertEqual(rig.server.callCount(.listUnfinished), 1, "one sweep")
         let remaining = try await unfinishedObjects(rig)
@@ -104,7 +104,7 @@ final class FileV2SendRemedyTests: XCTestCase {
         _ = try await rig.fake.putPart(obj: created.obj, part: 0, body: byte, sha256: XferSupport.sha256(byte))
         try await rig.fake.complete(obj: created.obj)
         let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 900_000)))
-        assertFailure(result, .userRemedy, code: "too_many_objects")
+        assertSendFailure(result, .userRemedy, code: "too_many_objects")
         XCTAssertEqual(rig.sleeper.delays, [])
         XCTAssertEqual(rig.fake.objectCount, 1, "the completed object is still there")
         try rig.assertNothingIsLeftBehind()
@@ -126,7 +126,7 @@ final class FileV2SendRemedyTests: XCTestCase {
         let rig = try sequentialRig()
         rig.fake.quota = 100_000
         let result = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000)))
-        let failure = assertFailure(result, .quota, code: "quota_exceeded")
+        let failure = assertSendFailure(result, .quota, code: "quota_exceeded")
         XCTAssertEqual(failure?.details?.limit, 100_000)
         try rig.assertNothingIsLeftBehind()
     }

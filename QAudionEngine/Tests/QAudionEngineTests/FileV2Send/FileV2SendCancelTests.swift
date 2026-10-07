@@ -15,7 +15,7 @@ final class FileV2SendCancelTests: XCTestCase {
         let pipeline = try rig.makePipeline()
         let collector = StateCollector()
         let sending = Task { await pipeline.send(rig.makeRequest(source, id: "cancel-me"), onState: collector.sink) }
-        try await waitUntil { rig.server.puts.count >= 2 }
+        try await pollUntilTrue { rig.server.puts.count >= 2 }
 
         let started = Date()
         let existed = await pipeline.cancel(transferID: "cancel-me")
@@ -77,7 +77,7 @@ final class FileV2SendCancelTests: XCTestCase {
         let cancelPipeline = try cancelRig.makePipeline()
         cancelPipeline.context.encryptorObserver = { cancelKeys.add($0) }
         let sending = Task { await cancelPipeline.send(cancelRig.makeRequest(GeneratedSource(size: manyParts), id: "zero-cancel")) }
-        try await waitUntil { cancelRig.server.puts.count >= 1 }
+        try await pollUntilTrue { cancelRig.server.puts.count >= 1 }
         _ = await cancelPipeline.cancel(transferID: "zero-cancel")
         _ = await sending.value
         XCTAssertEqual(cancelKeys.list.count, 1)
@@ -90,7 +90,7 @@ final class FileV2SendCancelTests: XCTestCase {
         let intPipeline = try intRig.makePipeline()
         intPipeline.context.encryptorObserver = { intKeys.add($0) }
         let running = Task { await intPipeline.send(intRig.makeRequest(GeneratedSource(size: manyParts), id: "zero-interrupt")) }
-        try await waitUntil { intRig.server.puts.count >= 1 }
+        try await pollUntilTrue { intRig.server.puts.count >= 1 }
         running.cancel()
         _ = await running.value
         XCTAssertTrue(intKeys.list.allSatisfy { $0.fileKey.isEmpty }, "zeroed after an interruption: a resume reads the key again from the secure store")
@@ -104,7 +104,7 @@ final class FileV2SendCancelTests: XCTestCase {
         let changedPipeline = try changedRig.makePipeline()
         changedPipeline.context.encryptorObserver = { changedKeys.add($0) }
         let changedResult = await changedPipeline.send(changedRig.makeRequest(changedSource))
-        assertFailure(changedResult, .sourceChanged)
+        assertSendFailure(changedResult, .sourceChanged)
         XCTAssertTrue(changedKeys.list.allSatisfy { $0.fileKey.isEmpty }, "zeroed after a source change")
     }
 
@@ -112,7 +112,7 @@ final class FileV2SendCancelTests: XCTestCase {
         let rig = try SendRig(self)
         rig.fake.injectFailure(.putPart, error: FileV2ServerError(status: 503, code: "storage_error"), times: 5)
         let paused = await (try rig.makePipeline()).send(rig.makeRequest(GeneratedSource(size: 700_000), id: "paused"))
-        assertFailure(paused, .network)
+        assertSendFailure(paused, .network)
         XCTAssertEqual(rig.fake.objectCount, 1)
 
         let restarted = try rig.makePipeline()
@@ -153,7 +153,7 @@ final class FileV2SendCancelTests: XCTestCase {
         let source = GeneratedSource(size: 700_000)
         let pipeline = try rig.makePipeline()
         let sending = Task { await pipeline.send(rig.makeRequest(source, id: "cancel-handover")) }
-        try await waitUntil { !rig.channel.announced.isEmpty }
+        try await pollUntilTrue { !rig.channel.announced.isEmpty }
         let descriptor = try FileV2Descriptor.parse(rig.channel.announced[0].body)
 
         let existed = await pipeline.cancel(transferID: "cancel-handover")
@@ -175,7 +175,7 @@ final class FileV2SendCancelTests: XCTestCase {
         let source = GeneratedSource(size: manyParts)
         let pipeline = try rig.makePipeline()
         let sending = Task { await pipeline.send(rig.makeRequest(source, id: "interrupted")) }
-        try await waitUntil { rig.server.puts.count >= 2 }
+        try await pollUntilTrue { rig.server.puts.count >= 2 }
         sending.cancel()                                                        // the app is going away: not the user's cancel
         let result = await sending.value
         XCTAssertEqual(result, .interrupted)

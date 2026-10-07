@@ -20,7 +20,7 @@ final class FileV2SendPipelineTests: XCTestCase {
 
     func captureAtAnnounce(_ rig: SendRig, id: String, metadata: FileV2SendMetadata, size: UInt64) -> FileV2Locked<AtAnnounce> {
         let captured = FileV2Locked(AtAnnounce())
-        rig.channel.setHook { body in
+        rig.channel.setHook { _ in
             guard let store = rig.store, let recovered = try? store.load(id),
                   let key = try? rig.wrapper.unwrap(recovered.begin.wrappedKey),
                   let record = recovered.token, let tokenData = try? rig.wrapper.unwrap(record.wrappedValue),
@@ -277,7 +277,7 @@ final class FileV2SendPipelineTests: XCTestCase {
         rig.channel.setHangs(true)
         let source = GeneratedSource(size: 600_000)
         let first = Task { await pipeline.send(rig.makeRequest(source, id: "same-id")) }
-        try await waitUntil { !rig.channel.announced.isEmpty }
+        try await pollUntilTrue { !rig.channel.announced.isEmpty }
         let second = await pipeline.send(rig.makeRequest(GeneratedSource(size: 600_000), id: "same-id"))
         XCTAssertEqual(second, .failed(FileV2SendFailure(.alreadyRunning)))
         let resumeWhileRunning = await pipeline.resume(transferID: "same-id")
@@ -359,7 +359,7 @@ final class FileV2SendPipelineTests: XCTestCase {
 
 extension XCTestCase {
     /// Polls (real time) until `condition` holds.
-    func waitUntil(timeout: TimeInterval = 20, _ condition: @escaping () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+    func pollUntilTrue(timeout: TimeInterval = 20, _ condition: @escaping () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             if Date() > deadline {
@@ -370,4 +370,3 @@ extension XCTestCase {
         }
     }
 }
-

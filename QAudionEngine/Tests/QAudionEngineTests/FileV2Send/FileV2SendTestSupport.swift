@@ -1,7 +1,7 @@
 import XCTest
 @testable import QAudionEngine
 
-/// Helpers shared by the tests of the file transfer v2 send store and pipeline.
+// Helpers shared by the tests of the file transfer v2 send store and pipeline.
 
 /// An ordered log that the instrumented store, durability and server of one test all write to, so a test can assert what
 /// happened BEFORE what (the journal ordering of WIRE_SPEC 12.8).
