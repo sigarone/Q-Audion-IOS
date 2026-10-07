@@ -171,6 +171,31 @@ public enum FileV2ChatBody: Equatable, Sendable {
         return nil
     }
 
+    /// The name under which the delivery and read receipts of a v2 file travel (`qa_att_receipt:1`, WIRE_SPEC 12.7.6: "keyed by
+    /// `id`"): the 16 bytes of the descriptor's `id` as a lowercase hyphenated UUID, the form the Android app uses for the row of the
+    /// sender (`wireAttachmentId`) and for the receipt, so the sender finds the row by plain string equality. `nil` when the body is
+    /// not a valid descriptor of a file a user sent: the avatar and the thumbnail are consumed on arrival and have no receipt.
+    public static func receiptId(ofBody body: String) -> String? {
+        guard let descriptor = descriptor(ofBody: body),
+              descriptor.kind != .avatar, descriptor.kind != .thumb else { return nil }
+        return receiptId(fileID: descriptor.fileID)
+    }
+
+    /// The receipt name of a 16-byte file id (see `receiptId(ofBody:)`); `nil` for any other length.
+    static func receiptId(fileID: Data) -> String? {
+        guard fileID.count == 16 else { return nil }
+        // The bytes in order, 8-4-4-4-12 hex digits, lowercase (what `UUID.toString()` gives on Android for the same 16 bytes).
+        let digits: [Character] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+        var out = ""
+        out.reserveCapacity(36)
+        for (index, byte) in fileID.enumerated() {
+            if index == 4 || index == 6 || index == 8 || index == 10 { out.append("-") }
+            out.append(digits[Int(byte >> 4)])
+            out.append(digits[Int(byte & 0x0F)])
+        }
+        return out
+    }
+
     /// What the bubble of `message` shows, or `nil` when the message is not a v2 file: a valid descriptor, or a file that is
     /// being sent (its row holds the name, with `pendingMime`).
     public static func bubbleInfo(for message: Message) -> FileV2ChatFile? {

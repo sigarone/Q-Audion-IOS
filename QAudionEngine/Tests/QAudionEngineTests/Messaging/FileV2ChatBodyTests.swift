@@ -206,6 +206,49 @@ final class FileV2ChatBodyTests: XCTestCase {
         XCTAssertNil(bare.preview)
     }
 
+    // MARK: The name of the receipts
+
+    func test_receiptId_isTheLowercaseHyphenatedUuidOfTheFileId() {
+        // the form of the Android app (UUID of the 16 bytes read as two big-endian longs): sender and receiver compare it as a string
+        let bytes = Data((0..<16).map { UInt8($0) })
+        XCTAssertEqual(FileV2ChatBody.receiptId(fileID: bytes), "00010203-0405-0607-0809-0a0b0c0d0e0f")
+        XCTAssertEqual(FileV2ChatBody.receiptId(fileID: Data(repeating: 0xAB, count: 16)), "abababab-abab-abab-abab-abababababab")
+        XCTAssertNil(FileV2ChatBody.receiptId(fileID: Data(repeating: 1, count: 15)))
+        XCTAssertNil(FileV2ChatBody.receiptId(fileID: Data(repeating: 1, count: 17)))
+        XCTAssertNil(FileV2ChatBody.receiptId(fileID: Data()))
+    }
+
+    func test_receiptId_ofADescriptor_isTheOneOfItsFileId_forEveryKindAUserSends() throws {
+        for kind in [FileV2Descriptor.Kind.file, .image, .voice, .video] {
+            let encryptor = try FileV2Encryptor.makeNew(plaintextSize: 5_000)
+            let source = FileV2Descriptor.Source(
+                via: .srv, obj: "0a1b2c3d-0000-4000-8000-123456789abc",
+                token: FileV2Descriptor.Token(v: String(repeating: "ab", count: 32), exp: 1_800_000_000_000, max: 30))
+            let body = try FileV2DescriptorBuilder.build(FileV2DescriptorInput(
+                file: FileV2FileInput(encryptor: encryptor, kind: kind, source: source, name: "x")))
+            let expected = try XCTUnwrap(FileV2ChatBody.receiptId(fileID: encryptor.fileID))
+            XCTAssertEqual(FileV2ChatBody.receiptId(ofBody: body), expected, "\(kind)")
+            XCTAssertEqual(expected, expected.lowercased())
+            XCTAssertEqual(expected.count, 36)
+        }
+    }
+
+    func test_receiptId_isNilForTextAControlMessageARejectedDescriptorAndThePictureOfAContact() throws {
+        XCTAssertNil(FileV2ChatBody.receiptId(ofBody: "ciao"))
+        XCTAssertNil(FileV2ChatBody.receiptId(ofBody: ""))
+        XCTAssertNil(FileV2ChatBody.receiptId(ofBody: try FileV2DescriptorBuilder.buildCancel(fileID: Data(repeating: 7, count: 16))))
+        XCTAssertNil(FileV2ChatBody.receiptId(ofBody: #"{"qa_file":2,"id":"nope"}"#))
+        XCTAssertNil(FileV2ChatBody.receiptId(ofBody: #"{"qa_file":9,"anything":1}"#))
+        // the avatar is consumed on arrival and has no receipt
+        let encryptor = try FileV2Encryptor.makeNew(plaintextSize: 5_000)
+        let source = FileV2Descriptor.Source(
+            via: .srv, obj: "0a1b2c3d-0000-4000-8000-123456789abc",
+            token: FileV2Descriptor.Token(v: String(repeating: "ab", count: 32), exp: 1_800_000_000_000, max: 30))
+        let avatar = try FileV2DescriptorBuilder.build(FileV2DescriptorInput(
+            file: FileV2FileInput(encryptor: encryptor, kind: .avatar, source: source, name: "a")))
+        XCTAssertNil(FileV2ChatBody.receiptId(ofBody: avatar))
+    }
+
     func test_aPendingRowRemembersItsKind() throws {
         XCTAssertEqual(FileV2ChatBody.pendingMime(kind: "file"), FileV2ChatBody.pendingMime)
         for kind in ["image", "voice", "video"] {

@@ -738,7 +738,7 @@ struct ChatDetailScreen: View {
                     .foregroundStyle(scheme.onSurface)
                     .frame(width: 36, height: 36)
             }
-            .disabled(container.viewModel.conversation.kind == .group)
+            .disabled(container.viewModel.conversation.kind == .group || appState.isInCall)
             .accessibilityLabel("Chiamata audio")
 
             // Entitlements Task 5 — 1:1 video calling behind
@@ -758,7 +758,7 @@ struct ChatDetailScreen: View {
                     .foregroundStyle(scheme.onSurface)
                     .frame(width: 36, height: 36)
             }
-            .disabled(container.viewModel.conversation.kind == .group)
+            .disabled(container.viewModel.conversation.kind == .group || appState.isInCall)
             .accessibilityLabel("Chiamata video")
 
             // BLE-mesh offline chat entry point (branch
@@ -1142,7 +1142,8 @@ struct ChatDetailScreen: View {
                     mediaLocalPath: msg.mediaLocalPath,
                     durationMs: msg.mediaDurationMs ?? 0,
                     shareRequest: mediaShareRequestBinding(for: msg.id),
-                    onOpened: { markAttachmentRead(msg) }
+                    onOpened: { markAttachmentRead(msg) },
+                    onBlockedByCall: callAudioBlock
                 )
             } else if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
                 ImageBubbleContent(
@@ -1176,7 +1177,8 @@ struct ChatDetailScreen: View {
                     mediaLocalPath: msg.mediaLocalPath,
                     durationMs: dur,
                     shareRequest: mediaShareRequestBinding(for: msg.id),
-                    onOpened: { markAttachmentRead(msg) }
+                    onOpened: { markAttachmentRead(msg) },
+                    onBlockedByCall: callAudioBlock
                 )
             } else {
                 Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
@@ -1210,8 +1212,15 @@ struct ChatDetailScreen: View {
             onDownload: { fileV2Downloads.start(message: msg, appState: appState) },
             onAppearWithoutFile: {
                 if isIncoming { fileV2Downloads.autoStart(message: msg, appState: appState) }
-            }
+            },
+            // A voice note (and a video) read when played; everything else below, when the bubble is on screen. (`markAttachmentRead`
+            // does nothing for a row of this device.)
+            onOpened: { markAttachmentRead(msg) },
+            onBlockedByCall: callAudioBlock
         )
+        .onAppear {
+            if info.kind != "voice" { markAttachmentRead(msg) }
+        }
     }
 
     private var typingRow: some View {
@@ -1593,7 +1602,8 @@ struct ChatDetailScreen: View {
             // the type-checker exhaustion. See CLAUDE.md §13.
             onStartVoiceNote: handleVoiceNoteStart,
             onFinishVoiceNote: handleVoiceNoteFinish,
-            onCancelVoiceNote: handleVoiceNoteCancel
+            onCancelVoiceNote: handleVoiceNoteCancel,
+            onVoiceNoteBlocked: callAudioBlock
         )
         }
     }
@@ -1734,6 +1744,11 @@ struct ChatDetailScreen: View {
     /// repeatedly. No-op for outbound rows, text rows, or rows predating
     /// this field (`wireAttachmentId == nil` — nothing to match against
     /// on the sender's side anyway).
+    ///
+    /// File transfer v2: a 1:1 file message keeps the name of its receipts in `wireAttachmentId` too (`FileV2ChatBody.receiptId`), so
+    /// the same rule applies: a voice note when it is first played, an image, a document or a video when its bubble is on screen. The
+    /// "Conferme di lettura" privacy switch applies to this receipt like to the one of the text (WIRE_SPEC 9.5): with it off the row is
+    /// still marked read here (so it asks no more), and nothing is sent.
     private func markAttachmentRead(_ msg: Message) {
         guard msg.direction == .incoming, msg.status != .read,
               let wireId = msg.wireAttachmentId, !wireId.isEmpty
@@ -1741,10 +1756,26 @@ struct ChatDetailScreen: View {
         let senderId = msg.senderUserId ?? container.viewModel.conversation.peerUserId
         let store = ConversationStore()
         store.updateMessageStatus(id: msg.id, conversationId: msg.conversationId, newStatus: .read, readAt: Date())
+        guard PrivacyGate.readReceiptsEnabled else { return }
         Task {
             await appState.sendAttachmentReceipt(
                 recipientId: senderId, wireId: wireId, status: AttachmentReceiptEnvelope.statusRead)
         }
+    }
+
+    /// Non-nil while a call is up (this screen is then the chat opened over the call, `InCallChatCover`): the shared audio session
+    /// belongs to the call, and recording a voice note, playing one or playing a video would change its category and deactivate it
+    /// (W-SESSIONCATLEAK), which silences the call. The controls that would do it call this instead, to say why they do nothing.
+    private var callAudioBlock: (() -> Void)? {
+        guard appState.isInCall else { return nil }
+        return { showInCallAudioNotice() }
+    }
+
+    private func showInCallAudioNotice() {
+        snackbar?.show(.init(
+            text: String(localized: "in_call.chat.audio_blocked", defaultValue: "Durante una chiamata non si possono registrare né riprodurre note vocali e video: userebbero l'audio della chiamata.", comment: "Shown in the chat opened over a call when the user tries to record or play a voice note or a video: they would take over the audio of the call."),
+            severity: .warning,
+            durationSeconds: 4))
     }
 
     private func startAudioCall() {

@@ -57,6 +57,9 @@ struct VoiceNoteBubbleContent: View {
     /// `qa_att_receipt:1` back to the sender. `nil`/never called for
     /// outbound bubbles (the caller only passes it for inbound rows).
     var onOpened: (() -> Void)? = nil
+    /// Non-nil while a call is up: the shared audio session belongs to the call, and playing a voice note would change its category and
+    /// deactivate it at the end (W-SESSIONCATLEAK). A tap then plays nothing and calls this to tell why.
+    var onBlockedByCall: (() -> Void)? = nil
     /// File transfer v2: the waveform of the descriptor, each sample a fraction `0...1` of the loudest one
     /// (`FileV2MediaHints.drawableWave`); empty = the bars are the pseudo-random ones of every other voice note.
     var wave: [Double] = []
@@ -303,6 +306,10 @@ struct VoiceNoteBubbleContent: View {
     }
 
     private func handleTap() {
+        if let blocked = onBlockedByCall {
+            blocked()
+            return
+        }
         guard let path = mediaLocalPath, !path.isEmpty else { return }
         // W124: missing cache → no-op rather than crash the player.
         guard FileManager.default.fileExists(atPath: path) else {

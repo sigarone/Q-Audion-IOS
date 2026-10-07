@@ -39,6 +39,9 @@ struct FileV2BubbleContent: View {
     var onAppearWithoutFile: () -> Void = {}
     /// A voice note or an image was opened: the caller sends the read receipt.
     var onOpened: (() -> Void)? = nil
+    /// Non-nil while a call is up: a voice note and a video play through the shared audio session, which belongs to the call. They then
+    /// play nothing and call this to tell why.
+    var onBlockedByCall: (() -> Void)? = nil
 
     @State private var thumbnail: UIImage? = nil
     @State private var playing: VideoTarget? = nil
@@ -128,7 +131,7 @@ struct FileV2BubbleContent: View {
         if readablePath != nil || voiceIsComing {
             VoiceNoteBubbleContent(player: VoiceNotePlayer.shared, messageId: rowId, mediaLocalPath: readablePath,
                                    durationMs: info.hints.durationMs ?? 0, shareRequest: shareRequest, onOpened: onOpened,
-                                   wave: info.hints.drawableWave)
+                                   onBlockedByCall: onBlockedByCall, wave: info.hints.drawableWave)
         } else {
             card(systemImage: "waveform")
         }
@@ -221,6 +224,10 @@ struct FileV2BubbleContent: View {
 
     private func openVideo() {
         guard info.kind == "video", let url = readableURL else { return }
+        if let blocked = onBlockedByCall {
+            blocked()
+            return
+        }
         playing = VideoTarget(url: url)
         onOpened?()
     }
