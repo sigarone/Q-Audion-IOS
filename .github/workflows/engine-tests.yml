@@ -377,7 +377,8 @@ jobs:
               GhostCallPolicyTests \
               FileV2KatTests FileV2DescriptorKatTests FileV2DescriptorTests FileV2ProfileTests FileV2LibraryTests \
               FileV2ServerTranscriptTests FakeFileV2ServerTests FileV2DispositionTests FileV2ParallelismTests \
-              FileV2RetryAfterTests FileV2ServerTypesTests || true
+              FileV2RetryAfterTests FileV2ServerTypesTests \
+              FileV2SendStoreTests FileV2SecretWrapperTests || true
             echo "::endgroup::"
           done
       - name: Upload the executed test case list
