@@ -74,12 +74,17 @@ enum XferSupport {
     static func base64(_ data: Data) -> String { data.base64EncodedString() }
 }
 
-/// A clock the test moves by hand.
+/// A clock the test moves by hand: the wall clock (epoch milliseconds) and the monotonic one, which are two different
+/// readings of the same time passing until the test sets the wall clock by hand.
 final class XferManualClock: FileV2Clock, @unchecked Sendable {
     private let lock = NSLock()
     private var now: Int64
+    private var monotonic: Int64
 
-    init(startMs: Int64 = 1_700_000_000_000) { now = startMs }
+    init(startMs: Int64 = 1_700_000_000_000, monotonicStartMs: Int64 = 5_000) {
+        now = startMs
+        monotonic = monotonicStartMs
+    }
 
     func nowMs() -> Int64 {
         lock.lock()
@@ -87,7 +92,23 @@ final class XferManualClock: FileV2Clock, @unchecked Sendable {
         return now
     }
 
+    func monotonicMs() -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return monotonic
+    }
+
+    /// Time passes: both clocks move forward.
     func advance(ms: Int64) {
+        lock.lock()
+        now += ms
+        monotonic += ms
+        lock.unlock()
+    }
+
+    /// The wall clock is set by hand, back or forward (a user, the network time service): the monotonic clock does not
+    /// notice.
+    func stepWall(byMs ms: Int64) {
         lock.lock()
         now += ms
         lock.unlock()

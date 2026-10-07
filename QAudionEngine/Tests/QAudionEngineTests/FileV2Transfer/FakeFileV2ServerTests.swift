@@ -1,65 +1,143 @@
 import XCTest
 @testable import QAudionEngine
 
+/// A test waited too long for something that a bug could leave pending for ever (a task still suspended, a sleeper nobody
+/// releases). Thrown after a real-time limit so that the test FAILS FAST with a name, instead of hanging until the 15 minute
+/// watchdog of the xcodebuild step kills the whole job.
+struct XferTimeout: Error, CustomStringConvertible {
+    let what: String
+    let seconds: Double
+
+    var description: String { "timed out after \(seconds) s waiting for \(what)" }
+}
+
+/// Lets the first of two racing completions win, once.
+private final class XferOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var taken = false
+
+    func first() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if taken { return false }
+        taken = true
+        return true
+    }
+}
+
+/// The value of `task`, or an `XferTimeout` after `seconds` of real time. `onTimeout` runs first (a test passes the gate of its
+/// sleeper, so that the task that is stuck ends and does not leak into the next test) and the task is cancelled. Awaiting
+/// `task.value` is not cancellable, so the race is between two plain tasks that resume ONE continuation.
+func xferValue<T: Sendable>(of task: Task<T, Error>, what: String = "a task", within seconds: Double = 30,
+                            onTimeout: @escaping @Sendable () -> Void = {}) async throws -> T {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+        let once = XferOnce()
+        let timer = Task {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if once.first() {
+                onTimeout()
+                task.cancel()
+                continuation.resume(throwing: XferTimeout(what: what, seconds: seconds))
+            }
+        }
+        Task {
+            do {
+                let value = try await task.value
+                if once.first() { continuation.resume(returning: value) }
+            } catch {
+                if once.first() { continuation.resume(throwing: error) }
+            }
+            timer.cancel()
+        }
+    }
+}
+
 /// A sleeper the test controls: `sleep` suspends until the test releases it, so a call with an injected delay, or a download
 /// that waits for parts, is in flight exactly as long as the test wants.
+///
+/// Two ways to let sleeps go. `releaseAll()` wakes the sleeps that are suspended NOW, and a task that sleeps again suspends
+/// again: right for a test that counts the sleeps. `openGate()` wakes them and makes every later sleep return at once: the
+/// deterministic way to let a task run to its end when it may still sleep a few more times. Counting how many sleeps are
+/// suspended and then releasing them is NOT enough for that: a task that was woken and has not yet reached its next sleep is
+/// counted as zero, and a release that stops there leaves it to suspend with nobody to wake it (a test that hangs).
 final class XferGateSleeper: @unchecked Sendable {
     private let lock = NSLock()
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var sleptMs: [Int64] = []
+    private var gateOpen = false
+    private var threshold: Int64 = 0
 
     /// A sleep shorter than this returns at once (it is only logged); a longer one suspends until the test releases it. The
     /// default suspends every sleep.
-    var suspendFromMs: Int64 = 0
+    var suspendFromMs: Int64 {
+        get { locked { threshold } }
+        set { locked { threshold = newValue } }
+    }
 
     func sleep(_ ms: Int64) async {
         guard record(ms) else { return }
-        await withCheckedContinuation { continuation in
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             lock.lock()
-            waiters.append(continuation)
-            lock.unlock()
+            // the gate may have opened between `record` and here: this sleep must not suspend then
+            if gateOpen {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+                lock.unlock()
+            }
         }
+    }
+
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
     }
 
     /// Logs the sleep and says whether it suspends (a plain function: a lock is not for an `async` one).
     private func record(_ ms: Int64) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        sleptMs.append(ms)
-        return ms >= suspendFromMs
+        locked {
+            sleptMs.append(ms)
+            return !gateOpen && ms >= threshold
+        }
     }
 
-    var waiting: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return waiters.count
-    }
+    var waiting: Int { locked { waiters.count } }
 
-    var log: [Int64] {
-        lock.lock()
-        defer { lock.unlock() }
-        return sleptMs
-    }
+    var log: [Int64] { locked { sleptMs } }
 
-    /// Lets every suspended sleep return.
+    /// Lets every suspended sleep return; a task that sleeps again suspends again.
     func releaseAll() {
-        lock.lock()
-        let all = waiters
-        waiters = []
-        lock.unlock()
+        let all = locked { () -> [CheckedContinuation<Void, Never>] in
+            let taken = waiters
+            waiters = []
+            return taken
+        }
+        for continuation in all { continuation.resume() }
+    }
+
+    /// Lets every suspended sleep return, and every later sleep too (it is only logged): from here on nothing suspends.
+    func openGate() {
+        let all = locked { () -> [CheckedContinuation<Void, Never>] in
+            gateOpen = true
+            let taken = waiters
+            waiters = []
+            return taken
+        }
         for continuation in all { continuation.resume() }
     }
 
     /// How many sleeps of exactly `ms` were started (suspended or not).
     func count(ms: Int64) -> Int { log.filter { $0 == ms }.count }
 
-    /// Waits (really, briefly) until `count` sleeps are suspended.
-    func waitUntilWaiting(_ count: Int, file: StaticString = #filePath, line: UInt = #line) async {
-        for _ in 0..<2_000 {
-            if waiting >= count { return }
-            try? await Task.sleep(nanoseconds: 1_000_000)
+    /// Waits (really, briefly) until `count` sleeps are suspended; throws `XferTimeout` after `seconds` of real time.
+    func waitUntilWaiting(_ count: Int, within seconds: Double = 30) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while waiting < count {
+            if Date() > deadline { throw XferTimeout(what: "\(count) suspended sleeps (only \(waiting) are)", seconds: seconds) }
+            try await Task.sleep(nanoseconds: 1_000_000)
         }
-        XCTFail("only \(waiting) of \(count) sleeps are suspended", file: file, line: line)
     }
 }
 
@@ -222,6 +300,54 @@ final class FakeFileV2ServerTests: XCTestCase {
         XCTAssertEqual(error?.disposition(for: .create), .fail(.quota))
         try await server.delete(obj: first.obj)
         _ = try await server.create(createRequest(blob(7, length: 1_500)))
+    }
+
+    /// The quota errors are final and user visible (`fail(.quota)`, `fail(.serverFull)`, `userRemedy(.quota)`), and the numbers the
+    /// UI shows (how much is used, the limit, the largest object) are NOT in the disposition: they stay on the error the server
+    /// raised, which the pipeline keeps with the failure. This pins that they arrive there, from the real answer.
+    func testTheNumbersAUserSeesTravelWithTheErrorOfEveryQuotaFailure() async throws {
+        let server = FakeFileV2Server()
+        server.quota = 3_000
+        _ = try await server.create(createRequest(blob(90, length: 2_000)))
+
+        // 413 quota_exceeded: `used` and `limit` (the declared sizes of everything the account holds, and the quota)
+        let quota = await expectError(413, "quota_exceeded") { _ = try await server.create(self.createRequest(self.blob(91, length: 1_500))) }
+        XCTAssertEqual(quota?.disposition(for: .create), .fail(.quota))
+        XCTAssertEqual(quota?.details.used, 2_000)
+        XCTAssertEqual(quota?.details.limit, 3_000)
+        XCTAssertNil(quota?.details.maxBlobLength)
+
+        // 413 blob_too_large: `max_blob_len`, the largest object the server takes
+        let large = await expectError(413, "blob_too_large") {
+            _ = try await server.create(FileV2CreateRequest(blobLength: Int64(FileV2.maxBlob) + 1, head: self.blob(92).head))
+        }
+        XCTAssertEqual(large?.disposition(for: .create), .fail(.quota))
+        XCTAssertEqual(large?.details.maxBlobLength, Int64(FileV2.maxBlob))
+        XCTAssertNil(large?.details.used)
+
+        // 429 too_many_uploads: `limit`, how many unfinished uploads an account may hold
+        let busy = FakeFileV2Server(account: "carol")
+        busy.maxIncomplete = 1
+        _ = try await busy.create(createRequest(blob(93, length: 500)))
+        let uploads = await expectError(429, "too_many_uploads") { _ = try await busy.create(self.createRequest(self.blob(95, length: 500))) }
+        XCTAssertEqual(uploads?.disposition(for: .create), .userRemedy(.quota))
+        XCTAssertEqual(uploads?.details.limit, 1)
+
+        // the same through the transport mapping the pipelines call: the disposition is the one above, the error is the same value
+        for error in [quota, large, uploads] {
+            guard let error = error else { continue }
+            XCTAssertEqual(try fileV2TransportDisposition(error, op: .create), error.disposition(for: .create))
+        }
+        // the text of an error never carries the numbers (they are shown by the UI, not written to a log)
+        XCTAssertEqual(quota?.description, "413 quota_exceeded")
+        XCTAssertEqual(large?.description, "413 blob_too_large")
+
+        // 507: no number to show; the server-wide cap comes with its `Retry-After`
+        let full = FakeFileV2Server()
+        full.freeBytes = 500 << 20
+        let nothing = await expectError(507, "insufficient_storage") { _ = try await full.create(self.createRequest(self.blob(94))) }
+        XCTAssertEqual(nothing?.disposition(for: .create), .fail(.serverFull))
+        XCTAssertEqual(nothing?.details, FileV2ErrorDetails.none)
     }
 
     func testTooManyUploadsAndTooManyObjectsAskTheUserToFreeSomething() async throws {
@@ -500,10 +626,10 @@ final class FakeFileV2ServerTests: XCTestCase {
         let file = blob(35)
         let made = try await alice.create(createRequest(file))
         let reader = Task { try await alice.fetchRange(obj: made.obj, from: 64, toInclusive: 1_063, token: nil, waitSeconds: 20) }
-        await sleeper.waitUntilWaiting(1)
+        try await sleeper.waitUntilWaiting(1)
         try await put(alice, made.obj, file, 0)
-        sleeper.releaseAll()
-        let result = try await reader.value
+        sleeper.openGate()
+        let result = try await xferValue(of: reader, what: "the read that waits for a part", onTimeout: { sleeper.openGate() })
         XCTAssertEqual(result.body, file.part(0))
     }
 
@@ -532,11 +658,11 @@ final class FakeFileV2ServerTests: XCTestCase {
         let file = blob(37)
         let made = try await alice.create(createRequest(file))
         let waiting = Task { try await alice.fetchRange(obj: made.obj, from: 64, toInclusive: 100, token: nil, waitSeconds: 20) }
-        await sleeper.waitUntilWaiting(1)
+        try await sleeper.waitUntilWaiting(1)
         try await alice.delete(obj: made.obj)
-        sleeper.releaseAll()
+        sleeper.openGate()
         do {
-            _ = try await waiting.value
+            _ = try await xferValue(of: waiting, what: "the read of a deleted object", onTimeout: { sleeper.openGate() })
             XCTFail("a read of a deleted object must be refused")
         } catch let error as FileV2ServerError {
             XCTAssertEqual(error.status, 404)
@@ -717,14 +843,14 @@ final class FakeFileV2ServerTests: XCTestCase {
         server.injectDelay(.putPart, ms: 500)
         let first = Task { try await self.put(server, made.obj, file, 0) }
         let second = Task { try await self.put(server, made.obj, file, 1) }
-        await sleeper.waitUntilWaiting(2)
+        try await sleeper.waitUntilWaiting(2)
         let refused = await expectError(429, "too_many_parts_in_flight") { _ = try await self.put(server, made.obj, file, 2) }
         XCTAssertEqual(refused?.retryAfter, 1)
         XCTAssertEqual(refused?.disposition(for: .putPart), .retry(onExhausted: .rateLimited))
         XCTAssertNil(server.storedPart(obj: made.obj, part: 0), "an upload that is still in flight has marked nothing")
         sleeper.releaseAll()
-        _ = try await first.value
-        _ = try await second.value
+        _ = try await xferValue(of: first, what: "the first upload", onTimeout: { sleeper.openGate() })
+        _ = try await xferValue(of: second, what: "the second upload", onTimeout: { sleeper.openGate() })
         server.clearDelays()
         _ = try await put(server, made.obj, file, 2)
         try await server.complete(obj: made.obj)
@@ -738,20 +864,19 @@ final class FakeFileV2ServerTests: XCTestCase {
         let made = try await server.create(createRequest(file))
         server.injectDelay(.putPart, ms: 300)
         let original = Task { try await self.put(server, made.obj, file, 0) }
-        await sleeper.waitUntilWaiting(1)
+        try await sleeper.waitUntilWaiting(1)
         server.clearDelays()
         let retry = Task { try await self.put(server, made.obj, file, 0) }
-        await sleeper.waitUntilWaiting(2)           // the retry looks again after a poll: it waits for the part lock
+        try await sleeper.waitUntilWaiting(2)       // the retry looks again after a poll: it waits for the part lock
         sleeper.releaseAll()
-        let first = try await original.value
+        let first = try await xferValue(of: original, what: "the original upload", onTimeout: { sleeper.openGate() })
         XCTAssertFalse(first.duplicate)
-        // the retry keeps polling until the original has ended and it can take the lock
-        for _ in 0..<100 {
-            if sleeper.waiting == 0 { break }
-            sleeper.releaseAll()
-            try? await Task.sleep(nanoseconds: 1_000_000)
-        }
-        let second = try await retry.value
+        // The original is over and has given the part lock back. The retry polls the lock every 50 ms of sleeper time; it may be
+        // suspended in a poll or between two polls, and a release that looked at a count of suspended sleeps could miss the
+        // second case (and the test would hang). So: open the gate. Every poll from here on returns at once, the retry finds
+        // the lock free on its next look, and its answer is the duplicate.
+        sleeper.openGate()
+        let second = try await xferValue(of: retry, what: "the retry of the upload", onTimeout: { sleeper.openGate() })
         XCTAssertTrue(second.duplicate)
         XCTAssertEqual(second.received, 1)
     }
@@ -764,14 +889,14 @@ final class FakeFileV2ServerTests: XCTestCase {
         let made = try await server.create(createRequest(file))
         server.injectDelay(.putPart, ms: 1_000_000)
         let holder = Task { try await self.put(server, made.obj, file, 0) }
-        await sleeper.waitUntilWaiting(1)
+        try await sleeper.waitUntilWaiting(1)
         server.clearDelays()
         let error = await expectError(429, "part_busy") { _ = try await self.put(server, made.obj, file, 0) }
         XCTAssertEqual(error?.retryAfter, 2)
         XCTAssertEqual(error?.disposition(for: .putPart), .retry(onExhausted: .rateLimited))
         XCTAssertEqual(sleeper.count(ms: 50), 100, "the lock wait is 5 seconds, looked at every 50 ms")
         sleeper.releaseAll()
-        let result = try await holder.value
+        let result = try await xferValue(of: holder, what: "the upload that held the part", onTimeout: { sleeper.openGate() })
         XCTAssertFalse(result.duplicate)
         // the holder was not disturbed, and the slot of the refused retry was given back
         let again = try await put(server, made.obj, file, 0)

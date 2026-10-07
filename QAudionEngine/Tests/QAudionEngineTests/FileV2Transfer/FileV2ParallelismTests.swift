@@ -241,6 +241,101 @@ final class FileV2ParallelismTests: XCTestCase {
         XCTAssertEqual(value.current, 4)
     }
 
+    // MARK: A clock that goes back
+
+    /// A rule fed from the wall clock, which is set back during a window: the window ends before it began. It used to be
+    /// clamped to 1 ms, a goodput of 33 GB/s that became the baseline, so no later window could ever gain 15 percent.
+    func testAWindowThatEndsBeforeItBeganIsNotAGoodputOfThirtyThreeGigabytesPerSecond() {
+        var value = FileV2AdaptiveParallelism(serverParallelism: 3, serverMaxParallelism: 8, memoryCap: 8, startMs: 3_600_000)
+        for index in 1...4 {                                    // the clock is set back an hour while the window runs
+            value.onPartDone(bytes: partBytes, nowMs: 100 + Int64(index) * 50, startedMs: 3_600_000)
+        }
+        XCTAssertEqual(value.current, 3, "no measurement, no change of P")
+        XCTAssertEqual(value.changes, 0)
+        XCTAssertEqual(value.stats().meanGoodputBytesPerSecond, 0, "nothing was measured")
+        // the next window is timed from where the clock is now: a fresh baseline, and the probe works
+        var now: Int64 = 300
+        now = window(&value, bps: 10_000_000, now: now)
+        XCTAssertEqual(value.current, 4)
+        now = window(&value, bps: 11_600_000, now: now)
+        XCTAssertEqual(value.current, 5, "+16 percent over a REAL baseline")
+        XCTAssertTrue((10_000_000.0...12_000_000.0).contains(value.stats().meanGoodputBytesPerSecond), "\(value.stats())")
+    }
+
+    func testAWindowThatEndsWhereItBeganIsNotMeasuredEither() {
+        var value = FileV2AdaptiveParallelism(serverParallelism: 3, serverMaxParallelism: 8, memoryCap: 8, startMs: 1_000)
+        for _ in 1...4 { value.onPartDone(bytes: partBytes, nowMs: 1_000, startedMs: 1_000) }
+        XCTAssertEqual(value.current, 3)
+        XCTAssertEqual(value.changes, 0)
+        XCTAssertEqual(value.stats().meanGoodputBytesPerSecond, 0)
+        // and a window of one millisecond is a real (fast) measurement, not dropped
+        for _ in 1...4 { value.onPartDone(bytes: partBytes, nowMs: 1_001, startedMs: 1_000) }
+        XCTAssertEqual(value.current, 4, "the baseline was taken and P+1 is being probed")
+        XCTAssertGreaterThan(value.stats().meanGoodputBytesPerSecond, 1e9)
+    }
+
+    /// The debounce must not freeze when the clock goes back: a change of P that lies in the future of the current time is brought
+    /// back to it ("P changed just now"), so only the parts already in flight are ignored, not every part until the clock catches up.
+    func testAFailureAfterTheClockWentBackStillHalvesTheParallelism() {
+        var value = parallelism(p0: 3, serverMax: 8, memCap: 8)
+        let now = window(&value, bps: 10_000_000, now: 0)      // P 3 -> 4 at about 3355 ms
+        XCTAssertEqual(value.current, 4)
+        XCTAssertGreaterThan(now, 3_000)
+        value.onPartFailed(nowMs: 100, startedMs: 90)           // the clock was set back: the parts in flight are from "before"
+        XCTAssertEqual(value.current, 4)
+        value.onPartFailed(nowMs: 400, startedMs: 150)          // a part that started after the step is news (it was ignored for ever before)
+        XCTAssertEqual(value.current, 2)
+        XCTAssertEqual(value.changes, 2)
+        // a part that was in flight at the halving still does not halve again (one halving per window)
+        value.onPartFailed(nowMs: 420, startedMs: 120)
+        XCTAssertEqual(value.current, 2)
+    }
+
+    /// Fed from the monotonic clock, a wall clock that is set back in the middle of the window changes nothing; fed from the
+    /// wall clock, the same window is dropped instead of being measured wrong.
+    func testTheRuleFedFromTheMonotonicClockIsNotTroubledByAWallClockStep() {
+        func run(useMonotonic: Bool) -> FileV2AdaptiveParallelism {
+            let clock = XferManualClock()
+            let start = useMonotonic ? clock.monotonicMs() : clock.nowMs()
+            var value = FileV2AdaptiveParallelism(serverParallelism: 3, serverMaxParallelism: 8, memoryCap: 8, startMs: start)
+            for index in 1...4 {
+                let started = useMonotonic ? clock.monotonicMs() : clock.nowMs()
+                clock.advance(ms: 250)
+                if index == 2 { clock.stepWall(byMs: -3_600_000) }
+                value.onPartDone(bytes: partBytes, nowMs: useMonotonic ? clock.monotonicMs() : clock.nowMs(), startedMs: started)
+            }
+            return value
+        }
+        let monotonic = run(useMonotonic: true)
+        XCTAssertEqual(monotonic.current, 4, "the baseline was measured over the real second")
+        XCTAssertEqual(monotonic.stats().meanGoodputBytesPerSecond, Double(4 * partBytes), accuracy: 1.0)
+        let wall = run(useMonotonic: false)
+        XCTAssertEqual(wall.current, 3, "a wall clock that went back: the window is dropped, not mismeasured")
+        XCTAssertEqual(wall.stats().meanGoodputBytesPerSecond, 0)
+    }
+
+    func testAProgressDeadlineNeverTrapsOnAnExtremeTime() {
+        var late = FileV2ProgressDeadline(idleLimitMs: 30_000, startMs: Int64.max - 10)
+        XCTAssertEqual(late.expiresAtMs, Int64.max, "the sum saturates")
+        XCTAssertFalse(late.isExpired(nowMs: Int64.max))
+        XCTAssertFalse(late.isExpired(nowMs: Int64.min), "a clock far in the past: not expired, no trap")
+        late.progress(bytes: 1, nowMs: Int64.max)
+        XCTAssertFalse(late.isExpired(nowMs: Int64.max))
+        let early = FileV2ProgressDeadline(idleLimitMs: 1, startMs: Int64.min)
+        XCTAssertTrue(early.isExpired(nowMs: Int64.max), "the difference overflows: a whole range of silence is expired")
+        XCTAssertFalse(early.isExpired(nowMs: Int64.min))
+        XCTAssertEqual(early.expiresAtMs, Int64.min + 1)
+    }
+
+    func testNegativeBytesAndHugeByteCountsNeverTrapTheWindow() {
+        var value = parallelism(p0: 3, serverMax: 8, memCap: 8)
+        value.onPartDone(bytes: -5, nowMs: 100, startedMs: 0)
+        value.onPartDone(bytes: Int64.max, nowMs: 200, startedMs: 0)
+        value.onPartDone(bytes: Int64.max, nowMs: 300, startedMs: 0)
+        value.onPartDone(bytes: Int64.max, nowMs: 400, startedMs: 0)
+        XCTAssertEqual(value.current, 4, "a baseline was measured (a huge one) and P+1 is probed")
+    }
+
     // MARK: Retry policy: 1-2-4-8 s, jitter, Retry-After, at most 5 attempts
 
     func testBackoffTableWithZeroJitter() {
@@ -260,9 +355,11 @@ final class FileV2ParallelismTests: XCTestCase {
         XCTAssertEqual(policy.nextDelayMs(failedAttempts: 4, retryAfterSeconds: nil), 10_000)
     }
 
-    func testAJitterOutsideZeroToBaseIsClamped() {
+    func testAJitterOutsideZeroToAQuarterOfTheBaseIsClamped() {
         XCTAssertEqual(FileV2RetryPolicy(jitter: { _ in -500 }).nextDelayMs(failedAttempts: 1, retryAfterSeconds: nil), 1_000)
-        XCTAssertEqual(FileV2RetryPolicy(jitter: { _ in 99_999 }).nextDelayMs(failedAttempts: 1, retryAfterSeconds: nil), 2_000)
+        XCTAssertEqual(FileV2RetryPolicy(jitter: { _ in 99_999 }).nextDelayMs(failedAttempts: 1, retryAfterSeconds: nil), 1_250)
+        XCTAssertEqual(FileV2RetryPolicy(jitter: { _ in Int64.max }).nextDelayMs(failedAttempts: 4, retryAfterSeconds: nil), 10_000)
+        XCTAssertEqual(FileV2RetryPolicy(jitter: { _ in Int64.min }).nextDelayMs(failedAttempts: 4, retryAfterSeconds: nil), 8_000)
     }
 
     func testDefaultJitterStaysWithinAQuarterOfTheBase() {
@@ -286,14 +383,55 @@ final class FileV2ParallelismTests: XCTestCase {
         XCTAssertEqual(policy.nextDelayMs(failedAttempts: 2, retryAfterSeconds: -5), 2_000)
     }
 
-    func testRetryAfterAboveThreeHundredSecondsIsCapped() {
+    /// The rule decided for the three platforms: a `Retry-After` up to 300 seconds is honoured (with the jitter), the total wait is
+    /// hard-capped at 300 000 ms, and one above 300 seconds is not waited for at all.
+    func testRetryAfterUpToThreeHundredSecondsIsHonoured() {
         let policy = FileV2RetryPolicy(jitter: { _ in 0 })
+        XCTAssertEqual(FileV2RetryPolicy.maxWaitMs, 300_000)
+        XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 299), 299_000)
         XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 300), 300_000)
-        XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 301), 300_000)
-        XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 3_600), 300_000)
-        XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: Int.max), 300_000)
-        // and the jitter still applies on top of the cap, so the longest wait is 375 s
-        XCTAssertEqual(FileV2RetryPolicy(jitter: { $0 / 4 }).nextDelayMs(failedAttempts: 1, retryAfterSeconds: 9_999), 375_000)
+        XCTAssertEqual(policy.nextDelayMs(failedAttempts: 3, retryAfterSeconds: 300), 300_000)
+    }
+
+    func testRetryAfterAboveThreeHundredSecondsIsNotWaitedFor() {
+        for policy in [FileV2RetryPolicy(jitter: { _ in 0 }), FileV2RetryPolicy(jitter: { $0 / 4 }), FileV2RetryPolicy()] {
+            for seconds in [301, 302, 600, 3_600, 86_400, Int(Int32.max), Int.max - 1, Int.max] {
+                for attempt in [1, 2, 4] {
+                    XCTAssertNil(policy.nextDelayMs(failedAttempts: attempt, retryAfterSeconds: seconds),
+                                 "\(seconds) s at failure \(attempt): no automatic wait")
+                }
+            }
+        }
+        // it is a refusal to wait, not a cap: the value next to the limit on either side
+        let policy = FileV2RetryPolicy(jitter: { _ in 0 })
+        XCTAssertNotNil(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 300))
+        XCTAssertNil(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 301))
+        // without a Retry-After (or with a negative one) the backoff is what it was
+        XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: nil), 1_000)
+        XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: -1), 1_000)
+    }
+
+    func testTheJitterOfARetryAfterIsAtMostAQuarterAndTheTotalIsCappedAtThreeHundredSeconds() {
+        let quarter = FileV2RetryPolicy(jitter: { $0 / 4 })
+        XCTAssertEqual(quarter.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 8), 10_000)
+        XCTAssertEqual(quarter.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 200), 250_000)
+        XCTAssertEqual(quarter.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 240), 300_000, "240 s and a quarter is exactly the cap")
+        XCTAssertEqual(quarter.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 250), 300_000, "312.5 s is cut to 300 s")
+        XCTAssertEqual(quarter.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 300), 300_000, "375 s is cut to 300 s")
+        // a jitter that asks for more than a quarter gets a quarter
+        let greedy = FileV2RetryPolicy(jitter: { $0 * 10 })
+        XCTAssertEqual(greedy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 100), 125_000)
+        XCTAssertEqual(greedy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: 300), 300_000)
+        // the default jitter: always from the value up to a quarter more, never above the cap
+        let policy = FileV2RetryPolicy()
+        for seconds in [0, 1, 4, 60, 240, 241, 299, 300] {
+            let base = Int64(seconds) * 1000
+            for _ in 0..<200 {
+                let delay = policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: seconds) ?? -1
+                XCTAssertGreaterThanOrEqual(delay, base, "\(seconds) s")
+                XCTAssertLessThanOrEqual(delay, min(base + base / 4, 300_000), "\(seconds) s")
+            }
+        }
     }
 
     func testRetryAfterGetsTheJitterTooSoManyClientsDoNotComeBackTogether() {

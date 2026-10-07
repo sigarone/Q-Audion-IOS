@@ -1,18 +1,22 @@
 import Foundation
 
 /// The `Retry-After` header (RFC 9110 section 10.2.3): delta-seconds, or an HTTP date. The result is a whole number of
-/// seconds, never negative and never above `maxSeconds` (300): a server, a proxy or a broken clock that asks for an
-/// hour parks a transfer for five minutes at most, and then the transfer asks again.
+/// seconds, never negative, and NOT cut down: a server, a proxy or a broken clock that asks for an hour is reported as an
+/// hour, because `FileV2RetryPolicy` does not wait for anything above `maxSeconds` (300): there is no automatic wait for
+/// it, and the transfer pauses or fails with a reason the user sees. (Cutting it to 300 here would turn "come back in an
+/// hour" into five minutes of hammering.) A value too large for an `Int` is `Int.max`.
 ///
-/// Pure: no clock of its own (`nowMs` is passed), no `DateFormatter` (it depends on the locale and on the calendar of the
-/// device), no `String` comparison (the value is read as ASCII bytes).
+/// Pure: no clock of its own (`nowMs`, the WALL clock, is passed: the date form is wall time), no `DateFormatter` (it
+/// depends on the locale and on the calendar of the device), no `String` comparison (the value is read as ASCII bytes).
+/// The date form is only as good as the device's clock: delta-seconds, which the server sends, does not depend on it.
 public enum FileV2RetryAfter {
 
+    /// The longest `Retry-After` that is waited for (`FileV2Wire.maxRetryAfterSeconds`); the parser does not apply it.
     public static let maxSeconds: Int = FileV2Wire.maxRetryAfterSeconds
 
-    /// The seconds to wait, in `0...maxSeconds`, or `nil` when `header` is neither delta-seconds nor an HTTP date.
+    /// The seconds the server asks for, in `0...Int.max`, or `nil` when `header` is neither delta-seconds nor an HTTP date.
     ///
-    /// - delta-seconds: only ASCII digits (no sign, no fraction, no exponent); a value too large for an integer is the cap.
+    /// - delta-seconds: only ASCII digits (no sign, no fraction, no exponent); a value too large for an integer is `Int.max`.
     /// - an HTTP date, in any of the three forms a recipient must accept: `Sun, 06 Nov 1994 08:49:37 GMT`,
     ///   `Sunday, 06-Nov-94 08:49:37 GMT` (two-digit year: a date more than 50 years ahead is read as the past century)
     ///   and `Sun Nov  6 08:49:37 1994`. A date in the past is 0; a date in the future is the remaining time rounded up.
@@ -30,12 +34,12 @@ public enum FileV2RetryAfter {
         }
         guard let epoch = httpDateEpochSeconds(value, nowMs: nowMs) else { return nil }
         let (scaled, overflow) = epoch.multipliedReportingOverflow(by: 1000)
-        guard !overflow else { return epoch > 0 ? maxSeconds : 0 }
+        guard !overflow else { return epoch > 0 ? Int.max : 0 }
         let remaining = scaled.subtractingReportingOverflow(nowMs)
-        if remaining.overflow { return scaled > nowMs ? maxSeconds : 0 }
+        if remaining.overflow { return scaled > nowMs ? Int.max : 0 }
         if remaining.partialValue <= 0 { return 0 }
         let whole = remaining.partialValue / 1000 + (remaining.partialValue % 1000 == 0 ? 0 : 1)
-        return whole > Int64(maxSeconds) ? maxSeconds : Int(whole)
+        return Int(clamping: whole)
     }
 
     // MARK: delta-seconds
@@ -45,7 +49,7 @@ public enum FileV2RetryAfter {
         for digit in digits {
             let (times, overflow) = value.multipliedReportingOverflow(by: 10)
             let (plus, overflow2) = times.addingReportingOverflow(Int(digit - 0x30))
-            if overflow || overflow2 || plus > maxSeconds { return maxSeconds }
+            if overflow || overflow2 { return Int.max }
             value = plus
         }
         return value

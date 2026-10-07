@@ -52,7 +52,8 @@ public enum FileV2TransferError: String, CaseIterable, Sendable, Equatable {
 
 /// What a pipeline does with a failed request.
 public enum FileV2Disposition: Sendable, Equatable {
-    /// The same request again after a backoff (or `Retry-After`); `onExhausted` is the error when the attempts are spent.
+    /// The same request again after a backoff (or `Retry-After`, up to 300 s: a longer one is not waited for, see
+    /// `FileV2RetryPolicy.nextDelayMs`); `onExhausted` is the error when the attempts are spent.
     case retry(onExhausted: FileV2TransferError)
     /// 425: wait `Retry-After` and ask again; not a failure and not counted as an attempt.
     case wait

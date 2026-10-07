@@ -8,12 +8,22 @@ import Foundation
 // builds the requests and reads the answers, the in-memory fake of the tests implements the same interface, and the
 // server conformance transcript (test/kat/file_v2_server/transcript.json) ties that fake to the real handlers.
 
-/// Wall clock in epoch milliseconds, injectable so token expiry, idle times and `Retry-After` dates are testable.
+/// Time for the transfer layer, injectable so token expiry, idle times, goodput windows and `Retry-After` dates are testable.
+///
+/// There are two clocks because they answer two different questions, and a wall clock can be set back (by the user, by the
+/// network time service, by a device with a wrong date that has just corrected it):
+///
+/// - `nowMs()` is the wall clock in epoch milliseconds. It is for what the protocol states in wall time: the expiry of a
+///   download token (`FileV2IssuedToken.exp`) and the date form of `Retry-After`.
+/// - `monotonicMs()` never goes back while the process runs. It is the only clock for DURATIONS: the goodput windows of
+///   `FileV2AdaptiveParallelism`, `FileV2ProgressDeadline`, idle and wait timers. Its zero is arbitrary, so only differences
+///   mean anything and it is never compared with `nowMs()`.
 public protocol FileV2Clock: Sendable {
     func nowMs() -> Int64
+    func monotonicMs() -> Int64
 }
 
-/// The system clock.
+/// The system clocks: the wall clock, and the time the system has been up (monotonic).
 public struct FileV2SystemClock: FileV2Clock {
     public init() {}
 
@@ -21,6 +31,12 @@ public struct FileV2SystemClock: FileV2Clock {
         let seconds = Date().timeIntervalSince1970
         guard seconds.isFinite else { return 0 }
         return Int64(seconds * 1000.0)
+    }
+
+    public func monotonicMs() -> Int64 {
+        let seconds = ProcessInfo.processInfo.systemUptime
+        guard seconds.isFinite, seconds > 0 else { return 0 }
+        return Int64(min(seconds, 1.0e12) * 1000.0)
     }
 }
 
@@ -37,7 +53,8 @@ public enum FileV2Wire {
     public static let maxParts: Int = 640
     /// The prefix of every route of the protocol.
     public static let pathPrefix: String = "/api/v1/files/v2"
-    /// Longest `Retry-After` a client waits for, in seconds. A longer value is waited for 300 seconds only.
+    /// Longest `Retry-After` a client waits for, in seconds. A longer one is NOT waited for at all (no automatic wait: the
+    /// transfer pauses, or fails with a reason the user sees); it is not cut down to this value. See `FileV2RetryPolicy`.
     public static let maxRetryAfterSeconds: Int = 300
 
     /// `ceil((blobLength - 64) / partSize)`; 0 for a length that holds no payload.
@@ -68,7 +85,7 @@ public enum FileV2Wire {
 /// A download token request: exactly one of `recipientUserID` and `groupID`. The server validates it; this type does
 /// not, so that a malformed request can reach the server (and the fake) and be refused with `bad_token_request`.
 /// A `ttlSeconds` or `maxUses` of `nil` or 0 selects the server default (7 days, 10 uses; 0 is NOT unlimited).
-public struct FileV2TokenRequest: Sendable, Equatable, CustomStringConvertible {
+public struct FileV2TokenRequest: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
     public let recipientUserID: String?
     public let groupID: String?
     public let ttlSeconds: Int64?
@@ -89,12 +106,17 @@ public struct FileV2TokenRequest: Sendable, Equatable, CustomStringConvertible {
         FileV2TokenRequest(recipientUserID: nil, groupID: groupID, ttlSeconds: ttlSeconds, maxUses: maxUses)
     }
 
-    /// Only the kind of scope: never a user or group identifier.
+    /// Only the kind of scope: never a user or group identifier (not in `description`, not in a `dump` either).
     public var description: String { "FileV2TokenRequest(\(groupID != nil ? "group" : "user"))" }
+    public var customMirror: Mirror {
+        Mirror(self, children: ["scope": groupID != nil ? "group" : "user", "ttlSeconds": ttlSeconds as Any,
+                                "maxUses": maxUses as Any], displayStyle: .struct)
+    }
 }
 
-/// `POST /`. `head` is the 64-byte file header; it identifies the file and is never printed.
-public struct FileV2CreateRequest: Sendable, Equatable, CustomStringConvertible {
+/// `POST /`. `head` is the 64-byte file header; it identifies the file and is never printed (not in `description`, not in a
+/// `dump`: the mirror holds the lengths and the redacted token request only).
+public struct FileV2CreateRequest: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
     public let blobLength: Int64
     public let head: Data
     public let partSize: Int
@@ -108,6 +130,10 @@ public struct FileV2CreateRequest: Sendable, Equatable, CustomStringConvertible 
     }
 
     public var description: String { "FileV2CreateRequest(blobLength=\(blobLength), partSize=\(partSize))" }
+    public var customMirror: Mirror {
+        Mirror(self, children: ["blobLength": blobLength, "headBytes": head.count, "partSize": partSize,
+                                "token": token as Any], displayStyle: .struct)
+    }
 }
 
 /// The download token as the server issues it. `v` is a secret (it is what the descriptor's `src.tok.v` carries); `exp`
@@ -153,8 +179,10 @@ public struct FileV2DownloadAuth: Sendable, Equatable, CustomStringConvertible, 
 /// Cuts an object id to the 8 characters that may be printed.
 func fileV2ShortID(_ id: String) -> String { String(id.prefix(8)) }
 
-/// Answer of create: 201 for a new object, 200 with `existing` true (and `received`, `complete`) for a resume.
-public struct FileV2Created: Sendable, Equatable, CustomStringConvertible {
+/// Answer of create: 201 for a new object, 200 with `existing` true (and `received`, `complete`) for a resume. The object id
+/// and the token are secrets of the transfer: a description or a `dump` shows the first 8 characters of the id and the
+/// redacted token only.
+public struct FileV2Created: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
     public let obj: String
     public let blobLength: Int64
     public let partSize: Int
@@ -183,6 +211,12 @@ public struct FileV2Created: Sendable, Equatable, CustomStringConvertible {
     public var description: String {
         let id = fileV2ShortID(obj)
         return "FileV2Created(obj=\(id), parts=\(parts), existing=\(existing), received=\(received), complete=\(complete))"
+    }
+
+    public var customMirror: Mirror {
+        Mirror(self, children: ["obj": fileV2ShortID(obj), "blobLength": blobLength, "partSize": partSize, "parts": parts,
+                                "parallelism": parallelism, "maxParallelism": maxParallelism, "token": token as Any,
+                                "existing": existing, "received": received, "complete": complete], displayStyle: .struct)
     }
 }
 
@@ -231,11 +265,15 @@ public struct FileV2PartsMap: Sendable, Equatable {
     }
 
     /// Decodes the `map` field (already base64-decoded): bit `i % 8` of byte `i / 8`, least significant bit first.
-    /// The bitmap must be exactly `ceil(parts / 8)` bytes, must not set a bit past the last part, and its population
-    /// count must equal `received`: anything else is `invalidPartsMap`.
+    /// `parts` must be 1...`FileV2Wire.maxParts` (every integer here is the server's JSON and is checked before it is used for
+    /// a length or an allocation: an object of this protocol has at least one part and at most 640), the bitmap must be exactly
+    /// `ceil(parts / 8)` bytes, must not set a bit past the last part, and its population count must equal `received`:
+    /// anything else is `invalidPartsMap`.
     public static func fromWire(blobLength: Int64, partSize: Int, parts: Int, received: Int, complete: Bool,
                                 bitmap: Data) throws -> FileV2PartsMap {
-        guard parts >= 0, bitmap.count == (parts + 7) / 8 else { throw FileV2WireFormatError.invalidPartsMap }
+        guard parts >= 1, parts <= FileV2Wire.maxParts, bitmap.count == bitmapLength(parts: parts) else {
+            throw FileV2WireFormatError.invalidPartsMap
+        }
         var bits = [Bool](repeating: false, count: parts)
         var count = 0
         let bytes = Array(bitmap)
@@ -253,10 +291,17 @@ public struct FileV2PartsMap: Sendable, Equatable {
                               complete: complete, bits: bits)
     }
 
+    /// `ceil(parts / 8)`, without the `parts + 7` that overflows for a count near `Int.max`; 0 for a count below 1.
+    static func bitmapLength(parts: Int) -> Int {
+        parts < 1 ? 0 : parts / 8 + (parts % 8 == 0 ? 0 : 1)
+    }
+
     /// The wire form: bit `i % 8` of byte `i / 8`, least significant bit first.
     public func toWireBitmap() -> Data {
-        var out = [UInt8](repeating: 0, count: (parts + 7) / 8)
-        for index in 0..<min(parts, bits.count) where bits[index] {
+        // one entry of `bits` per part: a map whose `parts` says more than `bits` holds (only a hand-made one) is cut to `bits`
+        let count = max(0, min(parts, bits.count))
+        var out = [UInt8](repeating: 0, count: FileV2PartsMap.bitmapLength(parts: count))
+        for index in 0..<count where bits[index] {
             out[index / 8] |= UInt8(1) << UInt8(index % 8)
         }
         return Data(out)
@@ -273,8 +318,9 @@ public enum FileV2Op: String, Sendable, CaseIterable {
     case create, putPart, partsMap, complete, delete, issueToken, fetchRange, listUnfinished, deleteUnfinished
 }
 
-/// One unfinished object of the caller, as the collection route lists it.
-public struct FileV2UnfinishedItem: Sendable, Equatable, CustomStringConvertible {
+/// One unfinished object of the caller, as the collection route lists it. Only the first 8 characters of the id are ever
+/// printed (description or `dump`).
+public struct FileV2UnfinishedItem: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
     public let obj: String
     public let blobLength: Int64
     public let parts: Int
@@ -294,16 +340,27 @@ public struct FileV2UnfinishedItem: Sendable, Equatable, CustomStringConvertible
     public var description: String {
         "FileV2UnfinishedItem(obj=\(fileV2ShortID(obj)), parts=\(parts), received=\(received))"
     }
+
+    public var customMirror: Mirror {
+        Mirror(self, children: ["obj": fileV2ShortID(obj), "blobLength": blobLength, "parts": parts, "received": received,
+                                "createdMs": createdMs, "activityMs": activityMs], displayStyle: .struct)
+    }
 }
 
-/// A page of `FileV2Server.listUnfinished`; `next` is the cursor of the following page, `nil` on the last one.
-public struct FileV2UnfinishedPage: Sendable, Equatable {
+/// A page of `FileV2Server.listUnfinished`; `next` is the cursor of the following page (an object id), `nil` on the last
+/// one. A description or a `dump` shows the number of objects and whether there is a next page, never the cursor.
+public struct FileV2UnfinishedPage: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
     public let objects: [FileV2UnfinishedItem]
     public let next: String?
 
     public init(objects: [FileV2UnfinishedItem], next: String?) {
         self.objects = objects
         self.next = next
+    }
+
+    public var description: String { "FileV2UnfinishedPage(objects=\(objects.count), hasNext=\(next != nil))" }
+    public var customMirror: Mirror {
+        Mirror(self, children: ["objects": objects, "hasNext": next != nil], displayStyle: .struct)
     }
 }
 
@@ -318,14 +375,20 @@ public struct FileV2BulkDeleteResult: Sendable, Equatable {
     }
 }
 
-/// A ranged read: `body` holds the bytes of the range, `totalLength` is the blob length from `Content-Range`.
-public struct FileV2RangeResult: Sendable, Equatable {
+/// A ranged read: `body` holds the bytes of the range, `totalLength` is the blob length from `Content-Range`. The bytes are
+/// the file itself (the first range holds the 64-byte header): a description or a `dump` shows their number only.
+public struct FileV2RangeResult: Sendable, Equatable, CustomStringConvertible, CustomReflectable {
     public let body: Data
     public let totalLength: Int64
 
     public init(body: Data, totalLength: Int64) {
         self.body = body
         self.totalLength = totalLength
+    }
+
+    public var description: String { "FileV2RangeResult(bytes=\(body.count), totalLength=\(totalLength))" }
+    public var customMirror: Mirror {
+        Mirror(self, children: ["bodyBytes": body.count, "totalLength": totalLength], displayStyle: .struct)
     }
 }
 
@@ -365,9 +428,12 @@ public struct FileV2ErrorDetails: Sendable, Equatable {
 }
 
 /// An HTTP error of the parts protocol. `status` and `code` are those of the server's error table;
-/// `retryAfter` is the `Retry-After` header in seconds (already capped at `FileV2Wire.maxRetryAfterSeconds` by
-/// `FileV2RetryAfter`); `missing` is the `missing` list of 409 `incomplete` (at most the first 32 indices);
-/// `details` are the other fields of the JSON error body.
+/// `retryAfter` is the `Retry-After` header in seconds as the server sent it (`FileV2RetryAfter`; NOT cut down: above
+/// `FileV2Wire.maxRetryAfterSeconds` the retry policy does not wait for it); `missing` is the `missing` list of 409
+/// `incomplete` (at most the first 32 indices); `details` are the other fields of the JSON error body, and the numbers a UI
+/// shows stay there: `used` and `limit` of 413 `quota_exceeded`, `maxBlobLength` of 413 `blob_too_large`, `limit` of 429
+/// `too_many_uploads`. `FileV2ServerError.disposition(for:)` says what to do (`fail(.quota)`); the error is what the user
+/// is told about, so a pipeline keeps both.
 ///
 /// The text of the error is the status and the code only: never a token, a key, a name or a URL. The `code` of a
 /// server answer is kept only when it is 1 to 64 characters of lowercase ASCII letters, digits and `_` (every code of

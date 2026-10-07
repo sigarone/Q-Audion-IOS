@@ -1,7 +1,8 @@
 import XCTest
 @testable import QAudionEngine
 
-/// `Retry-After`: delta-seconds and the three HTTP date forms, capped at 300 seconds, read from ASCII bytes.
+/// `Retry-After`: delta-seconds and the three HTTP date forms, read from ASCII bytes. The value is reported as the server sent
+/// it, however large: the policy decides what is waited for (up to 300 seconds) and what is not (anything above).
 final class FileV2RetryAfterTests: XCTestCase {
 
     /// 1994-11-06T08:49:37Z, the date of the RFC 9110 examples.
@@ -22,13 +23,18 @@ final class FileV2RetryAfterTests: XCTestCase {
         XCTAssertEqual(seconds("007"), 7, "leading zeros are digits")
     }
 
-    func testDeltaSecondsAboveTheCapAreTheCap() {
-        XCTAssertEqual(FileV2RetryAfter.maxSeconds, 300)
-        XCTAssertEqual(seconds("301"), 300)
-        XCTAssertEqual(seconds("3600"), 300)
-        XCTAssertEqual(seconds("86400"), 300)
-        XCTAssertEqual(seconds("9223372036854775807"), 300)
-        XCTAssertEqual(seconds("99999999999999999999999999999999"), 300, "too large for an integer: still the cap, no trap")
+    /// A value above the longest wait (300) is NOT cut down: cut to 300 it would look like "come back in five minutes" and the
+    /// policy would wait for it; reported as it is, the policy refuses to wait and the transfer pauses or fails.
+    func testDeltaSecondsAboveTheLongestWaitAreReportedAsTheyAre() {
+        XCTAssertEqual(FileV2RetryAfter.maxSeconds, 300, "the longest wait, not applied by the parser")
+        XCTAssertEqual(seconds("300"), 300)
+        XCTAssertEqual(seconds("301"), 301)
+        XCTAssertEqual(seconds("3600"), 3_600)
+        XCTAssertEqual(seconds("86400"), 86_400)
+        XCTAssertEqual(seconds("9223372036854775806"), Int.max - 1)
+        XCTAssertEqual(seconds("9223372036854775807"), Int.max)
+        XCTAssertEqual(seconds("9223372036854775808"), Int.max, "one more than an Int: saturates, no trap")
+        XCTAssertEqual(seconds("99999999999999999999999999999999"), Int.max, "too large for an integer: Int.max, no trap")
     }
 
     func testOnlyDigitsAreDeltaSeconds() {
@@ -50,7 +56,7 @@ final class FileV2RetryAfterTests: XCTestCase {
         XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:50:37 GMT", now: now), 60)           // IMF-fixdate
         XCTAssertEqual(seconds("Sunday, 06-Nov-94 08:50:37 GMT", now: now), 60)         // rfc850
         XCTAssertEqual(seconds("Sun Nov  6 08:50:37 1994", now: now), 60)               // asctime, one-digit day padded with a space
-        XCTAssertEqual(seconds("Mon Nov 14 08:50:37 1994", now: now), 300, "asctime, two-digit day, a week away: the cap")
+        XCTAssertEqual(seconds("Mon Nov 14 08:50:37 1994", now: now), 8 * 86_400 + 60, "asctime, two-digit day, 8 days and a minute away")
     }
 
     func testADateInThePastOrNowIsZero() {
@@ -67,9 +73,12 @@ final class FileV2RetryAfterTests: XCTestCase {
         XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:50:37 GMT", now: rfcMoment - 500), 61)
     }
 
-    func testADateBeyondTheCapIsTheCap() {
-        XCTAssertEqual(seconds("Sun, 06 Nov 1994 09:49:37 GMT", now: rfcMoment), 300)
-        XCTAssertEqual(seconds("Fri, 31 Dec 9999 23:59:59 GMT", now: rfcMoment), 300)
+    func testADateBeyondTheLongestWaitIsTheTimeThatRemains() {
+        XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:54:37 GMT", now: rfcMoment), 300)
+        XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:54:38 GMT", now: rfcMoment), 301)
+        XCTAssertEqual(seconds("Sun, 06 Nov 1994 09:49:37 GMT", now: rfcMoment), 3_600)
+        // 9999-12-31T23:59:59Z is 253402300799 seconds after the epoch; the clock is at 784111777
+        XCTAssertEqual(seconds("Fri, 31 Dec 9999 23:59:59 GMT", now: rfcMoment), 253_402_300_799 - 784_111_777)
     }
 
     func testLeapYearsAndMonthLengths() {
@@ -87,9 +96,10 @@ final class FileV2RetryAfterTests: XCTestCase {
         // now = 2026-10-07: 94 is 1994 (2094 would be 68 years ahead), 30 is 2030 (4 years ahead)
         let now: Int64 = 1_791_330_000_000
         XCTAssertEqual(seconds("Saturday, 04-Oct-94 00:00:00 GMT", now: now), 0)
-        XCTAssertEqual(seconds("Monday, 01-Jan-30 00:00:00 GMT", now: now), 300)
+        // 2030-01-01T00:00:00Z is 1893456000 seconds after the epoch
+        XCTAssertEqual(seconds("Monday, 01-Jan-30 00:00:00 GMT", now: now), 1_893_456_000 - 1_791_330_000)
         // exactly at the pivot: 2076 is 50 years ahead (kept); 2077 is more than 50 years ahead (read as 1977)
-        XCTAssertEqual(seconds("Monday, 01-Jan-76 00:00:00 GMT", now: now), 300)
+        XCTAssertGreaterThan(seconds("Monday, 01-Jan-76 00:00:00 GMT", now: now) ?? 0, 40 * 365 * 86_400)
         XCTAssertEqual(seconds("Saturday, 01-Jan-77 00:00:00 GMT", now: now), 0)
     }
 
@@ -129,7 +139,7 @@ final class FileV2RetryAfterTests: XCTestCase {
     func testAMomentBeforeTheEpochAndAHugeClockDoNotTrap() {
         XCTAssertEqual(seconds("Thu, 01 Jan 1970 00:00:10 GMT", now: -5_000), 15)
         XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:49:37 GMT", now: Int64.max), 0)
-        XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:49:37 GMT", now: Int64.min), 300)
+        XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:49:37 GMT", now: Int64.min), Int.max, "the difference overflows: saturates")
     }
 
     /// The two-digit year of the obsolete form is read against the current year, which comes from the clock: a clock at either end of
@@ -151,5 +161,27 @@ final class FileV2RetryAfterTests: XCTestCase {
         let value = seconds("Sun, 06 Nov 1994 08:50:37 GMT")
         XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: value), 60_000)
         XCTAssertEqual(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: seconds("garbage")), 1_000, "unparseable: the backoff")
+    }
+
+    /// The whole chain, header to wait, for the rule decided for the three platforms: up to 300 seconds is waited for, above it
+    /// there is no automatic wait (`nil`).
+    func testAHeaderAboveFiveMinutesIsNotWaitedForAndOneUpToFiveMinutesIs() {
+        let policy = FileV2RetryPolicy(jitter: { _ in 0 })
+        func delay(_ header: String) -> Int64? {
+            policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: seconds(header))
+        }
+        XCTAssertEqual(delay("2"), 2_000)
+        XCTAssertEqual(delay("300"), 300_000)
+        XCTAssertNil(delay("301"))
+        XCTAssertNil(delay("3600"))
+        XCTAssertNil(delay("99999999999999999999999999999999"))
+        XCTAssertEqual(delay("Sun, 06 Nov 1994 08:54:37 GMT"), 300_000, "a date exactly five minutes ahead")
+        XCTAssertNil(delay("Sun, 06 Nov 1994 08:54:38 GMT"), "a date five minutes and a second ahead")
+        XCTAssertNil(delay("Sun, 06 Nov 1994 09:49:37 GMT"))
+        XCTAssertEqual(delay("Sun, 06 Nov 1994 08:49:37 GMT"), 0, "a date that has passed: now")
+        // a device whose wall clock is an hour behind reads a near date as an hour away: no automatic wait, and no hammering
+        let behind = FileV2RetryAfter.seconds(from: "Sun, 06 Nov 1994 08:49:47 GMT", nowMs: rfcMoment - 3_600_000)
+        XCTAssertEqual(behind, 3_610)
+        XCTAssertNil(policy.nextDelayMs(failedAttempts: 1, retryAfterSeconds: behind))
     }
 }

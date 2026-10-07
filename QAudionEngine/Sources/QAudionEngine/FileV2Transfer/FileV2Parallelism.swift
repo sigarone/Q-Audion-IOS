@@ -40,15 +40,22 @@ public struct FileV2MemBudget: Sendable, Equatable {
 /// Retries of one part: backoff 1, 2, 4, 8 seconds plus jitter, `Retry-After` (with the same jitter, so many clients do
 /// not come back together) when the server gives one, at most `maxAttempts` tries.
 ///
-/// A `Retry-After` above `FileV2Wire.maxRetryAfterSeconds` (300) is capped at it: a server that asks for an hour is
-/// waited for five minutes. `FileV2RetryAfter` already does that for the header; the policy does it again for a value that
-/// reaches it any other way.
+/// The rule for `Retry-After` is the same on the three platforms:
+///
+/// - up to `FileV2Wire.maxRetryAfterSeconds` (300) it is honoured, plus a jitter of at most 25 percent of the value, and the
+///   TOTAL wait never exceeds `maxWaitMs` (300 000 ms), so a server that asks for the maximum is waited for exactly that;
+/// - above 300 there is NO automatic wait: `nextDelayMs` returns `nil` (not the capped 300 s). The caller then pauses the
+///   transfer or fails it with a reason the user sees; a server that asks for an hour is not hammered every five minutes, and
+///   the user is not left with a transfer that looks alive and does nothing.
 public struct FileV2RetryPolicy: Sendable {
+    /// The longest single wait, in milliseconds: 300 seconds, jitter included.
+    public static let maxWaitMs: Int64 = Int64(FileV2Wire.maxRetryAfterSeconds) * 1000
+
     public let maxAttempts: Int
     private let jitter: @Sendable (Int64) -> Int64
 
-    /// `jitter` receives the base delay in milliseconds and returns the extra milliseconds, clamped here to
-    /// `0...base` (a delay never more than doubles). The default is uniform in `0...base/4`.
+    /// `jitter` receives the base delay in milliseconds and returns the extra milliseconds, clamped here to `0...base/4`
+    /// (at most 25 percent). The default is uniform in `0...base/4`.
     public init(maxAttempts: Int = 5, jitter: @escaping @Sendable (Int64) -> Int64 = FileV2RetryPolicy.defaultJitter) {
         self.maxAttempts = maxAttempts
         self.jitter = jitter
@@ -58,20 +65,22 @@ public struct FileV2RetryPolicy: Sendable {
         Int64.random(in: 0...max(0, base / 4))
     }
 
-    /// The wait before the next try after `failedAttempts` failures (1-based), or `nil` when the attempts are spent (the
-    /// transfer then pauses with `network`, it does not fail). `retryAfterSeconds` from the server replaces the backoff
-    /// base; a negative value is ignored.
+    /// The wait before the next try after `failedAttempts` failures (1-based), or `nil` when no automatic wait is allowed:
+    /// the attempts are spent (the transfer then pauses with `network`, it does not fail), or `retryAfterSeconds` is above
+    /// `FileV2Wire.maxRetryAfterSeconds` (the pipeline tells the two apart by comparing it with that constant, and pauses or
+    /// fails with its reason). `retryAfterSeconds` from the server replaces the backoff base; a negative value is ignored.
     public func nextDelayMs(failedAttempts: Int, retryAfterSeconds: Int?) -> Int64? {
         guard failedAttempts < maxAttempts else { return nil }
         let base: Int64
         if let seconds = retryAfterSeconds, seconds >= 0 {
-            base = Int64(min(seconds, FileV2Wire.maxRetryAfterSeconds)) * 1000
+            if seconds > FileV2Wire.maxRetryAfterSeconds { return nil }
+            base = Int64(seconds) * 1000
         } else {
             let shift = min(max(failedAttempts - 1, 0), 3)
             base = Int64(1000) << Int64(shift)
         }
-        let extra = min(max(jitter(base), 0), base)
-        return base + extra
+        let extra = min(max(jitter(base), 0), base / 4)
+        return min(base + extra, FileV2RetryPolicy.maxWaitMs)
     }
 }
 
@@ -89,6 +98,11 @@ public struct FileV2ParallelismStats: Sendable, Equatable {
 }
 
 /// Adaptive parallelism (design 2.3.1), pure: no clock, no threads, the caller passes the time.
+///
+/// The time is a DURATION clock: feed every `nowMs`, `startedMs` and `startMs` from `FileV2Clock.monotonicMs()`, never from
+/// the wall clock (`nowMs()`): a wall clock that is set back during a transfer would make a window last 1 ms (a goodput of
+/// 33 GB/s) or freeze the rule. As a second line of defence, a window that cannot be timed (it ends at or before its start)
+/// is dropped without a measurement, and a change of P that lies in the future of the current time is brought back to it.
 ///
 /// Start: `P0` from the server, ceiling = min(server `max_parallelism`, 8, memory budget, 3 on a metered network, the
 /// direction cap: 4 for downloads). Every `window` completed parts the aggregate goodput of the window (bytes per second)
@@ -144,11 +158,21 @@ public struct FileV2AdaptiveParallelism: Sendable {
 
     /// A part completed; `startedMs` is when it was started.
     public mutating func onPartDone(bytes: Int64, nowMs: Int64, startedMs: Int64) {
+        if lastChangeMs > nowMs { lastChangeMs = nowMs }   // the clock went back: a change cannot be in the future
         if startedMs < lastChangeMs { return }     // started under another P: not a sample of the current one
-        windowBytes += bytes
+        let (sum, overflow) = windowBytes.addingReportingOverflow(max(0, bytes))
+        windowBytes = overflow ? Int64.max : sum
         windowParts += 1
         if windowParts < FileV2AdaptiveParallelism.window { return }
-        let elapsed = max(1, nowMs - windowStartMs)
+        let (elapsed, elapsedOverflow) = nowMs.subtractingReportingOverflow(windowStartMs)
+        if elapsedOverflow || elapsed <= 0 {
+            // a window that ends at or before its start cannot be timed (a clock that stood still or went back): no
+            // measurement, no change of P; the next window starts now
+            windowStartMs = nowMs
+            windowBytes = 0
+            windowParts = 0
+            return
+        }
         let goodput = Double(windowBytes) * 1000.0 / Double(elapsed)
         goodputSum += goodput
         goodputWindows += 1
@@ -177,6 +201,7 @@ public struct FileV2AdaptiveParallelism: Sendable {
 
     /// A part failed (timeout, 5xx, 429, I/O error); `startedMs` is when it was started.
     public mutating func onPartFailed(nowMs: Int64, startedMs: Int64) {
+        if lastChangeMs > nowMs { lastChangeMs = nowMs }   // the clock went back: a change cannot be in the future
         if startedMs < lastChangeMs { return }     // one halving per window: this part was already in flight at the last change
         move(max(1, current / 2), nowMs)
         phase = .measure
@@ -226,7 +251,7 @@ public enum FileV2PartTimeout {
 }
 
 /// A deadline that slides while the transfer moves: expired when no byte has moved for `idleLimitMs`. Pure: the caller
-/// passes the time, and serialises the calls.
+/// passes the time (from `FileV2Clock.monotonicMs()`, like every duration), and serialises the calls.
 public struct FileV2ProgressDeadline: Sendable, Equatable {
     public let idleLimitMs: Int64
     private var lastProgressMs: Int64
@@ -242,8 +267,14 @@ public struct FileV2ProgressDeadline: Sendable, Equatable {
     }
 
     /// True when no byte has moved for `idleLimitMs`.
-    public func isExpired(nowMs: Int64) -> Bool { nowMs - lastProgressMs >= idleLimitMs }
+    public func isExpired(nowMs: Int64) -> Bool {
+        let (idle, overflow) = nowMs.subtractingReportingOverflow(lastProgressMs)
+        return overflow ? nowMs > lastProgressMs : idle >= idleLimitMs
+    }
 
     /// The instant at which the deadline expires if nothing moves from now on.
-    public var expiresAtMs: Int64 { lastProgressMs + idleLimitMs }
+    public var expiresAtMs: Int64 {
+        let (instant, overflow) = lastProgressMs.addingReportingOverflow(idleLimitMs)
+        return overflow ? Int64.max : instant
+    }
 }
