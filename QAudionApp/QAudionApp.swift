@@ -98,6 +98,10 @@ struct QAudionApp: App {
         // in `.onAppear`, which must run AFTER the stdout tee attaches).
         CrashReporter.installHandlers()
 
+        // File transfer v2: the text a rejected file message becomes (WIRE_SPEC 12.7.1) is localised here, the engine has no
+        // strings of its own. Before anything can record a message.
+        FileV2PlaceholderText.install()
+
         // W-SRTPALWAYSON (2026-09-29/30, owner decision after live M150
         // verification — DTLS 1.3/TLS_AES_256_GCM_SHA384, SRTP
         // AEAD_AES_256_GCM, X25519MLKEM768, 0 handshake failures, 0

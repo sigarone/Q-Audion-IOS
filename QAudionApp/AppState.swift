@@ -10668,6 +10668,27 @@ final class AppState: ObservableObject {
             return
         }
 
+        // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message is never shown as the text it is. This version
+        // does not send or open v2 files in groups, so such a message is a line that says so (the descriptor holds the key of
+        // the file and never reaches a row, a banner or a log); a control message is dropped.
+        let groupFileBody = FileV2ChatBody.classify(text: plaintext)
+        if groupFileBody == .control {
+            let controlGroup: String = String(groupHex.prefix(8))
+            RTLog.warn("group", "text filev2_control=1 dropped=1 g=" + controlGroup)
+            if live { sendGroupDelivered(serverMsgId) }
+            return
+        }
+        let shownText: String
+        switch groupFileBody {
+        case .text:
+            shownText = plaintext
+        case .file(let groupFile):
+            let groupFileLine: String = groupFile.previewText
+            shownText = String(localized: "file_v2.group_unavailable", defaultValue: "\(groupFileLine) (non ancora disponibile nei gruppi)", comment: "Row for a file message received in a group, which this version cannot open; %@ is the file name line.")
+        case .unsupportedVersion, .invalid, .control:
+            shownText = groupFileBody.displayText ?? ""
+        }
+
         // Store posts didChangeNotification → an open GroupChatScreen
         // reloads live; persisted so it also shows on next open.
         let inserted = GroupMessageStore.shared.append(
@@ -10677,13 +10698,13 @@ final class AppState: ObservableObject {
                 serverMessageId: serverMsgId,
                 senderId: senderId,
                 mine: false,
-                text: plaintext,
+                text: shownText,
                 ts: ts))
         // Fase 1B — fire the same local banner the 1:1 inbound path fires,
         // but only for a genuinely NEW inbound row (never on a re-delivery
         // that merged into an existing message).
         if inserted {
-            presentGroupMessageBanner(groupHex: groupHex, senderId: senderId, plaintext: plaintext)
+            presentGroupMessageBanner(groupHex: groupHex, senderId: senderId, plaintext: shownText)
             // Fase 2 — notify the ORIGINAL SENDER this device received
             // their message (targeted group_msg_receipt, best-effort, not
             // persisted). Distinct from `sendGroupDelivered` below, which
@@ -11611,7 +11632,12 @@ final class AppState: ObservableObject {
         var initialMediaDur: Int64? = nil
         var pendingMarker: FileTransfer.FileMarker? = nil
         var pendingAttachAnnounce: AttachAnnounceEnvelope? = nil
-        if !decryptedRaw.isEmpty,
+        // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message IS one and nothing else, whatever else it
+        // contains; the legacy markers below are not even looked for in it. The store's write boundary shows it as a file (or
+        // its placeholder), never as the text it is made of.
+        let fileV2Body = FileV2ChatBody.classify(text: decryptedRaw)
+        if fileV2Body == .text,
+           !decryptedRaw.isEmpty,
            let marker = FileTransfer.tryParseMarker(text: decryptedRaw),
            marker.qfile.downloadClaim != nil {
             initialMediaDur = marker.qfile.durationMs
@@ -11622,6 +11648,7 @@ final class AppState: ObservableObject {
         // parse (shouldn't, since `qa_ctl` and `qfile` are different
         // top-level keys) the qfile path wins for backward compat.
         if pendingMarker == nil,
+           fileV2Body == .text,
            !decryptedRaw.isEmpty,
            let env = try? AttachAnnounceEnvelope.parse(decryptedRaw) {
             initialMediaDur = env.att.durationMs
@@ -11635,7 +11662,14 @@ final class AppState: ObservableObject {
         // `InboundFileAttachmentDispatcher`. Plain text messages (no
         // envelope parsed) have no override, so this is a no-op for them
         // and behavior is unchanged.
-        let attachmentExOverride: Int? = pendingMarker?.qfile.ex ?? pendingAttachAnnounce?.att.ex
+        // A v2 file message carries its own timer (`ex`) and export permission (`xp`) in the descriptor.
+        var fileV2Ex: Int? = nil
+        var fileV2Xp: Int? = nil
+        if case .file(let fileV2) = fileV2Body {
+            fileV2Ex = fileV2.ex.map { Int(clamping: $0) }
+            fileV2Xp = fileV2.xp.map { Int(clamping: $0) }
+        }
+        let attachmentExOverride: Int? = pendingMarker?.qfile.ex ?? pendingAttachAnnounce?.att.ex ?? fileV2Ex
         let effectiveTimerSecs = AttachmentTimerResolver.resolve(
             overrideSeconds: attachmentExOverride,
             conversationDefault: conv.ephemeralTimerSeconds
@@ -11664,7 +11698,7 @@ final class AppState: ObservableObject {
         // can ever carry it; a qfile-marker attachment always decodes as
         // export-allowed (nil), same as today. absent/1 on the wire =
         // allowed (nil here, the default); 0 = blocked.
-        let wireXp: Int? = pendingAttachAnnounce?.att.xp
+        let wireXp: Int? = pendingAttachAnnounce?.att.xp ?? fileV2Xp
         let exportBlocked: Bool? = ((wireXp ?? 1) == 0) ? true : nil
 
         let msg = Message(
@@ -11791,13 +11825,15 @@ final class AppState: ObservableObject {
             let hideContent = (UserDefaults.standard.object(
                 forKey: "qaudion.privacy.hide_notification_content") as? Bool) ?? false
             let previewAllowed = PrivacyGate.messagePreviewInNotifications
+            // A file message shows its one-line preview, never the descriptor (WIRE_SPEC 12.7.1: not in a notification).
+            let notificationText: String = FileV2ChatBody.classify(text: plaintext).displayText ?? plaintext
             let bodyText: String
             if hideContent || !previewAllowed {
                 bodyText = "Nuovo messaggio"
-            } else if plaintext.count > 120 {
-                bodyText = String(plaintext.prefix(120)) + "…"
+            } else if notificationText.count > 120 {
+                bodyText = String(notificationText.prefix(120)) + "…"
             } else {
-                bodyText = plaintext
+                bodyText = notificationText
             }
             Task { @MainActor in
                 await NotificationCenterService.shared.scheduleLocal(
@@ -17406,10 +17442,12 @@ final class AppState: ObservableObject {
             // Never cache a view-once message — this second, persistent
             // copy would defeat the whole point of that feature.
             for msg in recent where msg.deletedAt == nil && !(msg.isViewOnce ?? false) {
+                // A file message (WIRE_SPEC 12.7.1) is cached as its one-line preview, never as the descriptor it is made of.
+                let cachedText: String = FileV2ChatBody.classify(text: msg.plaintext).displayText ?? msg.plaintext
                 cached.append(SiriMessageBridgeStore.CachedMessage(
                     peerUserId: conv.peerUserId,
                     peerDisplayName: conv.peerDisplayName,
-                    text: msg.plaintext,
+                    text: cachedText,
                     sentAt: msg.sentAt,
                     isOutgoing: msg.direction == .outgoing))
             }
