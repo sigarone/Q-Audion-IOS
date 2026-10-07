@@ -184,10 +184,16 @@ public enum FileV2ChatBody: Equatable, Sendable {
     /// The receipt name of a 16-byte file id (see `receiptId(ofBody:)`); `nil` for any other length.
     static func receiptId(fileID: Data) -> String? {
         guard fileID.count == 16 else { return nil }
-        let b = [UInt8](fileID)
-        let uuid = UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                               b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
-        return uuid.uuidString.lowercased()
+        // The bytes in order, 8-4-4-4-12 hex digits, lowercase (what `UUID.toString()` gives on Android for the same 16 bytes).
+        let digits: [Character] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+        var out = ""
+        out.reserveCapacity(36)
+        for (index, byte) in fileID.enumerated() {
+            if index == 4 || index == 6 || index == 8 || index == 10 { out.append("-") }
+            out.append(digits[Int(byte >> 4)])
+            out.append(digits[Int(byte & 0x0F)])
+        }
+        return out
     }
 
     /// What the bubble of `message` shows, or `nil` when the message is not a v2 file: a valid descriptor, or a file that is

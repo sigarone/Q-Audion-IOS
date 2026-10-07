@@ -119,6 +119,9 @@ extension Message: FetchableRecord, PersistableRecord {
 
     public init(row: Row) throws {
         let reactionsJson: String? = row[Columns.reactionsJson]
+        // A typed local, not one more `row[...]` argument of the very long initializer call below: the more of those the call has, the
+        // longer the type checker takes over it.
+        let wireAttachmentId: String? = row["wireAttachmentId"]
         let reactions: [String: [String]]? = reactionsJson.flatMap { json in
             guard let data = json.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode([String: [String]].self, from: data)
@@ -150,7 +153,7 @@ extension Message: FetchableRecord, PersistableRecord {
             viewOnceOpened: row["viewOnceOpened"],
             exportBlocked: row["exportBlocked"],
             viaMesh: row["viaMesh"],
-            wireAttachmentId: row["wireAttachmentId"],
+            wireAttachmentId: wireAttachmentId,
             isPlaceholder: row["isPlaceholder"]
         )
     }
