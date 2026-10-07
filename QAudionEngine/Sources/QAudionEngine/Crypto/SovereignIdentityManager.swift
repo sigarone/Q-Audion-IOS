@@ -289,6 +289,28 @@ public final class SovereignIdentityManager {
     /// Check if sovereign identity exists.
     public func hasSovereignIdentity() -> Bool { loadIdentity() != nil }
 
+    /// W-SIGNERBOOT (2026-10-07) — make sure this device HAS an identity, creating it only when none
+    /// is stored (and the Keychain is readable). Serialised process-wide, see
+    /// `SovereignIdentityBootstrap`. An item that is stored but cannot be parsed reads as absent and
+    /// is replaced, exactly as the key-exchange path always did.
+    @discardableResult
+    public func ensureIdentity(serverUrl: String = "", displayName: String? = nil) -> SovereignIdentityBootstrap.Outcome {
+        SovereignIdentityBootstrap.ensure(
+            read: { try self.readIdentity() != nil },
+            create: { try self.saveIdentity(self.generateIdentity(serverUrl: serverUrl, displayName: displayName)) })
+    }
+
+    /// W-SIGNERBOOT — the 32-byte Ed25519 public key the handshake signs under, creating the
+    /// identity first if this device has none yet. `nil` only when the Keychain cannot be read (or
+    /// written) right now; the caller treats that as "signer not ready" and never as "unsigned".
+    /// One Keychain read on the usual path.
+    public func signingPublicKeyEnsuringIdentity() -> Data? {
+        if let pub = loadIdentity()?.signingPublic, pub.count == 32 { return pub }
+        ensureIdentity()
+        guard let pub = loadIdentity()?.signingPublic, pub.count == 32 else { return nil }
+        return pub
+    }
+
     /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — permanently erase
     /// the sovereign identity keypair from the Keychain. Neither
     /// `remote_wipe` nor account deletion used to call this at all: this
@@ -311,7 +333,7 @@ public final class SovereignIdentityManager {
 
     /// Full identity: [version:1][encPriv:32][encPub:32][sigPriv:32][sigPub:32]
     ///   [userIdLen:2BE][userId:N][serverUrlLen:2BE][serverUrl:M][nameLen:2BE][name:T][identityType:1]
-    private func serializeIdentity(_ id: SovereignIdentity) -> Data {
+    func serializeIdentity(_ id: SovereignIdentity) -> Data {
         var data = Data()
         data.append(Self.identityVersion)
         data.append(id.encryptionPrivate)
@@ -331,7 +353,7 @@ public final class SovereignIdentityManager {
         return data
     }
 
-    private func deserializeIdentity(_ data: Data) -> SovereignIdentity? {
+    func deserializeIdentity(_ data: Data) -> SovereignIdentity? {
         guard data.count >= 1 + 32 + 32 + 32 + 32 + 2 else { return nil }
         var offset = 0
         let version = data[offset]; offset += 1
@@ -413,7 +435,14 @@ public final class SovereignIdentityManager {
         data.append(Data(bytes: &big, count: 2))
     }
 
+    /// W-SIGNERBOOT (2026-10-07) — assembled byte by byte. The previous
+    /// `withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt16.self) }` is an ALIGNED load, and
+    /// every length field of the stored identity sits at an odd offset (129 for the first one): a
+    /// Debug build traps with "load from misaligned raw pointer" the moment `loadIdentity()` reads
+    /// a stored identity back. Release builds skip that check, which hid it; the first Debug run
+    /// that ever held an identity (the CI app host, after the launch bootstrap created one) hit it.
     private func readUInt16BE(_ data: Data, offset: Int) -> UInt16 {
-        data.withUnsafeBytes { UInt16(bigEndian: $0.load(fromByteOffset: offset, as: UInt16.self)) }
+        let i = data.startIndex + offset
+        return (UInt16(data[i]) << 8) | UInt16(data[i + 1])
     }
 }

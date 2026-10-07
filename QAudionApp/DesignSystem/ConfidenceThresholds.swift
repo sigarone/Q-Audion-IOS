@@ -24,4 +24,26 @@ public enum ConfidenceThresholds {
         if clamped >= caution  { return 1 }
         return 2
     }
+
+    /// Display tone of a confidence value that may be "no reading".
+    public enum Tone: Equatable {
+        /// No score yet (`AppState.confidenceScore`'s -1 sentinel, or a non-finite value): painted neutral,
+        /// like the "C=—" text — never green, amber or red.
+        case noReading
+        case verified
+        case caution
+        case highRisk
+    }
+
+    /// W-CONFNEUTRAL (2026-10-07). `category(of:)` clamps first, so the -1 "no score yet" sentinel became 0 and
+    /// painted the in-call avatar halo RED until Tier 2's first reading (10-16 s into a call, the whole call if
+    /// it never reads). Views that may receive the sentinel use this instead.
+    public static func tone(of index: Double) -> Tone {
+        guard index.isFinite, index >= 0 else { return .noReading }
+        switch category(of: index) {
+        case 0:  return .verified
+        case 1:  return .caution
+        default: return .highRisk
+        }
+    }
 }

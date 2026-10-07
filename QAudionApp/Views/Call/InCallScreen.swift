@@ -2834,7 +2834,9 @@ struct InCallScreen: View {
             VStack(alignment: .leading, spacing: 10) {
                 biometricRow(
                     label: "Autenticità",
-                    value: "\(confidenceWord(bio.confidence)) · \(String(format: "%.2f", bio.confidence))",
+                    value: Self.authenticityReading(bio.confidence) < 0
+                        ? Self.statDash
+                        : "\(confidenceWord(bio.confidence)) · \(String(format: "%.2f", bio.confidence))",
                     valueColor: confidenceColorFor(bio.confidence),
                     meaning: ">0.70 genuina · 0.25–0.70 verifica con SAS · <0.25 possibile voce sintetica (soglie ConfidenceIndex/ConfidenceThresholds)."
                 )
@@ -2901,18 +2903,28 @@ struct InCallScreen: View {
     /// the "Autenticità" wording and its color never diverge from the
     /// avatar-halo tone.
     private func confidenceWord(_ value: Float) -> String {
-        switch ConfidenceThresholds.category(of: Double(value)) {
-        case 0:  return String(localized: "in_call.confidence_word_genuine", defaultValue: "genuina", comment: "Biometrics row value — voice authenticity confidence label when the score is above the green threshold (genuine)")
-        case 1:  return String(localized: "in_call.confidence_word_verify_sas", defaultValue: "verifica con SAS", comment: "Biometrics row value — voice authenticity confidence label for the mid-range score, prompting an SAS compare")
-        default: return String(localized: "in_call.confidence_word_at_risk", defaultValue: "a rischio", comment: "Biometrics row value — voice authenticity confidence label when the score is below the red threshold (possible synthetic voice)")
+        switch ConfidenceThresholds.tone(of: Self.authenticityReading(value)) {
+        case .noReading: return Self.statDash
+        case .verified:  return String(localized: "in_call.confidence_word_genuine", defaultValue: "genuina", comment: "Biometrics row value — voice authenticity confidence label when the score is above the green threshold (genuine)")
+        case .caution:   return String(localized: "in_call.confidence_word_verify_sas", defaultValue: "verifica con SAS", comment: "Biometrics row value — voice authenticity confidence label for the mid-range score, prompting an SAS compare")
+        case .highRisk:  return String(localized: "in_call.confidence_word_at_risk", defaultValue: "a rischio", comment: "Biometrics row value — voice authenticity confidence label when the score is below the red threshold (possible synthetic voice)")
         }
     }
     private func confidenceColorFor(_ value: Float) -> Color {
-        switch ConfidenceThresholds.category(of: Double(value)) {
-        case 0:  return extras.success
-        case 1:  return extras.warning
-        default: return extras.riskHigh
+        switch ConfidenceThresholds.tone(of: Self.authenticityReading(value)) {
+        case .noReading: return scheme.onSurfaceVariant
+        case .verified:  return extras.success
+        case .caution:   return extras.warning
+        case .highRisk:  return extras.riskHigh
         }
+    }
+
+    /// W-CONFNEUTRAL (2026-10-07) — "Autenticità" as a reading. `VoiceAnalysisResult.confidence` is 0 only when
+    /// no frame of the averaged second was voiced (`ConfidenceIndicator` scores a voiced frame >= 0.5 and
+    /// `VoiceAnalysisSmoothing` averages voiced frames only, falling back to all-zero frames): that is no
+    /// reading, not "a rischio". Maps it to the -1 sentinel `ConfidenceThresholds.tone(of:)` paints neutral.
+    static func authenticityReading(_ value: Float) -> Double {
+        value > 0 ? Double(value) : -1
     }
 
     // MARK: - Bottom action row (pinned)
@@ -3115,11 +3127,14 @@ struct InCallScreen: View {
         #endif
     }
 
+    /// Avatar halo and CONFIDENCE stat colour. No reading yet (the -1 sentinel) is neutral, the same colour as
+    /// the "C=—" text, never a clamped 0 painted red (W-CONFNEUTRAL).
     private var confidenceColor: Color {
-        switch ConfidenceThresholds.category(of: confidence) {
-        case 0:  return extras.success
-        case 1:  return extras.warning
-        default: return extras.riskHigh
+        switch ConfidenceThresholds.tone(of: confidence) {
+        case .noReading: return scheme.onSurfaceVariant
+        case .verified:  return extras.success
+        case .caution:   return extras.warning
+        case .highRisk:  return extras.riskHigh
         }
     }
 

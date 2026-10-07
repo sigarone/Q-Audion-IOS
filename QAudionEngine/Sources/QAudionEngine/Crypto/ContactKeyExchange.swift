@@ -91,11 +91,12 @@ public final class ContactKeyExchange: @unchecked Sendable {
             // a NEW identity and writing it over the real one. A locked device
             // is not a missing identity: bail out as transient instead (audit
             // memory reference_ios_stability_audit_2026_09_01, P1 item 5).
-            if identityIsUnreadableBecauseLocked() {
+            // W-SIGNERBOOT — the read-or-create is now one serialised step shared
+            // with the handshake signer (`SovereignIdentityBootstrap`), so two
+            // racing callers can never mint two identities.
+            if identity.ensureIdentity() == .locked {
                 throw ContactKeyExchangeError.identityLocked
             }
-            let newId = identity.generateIdentity(serverUrl: "", displayName: nil)
-            try? identity.saveIdentity(newId)
         }
         guard let myPub = myX25519PublicKey() else {
             throw ContactKeyExchangeError.missingLocalIdentity
@@ -116,11 +117,9 @@ public final class ContactKeyExchange: @unchecked Sendable {
                 // W-KCAFTERUNLOCK — same transient bail-out as `initiate()`:
                 // an OFFER that lands while the phone is locked must not
                 // replace the identity. Surfaces through `onError`.
-                if identityIsUnreadableBecauseLocked() {
+                if identity.ensureIdentity() == .locked {
                     throw ContactKeyExchangeError.identityLocked
                 }
-                let newId = identity.generateIdentity(serverUrl: "", displayName: nil)
-                try? identity.saveIdentity(newId)
             }
             try deriveAndStore(contactId: senderId, peerPub: peerPubKey)
             guard let myPub = myX25519PublicKey() else { return }
@@ -149,22 +148,6 @@ public final class ContactKeyExchange: @unchecked Sendable {
 
     private func myX25519PrivateKey() -> Data? {
         return identity.loadIdentity()?.encryptionPrivate
-    }
-
-    /// W-KCAFTERUNLOCK (2026-09-01) — true iff the identity read failed
-    /// specifically with `KeyVaultError.deviceLocked`. Any other outcome
-    /// (absent, other failure) keeps the legacy auto-generate path exactly as
-    /// it was. Only reached on the `nil` branch, so the extra read costs
-    /// nothing on the happy path.
-    private func identityIsUnreadableBecauseLocked() -> Bool {
-        do {
-            _ = try identity.readIdentity()
-            return false
-        } catch KeyVaultError.deviceLocked {
-            return true
-        } catch {
-            return false
-        }
     }
 
     /// Vault binding uses the account name `"auto:<contactIdPrefix>"`.
