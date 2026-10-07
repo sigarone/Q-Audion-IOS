@@ -5,8 +5,9 @@ import Foundation
 /// W-GUARDIAN1CONTIG (2026-10-07). Every voiced chunk goes in, whole and in order, whatever its length (10 ms
 /// native SRTP, 20 or 60 ms DataChannel), and a window is handed out each time `windowSamples` voiced samples
 /// have accumulated. Windows do not overlap: a chunk that crosses the end of one window carries its remainder
-/// into the next, so no voiced sample is dropped and none is scored twice. One window is therefore one
-/// inference per `windowSamples / 48 000` s (4.04 s) of voiced remote speech, on every transport.
+/// into the next, so no voiced sample is dropped and none is scored twice. A window completes every
+/// `windowSamples / 48 000` s (4.04 s) of voiced remote speech, on every transport; `GuardianMode` scores at most
+/// one window per `GuardianMode.minVoicedMsBetweenInferences` (8 s) of it.
 ///
 /// Before this, `GuardianMode` passed ONE chunk per 100 ms of audio to `VoiceprintAnalyzer`, which kept half of
 /// each window for overlap: 50% of the audio at 60 ms chunks, 20% at 20 ms and 10% at the 10 ms chunks of native

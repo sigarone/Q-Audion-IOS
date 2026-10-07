@@ -39,7 +39,9 @@ struct SessionStatusStrip: View {
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurface)
 
-            Text(String(format: "C=%.2f", min(1.0, max(0.0, confidence))))
+            Text(ConfidenceThresholds.tone(of: confidence) == .noReading
+                 ? "C=—"
+                 : String(format: "C=%.2f", min(1.0, max(0.0, confidence))))
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(toneColor)
 
@@ -83,11 +85,13 @@ struct SessionStatusStrip: View {
 
     // MARK: - Helpers
 
+    /// W-CONFNEUTRAL (2026-10-07) — a negative value is "no reading": neutral, never a clamped 0 in red.
     private var toneColor: Color {
-        switch ConfidenceThresholds.category(of: confidence) {
-        case 0:  return extras.success
-        case 1:  return extras.warning
-        default: return extras.riskHigh
+        switch ConfidenceThresholds.tone(of: confidence) {
+        case .noReading: return scheme.onSurfaceVariant
+        case .verified:  return extras.success
+        case .caution:   return extras.warning
+        case .highRisk:  return extras.riskHigh
         }
     }
 

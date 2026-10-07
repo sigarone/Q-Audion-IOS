@@ -2,8 +2,9 @@ import XCTest
 @testable import QAudionEngine
 
 /// W-GUARDIAN1CONTIG (2026-10-07) — Tier 1 (`GuardianMode`) gets every voiced chunk, contiguous, at any chunk
-/// length, scores non-overlapping 4.04 s windows with one inference in flight and no backlog, and keeps the
-/// alarm semantics (5 s of sustained red, 30 s cooldown, no score invented, silence ignored).
+/// length, builds non-overlapping 4.04 s windows, scores at most one window per 8 s of voiced audio
+/// (`minVoicedMsBetweenInferences`) with one inference in flight and no backlog, and keeps the alarm semantics
+/// (5 s of sustained red, 30 s cooldown, no score invented, silence ignored).
 ///
 /// Deterministic: the scorer, the executor and the clock are injected; no model, no queue, no device. The
 /// expected numbers are worked out in the comments, not recomputed with the code under test.
@@ -159,7 +160,7 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         XCTAssertEqual(acc.silentChunks, silentFed)
     }
 
-    // MARK: - GuardianMode: first inference, one in flight, no backlog
+    // MARK: - GuardianMode: first inference, 8 s interval, one in flight, no backlog
 
     func testFirstInferenceAfterExactlyOneWindowOfVoicedTenMsAudio() {
         let probe = ScorerProbe()
@@ -176,8 +177,30 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         XCTAssertEqual(guardian.tier1Stats.inferences, 1)
     }
 
-    /// Three windows complete while the first inference is still running: one job is submitted, the two later
-    /// windows are dropped (not queued), and the next job after it finishes scores FRESH audio.
+    /// 60 s of voiced 10 ms audio completes 14 windows (see the cadence test). The interval is 8 000 ms =
+    /// 384 000 samples; windows end every 193 800 samples, so after a scored window the next one (193 800 later)
+    /// is skipped and the one after (387 600 later, 8.075 s) is scored: windows 1, 3, 5, 7, 9, 11, 13, i.e. 7
+    /// inferences and 7 skipped. Each scored window starts at sample (k - 1) * 193 800.
+    func testInferencesAreAtLeastEightSecondsOfVoicedAudioApart() {
+        XCTAssertEqual(GuardianMode.minVoicedMsBetweenInferences, 8_000)
+        let probe = ScorerProbe()
+        let guardian = makeGuardian(probe: probe)
+        var g = 0
+        while g < 60 * 48_000 {
+            guardian.processFrame(chunk(from: g, samples: 480))
+            g += 480
+        }
+        let s = guardian.tier1Stats
+        XCTAssertEqual(s.windowsReady, 14)
+        XCTAssertEqual(s.inferences, 7)
+        XCTAssertEqual(s.windowsSkipped, 7)
+        XCTAssertEqual(s.windowsDropped, 0)
+        XCTAssertEqual(probe.firstSamples, [1, 3, 5, 7, 9, 11, 13].map { expected(($0 - 1) * window) })
+    }
+
+    /// The first inference is still running when window 3 (the next eligible one) completes: it is dropped,
+    /// not queued (window 2 was already skipped by the interval). Once the job finishes, window 4 (3 * 193 800
+    /// samples after window 1 ended, past the interval) is scored: FRESH audio, never a stale window.
     func testOneInferenceInFlightAndNoBacklog() {
         let probe = ScorerProbe()
         let executor = ManualExecutor()
@@ -191,7 +214,8 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         XCTAssertEqual(executor.maxPending, 1)
         var s = guardian.tier1Stats
         XCTAssertEqual(s.windowsReady, 3)
-        XCTAssertEqual(s.windowsDropped, 2)
+        XCTAssertEqual(s.windowsSkipped, 1)
+        XCTAssertEqual(s.windowsDropped, 1)
         XCTAssertTrue(s.inferenceInFlight)
 
         executor.runNext()
@@ -200,18 +224,18 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         XCTAssertEqual(s.inferences, 1)
         XCTAssertEqual(probe.firstSamples, [expected(0)])
 
-        while executor.jobs.isEmpty {             // the 4th window
+        while executor.jobs.isEmpty {             // window 4
             guardian.processFrame(chunk(from: g, samples: 480))
             g += 480
         }
         XCTAssertEqual(executor.maxPending, 1)
         executor.runNext()
-        XCTAssertEqual(probe.firstSamples, [expected(0), expected(3 * window)], "the 4th window, not a stale one")
+        XCTAssertEqual(probe.firstSamples, [expected(0), expected(3 * window)], "window 4, not a stale one")
         XCTAssertEqual(guardian.tier1Stats.inferences, 2)
     }
 
     /// No real score (model not loaded, inference error): nothing enters the EMA or the wave, and the next
-    /// window is still accepted.
+    /// eligible window is still accepted.
     func testNilScoreLeavesTheIndexUntouched() {
         let probe = ScorerProbe()
         probe.next = nil
@@ -241,13 +265,14 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         XCTAssertEqual(guardian.tier1Stats.pendingSamples, 0)
     }
 
-    // MARK: - alarm semantics: 5 s of sustained red, 30 s cooldown
+    // MARK: - alarm semantics with one score per 8 s: 5 s of sustained red, 30 s cooldown
 
-    /// Score 0.0 on every window, one window per 4 038 ms. EMA (alpha 0.1, seed 0.5) = 0.5 * 0.9^n: 0.2657 at
-    /// n = 6 (yellow, >= 0.25), 0.2391 at n = 7 (red; run starts at t = 6 * 4038 = 24 228). Alert when the run
-    /// is >= 5 s old: n = 8 is 4 038 ms in (no), n = 9 is 8 076 ms in (alert at t = 32 304). Next alert needs
-    /// 30 s since that one: t >= 62 304, first reached at n = 17 (t = 64 608).
-    func testSustainedRedAlarmAfterFiveSecondsThenThirtySecondCooldown() {
+    /// Score 0.0 on every inference, one inference per 8 075 ms (one window in two). EMA (alpha 0.1, seed 0.5)
+    /// = 0.5 * 0.9^n: 0.2657 at n = 6 (yellow, >= 0.25), 0.2391 at n = 7 (red: the first red opens the run at
+    /// t = 6 * 8075 = 48 450). The next red, n = 8 at t = 56 525, is 8 075 ms in, >= 5 s: it closes the run and
+    /// the alarm fires there. Next alert needs 30 s since that one (t >= 86 525): n = 11 is t = 80 750 (no),
+    /// n = 12 is t = 88 825 (alert). So alerts at n = 8, 12, 16, 20.
+    func testSustainedRedAlarmFiresOnTheSecondRedScoreEightSecondsLaterThenCooldown() {
         let probe = ScorerProbe()
         probe.next = 0.0
         let clock = TestClock()
@@ -259,20 +284,19 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         }
         var g = 0
         for n in 1...20 {
-            clock.ms = Int64(n - 1) * 4038
+            clock.ms = Int64(n - 1) * 8075
             while probe.lengths.count < n {
                 guardian.processFrame(chunk(from: g, samples: 2880))   // 60 ms chunks: cadence is not under test here
                 g += 2880
             }
         }
-        XCTAssertEqual(alertsAt, [9, 17])
+        XCTAssertEqual(alertsAt, [8, 12, 16, 20])
     }
 
-    /// A non-red update ends the run. Scores 0.0 except 0.6 / 0.7 / 0.8 / 0.9 at n = 9 / 12 / 15 / 18, one
-    /// window per 4 038 ms. EMA: red at n = 7, 8 (0.2391, 0.2152), yellow at n = 9 (0.2537), red at 10, 11,
-    /// yellow at 12 (0.2550), red at 13, 14, yellow at 15, red at 16, 17, yellow at 18, 19. Every red run is two
-    /// updates = 4 038 ms < 5 s: no alert. If a yellow update did NOT restart the run, the run begun at n = 7
-    /// would be 12 114 ms old at n = 10 and alert there.
+    /// A non-red update ends the run. Scores 0.0 for n = 1...7, then 0.5 on even n and 0.0 on odd n, one
+    /// inference per 8 075 ms. EMA: red at n = 7 (0.2391), yellow at 8 (0.2652), red at 9 (0.2387), yellow at 10
+    /// (0.2648), and so on to n = 16 (0.2641): never two red scores in a row, no alert. If a yellow update did
+    /// NOT restart the run, the run opened at n = 7 would be 16 150 ms old at n = 9 and alert there.
     func testNonRedUpdateRestartsTheFiveSecondRun() {
         let probe = ScorerProbe()
         let clock = TestClock()
@@ -280,15 +304,15 @@ final class GuardianTier1ContiguityTests: XCTestCase {
         var alerts = 0
         guardian.onAlert = { _, _ in alerts += 1 }
         var g = 0
-        let recoveries: [Int: Float] = [9: 0.6, 12: 0.7, 15: 0.8, 18: 0.9]
-        for n in 1...19 {
-            clock.ms = Int64(n - 1) * 4038
-            probe.next = recoveries[n] ?? 0.0
+        for n in 1...16 {
+            clock.ms = Int64(n - 1) * 8075
+            probe.next = (n > 7 && n % 2 == 0) ? 0.5 : 0.0
             while probe.lengths.count < n {
                 guardian.processFrame(chunk(from: g, samples: 2880))   // 60 ms chunks: cadence is not under test here
                 g += 2880
             }
         }
         XCTAssertEqual(alerts, 0)
+        XCTAssertEqual(guardian.getConfidenceIndex().scoreHistory.count, 16)
     }
 }

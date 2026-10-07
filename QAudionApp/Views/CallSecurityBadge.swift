@@ -140,6 +140,9 @@ struct CallSecurityBadge: View {
     // MARK: - Computed Colors
 
     private var dotColor: Color {
+        // W-CONFNEUTRAL (2026-10-07) — no Guardian reading yet (the -1 sentinel, shown as "—"): neutral, not the
+        // green its reset level "green" would paint.
+        guard ConfidenceThresholds.tone(of: Double(appState.confidenceScore)) != .noReading else { return .gray }
         switch appState.confidenceLevel {
         case "yellow": return .yellow
         case "red": return .red

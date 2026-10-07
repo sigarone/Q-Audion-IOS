@@ -38,6 +38,7 @@ targets:
           - CallMetricsRedactionTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
+          - ConfidenceToneTests.swift
           - MissedCallsBadgeTests.swift
           - PersistentCallRecordStoreTests.swift
           - RuntimeLogSinkTeeTests.swift

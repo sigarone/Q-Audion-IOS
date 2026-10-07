@@ -19,9 +19,11 @@ final class ConfidenceBadgeWiringTests: XCTestCase {
         var description: String { what }
     }
 
-    /// `QAudionApp/AppState.swift` from the repository root, comments stripped, whitespace collapsed.
-    private func appCode(file: StaticString = #filePath, line: UInt = #line) throws -> String {
-        let relativePath = "QAudionApp/AppState.swift"
+    /// An app source file (default `QAudionApp/AppState.swift`) from the repository root, comments stripped,
+    /// whitespace collapsed.
+    private func appCode(
+        _ relativePath: String = "QAudionApp/AppState.swift", file: StaticString = #filePath, line: UInt = #line
+    ) throws -> String {
         var dir = URL(fileURLWithPath: "\(file)")
         for _ in 0..<10 {
             dir = dir.deletingLastPathComponent()
@@ -115,5 +117,27 @@ final class ConfidenceBadgeWiringTests: XCTestCase {
         let code = try appCode()
         XCTAssertTrue(code.contains("contactVoiceConfidenceEma = 1 confidenceScore = -1 confidenceLevel = \"green\""))
         XCTAssertEqual(GuardianDisplayConfidence.seed, 1)
+    }
+
+    /// W-CONFNEUTRAL (2026-10-07) — every view that colours the C= value goes through
+    /// `ConfidenceThresholds.tone(of:)`, whose `.noReading` (the -1 sentinel) is neutral. None uses the clamping
+    /// `category(of:)`, which turns -1 into 0 and paints red: on the previous main the avatar halo did exactly
+    /// that for the 10-16 s before Tier 2's first reading.
+    func testNoReadingIsNeutralWhereverTheConfidenceIsPainted() throws {
+        let screen = try appCode("QAudionApp/Views/Call/InCallScreen.swift")
+        XCTAssertFalse(screen.contains("ConfidenceThresholds.category(of:"), "InCallScreen must not clamp the sentinel")
+        XCTAssertTrue(screen.contains("AvatarHalo(color: confidenceColor"))
+        let halo = try body(of: "private var confidenceColor: Color {", in: screen)
+        XCTAssertTrue(halo.contains("ConfidenceThresholds.tone(of: confidence)"))
+        XCTAssertTrue(halo.contains("case .noReading: return scheme.onSurfaceVariant"))
+
+        let strip = try appCode("QAudionApp/Views/Chat/Components/SessionStatusStrip.swift")
+        XCTAssertFalse(strip.contains("ConfidenceThresholds.category(of:"))
+        XCTAssertTrue(strip.contains("case .noReading: return scheme.onSurfaceVariant"))
+
+        let badge = try appCode("QAudionApp/Views/CallSecurityBadge.swift")
+        let dot = try body(of: "private var dotColor: Color {", in: badge)
+        XCTAssertTrue(dot.contains(
+            "guard ConfidenceThresholds.tone(of: Double(appState.confidenceScore)) != .noReading else { return .gray }"))
     }
 }

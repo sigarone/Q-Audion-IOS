@@ -15,8 +15,10 @@ public final class GuardianMode: @unchecked Sendable {
     /// - `processFrame` (on the RX analysis queue) only runs the VAD gate and copies the chunk into
     ///   `GuardianWindowAccumulator`: every voiced chunk, contiguous, at any chunk length. It used to forward
     ///   one chunk per 100 ms of audio, i.e. 10% of the audio on native SRTP.
-    /// - Windows do not overlap: at most one inference per 4.04 s of voiced audio on every transport, which is
-    ///   the rate the 60 ms DataChannel path already had and never more.
+    /// - Windows (4.04 s) do not overlap, and two inferences are at least `minVoicedMsBetweenInferences` (8 s)
+    ///   of voiced audio apart: the first score after one window, then one window in two. The window in between
+    ///   is discarded without inference and without queueing. The owner's rule: if it costs, update less often.
+    ///   Same rate on every transport (the 60 ms DataChannel path scored every 4.04 s before).
     /// - The inference runs on this class's own serial queue with ONE job in flight. A window that completes
     ///   while the previous one is still being scored is dropped, never queued: no backlog, no stale score,
     ///   and the RX analysis queue (whose ring is 10 chunks, 100 ms at 10 ms chunks) is no longer held for the
@@ -30,6 +32,9 @@ public final class GuardianMode: @unchecked Sendable {
     /// Read-only counters, for tests and the throttled diagnostic line.
     struct Tier1Stats: Equatable {
         var windowsReady = 0
+        /// Discarded because the previous inference was less than `minVoicedMsBetweenInferences` of voice ago.
+        var windowsSkipped = 0
+        /// Discarded because an inference was still in flight (or a chunk completed several eligible windows).
         var windowsDropped = 0
         var inferences = 0
         var nilScores = 0
@@ -45,6 +50,16 @@ public final class GuardianMode: @unchecked Sendable {
     private var enabled = true
     private var accumulator: GuardianWindowAccumulator
     private var stats = Tier1Stats()
+
+    /// Minimum voiced audio between the windows of two Tier 1 inferences (W-GUARDIAN1CONTIG). With 4.04 s
+    /// windows this is one window in two: one inference per 8.075 s of voiced remote speech.
+    static let minVoicedMsBetweenInferences = 8_000
+    private static let minVoicedSamplesBetweenInferences = minVoicedMsBetweenInferences * 48
+    private let windowSamples: Int
+    /// Voiced samples taken in up to the end of the last completed window, and up to the end of the last window
+    /// handed to the scorer (`nil` before the first).
+    private var voicedSamplesAtWindowEnd = 0
+    private var lastScoredWindowEnd: Int?
 
     private var redThreshold: Float = ConfidenceIndex.redThreshold
     private var sustainedRedStartMs: Int64?
@@ -75,28 +90,41 @@ public final class GuardianMode: @unchecked Sendable {
         self.scorer = scorer
         self.executor = executor
         self.nowMs = nowMs
+        self.windowSamples = windowSamples
         self.accumulator = GuardianWindowAccumulator(windowSamples: windowSamples)
     }
 
     /// One decoded RX chunk (little-endian Int16 mono 48 kHz, any length). Cheap: VAD + copy, and at most one
-    /// hand-off to the inference queue per window.
+    /// hand-off to the inference queue per `minVoicedMsBetweenInferences` of voiced audio.
     public func processFrame(_ pcmFrame: Data) {
         lock.lock()
         guard enabled else { lock.unlock(); return }
         let windows = accumulator.append(int16LE: pcmFrame)
         stats.pendingSamples = accumulator.pendingSamples
-        guard let newest = windows.last else { lock.unlock(); return }
-        stats.windowsReady += windows.count
+        var candidate: (window: [Float], end: Int)?
+        for window in windows {
+            stats.windowsReady += 1
+            voicedSamplesAtWindowEnd += windowSamples
+            if let last = lastScoredWindowEnd,
+               voicedSamplesAtWindowEnd - last < Self.minVoicedSamplesBetweenInferences {
+                stats.windowsSkipped += 1
+                continue
+            }
+            // Only a chunk longer than a whole window can make two eligible: score the newest, drop the rest.
+            if candidate != nil { stats.windowsDropped += 1 }
+            candidate = (window: window, end: voicedSamplesAtWindowEnd)
+        }
+        guard let pick = candidate else { lock.unlock(); return }
         guard !stats.inferenceInFlight else {
-            stats.windowsDropped += windows.count
+            stats.windowsDropped += 1
             lock.unlock()
             return
         }
-        // Only a chunk longer than a whole window can complete two: score the newest, drop the rest.
-        stats.windowsDropped += windows.count - 1
+        lastScoredWindowEnd = pick.end
         stats.inferenceInFlight = true
         lock.unlock()
 
+        let newest = pick.window
         executor { [weak self] in self?.runInference(on: newest) }
     }
 
@@ -139,7 +167,7 @@ public final class GuardianMode: @unchecked Sendable {
         // Measured cost of the Tier 1 inference, throttled (first, then every 10th): counts and milliseconds
         // only, never audio or scores of individual windows.
         if s.inferences == 1 || s.inferences % 10 == 0 {
-            print("[GuardianMode] tier1 inf n=\(s.inferences) ms=\(elapsedMs) windows=\(s.windowsReady) dropped=\(s.windowsDropped) nil=\(s.nilScores)")
+            print("[GuardianMode] tier1 inf n=\(s.inferences) ms=\(elapsedMs) windows=\(s.windowsReady) skipped=\(s.windowsSkipped) dropped=\(s.windowsDropped) nil=\(s.nilScores)")
         }
         callback?(.red, score)
     }
