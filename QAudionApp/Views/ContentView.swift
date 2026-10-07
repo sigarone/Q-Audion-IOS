@@ -416,7 +416,8 @@ struct ContentView: View {
     @ViewBuilder
     private var mainStack: some View {
         if appState.isInCall {
-            inCallStack
+            // The chat opened over the call (the "Chat" button of both 1:1 call screens) lives above the swap between them.
+            InCallChatHost { inCallStack }
         } else if let outcome = appState.callerOutcome {
             // W-CALLERBUSY — the outgoing call ended because the callee is busy / unreachable: say so for a
             // few seconds instead of dropping straight to Home. `startCall` and the close button clear it.

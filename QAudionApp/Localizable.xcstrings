@@ -33995,6 +33995,42 @@
           }
         }
       }
+    },
+    "in_call.chat.camera_blocked": {
+      "extractionState": "manual",
+      "comment": "Shown in the chat opened over a video call when the user taps \"take a photo\": the camera belongs to the call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante una videochiamata la fotocamera è usata dalla chiamata: scegli una foto dalla galleria oppure scatta dopo la chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "During a video call the camera is used by the call: pick a photo from the library, or take one after the call."
+          }
+        }
+      }
+    },
+    "video_call.chat.button": {
+      "extractionState": "manual",
+      "comment": "Label under the button of the video call controls that opens the chat with the person on the call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

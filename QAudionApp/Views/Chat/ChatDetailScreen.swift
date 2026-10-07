@@ -352,7 +352,7 @@ struct ChatDetailScreen: View {
                             isPresented: $showAttachmentChoice,
                             titleVisibility: .visible) {
             Button {
-                showCameraPicker = true
+                handleTakePhotoTap()
             } label: {
                 Label("Scatta foto", systemImage: "camera")
             }
@@ -1774,6 +1774,31 @@ struct ChatDetailScreen: View {
     private func showInCallAudioNotice() {
         snackbar?.show(.init(
             text: String(localized: "in_call.chat.audio_blocked", defaultValue: "Durante una chiamata non si possono registrare né riprodurre note vocali e video: userebbero l'audio della chiamata.", comment: "Shown in the chat opened over a call when the user tries to record or play a voice note or a video: they would take over the audio of the call."),
+            severity: .warning,
+            durationSeconds: 4))
+    }
+
+    /// Non-nil while a video call is up (this screen is then the chat opened over the call, `InCallChatCover`): the capture session of
+    /// the call owns the camera, and `UIImagePickerController` (CameraPicker) opening a second one would take it from the call. The
+    /// photo library, the clipboard and the document picker stay available. In an audio call the camera is free
+    /// (`InCallChatPolicy.cameraCaptureBlocked`).
+    private var callCameraBlock: (() -> Void)? {
+        guard InCallChatPolicy.cameraCaptureBlocked(inCall: appState.isInCall, videoCall: appState.isVideoCall) else { return nil }
+        return { showInCallCameraNotice() }
+    }
+
+    /// "Scatta foto": the camera picker, except where the camera is the call's (see `callCameraBlock`), where it says why not.
+    private func handleTakePhotoTap() {
+        if let blocked = callCameraBlock {
+            blocked()
+        } else {
+            showCameraPicker = true
+        }
+    }
+
+    private func showInCallCameraNotice() {
+        snackbar?.show(.init(
+            text: String(localized: "in_call.chat.camera_blocked", defaultValue: "Durante una videochiamata la fotocamera è usata dalla chiamata: scegli una foto dalla galleria oppure scatta dopo la chiamata.", comment: "Shown in the chat opened over a video call when the user taps \"take a photo\": the camera belongs to the call."),
             severity: .warning,
             durationSeconds: 4))
     }
