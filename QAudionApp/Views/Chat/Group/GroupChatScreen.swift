@@ -872,8 +872,8 @@ struct GroupChatScreen: View {
                         timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
                 }
             }
-        case .file:
-            // Not reachable: the group attach menu no longer offers documents (file transfer v2 does not travel in groups yet).
+        case .file, .media:
+            // Not reachable: the group attach menu offers photos only for now.
             break
         case .voiceNote:
             break

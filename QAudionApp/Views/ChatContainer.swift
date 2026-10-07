@@ -1295,6 +1295,14 @@ final class ChatContainer: ObservableObject {
             try? FileManager.default.removeItem(at: url)
             return failure
         }
+        // Refused before the file is moved: a video is fetched on a tap, so it cannot be "view once".
+        let effectiveTimer = AttachmentTimerResolver.resolve(
+            overrideSeconds: overrideTimerSeconds,
+            conversationDefault: viewModel.conversation.ephemeralTimerSeconds)
+        if effectiveTimer == -1 {
+            try? FileManager.default.removeItem(at: url)
+            return FileV2Failure(.viewOnceUnsupported)
+        }
         let msgId = UUID()
         let prepared: FileV2MediaPreparer.Prepared
         do {
@@ -1302,9 +1310,18 @@ final class ChatContainer: ObservableObject {
         } catch {
             return FileV2Failure(.unreadable)
         }
-        return startMediaSend(prepared, msgId: msgId, displayText: FileV2ChatBody.kindLabelText(.video),
-                              overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked, keepsLocalCopy: true,
-                              scoped: nil)
+        let failure = startMediaSend(prepared, msgId: msgId, displayText: FileV2ChatBody.kindLabelText(.video),
+                                     overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked,
+                                     keepsLocalCopy: true, scoped: nil)
+        if failure != nil { discardPrepared(msgId: msgId) }
+        return failure
+    }
+
+    /// What a send that did not start leaves behind in the row's directory of the caches directory: the thumbnail and, for a video, the
+    /// copy of the file. (The copy of an image or a voice note is kept: it is also what a retry sends again.)
+    private func discardPrepared(msgId: UUID) {
+        try? FileManager.default.removeItem(
+            at: FileV2LocalFiles.directory(base: FileV2DownloadCenter.cachesBase, rowKey: msgId.uuidString))
     }
 
     /// The common tail of an image or a voice note: the row, the progress and the run. A failure to start is told to the user.
@@ -1319,6 +1336,7 @@ final class ChatContainer: ObservableObject {
         if let failure = startMediaSend(prepared, msgId: msgId, displayText: label, overrideTimerSeconds: overrideTimerSeconds,
                                         exportBlocked: exportBlocked, keepsLocalCopy: true, scoped: nil) {
             transientNotice = FileV2FailureText.message(for: failure)
+            discardPrepared(msgId: msgId)
             return false
         }
         return true
