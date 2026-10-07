@@ -101,9 +101,13 @@ final class ConfidenceBadgeWiringTests: XCTestCase {
 
         let breakdown = try slice(code, from: "callService.onContactVoiceScoreBreakdown = {",
                                   to: "callService.onLocalInboundLossReport")
-        XCTAssertTrue(breakdown.contains("GuardianDisplayConfidence.next( ema: self.contactVoiceConfidenceEma, combined: combined)"))
-        XCTAssertTrue(breakdown.contains("self.confidenceScore = self.contactVoiceConfidenceEma"))
-        XCTAssertTrue(breakdown.contains("self.confidenceLevel = GuardianDisplayConfidence.level(of: self.contactVoiceConfidenceEma)"))
+        // Spaces removed: the wiring, not the line wrapping, is what is pinned.
+        let compact = breakdown.replacingOccurrences(of: " ", with: "")
+        XCTAssertTrue(compact.contains(
+            "self.contactVoiceConfidenceEma=GuardianDisplayConfidence.next(ema:self.contactVoiceConfidenceEma,combined:combined)"))
+        XCTAssertTrue(compact.contains("self.confidenceScore=self.contactVoiceConfidenceEma"))
+        XCTAssertTrue(compact.contains(
+            "self.confidenceLevel=GuardianDisplayConfidence.level(of:self.contactVoiceConfidenceEma)"))
     }
 
     /// The per-call reset puts the EMA back to Android's per-call seed and the badge to "no score yet".

@@ -35,8 +35,8 @@ final class GuardianDisplayConfidenceTests: XCTestCase {
         // Android: 0.15 * 0.99 + 0.85 * 1.0 = 0.9985; then 0.15 * 0.99 + 0.85 * 0.9985 = 0.997225.
         XCTAssertEqual(emas[0], 0.9985, accuracy: 1e-5)
         XCTAssertEqual(emas[1], 0.997225, accuracy: 1e-5)
-        // 0.99 + 0.01 * 0.85^11 = 0.99 + 0.01 * 0.16734 = 0.991673.
-        XCTAssertEqual(emas[10], 0.991673, accuracy: 1e-5)
+        // 0.99 + 0.01 * 0.85^11 = 0.99 + 0.01 * 0.1673432 = 0.9916734.
+        XCTAssertEqual(emas[10], 0.9916734, accuracy: 1e-5)
         for e in emas {
             XCTAssertEqual(GuardianDisplayConfidence.level(of: e), "green")
         }
