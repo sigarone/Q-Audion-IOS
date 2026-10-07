@@ -279,6 +279,108 @@ final class FileV2SendResumeTests: XCTestCase {
         try rig.assertNothingIsLeftBehind()
     }
 
+    // MARK: A resume that only announces does not need the source
+
+    /// A transfer whose upload is over and whose descriptor the chat refused (`ANNOUNCE_NOT_SENT`): its state is `announcePending`.
+    private func announcePending(_ rig: SendRig, source: GeneratedSource, id: String) async throws {
+        rig.channel.setOutcomes([.unavailable, .sent])
+        let first = await (try rig.makePipeline()).send(rig.makeRequest(source, id: id))
+        assertSendFailure(first, .announceNotSent)
+        XCTAssertEqual(rig.fake.objectCount, 1)
+        XCTAssertEqual(try rig.makeStore().load(id).phase, .announcePending)
+    }
+
+    func testAnAnnounceOnlyResumeWhoseSourceIsGoneKeepsTheUploadedBlobAndAnnouncesIt() async throws {
+        // The review's probe: an iOS temporary copy that the system purged before the re-announce used to destroy a blob that was complete.
+        let rig = try sequentialRig()
+        let source = GeneratedSource(size: SendTestSizes.threeParts)
+        try await announcePending(rig, source: source, id: "source-gone-announce")
+        let putsBefore = rig.server.puts.count
+        let firstDescriptor = try rig.lastDescriptor()
+
+        rig.sources.failLookups = true                                           // the source cannot be found any more
+        let second = await (try rig.makePipeline()).resume(transferID: "source-gone-announce")
+        XCTAssertEqual(second, .sentOk)
+        XCTAssertEqual(rig.fake.objectCount, 1, "the uploaded blob is still there")
+        XCTAssertFalse(rig.fake.calls.contains { $0.op == .delete })
+        XCTAssertEqual(rig.server.puts.count, putsBefore, "no upload")
+        XCTAssertEqual(rig.channel.announced.count, 2)
+        let secondDescriptor = try rig.lastDescriptor()
+        XCTAssertEqual(secondDescriptor.fileKey, firstDescriptor.fileKey)
+        XCTAssertEqual(secondDescriptor.source.obj, firstDescriptor.source.obj)
+        XCTAssertEqual(rig.telemetry.count { $0 == .contentChanged }, 0, "a missing source is not a changed source here")
+        try rig.assertBlobEqualsOneShot(descriptor: secondDescriptor, source: GeneratedSource(size: SendTestSizes.threeParts))
+        try rig.assertNothingIsLeftBehind()
+    }
+
+    func testAResumeInTheMiddleOfTheAnnounceAlsoDoesNotNeedTheSource() async throws {
+        let rig = try sequentialRig()
+        let source = GeneratedSource(size: SendTestSizes.oneChunkOver)
+        rig.channel.setHangs(true)
+        let pipeline = try rig.makePipeline()
+        let running = Task { await pipeline.send(rig.makeRequest(source, id: "announcing-source-gone")) }
+        try await pollUntilTrue { !rig.channel.announced.isEmpty }
+        running.cancel()                                                         // the process dies with the handover unanswered
+        _ = await running.value
+        XCTAssertEqual(try rig.makeStore().load("announcing-source-gone").phase, .announcing)
+
+        rig.channel.setHangs(false)
+        rig.sources.failLookups = true
+        let second = await (try rig.makePipeline()).resume(transferID: "announcing-source-gone")
+        XCTAssertEqual(second, .sentOk)
+        XCTAssertEqual(rig.channel.announced.count, 2)
+        XCTAssertEqual(rig.fake.objectCount, 1)
+    }
+
+    func testAResumeThatStillHasPartsToUploadNeedsTheSourceAndCancelsWithoutIt() async throws {
+        let rig = try sequentialRig()
+        let source = GeneratedSource(size: SendTestSizes.threeParts)
+        rig.server.setCrash(RecordingServer.CrashPlan(op: .putPart, call: 1, applyEffect: true))
+        _ = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "still-uploading"))
+        rig.sources.failLookups = true
+        rig.server.revive()
+        let result = await (try rig.makePipeline()).resume(transferID: "still-uploading")
+        assertSendFailure(result, .sourceChanged)
+        XCTAssertEqual(rig.fake.objectCount, 0)
+        try rig.assertNothingIsLeftBehind()
+    }
+
+    func testAnAnnounceOnlyResumeWhoseObjectTheServerLostFindsTheSourceWhenAnUploadBecomesNecessary() async throws {
+        let rig = try sequentialRig()
+        let source = GeneratedSource(size: SendTestSizes.threeParts)
+        try await announcePending(rig, source: source, id: "object-lost")
+        let oldObject = try XCTUnwrap(try rig.makeStore().load("object-lost").object?.obj)
+        try await rig.fake.delete(obj: oldObject)                                // the server lost it
+        XCTAssertEqual(rig.fake.objectCount, 0)
+
+        // The source is still there: the object is made again from the same header and every part is sent again with the same bytes (the
+        // ledger of the journal), under rule 1, which is checked now.
+        let second = await (try rig.makePipeline()).resume(transferID: "object-lost")
+        XCTAssertEqual(second, .sentOk)
+        let descriptor = try rig.lastDescriptor()
+        XCTAssertNotEqual(descriptor.source.obj, oldObject, "a NEW object")
+        try rig.assertBlobEqualsOneShot(descriptor: descriptor, source: source)
+        rig.assertEveryPartWasAlwaysSentWithTheSameBytes()
+        rig.assertNoChunkWasEverTransmittedWithADifferentTag()
+        try rig.assertNothingIsLeftBehind()
+    }
+
+    func testAnAnnounceOnlyResumeWhoseObjectTheServerLostAndWhoseSourceIsGoneIsCancelled() async throws {
+        let rig = try sequentialRig()
+        let source = GeneratedSource(size: SendTestSizes.threeParts)
+        try await announcePending(rig, source: source, id: "object-and-source-lost")
+        try await rig.fake.delete(obj: try XCTUnwrap(try rig.makeStore().load("object-and-source-lost").object?.obj))
+        let putsBefore = rig.server.puts.count
+
+        rig.sources.failLookups = true
+        let second = await (try rig.makePipeline()).resume(transferID: "object-and-source-lost")
+        assertSendFailure(second, .sourceChanged)
+        XCTAssertEqual(rig.server.puts.count, putsBefore, "nothing could be uploaded and nothing was")
+        XCTAssertEqual(rig.fake.objectCount, 0, "the object made again is deleted too")
+        XCTAssertEqual(rig.channel.announced.count, 1, "no descriptor goes out for an object that has no blob")
+        try rig.assertNothingIsLeftBehind()
+    }
+
     // MARK: The server deleted the object (6 h idle, 24 h absolute)
 
     func testAnObjectTheServerDeletedIsMadeAgainFromTheSameHeaderAndEveryPartIsSentAgainWithTheSameBytes() async throws {

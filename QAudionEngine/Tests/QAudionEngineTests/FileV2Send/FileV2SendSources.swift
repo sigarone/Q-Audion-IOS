@@ -1,9 +1,14 @@
 import XCTest
+import CryptoKit
 @testable import QAudionEngine
 
 /// A source that is generated, never stored: byte `j` of chunk `c` is a function of `c`, `j` and a per-chunk salt, produced a chunk at
 /// a time. It is how the tests move 5 GiB without a 5 GiB file, and how they change the content of a source WITHOUT changing its size
 /// or its modification time (the one change that rule 1 of WIRE_SPEC 12.8 cannot see and rule 2 must).
+///
+/// By default its identity is only a size and a time (like a provider that has no more to give), so a change in the middle of it is
+/// invisible to rule 1 and reaches the ledger. With `fingerprint` it gives the hardened identity of a file: the time to the nanosecond,
+/// a file number, a creation time and the SHA-256 of its first and last 64 KiB, so the tests can show what the hardening catches.
 final class GeneratedSource: FileV2SendSource, @unchecked Sendable {
     private static let chunk = FileV2.chunkSize
 
@@ -28,21 +33,37 @@ final class GeneratedSource: FileV2SendSource, @unchecked Sendable {
 
     let size: UInt64
     let locator: String
+    /// The identity carries the hardened members (see above).
+    let fingerprint: Bool
     private let lock = NSLock()
     private var modifiedMs: Int64
+    private var extraNanoseconds: Int64 = 0
+    private var fileNumber: UInt64 = 7_000_001
     private var salts: [Int: UInt8] = [:]
+    private var flippedBytes: [UInt64: UInt8] = [:]
     private var reads = 0
 
-    init(size: UInt64, locator: String = "generated-\(UUID().uuidString.lowercased())", modifiedMs: Int64 = 1_700_000_000_000) {
+    init(size: UInt64, locator: String = "generated-\(UUID().uuidString.lowercased())", modifiedMs: Int64 = 1_700_000_000_000,
+         fingerprint: Bool = false) {
         self.size = size
         self.locator = locator
         self.modifiedMs = modifiedMs
+        self.fingerprint = fingerprint
     }
 
     func currentIdentity() throws -> FileV2SourceIdentity {
         lock.lock()
-        defer { lock.unlock() }
-        return FileV2SourceIdentity(locator: locator, size: size, modifiedMs: modifiedMs)
+        let milliseconds = modifiedMs
+        let nanoseconds = extraNanoseconds
+        let number = fileNumber
+        lock.unlock()
+        guard fingerprint else { return FileV2SourceIdentity(locator: locator, size: size, modifiedMs: milliseconds) }
+        let sample = Int(min(size, UInt64(FileV2SourceIdentity.sampleLength)))
+        let head = bytes(offset: 0, length: sample) ?? Data()
+        let tail = bytes(offset: size - UInt64(sample), length: sample) ?? Data()
+        return FileV2SourceIdentity(locator: locator, size: size, modifiedMs: milliseconds, modifiedNs: milliseconds * 1_000_000 + nanoseconds,
+                                    fileNumber: number, createdMs: 1_600_000_000_000, headDigest: Data(SHA256.hash(data: head)),
+                                    tailDigest: Data(SHA256.hash(data: tail)))
     }
 
     func makeReader() throws -> FileV2SourceReader { GeneratedReader(owner: self) }
@@ -54,10 +75,31 @@ final class GeneratedSource: FileV2SendSource, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// One byte of the file, anywhere in it, changes; the size and the modification time do not.
+    func flipByte(at offset: UInt64) {
+        lock.lock()
+        flippedBytes[offset] = (flippedBytes[offset] ?? 0) ^ 0xFF
+        lock.unlock()
+    }
+
     /// The modification time moves (the file was saved again).
     func touch() {
         lock.lock()
         modifiedMs += 1
+        lock.unlock()
+    }
+
+    /// The modification time moves by a nanosecond: the same millisecond, another time (visible only to a fingerprint).
+    func touchByANanosecond() {
+        lock.lock()
+        extraNanoseconds += 1
+        lock.unlock()
+    }
+
+    /// The file is replaced by another file (an editor that saves atomically): the content and the times are the same, the file number is not.
+    func replaceFile() {
+        lock.lock()
+        fileNumber += 1
         lock.unlock()
     }
 
@@ -77,6 +119,7 @@ final class GeneratedSource: FileV2SendSource, @unchecked Sendable {
     func content(ofChunk index: Int) -> Data {
         lock.lock()
         let salt = salts[index] ?? 0
+        let flips = flippedBytes.filter { $0.key / UInt64(GeneratedSource.chunk) == UInt64(index) }
         lock.unlock()
         var block = GeneratedSource.base
         var counter = UInt64(index)
@@ -85,6 +128,7 @@ final class GeneratedSource: FileV2SendSource, @unchecked Sendable {
             counter >>= 8
         }
         block[8] = salt
+        for (offset, mask) in flips { block[Int(offset % UInt64(GeneratedSource.chunk))] ^= mask }
         return block
     }
 

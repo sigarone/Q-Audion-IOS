@@ -143,6 +143,7 @@ final class InstrumentedStore: FileV2SendStore, @unchecked Sendable {
     let log: SendEventLog
     private let lock = NSLock()
     private var failTagAppends = 0
+    private var loads = 0
     private var appended: [(id: String, event: FileV2SendJournalEvent)] = []
 
     init(inner: FileV2FileSendStore, log: SendEventLog) {
@@ -184,9 +185,34 @@ final class InstrumentedStore: FileV2SendStore, @unchecked Sendable {
         log.add("journal.\(label).done")
     }
 
-    func load(_ transferID: String) throws -> FileV2SendRecovered { try inner.load(transferID) }
+    /// How many times THIS instance was asked to read a journal.
+    var loadCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return loads
+    }
+
+    func load(_ transferID: String) throws -> FileV2SendRecovered {
+        lock.lock()
+        loads += 1
+        lock.unlock()
+        log.add("journal.load")
+        return try inner.load(transferID)
+    }
 
     func listTransferIDs() throws -> [String] { try inner.listTransferIDs() }
+
+    /// The lock is logged when it is taken, refused and given up, so a test can read WHEN a transfer was claimed relative to everything else.
+    func acquireLock(_ transferID: String) throws -> FileV2SendTransferLock {
+        do {
+            let lock = try inner.acquireLock(transferID)
+            log.add("lock.acquire")
+            return InstrumentedLock(inner: lock, log: log)
+        } catch {
+            if case FileV2SendStoreError.busy = error { log.add("lock.busy") }
+            throw error
+        }
+    }
 
     func remove(_ transferID: String) throws {
         log.add("journal.remove")
@@ -209,6 +235,28 @@ final class InstrumentedStore: FileV2SendStore, @unchecked Sendable {
         case .partDone(let part): return "partDone part=\(part)"
         case .phase(let phase): return "phase \(phase)"
         }
+    }
+}
+
+/// A lock that logs its release (once, at the first release).
+final class InstrumentedLock: FileV2SendTransferLock, @unchecked Sendable {
+    private let inner: FileV2SendTransferLock
+    private let log: SendEventLog
+    private let flag = NSLock()
+    private var released = false
+
+    init(inner: FileV2SendTransferLock, log: SendEventLog) {
+        self.inner = inner
+        self.log = log
+    }
+
+    func release() {
+        flag.lock()
+        let first = !released
+        released = true
+        flag.unlock()
+        if first { log.add("lock.release") }
+        inner.release()
     }
 }
 
@@ -515,6 +563,8 @@ final class SendRig: @unchecked Sendable {
     var configuration: FileV2SendConfiguration
     private var lastStore: InstrumentedStore?
     var refreshAuth: (@Sendable () async -> Bool)?
+    /// What the pipeline is told about the device's protected data (`nil`: always available).
+    var protectedDataAvailable: (@Sendable () async -> Bool)?
 
     init(_ testCase: XCTestCase, reporting: Bool = false, realFlush: Bool = false, sleepOfFake: @escaping @Sendable (Int64) async -> Void = FakeFileV2Server.defaultSleep) throws {
         self.testCase = testCase
@@ -542,10 +592,20 @@ final class SendRig: @unchecked Sendable {
         return store
     }
 
+    /// A new store instance whose durability is `RecordingDurability` over `inner`, and/or whose protection is `protection`.
+    func makeStore(over inner: FileV2Durability, protection: FileV2FileProtection = FileV2SystemFileProtection()) throws -> InstrumentedStore {
+        let recording = RecordingDurability(log: log, inner: inner)
+        let store = InstrumentedStore(inner: try FileV2FileSendStore(directory: storeDirectory, durability: recording, protection: protection),
+                                      log: log)
+        lastStore = store
+        return store
+    }
+
     func makePipeline(store: FileV2SendStore? = nil) throws -> FileV2SendPipeline {
         let chosen: FileV2SendStore = try store ?? makeStore()
         let deps = FileV2SendDependencies(server: server, store: chosen, secrets: wrapper, sources: sources, channel: channel,
-                                          clock: clock, sleeper: sleeper, telemetry: telemetry, refreshAuth: refreshAuth)
+                                          clock: clock, sleeper: sleeper, telemetry: telemetry, refreshAuth: refreshAuth,
+                                          protectedDataAvailable: protectedDataAvailable)
         return FileV2SendPipeline(dependencies: deps, configuration: configuration)
     }
 

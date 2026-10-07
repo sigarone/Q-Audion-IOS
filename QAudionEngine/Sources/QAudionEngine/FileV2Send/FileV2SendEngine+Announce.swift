@@ -42,6 +42,8 @@ extension FileV2SendEngine {
             current.maybeAnnounced = true
         }
 
+        // A crash after the chat took the message and before this run wrote that down re-announces with the same key (the phase above says
+        // only that the descriptor MAY have gone out): the chat must deduplicate on it (`FileV2DescriptorChannel.announce`).
         let outcome = await ctx.deps.channel.announce(body, to: begin.conversation, idempotencyKey: id)
         // A cancelled task does not know what the chat did with the descriptor: the phase stays `announcing` (it MAY have gone out), and
         // whatever comes next (a resume, a cancel) acts on that.

@@ -117,7 +117,14 @@ public protocol FileV2KeychainItems: Sendable {
 enum FileV2KeychainQueries {
 
     /// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`: readable by a transfer that goes on in the background after the first
-    /// unlock, never part of a backup, never moved to another device. Not synchronised through iCloud.
+    /// unlock, never moved to another device, not synchronised through iCloud.
+    ///
+    /// What `ThisDeviceOnly` does NOT promise: an ENCRYPTED backup restored onto the SAME device brings the item back. WIRE_SPEC 12.8
+    /// says the key never comes back from a backup, so that guarantee does not rest on this attribute alone. It rests on the journal,
+    /// which is the only thing that refers to the item and is excluded from every backup (`FileV2FileSendStore` refuses to start if it
+    /// cannot exclude it), on `FileV2SendPipeline.recoverOnLaunch`, which destroys the items no journal refers to (the integration MUST
+    /// call it at every launch, once the protected data is available), and on the identity check of the source. An item that
+    /// came back without its journal is a key for a transfer that no longer exists, and is destroyed at the next launch.
     static func add(service: String, account: String, secret: Data, accessGroup: String?) -> [String: Any] {
         var query = identity(service: service, account: account, accessGroup: accessGroup)
         query[kSecValueData as String] = secret

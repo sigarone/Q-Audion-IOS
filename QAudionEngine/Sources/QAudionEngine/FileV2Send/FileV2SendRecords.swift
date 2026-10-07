@@ -36,25 +36,63 @@ public struct FileV2Conversation: Sendable, Equatable, Hashable, Codable, Custom
 }
 
 /// What a source looked like when the transfer started (WIRE_SPEC 12.8: "the source identity (path or URI, size,
-/// modification time)"). Rule 1: before a resume, if the size or the modification time changed, the transfer is cancelled.
+/// modification time)"). Rule 1: before a resume, if the identity changed, the transfer is cancelled.
+///
+/// The spec asks for the size and the modification time. Those two alone are what a tool that rewrites a file and puts its time
+/// back does not change, and the nonce rule's ledger is the last line of defence against exactly that. So this identity is
+/// hardened, as an addition to what the spec requires: the modification time to the nanosecond, the file's number (the inode: a
+/// file replaced by another one, as an editor that saves atomically does, has another), its creation time, and a SHA-256 of the
+/// first and of the last 64 KiB. Everything that a source provides is compared; see `isUnchanged`.
+///
+/// What this does NOT cover: an edit in the middle of a file that keeps the size, the modification time to the nanosecond, the
+/// inode and the creation time (that takes a tool that sets the times by hand). The ledger of tags catches that edit for every chunk
+/// that was sealed before, and the cross-check of a resume for every part the server still holds. What none of them can see is the
+/// coincidence of all of these: the journal lost the tags of a part that was transmitted, the server's copy of the object is gone
+/// (6 hours of idleness, 24 hours at the latest) and the middle of the file was edited without touching anything the identity
+/// holds. That needs three independent faults at once.
 ///
 /// `locator` is where to find the source again (a path or a URI). It is NOT part of the comparison: an iOS container path
-/// changes with an app update, and the caller re-resolves the source from it. It is personal data: it is never printed.
+/// changes with an app update, and the caller re-resolves the source from it. It is personal data: it is never printed, and neither
+/// are the file number, the times or the digests.
 public struct FileV2SourceIdentity: Sendable, Equatable, Codable, CustomStringConvertible, CustomReflectable {
+    /// How many bytes at each end of the file the digests cover.
+    public static let sampleLength = 64 * 1024
+
     public let locator: String
     public let size: UInt64
     /// Modification time, epoch milliseconds.
     public let modifiedMs: Int64
+    /// Modification time to the nanosecond (epoch), `nil` for a source that cannot tell it.
+    public let modifiedNs: Int64?
+    /// The file number (the inode), `nil` for a source that has none.
+    public let fileNumber: UInt64?
+    /// Creation time, epoch milliseconds, `nil` where the platform does not keep it.
+    public let createdMs: Int64?
+    /// SHA-256 of the first `sampleLength` bytes (of the whole file when it is shorter), `nil` for a source that does not read them.
+    public let headDigest: Data?
+    /// SHA-256 of the last `sampleLength` bytes, `nil` for a source that does not read them.
+    public let tailDigest: Data?
 
-    public init(locator: String, size: UInt64, modifiedMs: Int64) {
+    public init(locator: String, size: UInt64, modifiedMs: Int64, modifiedNs: Int64? = nil, fileNumber: UInt64? = nil,
+                createdMs: Int64? = nil, headDigest: Data? = nil, tailDigest: Data? = nil) {
         self.locator = locator
         self.size = size
         self.modifiedMs = modifiedMs
+        self.modifiedNs = modifiedNs
+        self.fileNumber = fileNumber
+        self.createdMs = createdMs
+        self.headDigest = headDigest
+        self.tailDigest = tailDigest
     }
 
-    /// Rule 1 of 12.8: the same content as far as the file system can tell (size and modification time).
+    /// Rule 1 of 12.8: the same file as far as the file system and the two samples can tell. Every member that either side holds must
+    /// be held by both and be equal: a member the transfer started with and the source no longer provides (or the other way round) is
+    /// a change, because it cannot be verified. Two sources that provide only a size and a time (the tests' generated source, a
+    /// provider that has no more to give) are compared on those.
     public func isUnchanged(comparedTo other: FileV2SourceIdentity) -> Bool {
-        size == other.size && modifiedMs == other.modifiedMs
+        size == other.size && modifiedMs == other.modifiedMs && modifiedNs == other.modifiedNs
+            && fileNumber == other.fileNumber && createdMs == other.createdMs
+            && headDigest == other.headDigest && tailDigest == other.tailDigest
     }
 
     public var description: String { "FileV2SourceIdentity(size=\(size))" }
@@ -214,7 +252,7 @@ public struct FileV2SendTag: Sendable, Equatable, CustomStringConvertible, Custo
         self.tag = tag
     }
 
-    public var description: String { "FileV2SendTag(index=(index))" }
+    public var description: String { "FileV2SendTag(index=\(index))" }
 
     public var customMirror: Mirror { Mirror(self, children: ["index": index], displayStyle: .struct) }
 }
@@ -321,6 +359,12 @@ public enum FileV2SendStoreError: Error, Equatable, Sendable, CustomStringConver
     case invalidIdentifier
     /// A file system operation failed. `operation` is a fixed word (`write`, `sync`, `rename`...), never a path.
     case io(String)
+    /// Another holder (another pipeline of this process, or another process that shares the directory) has the exclusive lock of
+    /// this transfer. Nothing was touched.
+    case busy
+    /// The device's protected data is not available (a launch before the first unlock): nothing that depends on reading the
+    /// journals or the secure store may be decided now.
+    case protectedDataUnavailable
 
     public var description: String {
         switch self {
@@ -329,6 +373,8 @@ public enum FileV2SendStoreError: Error, Equatable, Sendable, CustomStringConver
         case .corrupt(let reason): return "FileV2SendStoreError(corrupt: \(reason))"
         case .invalidIdentifier: return "FileV2SendStoreError(invalid_identifier)"
         case .io(let operation): return "FileV2SendStoreError(io: \(operation))"
+        case .busy: return "FileV2SendStoreError(busy)"
+        case .protectedDataUnavailable: return "FileV2SendStoreError(protected_data_unavailable)"
         }
     }
 }
@@ -338,7 +384,18 @@ public enum FileV2SendStoreError: Error, Equatable, Sendable, CustomStringConver
 /// section 12.8's nonce rule leans on, because the part is PUT only after it returns.
 ///
 /// An implementation is thread safe. `begin` is atomic: a transfer either exists with a valid begin record or does not exist.
+///
+/// One writer per transfer, whatever the number of store instances and processes over the same state: `acquireLock` is the claim
+/// on a transfer. The pipeline takes it before it reads the journal of a transfer and gives it up when the operation is over;
+/// nothing else may call `begin`, `append` or `remove` for a transfer whose lock it does not hold.
 public protocol FileV2SendStore: Sendable {
+    /// Claims the transfer for the caller, WITHOUT waiting: throws `busy` when another holder has it (another pipeline of this
+    /// process, another process over the same directory). The claim is exclusive across instances and across processes, and it is
+    /// given up by `release()` of the returned lock (or when the lock object goes away, or the process dies). Throws
+    /// `invalidIdentifier` for an id that is not a transfer id.
+    func acquireLock(_ transferID: String) throws -> FileV2SendTransferLock
+
+
     /// Creates the journal of a new transfer. Throws `alreadyExists` when the id is taken.
     func begin(_ record: FileV2SendBeginRecord) throws
 

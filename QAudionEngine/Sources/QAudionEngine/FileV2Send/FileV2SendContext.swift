@@ -28,6 +28,10 @@ final class FileV2SendContext: @unchecked Sendable {
     let maxParallelismByMemory: Int
     let memoryBudgetBytes: Int64
     let gate = FileV2AsyncGate()
+    /// Pipeline-wide admission of parts: `maxParallelismByMemory` slots shared by EVERY transfer of the pipeline. A part holds a slot from
+    /// before its memory is allocated until its upload ends, so the budget of `FileV2MemBudget` is the pipeline's and not each
+    /// transfer's.
+    let admission: FileV2AsyncSemaphore
     let gauge = FileV2SendGauge()
     /// Test seam: told of the encryptor of every transfer that runs, so a test can check that its key material is zeroed when the run ends.
     var encryptorObserver: (@Sendable (FileV2Encryptor) -> Void)?
@@ -43,6 +47,13 @@ final class FileV2SendContext: @unchecked Sendable {
                                           perWorkerExtraBytes: FileV2SendContext.perWorkerExtraBytes)
         self.maxParallelismByMemory = budget?.maxParallelism ?? 1
         self.memoryBudgetBytes = budget?.budgetBytes ?? 0
+        self.admission = FileV2AsyncSemaphore(slots: self.maxParallelismByMemory)
+    }
+
+    /// Whether the protected data can be read now (see `FileV2SendDependencies.protectedDataAvailable`).
+    func protectedDataIsAvailable() async -> Bool {
+        guard let check = deps.protectedDataAvailable else { return true }
+        return await check()
     }
 
     var server: FileV2Server { deps.server }
@@ -57,7 +68,8 @@ final class FileV2SendContext: @unchecked Sendable {
     /// Runs `body` until it succeeds or the disposition table says what else to do (WIRE_SPEC 12.10 and the server's error table):
     ///
     /// - `retry`: the backoff 1, 2, 4, 8 s with jitter, or `Retry-After` up to 300 s; the failure when the attempts are spent;
-    /// - `wait` (425): `Retry-After`, not counted as an attempt, bounded;
+    /// - `wait` (425): `Retry-After`, not counted as an attempt, at most 100 times; a `Retry-After` above 300 s is not waited for, as
+    ///   for `retry` (the transfer pauses);
     /// - `refreshAuth` (401): the dependency refreshes the token and the request is repeated, a few times at most;
     /// - `recreate`, `sendMissing`, `userRemedy`: returned to the caller, which knows what to do;
     /// - `done`: the request had its effect already.
@@ -96,7 +108,12 @@ final class FileV2SendContext: @unchecked Sendable {
                 case .wait:
                     waits += 1
                     guard waits <= 100 else { return .failure(FileV2SendFailure(transfer: .network)) }
-                    let seconds = min(max(serverError?.retryAfter ?? 1, 0), FileV2Wire.maxRetryAfterSeconds)
+                    // The platform rule for every wait: a server that asks for more than 300 s is not waited for, whatever the status.
+                    let requested = serverError?.retryAfter ?? 1
+                    guard requested <= FileV2Wire.maxRetryAfterSeconds else {
+                        return .failure(FileV2SendFailure(transfer: .network, details: serverError?.details, code: serverError?.code))
+                    }
+                    let seconds = max(requested, 0)
                     do { try await deps.sleeper.sleep(milliseconds: Int64(seconds) * 1000) } catch { return .interrupted }
                 case .refreshAuth:
                     guard let refresh = deps.refreshAuth, refreshes < config.maxAuthRefreshes, await refresh() else {
@@ -204,8 +221,13 @@ final class FileV2SendContext: @unchecked Sendable {
     /// and makes it again from the same header, which is safe under the nonce rule).
     ///
     /// It runs inside the gate, so it cannot see an object whose create has answered and whose record is not yet in a journal.
+    ///
+    /// It DECIDES NOTHING FROM WHAT IT CANNOT READ. If the protected data is unavailable, if the journals cannot be listed, or if one
+    /// of them cannot be read for any reason but being corrupt (a corrupt journal refers to no object anyone can resume), it throws
+    /// and deletes nothing: an object that only looks unknown because its journal could not be read belongs to a paused transfer.
     func sweepOrphans(minIdleMs: Int64) async throws -> Int {
-        try await gate.withGate {
+        guard await protectedDataIsAvailable() else { throw FileV2SendStoreError.protectedDataUnavailable }
+        return try await gate.withGate {
             var items: [FileV2UnfinishedItem] = []
             var after: String?
             for _ in 0..<20 {                       // an account holds at most 10 unfinished objects: 20 pages is a hard stop
@@ -214,7 +236,7 @@ final class FileV2SendContext: @unchecked Sendable {
                 guard let next = page.next else { break }
                 after = next
             }
-            let known = self.knownObjectIDs()
+            let known = try self.knownObjectIDs()
             let now = self.clock.nowMs()
             var deleted = 0
             for item in items {
@@ -233,30 +255,53 @@ final class FileV2SendContext: @unchecked Sendable {
         }
     }
 
-    /// The objects of every journal on the device, as bytes (object ids are compared as bytes, never as `String`s).
-    func knownObjectIDs() -> Set<[UInt8]> {
+    /// The objects of every journal on the device, as bytes (object ids are compared as bytes, never as `String`s). Throws when the
+    /// journals cannot be listed or one of them cannot be read for a reason other than being corrupt: a list that is incomplete
+    /// because something could not be read must never be taken for the list of what exists.
+    func knownObjectIDs() throws -> Set<[UInt8]> {
         var known = Set<[UInt8]>()
-        for id in (try? store.listTransferIDs()) ?? [] {
-            if let recovered = try? store.load(id), let obj = recovered.object?.obj { known.insert(Array(obj.utf8)) }
+        for id in try store.listTransferIDs() {
+            if let recovered = try loadForScan(id), let obj = recovered.object?.obj { known.insert(Array(obj.utf8)) }
         }
         return known
+    }
+
+    /// A journal read for a decision about what NO journal refers to. A corrupt journal gives `nil` (it refers to nothing anyone can
+    /// resume); any other failure is thrown, because a journal that could not be read may refer to a lot.
+    func loadForScan(_ id: String) throws -> FileV2SendRecovered? {
+        do { return try store.load(id) } catch let error as FileV2SendStoreError {
+            if case .corrupt = error { return nil }
+            throw error
+        }
     }
 
     // MARK: Secrets nobody refers to
 
     /// Destroys the secrets of the wrapper that no journal refers to: a crash between `wrap` and the begin record, a reinstall that
     /// took the journals away and left the Keychain. Takes the gate, so it cannot meet a transfer that has wrapped its key and not yet written its begin record.
-    func purgeOrphanSecrets() async {
-        _ = try? await gate.withGate {
-            var referenced = Set<Data>()
-            for id in (try? self.store.listTransferIDs()) ?? [] {
-                guard let recovered = try? self.store.load(id) else { continue }
-                referenced.insert(recovered.begin.wrappedKey)
-                if let token = recovered.token { referenced.insert(token.wrappedValue) }
+    ///
+    /// It DECIDES NOTHING FROM WHAT IT CANNOT READ, because the cost of a wrong decision is the key of a paused transfer (the next
+    /// resume then finds no key and the upload is lost). It does nothing, and returns `false`, when the protected data is
+    /// unavailable, when the journals cannot be listed, when any journal cannot be read for a reason other than being corrupt, or when
+    /// the secure store cannot list its items. A corrupt journal refers to no secret anyone can use and does not stop the purge.
+    @discardableResult
+    func purgeOrphanSecrets() async -> Bool {
+        guard await protectedDataIsAvailable() else { return false }
+        do {
+            return try await gate.withGate {
+                var referenced = Set<Data>()
+                for id in try self.store.listTransferIDs() {
+                    guard let recovered = try self.loadForScan(id) else { continue }
+                    referenced.insert(recovered.begin.wrappedKey)
+                    if let token = recovered.token { referenced.insert(token.wrappedValue) }
+                }
+                for blob in try self.secrets.allBlobs() where !referenced.contains(blob) {
+                    self.secrets.destroy(blob)
+                }
+                return true
             }
-            for blob in (try? self.secrets.allBlobs()) ?? [] where !referenced.contains(blob) {
-                self.secrets.destroy(blob)
-            }
+        } catch {
+            return false
         }
     }
 }

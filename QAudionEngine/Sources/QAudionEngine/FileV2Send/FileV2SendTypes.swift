@@ -15,8 +15,14 @@ public protocol FileV2DescriptorChannel: Sendable {
     /// Can a text message reach `conversation` now? `false` fails the send with `channelUnavailable` and nothing is uploaded.
     func canCarryDescriptor(to conversation: FileV2Conversation) async -> Bool
 
-    /// Hands `body` (a descriptor built by `FileV2DescriptorBuilder`) to the chat. `idempotencyKey` is the id of the transfer: a
-    /// chat that is asked twice for the same key (a crash between the hand-over and the answer) can send one message.
+    /// Hands `body` (a descriptor built by `FileV2DescriptorBuilder`) to the chat. `idempotencyKey` is the id of the transfer.
+    ///
+    /// THE DEDUPLICATION CONTRACT. The pipeline can hand the same descriptor over twice with the same key: the process dies after
+    /// the chat took the message and before the pipeline wrote down that it did, or before the answer arrived, and the resume
+    /// announces again (the phase `announcing` says only that the descriptor MAY have gone out). The chat MUST deduplicate on
+    /// `idempotencyKey` (answer `.sent` or `.queued` again, without sending a second message). A chat that does not will show
+    /// the recipient two messages for one file. The descriptor of the second call is the same bytes as the first one except for
+    /// the token, which may have been replaced if the first was about to expire.
     func announce(_ body: String, to conversation: FileV2Conversation, idempotencyKey: String) async -> FileV2AnnounceOutcome
 
     /// Hands a control message (`qa_file_cancel`) to the chat. Best effort: there is no retry.
@@ -59,7 +65,9 @@ public protocol FileV2PartProgressReporting: FileV2Server {
         -> FileV2PutResult
 }
 
-/// Counters for telemetry (WIRE_SPEC program item I6): numbers and fixed words only, never an id, a name, a path or a size.
+/// Counters for telemetry (WIRE_SPEC program item I6): numbers and fixed words only, never an id, a name, a path or the size of a file.
+/// The one byte count in it is the size of an uploaded PART (at most 8 MiB, the same for every part but the last): a rate statistic.
+/// The server sees the length of the blob anyway; no event carries the size of the file or anything that names it.
 public enum FileV2SendTelemetryEvent: Sendable, Equatable {
     case started(resumed: Bool)
     case partUploaded(bytes: Int, duplicate: Bool)
@@ -117,8 +125,11 @@ public struct FileV2SendFailure: Error, Equatable, Sendable, CustomStringConvert
         case cancelled
         /// The device could not keep the transfer's state (a full disk, a refused write): nothing was sent that the state does not cover.
         case storage
-        /// A transfer with that id is already running.
+        /// A transfer with that id is already running in this pipeline.
         case alreadyRunning = "already_running"
+        /// Another holder has the transfer: another pipeline of this process, or another process that shares the store (the app and
+        /// an extension). Nothing was touched; try again when that one is done.
+        case busy
     }
 
     public let reason: Reason
@@ -158,7 +169,7 @@ public struct FileV2SendFailure: Error, Equatable, Sendable, CustomStringConvert
     /// The state of the transfer survives this failure, so `resume` can go on from it (the transfer paused, it did not end).
     public var keepsState: Bool {
         switch reason {
-        case .network, .rateLimited, .auth, .entitlement, .serverFull, .userRemedy, .announceNotSent, .storage: return true
+        case .network, .rateLimited, .auth, .entitlement, .serverFull, .userRemedy, .announceNotSent, .storage, .busy: return true
         default: return false
         }
     }
@@ -230,7 +241,7 @@ public struct FileV2SendRequest: Sendable, CustomStringConvertible, CustomReflec
         self.metadata = metadata
     }
 
-    public var description: String { "FileV2SendRequest(id=(fileV2ShortID(transferID)), (conversation.kind.rawValue))" }
+    public var description: String { "FileV2SendRequest(id=\(fileV2ShortID(transferID)), \(conversation.kind.rawValue))" }
 
     public var customMirror: Mirror {
         Mirror(self, children: ["id": fileV2ShortID(transferID), "conversation": conversation.kind.rawValue], displayStyle: .struct)
@@ -316,11 +327,19 @@ public struct FileV2SendDependencies: Sendable {
     public var telemetry: FileV2SendTelemetry?
     /// Refreshes the access token after a 401; returns whether it did.
     public var refreshAuth: (@Sendable () async -> Bool)?
+    /// Whether the device's protected data (the journals, class C, and the Keychain items) can be read now. On iOS the integration
+    /// passes `UIApplication.shared.isProtectedDataAvailable` (read on the main actor). `nil` means always available (a platform
+    /// with no such notion, the tests).
+    ///
+    /// While it says `false` the pipeline decides nothing from what it cannot read: `recoverOnLaunch` does not run, and
+    /// `discardOrphanedUploads` refuses. A launch before the first unlock (a VoIP push after a reboot) looks, to a store that
+    /// cannot read, exactly like a device with no transfers, and acting on that would destroy the keys of every paused one.
+    public var protectedDataAvailable: (@Sendable () async -> Bool)?
 
     public init(server: FileV2Server, store: FileV2SendStore, secrets: FileV2SecretWrapper, sources: FileV2SendSourceProvider,
                 channel: FileV2DescriptorChannel, clock: FileV2Clock = FileV2SystemClock(),
                 sleeper: FileV2Sleeper = FileV2SystemSleeper(), telemetry: FileV2SendTelemetry? = nil,
-                refreshAuth: (@Sendable () async -> Bool)? = nil) {
+                refreshAuth: (@Sendable () async -> Bool)? = nil, protectedDataAvailable: (@Sendable () async -> Bool)? = nil) {
         self.server = server
         self.store = store
         self.secrets = secrets
@@ -330,5 +349,19 @@ public struct FileV2SendDependencies: Sendable {
         self.sleeper = sleeper
         self.telemetry = telemetry
         self.refreshAuth = refreshAuth
+        self.protectedDataAvailable = protectedDataAvailable
     }
+}
+
+/// What `FileV2SendPipeline.cancelTransfer` did.
+public enum FileV2CancelOutcome: Sendable, Equatable {
+    /// The transfer was cancelled: the workers stopped, the object is deleted, the state is gone.
+    case cancelled
+    /// There was no transfer with that id (or it ended by itself while the cancel was being made).
+    case nothingToCancel
+    /// Another holder runs or cancels this transfer (another pipeline of this process, or another process over the same store). Nothing
+    /// was touched; the holder that has it is the one to cancel it.
+    case busy
+    /// The lock of the transfer could not be taken for a reason of the file system. Nothing was touched.
+    case storageUnavailable
 }

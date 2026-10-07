@@ -101,7 +101,6 @@ extension FileV2SendEngine {
                 current.object = record
                 current.doneParts = []
                 current.bytesDone = 0
-                current.generation += 1
                 // A new object has no part and is not complete: the journal's replay does the same on this record.
                 if current.phase == .completed || current.phase == .announcing || current.phase == .announcePending {
                     current.phase = .uploading

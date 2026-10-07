@@ -1,4 +1,10 @@
 import Foundation
+import CryptoKit
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Why a source could not be read.
 public enum FileV2SendSourceError: Error, Equatable, Sendable, CustomStringConvertible {
@@ -46,6 +52,10 @@ public protocol FileV2SendSourceProvider: Sendable {
 }
 
 /// A source that is a file: `FileHandle` with `seek` and `read`, a chunk at a time. Its description never shows the path.
+///
+/// Its identity is the hardened one of `FileV2SourceIdentity`: the file is opened once and everything is read from that descriptor
+/// (`fstat`, then the first and the last 64 KiB with `pread`), so the numbers and the two digests describe the same file even if the
+/// name is replaced while they are read.
 public struct FileV2FileSource: FileV2SendSource, CustomStringConvertible, CustomReflectable {
     public let url: URL
 
@@ -58,14 +68,74 @@ public struct FileV2FileSource: FileV2SendSource, CustomStringConvertible, Custo
     public var customMirror: Mirror { Mirror(self, children: [:], displayStyle: .struct) }
 
     public func currentIdentity() throws -> FileV2SourceIdentity {
-        let attributes: [FileAttributeKey: Any]
-        do { attributes = try FileManager.default.attributesOfItem(atPath: url.path) } catch {
+        let descriptor = open(url.path, O_RDONLY)
+        guard descriptor >= 0 else { throw FileV2SendSourceError.unavailable }
+        defer { _ = close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size >= 0 else {
             throw FileV2SendSourceError.unavailable
         }
-        guard let size = (attributes[.size] as? NSNumber)?.uint64Value else { throw FileV2SendSourceError.unavailable }
-        let seconds = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        guard seconds.isFinite, abs(seconds) < 1.0e12 else { throw FileV2SendSourceError.unavailable }
-        return FileV2SourceIdentity(locator: url.path, size: size, modifiedMs: Int64((seconds * 1000.0).rounded(.down)))
+        let size = UInt64(info.st_size)
+        let modified = FileV2FileSource.modification(of: info)
+        guard let modifiedMs = FileV2FileSource.milliseconds(modified), let modifiedNs = FileV2FileSource.nanoseconds(modified) else {
+            throw FileV2SendSourceError.unavailable
+        }
+        let sampleLength = min(size, UInt64(FileV2SourceIdentity.sampleLength))
+        let head = try FileV2FileSource.digest(of: descriptor, offset: 0, length: Int(sampleLength))
+        let tail = try FileV2FileSource.digest(of: descriptor, offset: size - sampleLength, length: Int(sampleLength))
+        return FileV2SourceIdentity(locator: url.path, size: size, modifiedMs: modifiedMs, modifiedNs: modifiedNs,
+                                    fileNumber: UInt64(info.st_ino), createdMs: FileV2FileSource.creation(of: info),
+                                    headDigest: head, tailDigest: tail)
+    }
+
+    private static func modification(of info: stat) -> timespec {
+        #if canImport(Darwin)
+        return info.st_mtimespec
+        #else
+        return info.st_mtim
+        #endif
+    }
+
+    /// Creation time in epoch milliseconds, where the platform keeps it (Apple platforms; Linux has no birth time in `stat`).
+    private static func creation(of info: stat) -> Int64? {
+        #if canImport(Darwin)
+        return milliseconds(info.st_birthtimespec)
+        #else
+        return nil
+        #endif
+    }
+
+    private static func milliseconds(_ time: timespec) -> Int64? {
+        let seconds = Int64(time.tv_sec)
+        guard abs(seconds) < 1_000_000_000_000 else { return nil }
+        return seconds * 1000 + Int64(time.tv_nsec) / 1_000_000
+    }
+
+    private static func nanoseconds(_ time: timespec) -> Int64? {
+        let (scaled, overflow) = Int64(time.tv_sec).multipliedReportingOverflow(by: 1_000_000_000)
+        guard !overflow else { return nil }
+        let (total, overflowed) = scaled.addingReportingOverflow(Int64(time.tv_nsec))
+        return overflowed ? nil : total
+    }
+
+    /// SHA-256 of `length` bytes at `offset`, read with `pread` (a read that ends early means the file shrank under it).
+    private static func digest(of descriptor: Int32, offset: UInt64, length: Int) throws -> Data {
+        var bytes = [UInt8](repeating: 0, count: length)
+        var done = 0
+        while done < length {
+            let count = bytes.withUnsafeMutableBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return 0 }
+                return pread(descriptor, base + done, length - done, off_t(offset) + off_t(done))
+            }
+            if count > 0 {
+                done += count
+            } else if count < 0 && errno == EINTR {
+                continue
+            } else {
+                throw FileV2SendSourceError.unavailable
+            }
+        }
+        return Data(SHA256.hash(data: bytes))
     }
 
     public func makeReader() throws -> FileV2SourceReader {

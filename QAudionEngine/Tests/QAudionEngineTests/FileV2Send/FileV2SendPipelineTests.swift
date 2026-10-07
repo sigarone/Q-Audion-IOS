@@ -110,7 +110,7 @@ final class FileV2SendPipelineTests: XCTestCase {
 
         // While the transfer ran, no file of the store held the key or the token in any form; afterwards nothing is left at all.
         XCTAssertEqual(seen.secretsFoundInFiles, [])
-        XCTAssertEqual(seen.journalFiles, ["end-to-end.qsj"])
+        XCTAssertEqual(seen.journalFiles, ["end-to-end.lock", "end-to-end.qsj"], "the journal, and the (empty) file of the exclusive lock the run holds")
         try rig.assertNothingIsLeftBehind()
 
         // The nonce rule's ordering, over the whole log.
@@ -323,7 +323,7 @@ final class FileV2SendPipelineTests: XCTestCase {
         for piece in pieces {
             let text = SendStoreFixtures.printed(piece)
             for word in forbidden where !word.isEmpty {
-                XCTAssertFalse(text.contains(word), "(type(of: piece)) prints (word.prefix(10))...")
+                XCTAssertFalse(text.contains(word), "\(type(of: piece)) prints \(word.prefix(10))...")
             }
         }
         XCTAssertTrue(SendStoreFixtures.printed(request).contains("11111111"))

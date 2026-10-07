@@ -19,9 +19,24 @@ import Foundation
 /// is right but whose payload cannot be decoded is `corrupt` (a bug or another version, never a torn write).
 ///
 /// Why ignoring a tail is safe for the nonce rule (WIRE_SPEC 12.8). A `tags` record is appended and flushed BEFORE the part it
-/// covers is PUT, so a record that a crash tore was never followed by a PUT of its part. The only record that could matter and
-/// be lost to media corruption is a tag one, and the pipeline closes that hole too: after a resume it checks that every part the
-/// server already holds has all its chunk tags in the journal, and cancels the transfer if one is missing.
+/// covers is PUT, and a flush that fails (`fsync`, `F_FULLFSYNC`) fails the append, so the part is not PUT. A record that a crash
+/// tore was therefore never followed by a PUT of its part.
+///
+/// What this does NOT make impossible: a `tags` record that the platform reported as flushed and then lost, or that media damage
+/// destroyed (the scan then drops it and everything after it as a tail). The pipeline narrows that case but does not close it:
+///
+/// - after a resume it checks that every part the server still holds has all its chunk tags in the journal, and cancels the
+///   transfer if one is missing. That compares against an object that EXISTS: if the server has deleted it (6 hours idle, 24 hours
+///   at the latest) the object is created again and there is nothing to compare;
+/// - the source identity (`FileV2SourceIdentity`: size, modification time to the nanosecond, inode, creation time, SHA-256 of the
+///   first and last 64 KiB) is checked before anything is sealed, so a source that was replaced or edited at its ends is found.
+///
+/// What is left is the coincidence of three independent faults: the journal lost the tags of a part that was transmitted, the
+/// server no longer holds the object, and the file was edited in its middle without any of the things the identity holds changing.
+/// The first needs the platform or the media to lose a write it acknowledged, the third a tool that restores times by hand.
+///
+/// A record type this version does not know (written by a newer version of the app) ends the scan like a corrupt record does:
+/// after a downgrade the next append cuts it off. The cross-check above covers the parts the server still holds.
 enum FileV2JournalFormat {
     static let magic: [UInt8] = [0x51, 0x53, 0x4A, 0x01]
     /// Largest payload a record may declare: a corrupt length must never size an allocation.

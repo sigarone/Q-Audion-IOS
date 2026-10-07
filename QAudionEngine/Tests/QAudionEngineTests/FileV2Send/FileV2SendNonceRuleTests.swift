@@ -106,21 +106,30 @@ final class FileV2SendNonceRuleTests: XCTestCase {
         try rig.assertNothingIsLeftBehind()
     }
 
-    func testASourceChangedAfterTheUploadStillCancelsAResumeThatOnlyAnnounces() async throws {
-        // Nothing is left to upload, so no part is sealed and no tag is compared: rule 1 alone stops a descriptor of the OLD content from going
-        // out for a file the user has saved again.
+    func testAResumeThatOnlyAnnouncesDoesNotLookAtTheSourceAndAnnouncesTheBlobThatWasUploaded() async throws {
+        // Nothing is left to upload, so no part is sealed and no tag is compared: rule 1 is about what a resume SEALS, and a resume that
+        // only announces seals nothing. The descriptor describes the blob that is on the server, which was complete and was checked
+        // when it was sealed. A source that was saved again since (or that is gone) does not change that blob and does not destroy it.
         let rig = try sequentialRig()
         rig.channel.setOutcomes([.unavailable, .sent])
         let source = GeneratedSource(size: SendTestSizes.oneChunkOver)
+        let pristine = GeneratedSource(size: SendTestSizes.oneChunkOver)
         let first = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "announce-only"))
         assertSendFailure(first, .announceNotSent)
         XCTAssertEqual(rig.fake.objectCount, 1)
 
         source.touch()
+        source.mutate(chunk: 3)
+        let readsBefore = source.readCount
+        let putsBefore = rig.server.puts.count
         let second = await (try rig.makePipeline()).resume(transferID: "announce-only")
-        assertSendFailure(second, .sourceChanged)
-        XCTAssertEqual(rig.fake.objectCount, 0, "cancelled: the object is deleted")
-        XCTAssertEqual(rig.channel.announced.count, 1, "no descriptor goes out after the change")
+        XCTAssertEqual(second, .sentOk)
+        XCTAssertEqual(source.readCount, readsBefore, "the source was not even opened")
+        XCTAssertEqual(rig.server.puts.count, putsBefore, "no upload")
+        XCTAssertEqual(rig.fake.objectCount, 1, "the uploaded blob stays for the recipients")
+        XCTAssertEqual(rig.channel.announced.count, 2, "announced again, with the same key material")
+        XCTAssertEqual(rig.telemetry.count { $0 == .contentChanged }, 0)
+        try rig.assertBlobEqualsOneShot(descriptor: try rig.lastDescriptor(), source: pristine)
         try rig.assertNothingIsLeftBehind()
     }
 
@@ -137,13 +146,15 @@ final class FileV2SendNonceRuleTests: XCTestCase {
         try rig.assertNothingIsLeftBehind()
     }
 
-    func testAFileOnDiskThatIsEditedAndHasItsTimeRestoredIsCaughtByTheLedger() async throws {
-        // The same trick on a real file: edit one byte of a chunk whose tags are journaled, put the modification time back.
+    func testAFileOnDiskThatIsEditedInTheMiddleAndHasItsTimeRestoredIsCaughtByTheLedger() async throws {
+        // The same trick on a real file, as far as it can be taken: edit one byte of a chunk in the MIDDLE of the file (the identity samples
+        // only its first and last 64 KiB), whose tags are journaled, and put the modification time back to the nanosecond. The size, the
+        // times, the file number and both samples are what they were: rule 1 cannot see it, and the ledger of rule 2 must.
         let rig = try sequentialRig()
         let generated = GeneratedSource(size: SendTestSizes.threeParts)
         let url = rig.root.appendingPathComponent("edited.bin")
         try generated.write(to: url)
-        let originalTime = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)
+        let identityBefore = try FileV2FileSource(url: url).currentIdentity()
         let request = FileV2SendRequest(transferID: "edited", source: FileV2FileSource(url: url), conversation: .direct(userID: "bob"),
                                         metadata: FileV2SendMetadata(kind: .file))
         rig.server.setCrash(RecordingServer.CrashPlan(op: .putPart, call: 1, applyEffect: false))
@@ -154,9 +165,10 @@ final class FileV2SendNonceRuleTests: XCTestCase {
         try handle.seek(toOffset: UInt64(9 * FileV2.chunkSize + 5))
         try handle.write(contentsOf: Data([0xFF]))
         try handle.close()
-        try FileManager.default.setAttributes([.modificationDate: originalTime], ofItemAtPath: url.path)
+        try SendFileTimes.restoreModificationTime(ofPath: url.path, toNanoseconds: try XCTUnwrap(identityBefore.modifiedNs))
         let identityNow = try FileV2FileSource(url: url).currentIdentity()
         XCTAssertEqual(identityNow.size, SendTestSizes.threeParts)
+        XCTAssertTrue(identityNow.isUnchanged(comparedTo: identityBefore), "nothing the identity holds has moved")
 
         rig.server.revive()
         let second = await (try rig.makePipeline()).resume(transferID: "edited")

@@ -39,6 +39,8 @@ final class FileV2SendRetryTests: XCTestCase {
                  delays: [300_000]),
             Case(name: "425 is waited for and not counted", failure: error(425, "parts_not_yet_received", retryAfter: 3), times: 6,
                  delays: [3000, 3000, 3000, 3000, 3000, 3000]),
+            Case(name: "425 with Retry-After 300 is the longest wait", failure: error(425, "parts_not_yet_received", retryAfter: 300), times: 1,
+                 delays: [300_000]),
             Case(name: "a reset connection", failure: URLError(.networkConnectionLost), times: 1, delays: [1000]),
             Case(name: "a timeout", failure: URLError(.timedOut), times: 2, delays: [1000, 2000]),
             Case(name: "offline", failure: URLError(.notConnectedToInternet), times: 1, delays: [1000]),
@@ -70,6 +72,21 @@ final class FileV2SendRetryTests: XCTestCase {
         let resumed = await (try rig.makePipeline()).resume(transferID: "long-wait")
         XCTAssertEqual(resumed, .sentOk)
         try rig.assertBlobEqualsOneShot(descriptor: try rig.lastDescriptor(), source: source)
+    }
+
+    func testA425WithARetryAfterOfMoreThanFiveMinutesIsNotWaitedForEitherAndIsNotCutDownTo300() async throws {
+        // The same platform rule for every wait: above 300 s there is no automatic wait, whatever the status (425 is a wait, not a retry).
+        let rig = try sequentialRig()
+        let source = GeneratedSource(size: 700_000)
+        rig.fake.injectFailure(.putPart, error: error(425, "parts_not_yet_received", retryAfter: 301), times: 1)
+        let result = await (try rig.makePipeline()).send(rig.makeRequest(source, id: "long-425"))
+        let failure = assertSendFailure(result, .network)
+        XCTAssertTrue(failure?.keepsState ?? false)
+        XCTAssertEqual(rig.sleeper.delays, [], "no wait at all")
+        XCTAssertEqual(rig.server.puts.count, 1, "no hammering")
+        XCTAssertEqual(try rig.journalNames(), ["long-425.qsj"], "the state is kept")
+        let resumed = await (try rig.makePipeline()).resume(transferID: "long-425")
+        XCTAssertEqual(resumed, .sentOk)
     }
 
     func testAPartThatKeepsFailingPausesTheTransferAfterTheAttemptsAreSpentAndItsStateIsKept() async throws {

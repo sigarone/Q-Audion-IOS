@@ -1,5 +1,10 @@
 import XCTest
 @testable import QAudionEngine
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 // Helpers shared by the tests of the file transfer v2 send store and pipeline.
 
@@ -116,4 +121,21 @@ enum SendStoreFixtures {
     }
 
     static func fileBytes(_ url: URL) throws -> [UInt8] { [UInt8](try Data(contentsOf: url)) }
+}
+
+enum SendFileTimes {
+
+    struct Failure: Error {
+        let step: String
+    }
+
+    /// Puts the modification time of a file back to an exact value, to the nanosecond, the way a tool that preserves times does.
+    static func restoreModificationTime(ofPath path: String, toNanoseconds nanoseconds: Int64) throws {
+        let descriptor = open(path, O_RDWR)
+        guard descriptor >= 0 else { throw Failure(step: "open") }
+        defer { _ = close(descriptor) }
+        let stamp = timespec(tv_sec: Int(nanoseconds / 1_000_000_000), tv_nsec: Int(nanoseconds % 1_000_000_000))
+        var times = [stamp, stamp]
+        guard futimens(descriptor, &times) == 0 else { throw Failure(step: "futimens") }
+    }
 }

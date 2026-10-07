@@ -19,7 +19,9 @@ import FoundationNetworking
 ///  4. A part that fails is sent again with the same bytes: they are held in memory until the part is confirmed.
 ///  5. After a resume, a part the server holds whose chunks are not all in the journal cancels the transfer: the journal lost
 ///     something, and the tags that would prove the bytes are the same are gone.
-///  6. Before every part and before `complete`, the source's size and modification time are compared with the transfer's.
+///  6. Before every part and before `complete`, the source's identity (`FileV2SourceIdentity`: size, modification time to the
+///     nanosecond, inode, creation time, SHA-256 of its first and last 64 KiB) is compared with the transfer's. A resume whose upload
+///     is over does not need the source at all: it finds and checks it (this rule) the first time an upload becomes necessary again.
 ///
 /// Memory: a worker holds its sealed part (at most 8 388 736 bytes) and, while it seals, the plaintext chunk and the sealed chunk
 /// (1 MiB each). The number of workers is the adaptive parallelism, capped by the memory budget that counts exactly that.
@@ -34,8 +36,6 @@ final class FileV2SendEngine: @unchecked Sendable {
         var bytesDone: Int64 = 0
         var phase: FileV2SendPhase
         var maybeAnnounced: Bool
-        /// Counts the objects of this run: a worker started under an older generation knows its object is gone.
-        var generation = 0
         var parallelism: FileV2AdaptiveParallelism?
         /// An object has been created or found on the server for this transfer.
         var objectAcknowledged: Bool
@@ -46,7 +46,9 @@ final class FileV2SendEngine: @unchecked Sendable {
     let id: String
     let begin: FileV2SendBeginRecord
     let encryptor: FileV2Encryptor
-    let source: FileV2SendSource
+    /// The source, once it is known and has passed rule 1: set at construction for a new transfer and for a resume that has to upload,
+    /// and the first time an upload becomes necessary for a resume that only announces.
+    private let verifiedSource: FileV2Locked<FileV2SendSource?>
     let isNew: Bool
     let onState: FileV2SendStateSink?
     let isUserCancelled: @Sendable () -> Bool
@@ -55,13 +57,14 @@ final class FileV2SendEngine: @unchecked Sendable {
     let totalParts: Int
     let state: FileV2Locked<Mutable>
 
-    init(context: FileV2SendContext, begin: FileV2SendBeginRecord, encryptor: FileV2Encryptor, source: FileV2SendSource,
+    /// `source` is the source when the caller has it and has checked it; `nil` for a resume that has no upload to make (see `sourceIsUnchanged`).
+    init(context: FileV2SendContext, begin: FileV2SendBeginRecord, encryptor: FileV2Encryptor, source: FileV2SendSource?,
          recovered: FileV2SendRecovered?, onState: FileV2SendStateSink?, isUserCancelled: @escaping @Sendable () -> Bool) {
         self.ctx = context
         self.id = begin.transferID
         self.begin = begin
         self.encryptor = encryptor
-        self.source = source
+        self.verifiedSource = FileV2Locked(source)
         self.isNew = recovered == nil
         self.onState = onState
         self.isUserCancelled = isUserCancelled
@@ -248,9 +251,25 @@ final class FileV2SendEngine: @unchecked Sendable {
 
     // MARK: Source
 
-    /// Rule 1 of WIRE_SPEC 12.8, kept for the whole run: the source must still be what the transfer started with.
+    /// Rule 1 of WIRE_SPEC 12.8, kept for the whole run: the source must still be what the transfer started with. A source that cannot
+    /// be found or read, or that differs, is "changed": nothing is sealed from it.
+    ///
+    /// For a resume that did not need its source until now (the upload was over, and the server lost the object), the source is found
+    /// here, the first time, and checked like any other.
     func sourceIsUnchanged() -> Bool {
-        guard let now = try? source.currentIdentity() else { return false }
-        return now.isUnchanged(comparedTo: begin.source)
+        let known = verifiedSource.withValue { $0 }
+        let candidate: FileV2SendSource
+        if let known = known {
+            candidate = known
+        } else {
+            guard let found = try? ctx.deps.sources.source(for: begin.source) else { return false }
+            candidate = found
+        }
+        guard let now = try? candidate.currentIdentity(), now.isUnchanged(comparedTo: begin.source) else { return false }
+        if known == nil { verifiedSource.withValue { $0 = candidate } }
+        return true
     }
+
+    /// The source, when `sourceIsUnchanged` has passed at least once (every part checks it before it seals).
+    func currentSource() -> FileV2SendSource? { verifiedSource.withValue { $0 } }
 }

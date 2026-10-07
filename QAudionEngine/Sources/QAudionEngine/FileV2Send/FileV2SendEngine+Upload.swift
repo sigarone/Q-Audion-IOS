@@ -103,9 +103,22 @@ extension FileV2SendEngine {
     /// Seals part `part`, journals its tags, PUTs it. The sealed bytes stay in memory until the part is confirmed, so a retry sends the
     /// same bytes without reading the source again.
     func uploadPart(_ part: Int) async -> PartOutcome {
-        let startedMs = ctx.clock.monotonicMs()
         let partLength = FileV2Wire.partLength(blobLength: blobLength, part: part)
         guard partLength > 0, let obj = state.withValue({ $0.object?.obj }) else { return .failed(FileV2SendFailure(.badRequest)) }
+        if Task.isCancelled { return .interrupted }
+
+        // PIPELINE-WIDE ADMISSION: a part holds one of the pipeline's `maxParallelismByMemory` slots from before its memory is allocated
+        // until its upload ends, whatever the number of transfers that are running. The wait is cancellable and holds nothing.
+        do {
+            return try await ctx.admission.withSlot { await self.uploadAdmittedPart(part, obj: obj, partLength: partLength) }
+        } catch {
+            return .interrupted
+        }
+    }
+
+    /// The body of `uploadPart` once the part has its slot.
+    private func uploadAdmittedPart(_ part: Int, obj: String, partLength: Int) async -> PartOutcome {
+        let startedMs = ctx.clock.monotonicMs()
         if Task.isCancelled { return .interrupted }
 
         ctx.gauge.addPart(bytes: partLength)
@@ -163,6 +176,7 @@ extension FileV2SendEngine {
     /// Reads the chunks of a part from the source and seals them, one chunk at a time. Holds the sealed part, and for the chunk at hand
     /// its plaintext and its sealed form: that is what `FileV2SendContext.perWorkerExtraBytes` accounts for.
     func sealPart(_ part: Int, length: Int) async throws -> SealedPart {
+        guard let source = currentSource() else { throw FileV2SendSourceError.unavailable }
         let reader = try source.makeReader()
         defer { reader.close() }
         var data = Data()

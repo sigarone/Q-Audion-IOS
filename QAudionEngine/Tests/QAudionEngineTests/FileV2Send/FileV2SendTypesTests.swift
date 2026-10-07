@@ -29,7 +29,7 @@ final class FileV2SendTypesTests: XCTestCase {
     }
 
     func testOnlyAPauseOrARefusalThatTheUserCanFixKeepsTheState() {
-        let keeps: Set<FileV2SendFailure.Reason> = [.network, .rateLimited, .auth, .entitlement, .serverFull, .userRemedy,
+        let keeps: Set<FileV2SendFailure.Reason> = [.network, .rateLimited, .auth, .entitlement, .serverFull, .userRemedy, .busy,
                                                     .announceNotSent, .storage]
         for reason in FileV2SendFailure.Reason.allCases {
             XCTAssertEqual(FileV2SendFailure(reason).keepsState, keeps.contains(reason), reason.rawValue)
