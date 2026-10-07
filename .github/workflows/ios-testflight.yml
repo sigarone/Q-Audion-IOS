@@ -1175,7 +1175,7 @@ jobs:
       #     to find (you must know the run number) and short-lived.
       #
       #     This step publishes a SEPARATE artifact named by version
-      #     (dsyms-<CFBundleShortVersionString>) retained 90 days, so any
+      #     (dsyms-<CFBundleShortVersionString>) retained 21 days, so any
       #     later crash can fetch the matching dSYM with:
       #         gh run download <run-id> -n dsyms-<version> -D ./dsyms
       #     No Mac required to symbolicate afterwards (atos / symbolicate,
@@ -1194,7 +1194,7 @@ jobs:
       #     the upload uses a STATIC path glob (never a cross-step env
       #     var), so the upload can never run with an empty path input.
       # ----------------------------------------------------------
-      - name: Archive dSYMs (versioned, 90d)
+      - name: Archive dSYMs (versioned, 21d)
         if: always()
         continue-on-error: true
         run: |
@@ -1254,7 +1254,7 @@ jobs:
           # STATIC path glob -- never a cross-step env var. The collect
           # step always creates dsyms-out/, so this input is never empty.
           path: dsyms-out/*
-          retention-days: 90
+          retention-days: 21
           if-no-files-found: warn
 
       # ----------------------------------------------------------
