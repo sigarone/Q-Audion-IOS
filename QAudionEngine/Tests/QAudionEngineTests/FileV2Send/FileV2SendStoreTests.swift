@@ -241,17 +241,20 @@ final class FileV2SendStoreTests: XCTestCase {
         let boundaries = try writeSampleJournal(store, directory: directory)
         let full = [UInt8](try Data(contentsOf: journalURL(directory)))
         let id = SendStoreFixtures.transferID
-        // Tear the last record in the middle.
-        let cut = (boundaries[boundaries.count - 2] + boundaries[boundaries.count - 1]) / 2
+        // Tear the tags record of part 1 (the longest, 174 bytes) in the middle: what is left of it is longer than the record the next append
+        // writes, so an append that did not cut the garbage off first would leave some of it after the new record.
+        let cut = (boundaries[boundaries.count - 3] + boundaries[boundaries.count - 2]) / 2
+        XCTAssertGreaterThan(cut - boundaries[boundaries.count - 3], 13, "more garbage than the 13 bytes of the record appended next")
 
         let (reopened, reopenedDirectory) = try makeStore()
         try Data(full[0..<cut]).write(to: journalURL(reopenedDirectory))
-        XCTAssertEqual(try reopened.load(id).phase, .uploading, "the torn phase record is ignored")
+        XCTAssertEqual(try reopened.load(id).phase, .uploading, "the torn record, and the phase record after it, are ignored")
+        XCTAssertEqual(try reopened.load(id).tags.count, 8, "only the tags of part 0 survive")
         try reopened.append(.partDone(7), to: id)
         let recovered = try reopened.load(id)
         XCTAssertEqual(recovered.droppedTailBytes, 0, "the new record follows the last good one, not the garbage")
         XCTAssertTrue(recovered.confirmedParts.contains(7))
-        XCTAssertEqual(recovered.tags.count, 16)
+        XCTAssertEqual(recovered.tags.count, 8)
 
         // A fresh store instance (a restart) reads the same thing.
         let restarted = try FileV2FileSendStore(directory: reopenedDirectory)

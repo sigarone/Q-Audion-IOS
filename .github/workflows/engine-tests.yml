@@ -378,7 +378,10 @@ jobs:
               FileV2KatTests FileV2DescriptorKatTests FileV2DescriptorTests FileV2ProfileTests FileV2LibraryTests \
               FileV2ServerTranscriptTests FakeFileV2ServerTests FileV2DispositionTests FileV2ParallelismTests \
               FileV2RetryAfterTests FileV2ServerTypesTests \
-              FileV2SendStoreTests FileV2SecretWrapperTests || true
+              FileV2SendStoreTests FileV2SecretWrapperTests FileV2SendPipelineTests FileV2SendResumeTests \
+              FileV2SendNonceRuleTests FileV2SendJournalOrderTests FileV2SendParallelismTests FileV2SendRetryTests \
+              FileV2SendRemedyTests FileV2AsyncGateTests FileV2SendCancelTests FileV2SendAnnounceTests \
+              FileV2SendMemoryTests FileV2SendTypesTests || true
             echo "::endgroup::"
           done
       - name: Upload the executed test case list
