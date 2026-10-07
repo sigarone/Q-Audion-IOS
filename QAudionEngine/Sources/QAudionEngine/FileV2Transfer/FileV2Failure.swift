@@ -16,6 +16,9 @@ public struct FileV2Failure: Error, Equatable, Sendable, CustomStringConvertible
         case fileTooLarge
         /// The source could not be read (gone, permission, I/O).
         case unreadable
+        /// The document was to be sent as "view once" (`ex` -1): the receiver's row would be removed a few seconds after the reveal tap,
+        /// long before a download of any size ends, so the combination is refused instead of failing for the receiver.
+        case viewOnceUnsupported
         /// The chat cannot seal a message for this contact yet (no session, no pairwise key): the descriptor could not be sent,
         /// so nothing is uploaded. The key exchange it starts is the remedy; the user tries again in a moment.
         case noSecureChannel
@@ -47,6 +50,7 @@ public struct FileV2Failure: Error, Equatable, Sendable, CustomStringConvertible
         case .emptyFile: return "empty_file"
         case .fileTooLarge: return "file_too_large"
         case .unreadable: return "unreadable"
+        case .viewOnceUnsupported: return "view_once_unsupported"
         case .noSecureChannel: return "no_secure_channel"
         case .unavailable: return "unavailable"
         case .objectGone: return "object_gone"

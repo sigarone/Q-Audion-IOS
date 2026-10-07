@@ -74,6 +74,8 @@ enum FileV2FailureText {
             return String(localized: "file_v2.fail.too_large", defaultValue: "Il file supera il limite di 5 GB.", comment: "File transfer error: the picked file is larger than 5 GB.")
         case .unreadable:
             return String(localized: "file_v2.fail.unreadable", defaultValue: "Impossibile leggere il file.", comment: "File transfer error: the file could not be read from disk.")
+        case .viewOnceUnsupported:
+            return String(localized: "file_v2.fail.view_once", defaultValue: "Un documento non può essere inviato con «visualizza una volta».", comment: "File transfer error: view-once is not available for documents.")
         case .noSecureChannel:
             return String(localized: "file_v2.fail.no_channel", defaultValue: "Il canale cifrato con questo contatto non è ancora pronto. Riprova tra un momento.", comment: "File transfer error: no encrypted session with the contact yet, so the file message cannot be sealed.")
         case .unavailable:

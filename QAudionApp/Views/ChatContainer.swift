@@ -2105,6 +2105,14 @@ final class ChatContainer: ObservableObject {
             if scoped { url.stopAccessingSecurityScopedResource() }
             return nil
         }
+        // "View once" (-1) would remove the receiver's row seconds after the reveal tap, before any download ends: refused, not broken.
+        let effectiveTimer = AttachmentTimerResolver.resolve(
+            overrideSeconds: overrideTimerSeconds,
+            conversationDefault: viewModel.conversation.ephemeralTimerSeconds)
+        if effectiveTimer == -1 {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return FileV2Failure(.viewOnceUnsupported)
+        }
         // The descriptor is a TEXT message: if the channel cannot seal one for this contact now, nothing is uploaded for it.
         guard sendService.canSendText(peerUserId: peerUserId) else {
             if scoped { url.stopAccessingSecurityScopedResource() }
@@ -2147,10 +2155,7 @@ final class ChatContainer: ObservableObject {
         uploadProgress[msgId] = 0
         refreshFromStore()
 
-        // The descriptor's own timer: the pre-send choice, else the conversation default (-1 view once, N seconds, nothing when 0).
-        let effectiveTimer = AttachmentTimerResolver.resolve(
-            overrideSeconds: overrideTimerSeconds,
-            conversationDefault: viewModel.conversation.ephemeralTimerSeconds)
+        // The descriptor's own timer: the pre-send choice, else the conversation default (N seconds, nothing when 0).
         let timerValue: Int64? = effectiveTimer.flatMap { (seconds: Int) -> Int64? in seconds == 0 ? nil : Int64(seconds) }
         let context = FileV2OutboundRunner.Context(
             messageId: msgId, conversationId: convId, peerUserId: peerId, displayText: displayText, sourceURL: url,

@@ -33851,6 +33851,24 @@
           }
         }
       }
+    },
+    "file_v2.fail.view_once": {
+      "extractionState": "manual",
+      "comment": "File transfer error: view-once is not available for documents.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un documento non può essere inviato con «visualizza una volta»."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A document cannot be sent as “view once”."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
