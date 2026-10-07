@@ -132,6 +132,18 @@ final class FileV2RetryAfterTests: XCTestCase {
         XCTAssertEqual(seconds("Sun, 06 Nov 1994 08:49:37 GMT", now: Int64.min), 300)
     }
 
+    /// The two-digit year of the obsolete form is read against the current year, which comes from the clock: a clock at either end of
+    /// the range of an `Int64` must not trap in the century arithmetic.
+    func testTheTwoDigitYearRuleNeverTrapsOnAnExtremeClock() {
+        for now in [Int64.max, Int64.min, Int64.max - 1, Int64.min + 1, 0, -1, 253_402_300_799_000, -62_135_596_800_000] {
+            for year in ["00", "49", "50", "76", "77", "99"] {
+                _ = seconds("Sunday, 06-Nov-\(year) 08:49:37 GMT", now: now)
+            }
+            _ = seconds("Sun, 06 Nov 9999 23:59:59 GMT", now: now)
+            _ = seconds("Mon Jan  1 00:00:00 0000", now: now)
+        }
+    }
+
     // MARK: Used with the policy
 
     func testTheParsedValueFeedsThePolicy() {
