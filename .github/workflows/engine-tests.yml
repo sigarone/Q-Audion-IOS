@@ -375,7 +375,9 @@ jobs:
               CallerBusyPeerSilenceTests CallerBusyTeardownTests BusyToneTests \
               CallerBusyHoldTests MissedCallsBadgeStateTests MissedCallAlertPolicyTests BadgeAndBusyHoldWiringTests \
               GhostCallPolicyTests \
-              FileV2KatTests FileV2DescriptorKatTests FileV2DescriptorTests FileV2ProfileTests FileV2LibraryTests || true
+              FileV2KatTests FileV2DescriptorKatTests FileV2DescriptorTests FileV2ProfileTests FileV2LibraryTests \
+              FileV2ServerTranscriptTests FakeFileV2ServerTests FileV2DispositionTests FileV2ParallelismTests \
+              FileV2RetryAfterTests FileV2ServerTypesTests || true
             echo "::endgroup::"
           done
       - name: Upload the executed test case list
