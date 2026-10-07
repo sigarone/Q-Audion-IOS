@@ -26,6 +26,11 @@ struct VideoCallView: View {
     /// `feat.calls.video` entitlement. Mirrors `LiveInCallScreen`'s
     /// `upgradeSheetCapability`.
     @State private var upgradeSheetCapability: Capability? = nil
+    /// The chat with the peer, opened over the call (the "Chat" button of the controls). The cover, the unread dot and the action are
+    /// shared with the audio call screen and live in `InCallChatHost` (see `InCallChatCover`), which sits above both and so keeps
+    /// the chat open if `ContentView` swaps this screen for `LiveInCallScreen`; nil = no host or no peer, no button. Showing the
+    /// cover tears nothing down here: this view, its renderers and the capture session behind them stay mounted underneath.
+    @Environment(\.inCallChat) private var inCallChat
 
     /// W-MUTEBTNSRC (2026-07-24) — read LIVE from the published mirror. This was
     /// an `@State` seeded once in `onAppear`, so a mute arriving from CallKit
@@ -532,15 +537,19 @@ struct VideoCallView: View {
     // MARK: - Bottom controls (unified call UI — cosmetic regroup only)
     //
     // Same 5 buttons, same closures (videoFlipCamera / videoSetCameraEnabled
-    // / setMuted / setSpeaker / endCall) — nothing added or removed. Order
-    // changed to match the unified dock's primary-controls-together,
-    // hangup-last convention from call-guardian-reference.html /
-    // InCallScreen's regrouped dock: mute · speaker · video · invert ·
-    // end (was: invert · video · mute · end · speaker, with hangup
-    // stranded in the middle).
+    // / setMuted / setSpeaker / endCall). Order changed to match the unified
+    // dock's primary-controls-together, hangup-last convention from
+    // call-guardian-reference.html / InCallScreen's regrouped dock: mute ·
+    // speaker · video · invert · end (was: invert · video · mute · end ·
+    // speaker, with hangup stranded in the middle). The "Chat" button (the
+    // chat with the peer over the call, `InCallChatHost`) goes before the
+    // hangup when the call offers it.
+    //
+    // Six buttons do not fit on a 375 pt phone with fixed 24 pt gaps, so the
+    // row shares its width between the buttons (capped for iPad) instead.
 
     private var bottomControls: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 0) {
             videoButton(
                 icon: isMuted ? "mic.slash.fill" : "mic.fill",
                 label: isMuted ? "Riattiva" : "Muto",
@@ -578,10 +587,28 @@ struct VideoCallView: View {
             videoButton(icon: "camera.rotate.fill", label: "Inverti") {
                 appState.videoFlipCamera()
             }
+            if let chat = inCallChat {
+                chatButton(chat)
+            }
             videoButton(icon: "phone.down.fill", label: "Termina", isEndCall: true) {
                 appState.endCall()
             }
         }
+        .frame(maxWidth: 440)
+        .padding(.horizontal, 8)
+    }
+
+    /// The "Chat" button: opens the chat with the peer over the call. A dot says a message is waiting there.
+    private func chatButton(_ chat: InCallChatAccess) -> some View {
+        videoButton(
+            icon: "bubble.left.fill",
+            label: String(localized: "video_call.chat.button", defaultValue: "Chat", comment: "Label under the button of the video call controls that opens the chat with the person on the call."),
+            badge: chat.hasUnread
+        ) {
+            chat.open(resolvedPeerDisplayName)
+        }
+        .accessibilityLabel(String(localized: "in_call.chat.open", defaultValue: "Apri la chat", comment: "Accessibility label of the button on the call screen that opens the chat with the person on the call."))
+        .accessibilityValue(chat.hasUnread ? String(localized: "in_call.chat.unread", defaultValue: "Nuovo messaggio", comment: "Accessibility value of the chat button on the call screen when a message from the person on the call is waiting.") : "")
     }
 
     // MARK: - Video control button helper
@@ -591,6 +618,7 @@ struct VideoCallView: View {
         label: String,
         isActive: Bool = false,
         isEndCall: Bool = false,
+        badge: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -604,11 +632,24 @@ struct VideoCallView: View {
                     )
                     .clipShape(Circle())
                     .foregroundColor(.white)
+                    .overlay(alignment: .topTrailing) {
+                        if badge {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 12, height: 12)
+                                .overlay(Circle().stroke(Color.black, lineWidth: 2))
+                                .offset(x: 2, y: -2)
+                                .accessibilityHidden(true)
+                        }
+                    }
 
                 Text(label)
                     .font(.system(size: 9))
                     .foregroundColor(.gray)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
+            .frame(maxWidth: .infinity)
         }
     }
 

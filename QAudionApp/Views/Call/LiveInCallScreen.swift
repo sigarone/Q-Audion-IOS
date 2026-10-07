@@ -71,11 +71,9 @@ struct LiveInCallScreen: View {
     /// as `showDiagnostics`.
     @State private var showAddParticipant: Bool = false
 
-    /// The chat with the peer, opened over the call (the "Chat" slot of the dock; see `InCallChatCover`). nil = closed.
-    @State private var callChatTarget: InCallChatTarget? = nil
-    /// A message of the peer is waiting in that chat: the dot on the dock button. Read from the store when a chat event arrives and
-    /// when the cover closes, never on the per-second tick.
-    @State private var chatHasUnread: Bool = false
+    /// The chat with the peer, opened over the call (the "Chat" slot of the dock). The cover, the unread dot and the action are shared
+    /// with the video call screen and live in `InCallChatHost` (see `InCallChatCover`); nil = no host or no peer, no button.
+    @Environment(\.inCallChat) private var inCallChat
 
     /// Cached peer display name. Resolved once on appear / on
     /// callContactId change so the contacts-store lookup doesn't run
@@ -136,7 +134,6 @@ struct LiveInCallScreen: View {
             // mirroring of that material are blocked while it is up.
             ScreenshotLockService.lock()
             resolvePeerDisplayName()
-            refreshChatUnread()
             rekeyAnchorEpoch = Date().timeIntervalSince1970
             // W-AUDIOUILIE (2026-07-24) — this surface is REMOUNTED mid-call
             // every time the pair transitions to/from both-paused, and both
@@ -206,39 +203,15 @@ struct LiveInCallScreen: View {
             UpgradeSheet(capability: capability)
                 .environmentObject(appState)
         }
-        // The chat with the peer, over the call: a cover (not a sheet) so that the SAS words and the identity of this screen are not
-        // visible behind it. The call itself is untouched. On the way back the secure window of this screen is put back (the chat
-        // releases it when it goes away, like on every screen it leaves) and the unread dot is recomputed.
-        .fullScreenCover(item: $callChatTarget, onDismiss: {
-            ScreenshotLockService.lock()
-            refreshChatUnread()
-        }) { target in
-            InCallChatCover(target: target)
-                .environmentObject(appState)
-                .environmentObject(capabilityGate)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: AppState.chatRefreshNotification)) { _ in
-            refreshChatUnread()
-        }
+        // The chat with the peer, over the call, is presented by `InCallChatHost` (above this screen and `VideoCallView`): a cover, so
+        // the SAS words and the identity of this screen are not visible behind it, and it survives the swap between the two screens.
     }
 
-    /// Opens the chat with the person on the call (it is created empty when there is none yet).
-    private func handleOpenChat() {
-        guard let peer = appState.callContactId, !peer.isEmpty else { return }
-        callChatTarget = InCallChatTarget(
-            conversationId: appState.resolveOrCreateConversationId(forPeerUserId: peer),
-            peerUserId: peer,
-            peerDisplayName: cachedPeerDisplayName)
-    }
-
-    /// The dot on the chat button: the conversation with the peer has unread messages and the chat is not open.
-    private func refreshChatUnread() {
-        guard callChatTarget == nil, let peer = appState.callContactId, !peer.isEmpty else {
-            chatHasUnread = false
-            return
-        }
-        let unread = ConversationStore().loadConversations().first(where: { $0.peerUserId == peer })?.unreadCount ?? 0
-        chatHasUnread = unread > 0
+    /// Opens the chat with the person on the call (it is created empty when there is none yet). nil hides the dock button.
+    private var openChatAction: (() -> Void)? {
+        guard let chat = inCallChat else { return nil }
+        let name = cachedPeerDisplayName
+        return { chat.open(name) }
     }
 
     /// W-CALLPROMOTE — contacts selectable from the "+" sheet: every stored
@@ -435,8 +408,8 @@ struct LiveInCallScreen: View {
                 // "add participant" (1:1 → group escalation) button.
                 addParticipantUnlocked: capabilityGate.isUnlocked(.callsGroup),
                 onAddParticipantLocked: { upgradeSheetCapability = .callsGroup },
-                onOpenChat: handleOpenChat,
-                chatHasUnread: chatHasUnread,
+                onOpenChat: openChatAction,
+                chatHasUnread: inCallChat?.hasUnread ?? false,
                 onHangup: handleHangup,
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
