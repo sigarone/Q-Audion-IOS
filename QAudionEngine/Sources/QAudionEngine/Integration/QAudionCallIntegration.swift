@@ -1037,10 +1037,34 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// signingPrivateKeyRaw:)` over `SovereignIdentity.signingPrivate`.
     public var signTranscript: ((Data) -> Data?)?
 
+    /// W-SIGNERWAIT (2026-10-07) — the LAZY source of the local signer's public key. Read at USE,
+    /// never captured when the integration is wired: the responder integration is built the
+    /// instant the first OFFER of a cold start arrives, which can be before this device's identity
+    /// exists (first launch) or can be read (Keychain still locked). A value copied at that moment
+    /// stayed `nil` for the whole life of the integration, so every OFFER retry of the call failed
+    /// with `sign_unavailable` even after the identity was ready. Wired in `AppState` to
+    /// `SovereignIdentityManager.signingPublicKeyEnsuringIdentity()`.
+    public var provideLocalSignerIdentityKey: (() -> Data?)?
+
     /// The LOCAL signer's 32-byte raw Ed25519 public identity key, written into
-    /// the bundle's `signerIdentityKey` field alongside the signature. `nil` →
-    /// unsigned. Wired from `SovereignIdentity.signingPublic`.
-    public var localSignerIdentityKey: Data?
+    /// the bundle's `signerIdentityKey` field alongside the signature. `nil` → no
+    /// signer yet, so no OFFER/ACCEPT is built (never an unsigned handshake). Resolved on every
+    /// read from `provideLocalSignerIdentityKey`; there is deliberately no stored copy.
+    public var localSignerIdentityKey: Data? { provideLocalSignerIdentityKey?() }
+
+    /// Wait (bounded) until the local signer key can be read. `true` → ready now. Logs only when
+    /// it actually had to wait or gave up (numeric `key=value` tokens survive the log redactor).
+    func awaitLocalSignerKey(
+        maxWaitMs: UInt64 = SignerKeyReadiness.maxWaitMs,
+        pollMs: UInt64 = SignerKeyReadiness.pollMs
+    ) async -> Bool {
+        let result = await SignerKeyReadiness.waitForKey(
+            read: { self.localSignerIdentityKey }, maxWaitMs: maxWaitMs, pollMs: pollMs)
+        if result.waitedMs > 0 || !result.ready {
+            print("[QAudionCallIntegration] signerwait ok=\(result.ready ? 1 : 0) waited_ms=\(result.waitedMs)")
+        }
+        return result.ready
+    }
 
     /// Resolve the TOFU-PINNED 32-byte Ed25519 key for a peer contactId, or nil
     /// if not pinned yet (spec §5c trust source, highest priority). Wired from a
@@ -1989,6 +2013,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // one — F9). Until it is pinned the PeerConnection applies no remote SDP.
             guard pinPeerDtlsFingerprint(callId: callId, fingerprint: peerFp) else {
                 throw IntegrationError.handshakeAborted(code: "dtls_fp_mismatch")
+            }
+
+            // W-SIGNERWAIT — the ACCEPT is signed, so there is no ACCEPT without the local signer
+            // key. On a cold start that key can be moments away (Keychain unlocking, the identity
+            // of a first launch still being created): wait for it, a short fixed time, before any
+            // state or crypto work is spent on this round. Zero cost when the key is already
+            // readable (every warm call, every re-key round). Out of time → the same
+            // `sign_unavailable` as before; never an unsigned ACCEPT.
+            guard await awaitLocalSignerKey() else {
+                throw IntegrationError.handshakeAborted(code: "sign_unavailable")
             }
 
             // Re-key round freshness (every round, unconditionally): refuse an OFFER whose signed

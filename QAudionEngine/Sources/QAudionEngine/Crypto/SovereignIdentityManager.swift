@@ -289,6 +289,28 @@ public final class SovereignIdentityManager {
     /// Check if sovereign identity exists.
     public func hasSovereignIdentity() -> Bool { loadIdentity() != nil }
 
+    /// W-SIGNERBOOT (2026-10-07) — make sure this device HAS an identity, creating it only when none
+    /// is stored (and the Keychain is readable). Serialised process-wide, see
+    /// `SovereignIdentityBootstrap`. An item that is stored but cannot be parsed reads as absent and
+    /// is replaced, exactly as the key-exchange path always did.
+    @discardableResult
+    public func ensureIdentity(serverUrl: String = "", displayName: String? = nil) -> SovereignIdentityBootstrap.Outcome {
+        SovereignIdentityBootstrap.ensure(
+            read: { try self.readIdentity() != nil },
+            create: { try self.saveIdentity(self.generateIdentity(serverUrl: serverUrl, displayName: displayName)) })
+    }
+
+    /// W-SIGNERBOOT — the 32-byte Ed25519 public key the handshake signs under, creating the
+    /// identity first if this device has none yet. `nil` only when the Keychain cannot be read (or
+    /// written) right now; the caller treats that as "signer not ready" and never as "unsigned".
+    /// One Keychain read on the usual path.
+    public func signingPublicKeyEnsuringIdentity() -> Data? {
+        if let pub = loadIdentity()?.signingPublic, pub.count == 32 { return pub }
+        ensureIdentity()
+        guard let pub = loadIdentity()?.signingPublic, pub.count == 32 else { return nil }
+        return pub
+    }
+
     /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — permanently erase
     /// the sovereign identity keypair from the Keychain. Neither
     /// `remote_wipe` nor account deletion used to call this at all: this
