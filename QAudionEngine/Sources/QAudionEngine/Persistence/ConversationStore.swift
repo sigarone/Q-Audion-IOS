@@ -240,14 +240,18 @@ public final class ConversationStore {
     public func loadPendingOutboundTextMessages() -> [Message] {
         do {
             return try db.reader.read { db in
-                try Message
+                let rows = try Message
                     .filter(Column("status") == Message.Status.sending.rawValue)
                     .filter(Column("direction") == Message.Direction.outgoing.rawValue)
                     .filter(Column("mediaMimeType") == nil)
-                    .filter(Column("mediaLocalPath") == nil)
                     .filter(Column("deletedAt") == nil)
                     .order(Column("sentAt").asc)
                     .fetchAll(db)
+                // A row with a local copy of a file (`mediaLocalPath`) is an attachment of the old kind and stays out, EXCEPT a
+                // row that carries a v2 file descriptor: that one is TEXT for the outbox even though the sender's own bubble
+                // shows the local copy, because the descriptor is what is re-sent. (`plaintext` is sealed at rest, so this is
+                // judged on the opened value, here, and not in SQL.)
+                return rows.filter { $0.mediaLocalPath == nil || FileV2Message.hasFileMessagePrefix($0.plaintext) }
             }
         } catch {
             print("[ConversationStore] loadPendingOutboundTextMessages failed: \(error)")

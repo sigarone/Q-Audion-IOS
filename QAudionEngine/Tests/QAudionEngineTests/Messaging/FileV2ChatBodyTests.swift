@@ -145,4 +145,85 @@ final class FileV2ChatBodyTests: XCTestCase {
         XCTAssertEqual(FileV2ChatBody.bubbleInfo(for: plain)?.size, 999)
         XCTAssertNil(FileV2ChatBody.bubbleInfo(for: inbound("ciao")))
     }
+
+    // MARK: The kinds
+
+    private func mediaBody(kind: FileV2Descriptor.Kind, media: FileV2Descriptor.Media? = nil, preview: Data? = nil,
+                           withThumbnail: Bool = false) throws -> String {
+        let encryptor = try FileV2Encryptor.makeNew(plaintextSize: 5_000)
+        let source = FileV2Descriptor.Source(
+            via: .srv, obj: "0a1b2c3d-0000-4000-8000-123456789abc",
+            token: FileV2Descriptor.Token(v: String(repeating: "ab", count: 32), exp: 1_800_000_000_000, max: 30))
+        let input = FileV2FileInput(encryptor: encryptor, kind: kind, source: source, name: "x", mimeType: nil,
+                                    media: media, preview: preview)
+        var thumbnail: FileV2FileInput?
+        if withThumbnail {
+            let thumbEncryptor = try FileV2Encryptor.makeNew(plaintextSize: 800)
+            thumbnail = FileV2FileInput(encryptor: thumbEncryptor, kind: .thumb, source: source)
+        }
+        return try FileV2DescriptorBuilder.build(FileV2DescriptorInput(file: input, thumbnail: thumbnail))
+    }
+
+    func test_anImageAVoiceNoteAndAVideoShowTheirLabel_notTheirFileName() throws {
+        let image = try mediaBody(kind: .image)
+        let voice = try mediaBody(kind: .voice)
+        let video = try mediaBody(kind: .video)
+        XCTAssertEqual(FileV2ChatBody.classify(text: image).displayText, FileV2ChatBody.kindLabelText(.image))
+        XCTAssertEqual(FileV2ChatBody.classify(text: voice).displayText, FileV2ChatBody.kindLabelText(.voice))
+        XCTAssertEqual(FileV2ChatBody.classify(text: video).displayText, FileV2ChatBody.kindLabelText(.video))
+        XCTAssertEqual(FileV2ChatBody.classify(text: try mediaBody(kind: .file)).displayText, "📎 x")
+    }
+
+    func test_theLabelsCanBeLocalised() throws {
+        let saved = FileV2ChatBody.kindLabelText
+        defer { FileV2ChatBody.kindLabelText = saved }
+        FileV2ChatBody.kindLabelText = { label in
+            switch label {
+            case .image: return "Photo"
+            case .voice: return "Voice note"
+            case .video: return "Video"
+            }
+        }
+        XCTAssertEqual(FileV2ChatBody.classify(text: try mediaBody(kind: .image)).displayText, "Photo")
+    }
+
+    func test_theBubbleGetsTheLimitedHintsThePreviewAndTheThumbnailFlag() throws {
+        let hostile = FileV2Descriptor.Media(w: -4, h: 1 << 40, dur: 1 << 50, wave: Array(repeating: 9_999, count: 1_000))
+        let body = try mediaBody(kind: .video, media: hostile, preview: Data([1, 2, 3]), withThumbnail: true)
+        guard case .file(let file) = FileV2ChatBody.classify(text: body) else { return XCTFail("not a file") }
+        XCTAssertNil(file.hints.width)
+        XCTAssertNil(file.hints.height)
+        XCTAssertEqual(file.hints.durationMs, FileV2MediaHints.maxDurationMs)
+        XCTAssertEqual(file.hints.wave.count, FileV2MediaHints.maxWaveSamples)
+        XCTAssertTrue(file.hints.wave.allSatisfy { $0 <= FileV2MediaHints.maxWaveValue })
+        XCTAssertEqual(file.preview, Data([1, 2, 3]))
+        XCTAssertTrue(file.hasThumbnail)
+        XCTAssertEqual(file.descriptorKind, .video)
+
+        let plain = try mediaBody(kind: .image)
+        guard case .file(let bare) = FileV2ChatBody.classify(text: plain) else { return XCTFail("not a file") }
+        XCTAssertFalse(bare.hasThumbnail)
+        XCTAssertNil(bare.preview)
+    }
+
+    func test_aPendingRowRemembersItsKind() throws {
+        XCTAssertEqual(FileV2ChatBody.pendingMime(kind: "file"), FileV2ChatBody.pendingMime)
+        for kind in ["image", "voice", "video"] {
+            let mime = FileV2ChatBody.pendingMime(kind: kind)
+            XCTAssertTrue(FileV2ChatBody.isPending(mime: mime))
+            XCTAssertEqual(FileV2ChatBody.pendingKind(mime: mime), kind)
+            let row = Message(id: UUID(), conversationId: conversation, direction: .outgoing,
+                              plaintext: "x", sentAt: Date(), deliveredAt: nil, readAt: nil, status: .sending,
+                              mediaDurationMs: 4200, mediaMimeType: mime)
+            let info = try XCTUnwrap(FileV2ChatBody.bubbleInfo(for: row))
+            XCTAssertEqual(info.kind, kind)
+            XCTAssertEqual(info.hints.durationMs, 4200)
+        }
+        XCTAssertTrue(FileV2ChatBody.isPending(mime: FileV2ChatBody.pendingMime))
+        XCTAssertEqual(FileV2ChatBody.pendingKind(mime: FileV2ChatBody.pendingMime), "file")
+        XCTAssertEqual(FileV2ChatBody.pendingKind(mime: FileV2ChatBody.pendingMime + ";kind=bogus"), "file")
+        XCTAssertFalse(FileV2ChatBody.isPending(mime: nil))
+        XCTAssertFalse(FileV2ChatBody.isPending(mime: "image/jpeg"))
+        XCTAssertFalse(FileV2ChatBody.isPending(mime: FileV2ChatBody.pendingMime + "x"))
+    }
 }
