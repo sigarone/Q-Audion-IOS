@@ -367,6 +367,11 @@ struct InCallScreen: View {
     /// capability-agnostic shape as `upgradeToVideoUnlocked` above.
     let addParticipantUnlocked: Bool
     let onAddParticipantLocked: () -> Void
+    /// The chat with the peer, opened over the call without leaving it (the "Chat" slot of the control dock). nil hides the button:
+    /// only the live 1:1 call screen (`LiveInCallScreen`) passes it.
+    let onOpenChat: (() -> Void)?
+    /// A message of the peer is waiting in that chat (a dot on the button).
+    let chatHasUnread: Bool
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
     let onToggleDiagnostics: () -> Void
@@ -478,6 +483,8 @@ struct InCallScreen: View {
          onAddParticipant: @escaping () -> Void = {},
          addParticipantUnlocked: Bool = true,
          onAddParticipantLocked: @escaping () -> Void = {},
+         onOpenChat: (() -> Void)? = nil,
+         chatHasUnread: Bool = false,
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
@@ -538,6 +545,8 @@ struct InCallScreen: View {
         self.onAddParticipant = onAddParticipant
         self.addParticipantUnlocked = addParticipantUnlocked
         self.onAddParticipantLocked = onAddParticipantLocked
+        self.onOpenChat = onOpenChat
+        self.chatHasUnread = chatHasUnread
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
@@ -2930,9 +2939,9 @@ struct InCallScreen: View {
     // unified dock layout from call-guardian-reference.html:
     //   Row 1 (primary):   Mute · Speaker · Video · Share screen
     //   Row 2 (secondary): Enhance · Add(disabled) · End
-    // The reference's Row 2 also has "Chat" as its first button — chat-
-    // over-call is explicitly wave-2 scope (deferred), so it is omitted
-    // here rather than added as a non-functional placeholder button.
+    // The reference's Row 2 also has "Chat" as its first button: it is
+    // there when the caller passes `onOpenChat` (the live 1:1 call screen
+    // does), and absent otherwise rather than a non-functional placeholder.
     //
     // W557 constraint carried over unchanged: two rows inside a rounded-
     // rectangle card so 4-5 buttons per row always fit on a 375pt screen
@@ -3036,6 +3045,10 @@ struct InCallScreen: View {
     private var secondaryControlsRow: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 0)
+            if let onOpenChat {
+                chatButton(action: onOpenChat)
+                Spacer(minLength: 0)
+            }
             CircularAction(
                 icon: "line.3.horizontal",
                 action: onToggleVoiceEnhancement,
@@ -3075,6 +3088,29 @@ struct InCallScreen: View {
             .accessibilityLabel("Termina chiamata")
             Spacer(minLength: 0)
         }
+    }
+
+    /// The "Chat" slot of the dock: opens the chat with the peer over the call. A dot says a message is waiting there.
+    private func chatButton(action: @escaping () -> Void) -> some View {
+        CircularAction(
+            icon: "bubble.left.fill",
+            action: action,
+            diameter: 48,
+            background: scheme.surfaceVariant,
+            iconColor: scheme.onSurface
+        )
+        .overlay(alignment: .topTrailing) {
+            if chatHasUnread {
+                Circle()
+                    .fill(extras.riskHigh)
+                    .frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(scheme.surface, lineWidth: 2))
+                    .offset(x: 2, y: -2)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityLabel(String(localized: "in_call.chat.open", defaultValue: "Apri la chat", comment: "Accessibility label of the button on the call screen that opens the chat with the person on the call."))
+        .accessibilityValue(chatHasUnread ? String(localized: "in_call.chat.unread", defaultValue: "Nuovo messaggio", comment: "Accessibility value of the chat button on the call screen when a message from the person on the call is waiting.") : "")
     }
 
     // MARK: - Helpers

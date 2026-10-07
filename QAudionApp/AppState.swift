@@ -11777,9 +11777,12 @@ final class AppState: ObservableObject {
         // A v2 file message carries its own timer (`ex`) and export permission (`xp`) in the descriptor.
         var fileV2Ex: Int? = nil
         var fileV2Xp: Int? = nil
+        // The name of the file's receipts (`qa_att_receipt:1`): the row keeps it so the read receipt can be sent later.
+        var fileV2WireId: String? = nil
         if case .file(let fileV2) = fileV2Body {
             fileV2Ex = fileV2.ex.map { Int(clamping: $0) }
             fileV2Xp = fileV2.xp.map { Int(clamping: $0) }
+            fileV2WireId = FileV2ChatBody.receiptId(ofBody: decryptedRaw)
         }
         let attachmentExOverride: Int? = pendingMarker?.qfile.ex ?? pendingAttachAnnounce?.att.ex ?? fileV2Ex
         let effectiveTimerSecs = AttachmentTimerResolver.resolve(
@@ -11837,6 +11840,7 @@ final class AppState: ObservableObject {
             expiresAt: ephExpiry,
             isViewOnce: isViewOnce ? true : nil,
             exportBlocked: exportBlocked,
+            wireAttachmentId: fileV2WireId,
             isPlaceholder: isUndecryptablePlaceholder ? true : nil
         )
         // W83: bump conversation preview + activity + unread so the
@@ -11865,12 +11869,15 @@ final class AppState: ObservableObject {
             msg, preview: plaintext, incrementUnread: !isMuted, kind: inboundKind)
         switch recorded {
         case .inserted:
-            break
+            // File transfer v2: the sender of a file learns it arrived the moment its descriptor lands, like the delivery receipt of a
+            // text, not after the download (a video or a document is only fetched on a tap).
+            sendFileV2DeliveredReceipt(wireId: fileV2WireId, senderId: senderId)
         case .replacedPlaceholder:
             // The resend of a message we had given up on landed: the
             // placeholder row now carries the real text. No second row, no
             // second unread, no banner.
             RTLog.info("chat", "msg_receive placeholder_replaced=1")
+            sendFileV2DeliveredReceipt(wireId: fileV2WireId, senderId: senderId)
             NotificationCenter.default.post(
                 name: AppState.chatRefreshNotification, object: nil,
                 userInfo: ["peerUserId": senderId, "conversationId": conv.id]
@@ -13637,6 +13644,16 @@ final class AppState: ObservableObject {
         Task { [weak self] in
             await self?.sendAttachmentReceipt(
                 recipientId: senderId, wireId: fileId, status: AttachmentReceiptEnvelope.statusDelivered)
+        }
+    }
+
+    /// File transfer v2 (1:1 only: a group has no per-file receipt): the "delivered" receipt of a file whose descriptor just landed.
+    /// `wireId` is `FileV2ChatBody.receiptId(ofBody:)`; `nil` (not a file, the picture of a contact) sends nothing.
+    private func sendFileV2DeliveredReceipt(wireId: String?, senderId: String) {
+        guard let wireId else { return }
+        Task { [weak self] in
+            await self?.sendAttachmentReceipt(
+                recipientId: senderId, wireId: wireId, status: AttachmentReceiptEnvelope.statusDelivered)
         }
     }
 
