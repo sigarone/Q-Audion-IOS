@@ -31,12 +31,20 @@ def main() -> int:
         return 0
 
     rows = []
+    durations = []
+
+    def _seconds(value):
+        try:
+            return float(str(value).strip().rstrip("s"))
+        except ValueError:
+            return 0.0
 
     def walk(node, suites):
         kind = node.get("nodeType", "")
         name = node.get("name", "")
         if kind == "Test Case":
             rows.append((node.get("result", "?"), "/".join(suites + [name])))
+            durations.append((_seconds(node.get("durationInSeconds", node.get("duration", "0"))), "/".join(suites + [name])))
         nxt = suites + [name] if kind == "Test Suite" else suites
         for child in node.get("children", []) or []:
             walk(child, nxt)
@@ -54,6 +62,9 @@ def main() -> int:
     if out_path:
         with open(out_path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
+    print("--- slowest 25 test cases (seconds)")
+    for value, name in sorted(durations, reverse=True)[:25]:
+        print(f"{value:9.2f}  {name}")
     for flt in filters:
         matched = [ln for ln in lines if f"/{flt}/" in ln or ln.split("\t", 1)[1].startswith(flt + "/")]
         print(f"--- {flt}: {len(matched)} cases")
