@@ -10677,25 +10677,18 @@ final class AppState: ObservableObject {
             return
         }
 
-        // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message is never shown as the text it is. In a group the
-        // descriptor travels with msg_type 1 (above); one that arrives in a TEXT frame is a placeholder (the descriptor holds the key
-        // of the file and never reaches a row, a banner or a log), and a control message is dropped.
-        let groupFileBody = FileV2ChatBody.classify(text: plaintext)
-        if groupFileBody == .control {
-            let controlGroup: String = String(groupHex.prefix(8))
-            RTLog.warn("group", "text filev2_control=1 dropped=1 g=" + controlGroup)
-            if live { sendGroupDelivered(serverMsgId) }
+        // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message is never shown as the text it is. The group
+        // descriptor travels with msg_type 1 (above); one that arrives in a TEXT frame is read the same way (it is a file message
+        // whichever frame carried it, and never text): a descriptor becomes a file row, a control message is dropped, a rejected one
+        // is a placeholder.
+        if FileV2Message.hasFileMessagePrefix(plaintext) {
+            landIncomingGroupFileV2(
+                plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
+                senderId: senderId, serverMsgId: serverMsgId,
+                clientMsgId: clientMsgId, ts: ts, live: live)
             return
         }
-        let shownText: String
-        switch groupFileBody {
-        case .text:
-            shownText = plaintext
-        case .file, .invalid:
-            shownText = FileV2ChatBody.invalid.displayText ?? ""
-        case .unsupportedVersion, .control:
-            shownText = groupFileBody.displayText ?? ""
-        }
+        let shownText: String = plaintext
 
         // Store posts didChangeNotification → an open GroupChatScreen
         // reloads live; persisted so it also shows on next open.
@@ -10821,7 +10814,10 @@ final class AppState: ObservableObject {
         plaintext: String, groupIdUuid: String, groupHex: String, senderId: String,
         serverMsgId: String, clientMsgId: String?, ts: Date, live: Bool
     ) {
-        let rowId = clientMsgId ?? serverMsgId
+        // The id of the row names the directory of its files on this device: it is made here, at random, and never taken from the
+        // wire (a sender must not be able to pick a name that another row, or another file, already has). A redelivery of the same
+        // message is recognised by its server message id, which `append` and the early `contains` check already use.
+        let rowId = UUID().uuidString
         let groupShort: String = String(groupHex.prefix(8))
         let body = FileV2ChatBody.classify(text: plaintext)
         switch body {

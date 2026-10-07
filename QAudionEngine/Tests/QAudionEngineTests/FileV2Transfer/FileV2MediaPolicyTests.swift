@@ -59,7 +59,7 @@ final class FileV2MediaPolicyTests: XCTestCase {
 
     func test_anAvatarIsFetchedOnArrivalOnlyIfItIsSmall() {
         let limit = FileV2AutoDownloadPolicy.maxAvatarBytes
-        XCTAssertEqual(limit, 4 * 1024 * 1024)
+        XCTAssertEqual(limit, 8 * 1024 * 1024)
         XCTAssertTrue(FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: 1))
         XCTAssertTrue(FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: limit))
         XCTAssertFalse(FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: limit + 1), "not an avatar: not fetched")
@@ -94,8 +94,10 @@ final class FileV2MediaPolicyTests: XCTestCase {
     // MARK: Display hints
 
     func test_aReceivedHintIsLimitedBeforeTheInterfaceDrawsIt() {
-        let sane = FileV2MediaHints(media: FileV2Descriptor.Media(w: 1920, h: 1080, dur: 5234, wave: [0, 10, 255]))
-        XCTAssertEqual(sane, FileV2MediaHints(width: 1920, height: 1080, durationMs: 5234, wave: [0, 10, 255]))
+        let sane = FileV2MediaHints(media: FileV2Descriptor.Media(w: 1920, h: 1080, dur: 5234, wave: [0, 10, 100]))
+        XCTAssertEqual(sane, FileV2MediaHints(width: 1920, height: 1080, durationMs: 5234, wave: [0, 10, 100]))
+        XCTAssertEqual(FileV2MediaHints(media: FileV2Descriptor.Media(wave: [0, 101, 255, -3])).wave, [0, 100, 100, 0],
+                       "a sample is a percentage: above 100 is cut to 100, below 0 to 0")
 
         // a side outside the range makes the whole size unknown (an aspect ratio from one side alone would be wrong)
         for (w, h): (Int64, Int64) in [(0, 10), (10, 0), (-5, 10), (16_385, 10), (10, 1 << 40), (Int64.max, Int64.max)] {
@@ -147,8 +149,48 @@ final class FileV2MediaPolicyTests: XCTestCase {
         let many = Array(repeating: 300, count: 1000) + [-9]
         let media = FileV2MediaHints.media(wave: many, waveSamples: 64)
         XCTAssertEqual(media?.wave?.count, 64)
-        XCTAssertTrue(media?.wave?.allSatisfy { $0 >= 0 && $0 <= 255 } ?? false, "values are limited to 0...255")
-        XCTAssertEqual(FileV2MediaHints.media(wave: many, waveSamples: 100_000)?.wave?.count, FileV2MediaHints.maxWaveSamples)
+        XCTAssertTrue(media?.wave?.allSatisfy { $0 >= 0 && $0 <= 100 } ?? false, "values are limited to 0...100")
+        XCTAssertEqual(FileV2MediaHints.media(wave: many, waveSamples: 100_000)?.wave?.count, 64, "at most 64 integers")
+        XCTAssertEqual(FileV2MediaHints.maxWaveSamples, 64)
+        XCTAssertEqual(FileV2MediaHints.maxWaveValue, 100)
+    }
+
+    func test_aWaveformIsRescaledToItsLoudestSampleForDrawing() {
+        XCTAssertEqual(FileV2MediaHints(wave: [10, 20, 5, 0]).drawableWave, [0.5, 1.0, 0.25, 0.0])
+        XCTAssertEqual(FileV2MediaHints(wave: [100, 50]).drawableWave, [1.0, 0.5])
+        XCTAssertTrue(FileV2MediaHints(wave: []).drawableWave.isEmpty)
+        XCTAssertTrue(FileV2MediaHints(wave: [0, 0, 0]).drawableWave.isEmpty, "silence has nothing to draw")
+    }
+
+    func test_theWavePeaksOfARecordingAreTheLoudestFrameOfEachSlice() {
+        var peaks = FileV2WavePeaks(totalFrames: 8, buckets: 4)
+        peaks.add([0.1, 0.5, 0.2, 0.2], startingAtFrame: 0)       // frames 0...3: slices 0 and 1
+        peaks.add([1.0, -0.25, 0.0, 0.3], startingAtFrame: 4)     // frames 4...7: slices 2 and 3 (the sign does not matter)
+        XCTAssertEqual(peaks.percentages, [50, 20, 100, 30])
+
+        // the same recording fed in other pieces gives the same samples
+        var pieces = FileV2WavePeaks(totalFrames: 8, buckets: 4)
+        for (index, value) in [Float(0.1), 0.5, 0.2, 0.2, 1.0, -0.25, 0.0, 0.3].enumerated() {
+            pieces.add([value], startingAtFrame: Int64(index))
+        }
+        XCTAssertEqual(pieces.percentages, peaks.percentages)
+    }
+
+    func test_theWavePeaksIgnoreWhatIsOutsideTheRecordingAndWhatIsNotANumber() {
+        var peaks = FileV2WavePeaks(totalFrames: 4, buckets: 4)
+        peaks.add([.nan, .infinity, 0.4], startingAtFrame: 0)
+        peaks.add([0.9], startingAtFrame: 4)           // past the end
+        peaks.add([0.9], startingAtFrame: -1)          // before the start
+        XCTAssertEqual(peaks.percentages, [0, 0, 40, 0])
+        peaks.add([7.5], startingAtFrame: 3)           // louder than full scale is full scale
+        XCTAssertEqual(peaks.percentages, [0, 0, 40, 100])
+
+        XCTAssertEqual(FileV2WavePeaks(totalFrames: 0).percentages.count, 64)
+        var empty = FileV2WavePeaks(totalFrames: 0)
+        empty.add([1.0], startingAtFrame: 0)
+        XCTAssertTrue(empty.percentages.allSatisfy { $0 == 0 })
+        XCTAssertEqual(FileV2WavePeaks(totalFrames: 100, buckets: 1000).buckets, 64, "limited to 64 samples")
+        XCTAssertEqual(FileV2WavePeaks(totalFrames: 100, buckets: 0).buckets, 1)
     }
 
     // MARK: Thumbnail geometry

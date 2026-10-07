@@ -107,11 +107,47 @@ enum FileV2MediaPreparer {
         return describeVoice(fileURL: url, durationMs: Int64(recording.durationMs), mimeType: recording.mimeType)
     }
 
-    /// A voice note that is already in the caches directory (the retry of a failed send).
+    /// A voice note that is already in the caches directory (the retry of a failed send): its duration and its waveform (at most 64
+    /// peaks in percent, the convention of the three apps).
     static func describeVoice(fileURL: URL, durationMs: Int64, mimeType: String) -> Prepared {
         Prepared(kind: .voice, sourceURL: fileURL, name: "voicenote-\(Int(Date().timeIntervalSince1970)).m4a",
                  mimeType: mimeType.isEmpty ? "audio/mp4" : mimeType,
-                 media: FileV2MediaHints.media(durationMs: durationMs), preview: nil, thumbnailURL: nil, durationMs: durationMs)
+                 media: FileV2MediaHints.media(durationMs: durationMs, wave: waveform(of: fileURL)),
+                 preview: nil, thumbnailURL: nil, durationMs: durationMs)
+    }
+
+    /// The peak of each slice of the recording in percent, read by decoding the audio in pieces (the memory does not depend on its
+    /// length); `nil` when the file cannot be decoded or is too long to be worth the time (the descriptor then has no waveform,
+    /// which is valid).
+    static func waveform(of url: URL) -> [Int]? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let total = file.length
+        guard total > 0, total <= 50_000_000 else { return nil }
+        let format = file.processingFormat
+        let pieceFrames: AVAudioFrameCount = 16_384
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: pieceFrames) else { return nil }
+        var peaks = FileV2WavePeaks(totalFrames: total)
+        var position: Int64 = 0
+        while position < total {
+            do {
+                try file.read(into: buffer, frameCount: pieceFrames)
+            } catch {
+                break
+            }
+            let frames = Int(buffer.frameLength)
+            guard frames > 0, let channels = buffer.floatChannelData else { break }
+            var amplitudes = [Float](repeating: 0, count: frames)
+            for channel in 0..<Int(format.channelCount) {
+                let samples = channels[channel]
+                for index in 0..<frames {
+                    let value = abs(samples[index])
+                    if value > amplitudes[index] { amplitudes[index] = value }
+                }
+            }
+            peaks.add(amplitudes, startingAtFrame: position)
+            position += Int64(frames)
+        }
+        return peaks.percentages
     }
 
     // MARK: A video

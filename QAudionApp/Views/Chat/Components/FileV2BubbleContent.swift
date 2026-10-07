@@ -127,7 +127,8 @@ struct FileV2BubbleContent: View {
     private var voiceContent: some View {
         if readablePath != nil || voiceIsComing {
             VoiceNoteBubbleContent(player: VoiceNotePlayer.shared, messageId: rowId, mediaLocalPath: readablePath,
-                                   durationMs: info.hints.durationMs ?? 0, shareRequest: shareRequest, onOpened: onOpened)
+                                   durationMs: info.hints.durationMs ?? 0, shareRequest: shareRequest, onOpened: onOpened,
+                                   wave: info.hints.drawableWave)
         } else {
             card(systemImage: "waveform")
         }

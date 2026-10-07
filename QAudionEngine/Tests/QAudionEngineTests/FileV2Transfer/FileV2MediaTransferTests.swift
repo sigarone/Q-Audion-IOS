@@ -171,7 +171,7 @@ final class FileV2MediaTransferTests: XCTestCase {
         let descriptor = try await send(request, from: alice)
         XCTAssertEqual(descriptor.kind, .voice)
         XCTAssertEqual(descriptor.media?.dur, 4200)
-        XCTAssertEqual(descriptor.media?.wave, [3, 9, 200, 40])
+        XCTAssertEqual(descriptor.media?.wave, [3, 9, 100, 40], "a sample is a percentage: 200 was cut to 100")
         XCTAssertEqual(FileV2MediaHints(media: descriptor.media).durationMs, 4200)
         XCTAssertEqual(alice.objectCount, 1, "a voice note has no thumbnail")
     }

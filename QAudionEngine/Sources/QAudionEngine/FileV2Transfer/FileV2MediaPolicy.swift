@@ -12,9 +12,9 @@ public enum FileV2AutoDownloadPolicy {
     /// 25 MiB of plaintext (`sz` of the descriptor).
     public static let maxAutomaticBytes: UInt64 = 25 * 1024 * 1024
 
-    /// An avatar is a picture of at most 512 x 512 pixels (a few hundred kilobytes): a contact's app that announces one larger than
-    /// this is not sending an avatar, and it is not fetched.
-    public static let maxAvatarBytes: UInt64 = 4 * 1024 * 1024
+    /// An avatar is a picture of at most 512 x 512 pixels (a few hundred kilobytes): one that is DECLARED larger than 8 MiB is not an
+    /// avatar and is discarded without being fetched (the convention shared by the three apps).
+    public static let maxAvatarBytes: UInt64 = 8 * 1024 * 1024
 
     /// Whether a file of `kind` and `size` bytes is fetched on arrival.
     public static func isAutomatic(kind: FileV2Descriptor.Kind, size: UInt64) -> Bool {
@@ -47,10 +47,10 @@ public struct FileV2MediaHints: Equatable, Sendable {
     public static let maxDimension: Int64 = 16_384
     /// Longest duration shown, in milliseconds (24 hours).
     public static let maxDurationMs: Int64 = 24 * 60 * 60 * 1000
-    /// Most waveform samples kept.
-    public static let maxWaveSamples = 128
-    /// Largest value of a waveform sample.
-    public static let maxWaveValue = 255
+    /// Most waveform samples kept: the convention shared by the three apps is at most 64 integers.
+    public static let maxWaveSamples = 64
+    /// Largest value of a waveform sample: the peak amplitude of its slice, in percent of the full scale (0...100).
+    public static let maxWaveValue = 100
 
     /// Both sides in pixels, or `nil` when either is missing or outside `1...maxDimension`.
     public let width: Int?
@@ -59,6 +59,13 @@ public struct FileV2MediaHints: Equatable, Sendable {
     public let durationMs: Int64?
     /// At most `maxWaveSamples` values, each `0...maxWaveValue`; empty when the descriptor had none.
     public let wave: [Int]
+
+    /// The waveform as a drawing needs it: each sample as a fraction of the LOUDEST one (so a quiet note is drawn as tall as a loud
+    /// one), `0...1`. Empty when there is no waveform or it is all zero (nothing to draw: the player draws its own bars).
+    public var drawableWave: [Double] {
+        guard let peak = wave.max(), peak > 0 else { return [] }
+        return wave.map { Double($0) / Double(peak) }
+    }
 
     public init(width: Int? = nil, height: Int? = nil, durationMs: Int64? = nil, wave: [Int] = []) {
         self.width = width
@@ -89,7 +96,7 @@ public struct FileV2MediaHints: Equatable, Sendable {
     /// duration is left out, a waveform is brought to at most `waveSamples` values of `0...maxWaveValue`. `nil` when nothing is
     /// left to say.
     public static func media(width: Int? = nil, height: Int? = nil, durationMs: Int64? = nil, wave: [Int]? = nil,
-                             waveSamples: Int = 64) -> FileV2Descriptor.Media? {
+                             waveSamples: Int = FileV2MediaHints.maxWaveSamples) -> FileV2Descriptor.Media? {
         var media = FileV2Descriptor.Media()
         if let width, let height, width >= 1, height >= 1, Int64(width) <= maxDimension, Int64(height) <= maxDimension {
             media.w = Int64(width)
@@ -117,6 +124,40 @@ public struct FileV2MediaHints: Equatable, Sendable {
             out.append(values[start..<min(end, values.count)].max() ?? 0)
         }
         return out
+    }
+}
+
+/// The waveform of a voice note, as the peak of each slice of the recording in percent of the full scale: the app decodes the audio
+/// and feeds the amplitude of every frame in order, and this keeps the largest one of each of `buckets` equal slices. The slices are
+/// computed from the total number of frames, so a recording of any length gives the same number of samples.
+public struct FileV2WavePeaks: Sendable {
+    public let buckets: Int
+    public let totalFrames: Int64
+    private var peaks: [Float]
+
+    /// `buckets` is limited to `1...FileV2MediaHints.maxWaveSamples`.
+    public init(totalFrames: Int64, buckets: Int = FileV2MediaHints.maxWaveSamples) {
+        self.totalFrames = max(0, totalFrames)
+        self.buckets = min(max(1, buckets), FileV2MediaHints.maxWaveSamples)
+        self.peaks = [Float](repeating: 0, count: self.buckets)
+    }
+
+    /// Adds the amplitudes (absolute values, `0...1`) of consecutive frames, the first one being frame number `startingAtFrame`. A
+    /// frame past the end of the recording, a negative one, or an amplitude that is not a number is ignored.
+    public mutating func add(_ amplitudes: [Float], startingAtFrame start: Int64) {
+        guard totalFrames > 0 else { return }
+        for (offset, amplitude) in amplitudes.enumerated() {
+            let frame = start + Int64(offset)
+            guard frame >= 0, frame < totalFrames, amplitude.isFinite else { continue }
+            let bucket = min(buckets - 1, Int(frame * Int64(buckets) / totalFrames))
+            let magnitude = min(1, abs(amplitude))
+            if magnitude > peaks[bucket] { peaks[bucket] = magnitude }
+        }
+    }
+
+    /// The peak of each slice in percent, `0...100`.
+    public var percentages: [Int] {
+        peaks.map { Int(($0 * 100).rounded()) }
     }
 }
 
