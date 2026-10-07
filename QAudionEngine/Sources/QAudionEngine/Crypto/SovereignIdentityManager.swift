@@ -333,7 +333,7 @@ public final class SovereignIdentityManager {
 
     /// Full identity: [version:1][encPriv:32][encPub:32][sigPriv:32][sigPub:32]
     ///   [userIdLen:2BE][userId:N][serverUrlLen:2BE][serverUrl:M][nameLen:2BE][name:T][identityType:1]
-    private func serializeIdentity(_ id: SovereignIdentity) -> Data {
+    func serializeIdentity(_ id: SovereignIdentity) -> Data {
         var data = Data()
         data.append(Self.identityVersion)
         data.append(id.encryptionPrivate)
@@ -353,7 +353,7 @@ public final class SovereignIdentityManager {
         return data
     }
 
-    private func deserializeIdentity(_ data: Data) -> SovereignIdentity? {
+    func deserializeIdentity(_ data: Data) -> SovereignIdentity? {
         guard data.count >= 1 + 32 + 32 + 32 + 32 + 2 else { return nil }
         var offset = 0
         let version = data[offset]; offset += 1
@@ -435,7 +435,14 @@ public final class SovereignIdentityManager {
         data.append(Data(bytes: &big, count: 2))
     }
 
+    /// W-SIGNERBOOT (2026-10-07) — assembled byte by byte. The previous
+    /// `withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt16.self) }` is an ALIGNED load, and
+    /// every length field of the stored identity sits at an odd offset (129 for the first one): a
+    /// Debug build traps with "load from misaligned raw pointer" the moment `loadIdentity()` reads
+    /// a stored identity back. Release builds skip that check, which hid it; the first Debug run
+    /// that ever held an identity (the CI app host, after the launch bootstrap created one) hit it.
     private func readUInt16BE(_ data: Data, offset: Int) -> UInt16 {
-        data.withUnsafeBytes { UInt16(bigEndian: $0.load(fromByteOffset: offset, as: UInt16.self)) }
+        let i = data.startIndex + offset
+        return (UInt16(data[i]) << 8) | UInt16(data[i + 1])
     }
 }
