@@ -1038,12 +1038,17 @@ struct ChatDetailScreen: View {
     /// `EphemeralMessageJanitor` sweeps it.
     private func imageGalleryItems(_ messages: [Message]) -> [ImageGalleryItem] {
         messages.compactMap { m in
-            guard let mime = m.mediaMimeType, mime.hasPrefix("image/"),
-                  let path = m.mediaLocalPath, !path.isEmpty else { return nil }
+            guard let path = m.mediaLocalPath, !path.isEmpty, Self.isImageRow(m) else { return nil }
             let isVO = m.isViewOnce == true && m.direction != .outgoing
             guard !isVO else { return nil }
             return ImageGalleryItem(id: m.id, localPath: path)
         }
+    }
+
+    /// Whether the row is an image: a legacy attachment (an `image/*` mime type) or a file transfer v2 message of kind `image`.
+    private static func isImageRow(_ m: Message) -> Bool {
+        if let mime = m.mediaMimeType { return mime.hasPrefix("image/") }
+        return FileV2ChatBody.bubbleInfo(for: m)?.kind == "image"
     }
 
     @ViewBuilder
@@ -1131,12 +1136,7 @@ struct ChatDetailScreen: View {
                 .foregroundStyle(scheme.onSurfaceVariant)
             } else if let fileInfo = FileV2ChatBody.bubbleInfo(for: msg) {
                 // File transfer v2: the body of such a message is a descriptor, never shown as text (WIRE_SPEC 12.7.1).
-                FileV2BubbleContent(
-                    message: msg,
-                    info: fileInfo,
-                    downloads: fileV2Downloads,
-                    onDownload: { fileV2Downloads.start(message: msg, appState: appState) }
-                )
+                fileV2Bubble(msg, fileInfo, galleryItems: galleryItems)
             } else if let mime = msg.mediaMimeType, mime.hasPrefix("audio/") {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
@@ -1191,6 +1191,29 @@ struct ChatDetailScreen: View {
         .onLongPressGesture(minimumDuration: 0.4) {
             actionTargetId = msg.id
         }
+    }
+
+    /// The bubble of a file transfer v2 message (a document, an image, a voice note, a video), received or sent. A received one that
+    /// is fetched on arrival (an image or a voice note up to 25 MiB) asks the download center when it appears, in case the app was
+    /// not running when it arrived.
+    private func fileV2Bubble(_ msg: Message, _ info: FileV2ChatFile, galleryItems: [ImageGalleryItem]) -> some View {
+        let isIncoming = msg.direction == .incoming
+        return FileV2BubbleContent(
+            rowKey: msg.id.uuidString,
+            rowId: msg.id,
+            isOutgoing: !isIncoming,
+            info: info,
+            localPath: msg.mediaLocalPath,
+            exportBlocked: msg.exportBlocked ?? false,
+            downloads: fileV2Downloads,
+            saveRequest: mediaSaveRequestBinding(for: msg.id),
+            shareRequest: mediaShareRequestBinding(for: msg.id),
+            galleryItems: galleryItems,
+            onDownload: { fileV2Downloads.start(message: msg, appState: appState) },
+            onAppearWithoutFile: {
+                if isIncoming { fileV2Downloads.autoStart(message: msg, appState: appState) }
+            }
+        )
     }
 
     private var typingRow: some View {
@@ -1608,6 +1631,15 @@ struct ChatDetailScreen: View {
     private func mediaKind(for id: UUID) -> BubbleActionSheet.MediaKind {
         guard let msg = container.viewModel.messages.first(where: { $0.id == id }) else {
             return .none
+        }
+        // A file transfer v2 message: save and share only act on a file that is on this device.
+        if let info = FileV2ChatBody.bubbleInfo(for: msg) {
+            guard FileV2DownloadCenter.fileExists(atPath: msg.mediaLocalPath) else { return .none }
+            switch info.kind {
+            case "image": return .image
+            case "voice": return .voiceNote
+            default: return .none
+            }
         }
         if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
             return .image

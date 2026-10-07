@@ -11848,6 +11848,16 @@ final class AppState: ObservableObject {
                 )
             }
         }
+        // File transfer v2: what is fetched on arrival (the thumbnail of an image or a video, an image or a voice note up to 25 MiB).
+        // A video, a document and anything larger wait for a tap on the card; the bubble asks again when it appears, in case the app
+        // was not running when the message arrived.
+        if case .file = fileV2Body {
+            let arrived = msg
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                FileV2DownloadCenter.shared.autoStart(message: arrived, appState: self)
+            }
+        }
         // W80: async download + decrypt + cache. We kick this off here
         // so the cache is populated by the time the user opens the
         // chat. The send path attaches a recipient capability claim,

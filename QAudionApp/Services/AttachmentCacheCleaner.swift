@@ -7,6 +7,9 @@ import Foundation
 /// Folders cleaned:
 ///   - `Library/Caches/voicenotes/` — decrypted M4A voice notes.
 ///   - `Library/Caches/images/`     — decrypted JPEG images.
+///   - `Library/Caches/files_v2/`   — files received and thumbnails made in the file transfer v2 format
+///     (documents, images, voice notes, videos): the rows keep their descriptors, so the bubbles offer
+///     the download again.
 ///
 /// The qfile markers in the chat history stay intact, so the user can
 /// still tap a bubble to re-fetch + decrypt from the server. We only
@@ -20,7 +23,7 @@ enum AttachmentCacheCleaner {
     @discardableResult
     static func clearAllCaches() -> UInt64 {
         var freed: UInt64 = 0
-        for sub in ["voicenotes", "images"] {
+        for sub in ["voicenotes", "images", "files_v2"] {
             freed &+= clearSubdir(sub)
         }
         return freed
@@ -30,7 +33,8 @@ enum AttachmentCacheCleaner {
     /// settings screen show "Voice notes: 4.2 MB · Immagini: 12.8 MB"
     /// before asking the user whether to clear.
     static func cacheSizes() -> (voiceNotes: UInt64, images: UInt64) {
-        return (sizeOfSubdir("voicenotes"), sizeOfSubdir("images"))
+        // The v2 files are counted with the images: the settings screen has two figures, and most of them are images.
+        return (sizeOfSubdir("voicenotes"), sizeOfSubdir("images") &+ sizeOfSubdir("files_v2"))
     }
 
     /// W128: count of items in each cache subdir. Useful for stats /

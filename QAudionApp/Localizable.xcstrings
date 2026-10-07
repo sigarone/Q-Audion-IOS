@@ -33859,13 +33859,85 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Un documento non può essere inviato con «visualizza una volta»."
+            "value": "Documenti e video non possono essere inviati con «visualizza una volta»."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A document cannot be sent as “view once”."
+            "value": "Documents and videos cannot be sent as “view once”."
+          }
+        }
+      }
+    },
+    "file_v2.kind.image": {
+      "extractionState": "manual",
+      "comment": "One-line label of an image message in the conversation list and in notifications.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📷 Foto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📷 Photo"
+          }
+        }
+      }
+    },
+    "file_v2.kind.voice": {
+      "extractionState": "manual",
+      "comment": "One-line label of a voice note in the conversation list and in notifications.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Nota vocale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Voice note"
+          }
+        }
+      }
+    },
+    "file_v2.kind.video": {
+      "extractionState": "manual",
+      "comment": "One-line label of a video message in the conversation list and in notifications.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎬 Video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎬 Video"
+          }
+        }
+      }
+    },
+    "file_v2.video.play": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the play button over a video in a chat.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riproduci video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Play video"
           }
         }
       }
