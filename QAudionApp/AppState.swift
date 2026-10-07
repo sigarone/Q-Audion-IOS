@@ -4278,15 +4278,12 @@ final class AppState: ObservableObject {
             // timing (see the `observeConfidence` gate above).
             Task { @MainActor in
                 guard let self else { return }
-                self.contactVoiceConfidenceEma = 0.15 * combined + 0.85 * self.contactVoiceConfidenceEma
+                // W-CONFBADGE1SRC (2026-10-07) — the ONLY writer of the badge
+                // during a call (see `GuardianDisplayConfidence`'s doc).
+                self.contactVoiceConfidenceEma = GuardianDisplayConfidence.next(
+                    ema: self.contactVoiceConfidenceEma, combined: combined)
                 self.confidenceScore = self.contactVoiceConfidenceEma
-                if self.contactVoiceConfidenceEma >= 0.72 {
-                    self.confidenceLevel = "green"
-                } else if self.contactVoiceConfidenceEma >= 0.40 {
-                    self.confidenceLevel = "yellow"
-                } else {
-                    self.confidenceLevel = "red"
-                }
+                self.confidenceLevel = GuardianDisplayConfidence.level(of: self.contactVoiceConfidenceEma)
             }
         }
         // W-PLPFEEDBACK (2026-08-25) — CallService's own timer measured a
@@ -20495,21 +20492,13 @@ extension AppState {
                 let integration = self.callService.callIntegration ?? self.responderCallIntegration
                 let index = integration?.getGuardianMode().getConfidenceIndex()
                 self.voiceConfidenceHistory = index?.scoreHistory ?? []
-                // W-CONFIDENCELIVE (2026-08-13) — the CONFIDENCE stat used to
-                // stay on its "C=—" sentinel for the ENTIRE call: it was fed
-                // exclusively by onDeepfakeAlert/onDeepfakeScore, which only
-                // fires on a sustained-red alarm (redThreshold=0.25 held for
-                // 5s) — per ConfidenceIndex's own calibration, "essentially
-                // impossible for live human voice", so on any real call it
-                // never fires even once. `index` here is the SAME live
-                // ConfidenceIndex the alarm reads from — it already computes
-                // currentScore/currentLevel continuously (after ~4s of
-                // audio); this sampler is the fix, riding the same tick that
-                // already reads scoreHistory from it.
-                if let index {
-                    self.confidenceScore = index.currentScore
-                    self.confidenceLevel = index.currentLevel.rawValue
-                }
+                // W-CONFBADGE1SRC (2026-10-07) — this tick no longer writes
+                // `confidenceScore`/`confidenceLevel`. It used to (W-CONFIDENCELIVE,
+                // from before Tier 2 drove the badge) and, at 5 Hz, it overwrote
+                // the Tier 2 value `onContactVoiceScoreBreakdown` publishes every
+                // few seconds with Tier 1's own EMA — a different quantity seeded
+                // at 0.5 that, on native SRTP, never reaches its first inference in
+                // an ordinary call. See `GuardianDisplayConfidence`.
                 // W-VASILENT (2026-08-13): same "can't tell ran-silently from
                 // never-ran" gap as the voice-analysis gauges — throttled to
                 // ~once per 5s so a real call's log shows whether this tick
