@@ -11621,6 +11621,19 @@ final class AppState: ObservableObject {
                     clientMsgId: clientMsgId, settleClientKey: true)
                 return
             }
+            // File transfer v2: a file of kind `avatar` is the picture of the contact, sent as a chat message to each contact (and a file of
+            // kind `thumb` alone means nothing): consumed here, acked and settled, never a row, a preview, an unread count, a banner or a
+            // conversation.
+            if case .file(let pictureFile) = FileV2ChatBody.classify(text: decryptedRaw),
+               pictureFile.kind == "avatar" || pictureFile.kind == "thumb" {
+                if pictureFile.kind == "avatar" {
+                    avatarAnnounceCoordinator.handleInboundFileV2(body: decryptedRaw, senderId: senderId)
+                }
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
+                return
+            }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
         } catch {
             // Fix (2026-07-31, found during full-audit): was bare print() —

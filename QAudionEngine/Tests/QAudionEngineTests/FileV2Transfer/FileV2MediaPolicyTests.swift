@@ -57,10 +57,19 @@ final class FileV2MediaPolicyTests: XCTestCase {
 
     // MARK: What is fetched on arrival
 
-    func test_avatarsThumbnailsVoiceNotesAndImagesUpTo25MiBAreFetchedOnArrival() {
+    func test_anAvatarIsFetchedOnArrivalOnlyIfItIsSmall() {
+        let limit = FileV2AutoDownloadPolicy.maxAvatarBytes
+        XCTAssertEqual(limit, 4 * 1024 * 1024)
+        XCTAssertTrue(FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: 1))
+        XCTAssertTrue(FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: limit))
+        XCTAssertFalse(FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: limit + 1), "not an avatar: not fetched")
+        XCTAssertFalse(FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: FileV2AutoDownloadPolicy.maxAutomaticBytes))
+    }
+
+    func test_thumbnailsVoiceNotesAndImagesUpTo25MiBAreFetchedOnArrival() {
         let limit = FileV2AutoDownloadPolicy.maxAutomaticBytes
         XCTAssertEqual(limit, 25 * 1024 * 1024)
-        for kind in [FileV2Descriptor.Kind.avatar, .thumb, .voice, .image] {
+        for kind in [FileV2Descriptor.Kind.thumb, .voice, .image] {
             XCTAssertTrue(FileV2AutoDownloadPolicy.isAutomatic(kind: kind, size: 1), "\(kind)")
             XCTAssertTrue(FileV2AutoDownloadPolicy.isAutomatic(kind: kind, size: limit), "\(kind) at the limit")
             XCTAssertFalse(FileV2AutoDownloadPolicy.isAutomatic(kind: kind, size: limit + 1), "\(kind) above the limit")

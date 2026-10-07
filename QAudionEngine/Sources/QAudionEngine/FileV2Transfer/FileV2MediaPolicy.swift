@@ -12,10 +12,16 @@ public enum FileV2AutoDownloadPolicy {
     /// 25 MiB of plaintext (`sz` of the descriptor).
     public static let maxAutomaticBytes: UInt64 = 25 * 1024 * 1024
 
+    /// An avatar is a picture of at most 512 x 512 pixels (a few hundred kilobytes): a contact's app that announces one larger than
+    /// this is not sending an avatar, and it is not fetched.
+    public static let maxAvatarBytes: UInt64 = 4 * 1024 * 1024
+
     /// Whether a file of `kind` and `size` bytes is fetched on arrival.
     public static func isAutomatic(kind: FileV2Descriptor.Kind, size: UInt64) -> Bool {
         switch kind {
-        case .avatar, .thumb, .voice, .image:
+        case .avatar:
+            return size <= maxAvatarBytes
+        case .thumb, .voice, .image:
             return size <= maxAutomaticBytes
         case .file, .video:
             return false
