@@ -414,7 +414,8 @@ public final class ConversationStore {
                         expiresAt: message.expiresAt,
                         isViewOnce: message.isViewOnce,
                         exportBlocked: message.exportBlocked,
-                        viaMesh: message.viaMesh
+                        viaMesh: message.viaMesh,
+                        wireAttachmentId: message.wireAttachmentId
                     )
                     try replaced.save(db)
                     if let conv = try Conversation.fetchOne(db, key: placeholderRow.conversationId),
@@ -615,6 +616,7 @@ public final class ConversationStore {
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
+                        wireAttachmentId: msg.wireAttachmentId,
                         isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)
@@ -683,6 +685,7 @@ public final class ConversationStore {
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
+                        wireAttachmentId: msg.wireAttachmentId,
                         isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)
@@ -790,6 +793,7 @@ public final class ConversationStore {
                     viewOnceOpened: msg.viewOnceOpened,
                     exportBlocked: msg.exportBlocked,
                     viaMesh: msg.viaMesh,
+                    wireAttachmentId: msg.wireAttachmentId,
                     isPlaceholder: msg.isPlaceholder
                 )
                 try msg.save(db)
@@ -970,6 +974,7 @@ public final class ConversationStore {
                     viewOnceOpened: msg.viewOnceOpened,
                     exportBlocked: msg.exportBlocked,
                     viaMesh: msg.viaMesh,
+                    wireAttachmentId: msg.wireAttachmentId,
                     isPlaceholder: msg.isPlaceholder
                 )
                 try msg.save(db)
@@ -1093,6 +1098,7 @@ public final class ConversationStore {
                         viewOnceOpened: true,
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
+                        wireAttachmentId: msg.wireAttachmentId,
                         isPlaceholder: msg.isPlaceholder
                     )
                     try msg.save(db)

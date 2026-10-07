@@ -171,6 +171,25 @@ public enum FileV2ChatBody: Equatable, Sendable {
         return nil
     }
 
+    /// The name under which the delivery and read receipts of a v2 file travel (`qa_att_receipt:1`, WIRE_SPEC 12.7.6: "keyed by
+    /// `id`"): the 16 bytes of the descriptor's `id` as a lowercase hyphenated UUID, the form the Android app uses for the row of the
+    /// sender (`wireAttachmentId`) and for the receipt, so the sender finds the row by plain string equality. `nil` when the body is
+    /// not a valid descriptor of a file a user sent: the avatar and the thumbnail are consumed on arrival and have no receipt.
+    public static func receiptId(ofBody body: String) -> String? {
+        guard let descriptor = descriptor(ofBody: body),
+              descriptor.kind != .avatar, descriptor.kind != .thumb else { return nil }
+        return receiptId(fileID: descriptor.fileID)
+    }
+
+    /// The receipt name of a 16-byte file id (see `receiptId(ofBody:)`); `nil` for any other length.
+    static func receiptId(fileID: Data) -> String? {
+        guard fileID.count == 16 else { return nil }
+        let b = [UInt8](fileID)
+        let uuid = UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                               b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
+        return uuid.uuidString.lowercased()
+    }
+
     /// What the bubble of `message` shows, or `nil` when the message is not a v2 file: a valid descriptor, or a file that is
     /// being sent (its row holds the name, with `pendingMime`).
     public static func bubbleInfo(for message: Message) -> FileV2ChatFile? {

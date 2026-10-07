@@ -143,6 +143,12 @@ enum FileV2OutboundRunner {
                                       store: ConversationStore) async throws {
         let msgId = context.messageId
         store.replaceContent(id: msgId, plaintext: body, mediaMimeType: nil)
+        // The delivery and read receipts of a file travel as `qa_att_receipt:1` named by the file id (WIRE_SPEC 12.7.6), not by the
+        // server id of the message, so the row has to hold that name before the descriptor leaves: the first receipt can come back at
+        // any moment after it.
+        if let wireId = FileV2ChatBody.receiptId(ofBody: body) {
+            store.setWireAttachmentId(id: msgId, wireAttachmentId: wireId)
+        }
         // Claims the row for this live attempt so the outbox drain never seals and sends the same message a second time.
         ChatOutboxDrain.shared.beginLiveSend(clientMsgId: msgId.uuidString)
         let outcome = await sendService.sendEncryptedDurable(

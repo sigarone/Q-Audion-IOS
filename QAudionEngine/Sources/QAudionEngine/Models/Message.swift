@@ -111,6 +111,9 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// it, because nothing on either side ever sent or matched a
     /// delivery/read signal for that transport. `nil` for backward
     /// compat with every stored row predating this field.
+    /// File transfer v2: a file message is an ordinary chat message whose body is the descriptor, but its receipts still travel as
+    /// `qa_att_receipt:1` keyed by the file id (`FileV2ChatBody.receiptId(ofBody:)`), so BOTH the sender's row and the receiver's row
+    /// of a 1:1 v2 file carry that name here.
     public let wireAttachmentId: String?
     /// 2026-09-19 service-message root fix — `true` only for the single
     /// "[messaggio cifrato non leggibile]" row an inbound CHAT-class frame

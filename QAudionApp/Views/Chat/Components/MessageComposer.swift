@@ -52,6 +52,9 @@ struct MessageComposer: View {
     let onStartVoiceNote: () -> Void
     let onFinishVoiceNote: () -> Void
     let onCancelVoiceNote: () -> Void
+    /// Non-nil while recording a voice note is not possible (a call is up: the shared audio session belongs to it). The mic button
+    /// then records nothing and tells why through this callback.
+    var onVoiceNoteBlocked: (() -> Void)? = nil
 
     @State private var isRecording: Bool = false
     /// W115: drag-up cancel armed. Banner copy flips to "Rilascia
@@ -73,7 +76,8 @@ struct MessageComposer: View {
          onCancelReply: @escaping () -> Void = {},
          onStartVoiceNote: @escaping () -> Void = {},
          onFinishVoiceNote: @escaping () -> Void = {},
-         onCancelVoiceNote: @escaping () -> Void = {}) {
+         onCancelVoiceNote: @escaping () -> Void = {},
+         onVoiceNoteBlocked: (() -> Void)? = nil) {
         self._text = text
         self.editingTarget = editingTarget
         self.replyTarget = replyTarget
@@ -88,6 +92,7 @@ struct MessageComposer: View {
         self.onStartVoiceNote = onStartVoiceNote
         self.onFinishVoiceNote = onFinishVoiceNote
         self.onCancelVoiceNote = onCancelVoiceNote
+        self.onVoiceNoteBlocked = onVoiceNoteBlocked
     }
 
     var body: some View {
@@ -345,7 +350,24 @@ struct MessageComposer: View {
         .accessibilityLabel("Invia messaggio")
     }
 
+    @ViewBuilder
     private var micButton: some View {
+        if let blocked = onVoiceNoteBlocked {
+            Image(systemName: "mic.slash.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(scheme.onSurface.opacity(0.4))
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(scheme.surfaceVariant.opacity(0.3)))
+                .contentShape(Circle())
+                .onTapGesture(perform: blocked)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(String(localized: "in_call.chat.mic_blocked", defaultValue: "Registrazione vocale non disponibile durante la chiamata", comment: "Accessibility label of the voice note button of the chat opened over a call: recording is not possible while the call is up."))
+        } else {
+            recordingMicButton
+        }
+    }
+
+    private var recordingMicButton: some View {
         // DragGesture(minimumDistance: 0) lets us emulate the Compose
         // press-to-talk flow:
         //   - onChanged (first touch)  → onStartVoiceNote, isRecording=true

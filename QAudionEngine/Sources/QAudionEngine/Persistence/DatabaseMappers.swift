@@ -93,6 +93,9 @@ extension Message: FetchableRecord, PersistableRecord {
         container["viewOnceOpened"] = viewOnceOpened
         container["exportBlocked"] = exportBlocked
         container["viaMesh"] = viaMesh
+        // `qa_att_receipt:1` keys (file attachments, file transfer v2): without this the column was never written or read, so a
+        // receipt could never find the row it names.
+        container["wireAttachmentId"] = wireAttachmentId
         container["isPlaceholder"] = isPlaceholder
 
         if let reactions = reactions,
@@ -147,6 +150,7 @@ extension Message: FetchableRecord, PersistableRecord {
             viewOnceOpened: row["viewOnceOpened"],
             exportBlocked: row["exportBlocked"],
             viaMesh: row["viaMesh"],
+            wireAttachmentId: row["wireAttachmentId"],
             isPlaceholder: row["isPlaceholder"]
         )
     }

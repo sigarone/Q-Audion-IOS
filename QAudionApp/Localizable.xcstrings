@@ -33923,6 +33923,78 @@
           }
         }
       }
+    },
+    "in_call.chat.open": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the button on the call screen that opens the chat with the person on the call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri la chat"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open chat"
+          }
+        }
+      }
+    },
+    "in_call.chat.unread": {
+      "extractionState": "manual",
+      "comment": "Accessibility value of the chat button on the call screen when a message from the person on the call is waiting.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuovo messaggio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New message"
+          }
+        }
+      }
+    },
+    "in_call.chat.mic_blocked": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the voice note button of the chat opened over a call: recording is not possible while the call is up.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registrazione vocale non disponibile durante la chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice recording is not available during a call"
+          }
+        }
+      }
+    },
+    "in_call.chat.audio_blocked": {
+      "extractionState": "manual",
+      "comment": "Shown in the chat opened over a call when the user tries to record or play a voice note or a video: they would take over the audio of the call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante una chiamata non si possono registrare né riprodurre note vocali e video: userebbero l'audio della chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "During a call you cannot record or play voice notes and videos: they would use the call's audio."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
