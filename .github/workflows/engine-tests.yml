@@ -325,20 +325,6 @@ jobs:
               SWIFT_ENABLE_EXPLICIT_MODULES=NO \
               -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
               -derivedDataPath /tmp/dd-ios-sim \
-              -only-testing:QAudionEngineTests/FileV2SendStoreTests \
-              -only-testing:QAudionEngineTests/FileV2SecretWrapperTests \
-              -only-testing:QAudionEngineTests/FileV2SendPipelineTests \
-              -only-testing:QAudionEngineTests/FileV2SendResumeTests \
-              -only-testing:QAudionEngineTests/FileV2SendNonceRuleTests \
-              -only-testing:QAudionEngineTests/FileV2SendJournalOrderTests \
-              -only-testing:QAudionEngineTests/FileV2SendParallelismTests \
-              -only-testing:QAudionEngineTests/FileV2SendRetryTests \
-              -only-testing:QAudionEngineTests/FileV2SendRemedyTests \
-              -only-testing:QAudionEngineTests/FileV2AsyncGateTests \
-              -only-testing:QAudionEngineTests/FileV2SendCancelTests \
-              -only-testing:QAudionEngineTests/FileV2SendAnnounceTests \
-              -only-testing:QAudionEngineTests/FileV2SendMemoryTests \
-              -only-testing:QAudionEngineTests/FileV2SendTypesTests \
               -test-timeouts-enabled YES -default-test-execution-time-allowance 120 \
               -resultBundlePath "/tmp/ios-sim-results-attempt${ATTEMPT}.xcresult" &
             XCODEBUILD_PID=$!
