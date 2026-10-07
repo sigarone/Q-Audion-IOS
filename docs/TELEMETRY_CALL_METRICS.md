@@ -126,6 +126,26 @@ Names that already exist in the legacy record keep their name and unit, so exist
 | `granted_sr`, `min_sr` | Hz | last and lowest session sample rate seen (sampled every heartbeat and at every route change) |
 | `output_route`, `input_route` | text | last output and input port names |
 
+## DTLS wait line
+
+New. Tag `call`, the family words `dtls wait` at the start of the body. Written about once a second, from the moment ICE first reports checking or connected until the DTLS state reads connected, at most 20 lines per call leg; the line that first shows `state=connected` is the last one, and after it the probe costs nothing (the 1 Hz stats callback skips every extra step). It reads the same stats report as the heartbeat (no second poller) and exists to answer, from the log alone, what a call with ICE up and no DTLS was doing. Code: `QAudionEngine/Sources/QAudionEngine/Diagnostics/DtlsWaitLine.swift` (pure), wired in `pollMediaRttOnce`.
+
+| field | unit | meaning |
+|---|---|---|
+| `count` | n | line number, 1..20 |
+| `ms` | ms | since ICE first reported checking/connected; capped at 99999 |
+| `lct`, `rct` | word | local and remote candidate type of the pair that carries the DTLS: host, srflx, prflx, relay; none = no such row yet; other = a type this build does not know. Types only, never an address |
+| `nt` | code | local network type: 1 wifi, 2 ethernet, 3 cellular, 4 VPN, 5 loopback, 6 unknown, 0 not reported |
+| `cps` | word | candidate-pair state: frozen, waiting, running (in-progress), ok (succeeded), failed, cancel (cancelled), none, other. Shortened because the shipper masks an unprotected `key=value` token of 12 or more characters |
+| `sent`, `recv` | bytes | the transport's byte counters; omitted when the row does not carry them; capped at 9999999 |
+| `state` | word | DTLS transport state: new, connecting, connected, closed, failed, none, other |
+
+The pair is the one the transport reports as selected, else a nominated succeeded pair, a nominated pair, a succeeded pair, an in-progress pair (the heartbeat's own choice only looks at succeeded pairs, which is the set that is still empty while the handshake is waited for). A stalled handshake reads as `sent` growing while `recv` stays 0. Example:
+
+    dtls wait count=3 ms=2150 lct=host nt=3 rct=host cps=ok sent=1420 recv=0 state=connecting
+
+The exact texts are pinned by `DtlsWaitLineTests.swift` and run through the shipper by `scripts/test_ship_ios_dtlswait_vocab.py`.
+
 ## Where the numbers come from
 
 Everything is read from values the app already had: the 1 Hz stats poll that feeds the in-call readout (`sampleWireThroughput`), the heartbeat that emits hb=1 and hb=2, the `AVAudioSession` route-change notification the app already observes, and the two WebRTC audio-processing hooks that already ran on every native call (they now also measure the RMS of each 10 ms frame, a single pass without allocation, never blocking the audio thread). No new timer, no new network request, no new permission.

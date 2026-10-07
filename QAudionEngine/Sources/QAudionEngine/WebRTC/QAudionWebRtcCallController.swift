@@ -875,6 +875,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// DataChannel/WS relay).
     public private(set) var nativeAudioSrtpStats = NativeAudioSrtpStatsSnapshot()
 
+    /// W-DTLSWAIT (2026-10-07) -- when a `dtls wait` line is due (see `DtlsWaitLine`). Written from the ICE delegate
+    /// and from the `getStats` callback thread, hence the lock. Once the DTLS state has read connected the probe is
+    /// finished for the life of this controller and `pollMediaRttOnce` skips every bit of the extra work.
+    private let dtlsWaitLock = NSLock()
+    private var dtlsWaitProbe = DtlsWaitProbe()
+
     public func pollMediaRttOnce() {
         guard let pc = peerConnection?.peerConnection else {
             setMediaRttMs(nil)
@@ -933,7 +939,18 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             var preferredRemoteCandidateId: String?
             var fallbackLocalCandidateId: String?
             var fallbackRemoteCandidateId: String?
-            for (_, s) in report.statistics {
+            // W-DTLSWAIT -- the handshake-wait probe reads the SAME report (no second poller). It is asked once, up
+            // front: after the DTLS state has read connected (or past 20 lines) this is false and the loop below
+            // collects nothing extra.
+            let waitNowMs = Self.nowMs()
+            self.dtlsWaitLock.lock()
+            let wantWait = self.dtlsWaitProbe.wantsSample(nowMs: waitNowMs)
+            self.dtlsWaitLock.unlock()
+            var waitPairs: [DtlsWaitLine.Pair] = []
+            var waitSelectedPairId: String?
+            var waitBytesSent: Int64 = -1
+            var waitBytesReceived: Int64 = -1
+            for (statId, s) in report.statistics {
                 if s.type == "inbound-rtp", (s.values["kind"] as? String) == "audio" {
                     jbDelaySec = (s.values["jitterBufferDelay"] as? NSNumber)?.doubleValue ?? 0.0
                     jbEmitted = (s.values["jitterBufferEmittedCount"] as? NSNumber)?.int64Value ?? 0
@@ -998,6 +1015,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     snapshot.transportDtlsCipher = s.values["dtlsCipher"] as? String
                     snapshot.transportTlsVersion = s.values["tlsVersion"] as? String
                     snapshot.transportDtlsRole = s.values["dtlsRole"] as? String
+                    if wantWait {
+                        waitSelectedPairId = s.values["selectedCandidatePairId"] as? String
+                        waitBytesSent = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
+                        waitBytesReceived = (s.values["bytesReceived"] as? NSNumber)?.int64Value ?? -1
+                    }
+                }
+                // W-DTLSWAIT -- every candidate pair whatever its state: the choice below needs the in-progress ones
+                // the succeeded-only guard right after this block throws away.
+                if wantWait, s.type == "candidate-pair" {
+                    waitPairs.append(DtlsWaitLine.Pair(
+                        id: statId,
+                        state: s.values["state"] as? String,
+                        nominated: (s.values["nominated"] as? NSNumber)?.boolValue ?? false,
+                        localId: s.values["localCandidateId"] as? String,
+                        remoteId: s.values["remoteCandidateId"] as? String))
                 }
                 guard s.type == "candidate-pair",
                       (s.values["state"] as? String) == "succeeded" else { continue }
@@ -1074,6 +1106,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 snapshot.remoteCandidateProtocol = remoteStats.values["protocol"] as? String
             }
             self.nativeAudioSrtpStats = snapshot
+
+            // W-DTLSWAIT -- one `dtls wait` line (at most one per ~1 s, 20 per call leg, none after the DTLS state
+            // reads connected). The pair is chosen from ALL pairs, not the heartbeat's succeeded-only one.
+            if wantWait {
+                let chosen = DtlsWaitLine.pick(waitPairs, selectedId: waitSelectedPairId)
+                var waitLocalType: String?
+                var waitNetworkType: String?
+                var waitRemoteType: String?
+                if let waitLocalId = chosen?.localId, let waitLocal = report.statistics[waitLocalId] {
+                    waitLocalType = waitLocal.values["candidateType"] as? String
+                    waitNetworkType = waitLocal.values["networkType"] as? String
+                }
+                if let waitRemoteId = chosen?.remoteId, let waitRemote = report.statistics[waitRemoteId] {
+                    waitRemoteType = waitRemote.values["candidateType"] as? String
+                }
+                let waitDtlsState = snapshot.transportDtlsState
+                self.dtlsWaitLock.lock()
+                let due = self.dtlsWaitProbe.take(nowMs: waitNowMs, dtlsState: waitDtlsState)
+                self.dtlsWaitLock.unlock()
+                if let due {
+                    self.log?(DtlsWaitLine.format(
+                        count: due.count,
+                        elapsedMs: due.elapsedMs,
+                        localType: waitLocalType,
+                        networkTypeCode: NativeAudioHeartbeatDeltas.networkTypeCode(waitNetworkType),
+                        remoteType: waitRemoteType,
+                        pairState: chosen?.state,
+                        bytesSent: waitBytesSent,
+                        bytesReceived: waitBytesReceived,
+                        dtlsState: waitDtlsState))
+                }
+            }
         }
     }
 
@@ -5008,6 +5072,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // fires on.
         lastIceConnectionState = s
         if s == .connected || s == .completed { hasEverConnectedIce = true }
+        // W-DTLSWAIT -- the handshake-wait line counts its milliseconds from the first checking/connected.
+        if s == .checking || s == .connected || s == .completed {
+            dtlsWaitLock.lock()
+            dtlsWaitProbe.noteIceActive(nowMs: Self.nowMs())
+            dtlsWaitLock.unlock()
+        }
         // W419 — log every ICE state transition. Crucial for diagnosing
         // "audio drops after 30s" bugs: typically ICE goes connected →
         // disconnected → failed when network is unstable, or stays
