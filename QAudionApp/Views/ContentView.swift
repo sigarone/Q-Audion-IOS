@@ -416,8 +416,7 @@ struct ContentView: View {
     @ViewBuilder
     private var mainStack: some View {
         if appState.isInCall {
-            // The chat opened over the call (the "Chat" button of both 1:1 call screens) lives above the swap between them.
-            InCallChatHost { inCallStack }
+            inCallStack
         } else if let outcome = appState.callerOutcome {
             // W-CALLERBUSY — the outgoing call ended because the callee is busy / unreachable: say so for a
             // few seconds instead of dropping straight to Home. `startCall` and the close button clear it.
@@ -473,6 +472,14 @@ struct ContentView: View {
     /// wiring), so this is a safe surface to fall back to.
     @ViewBuilder
     private var inCallStack: some View {
+        // The chat opened over the call (the "Chat" button of both 1:1 call screens) is presented by a host above the screens,
+        // so it survives the swap between them and lives exactly as long as the call (`InCallChatHost`).
+        InCallChatHost { inCallScreens }
+    }
+
+    /// The screens of the call, chosen by the rules above.
+    @ViewBuilder
+    private var inCallScreens: some View {
         // W-OUTGOINGDOT3 — gates on the async-flipped flag, not on
         // appState.callState directly. See showLiveCallScreen's doc.
         if showLiveCallScreen {

@@ -82,8 +82,11 @@ final class InCallChatPolicyTests: XCTestCase {
     func testTheCoverHasOneOwnerAboveBothCallScreens() throws {
         let content = try code("QAudionApp/Views/ContentView.swift")
         XCTAssertTrue(
-            content.contains("if appState.isInCall { InCallChatHost { inCallStack } }"),
-            "ContentView must wrap the in-call stack in InCallChatHost for the life of the call")
+            content.contains("private var inCallStack: some View { InCallChatHost { inCallScreens } }"),
+            "ContentView must wrap the call screens in InCallChatHost")
+        XCTAssertTrue(
+            content.contains("if appState.isInCall { inCallStack } else if"),
+            "the host (inside inCallStack) lives exactly as long as isInCall, so a call never starts with the previous chat")
 
         let video = try code("QAudionApp/Views/VideoCallView.swift")
         let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
