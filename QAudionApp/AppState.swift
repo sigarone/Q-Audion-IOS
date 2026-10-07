@@ -3713,15 +3713,27 @@ final class AppState: ObservableObject {
         //
         // Same key the KMS bundle publishes as `ed25519Pub`, so the id a peer
         // derives from the directory matches the id this device advertises.
-        if let signingPublic = SovereignIdentityManager().loadIdentity()?.signingPublic,
+        //
+        // W-SIGNERBOOT (2026-10-07) — make sure the identity EXISTS first.
+        // Nothing at account setup used to create it (only the first key
+        // exchange did), so a phone that got its first call before any key
+        // exchange had no handshake signer and answered with `sign_unavailable`
+        // (call b0d7ba30). Created here, once, at launch: it also lets the next
+        // KMS sweep publish the key before anyone calls. Present → untouched;
+        // Keychain locked (PushKit wake before first unlock) → nothing created,
+        // the handshake's own lazy read retries after unlock.
+        let bootIdentity = SovereignIdentityManager()
+        let signerBoot = bootIdentity.ensureIdentity()
+        RTLog.info("call", "signerboot r=\(SovereignIdentityBootstrap.logCode(signerBoot))")
+        if let signingPublic = bootIdentity.loadIdentity()?.signingPublic,
            signingPublic.count == 32 {
             MeshRuntime.shared.configureLocalIdentity(identityKeyRaw: signingPublic)
             RTLog.info("mesh", "localNodeId derived=1")
         } else {
-            // Identity bootstrap has not produced a key yet — a fresh install
-            // before registration completes. The random id stays until the next
-            // launch, which is correct: advertising a stable id derived from a
-            // key this device does not have would be a lie.
+            // The identity could not be read or created right now (Keychain
+            // locked). The random id stays until the next launch, which is
+            // correct: advertising a stable id derived from a key this device
+            // does not have would be a lie.
             RTLog.info("mesh", "localNodeId derived=0")
         }
 
@@ -13421,9 +13433,9 @@ final class AppState: ObservableObject {
             //
             // ROOT-CAUSE FIX (2026-06-23, cross-platform call reject): publish
             // the SOVEREIGN Ed25519 signing key — the EXACT same key used to
-            // sign the call handshake (see configureHandshakeSigning:
-            // `integration.localSignerIdentityKey = identityManager
-            // .loadIdentity()?.signingPublic`). Previously this published the
+            // sign the call handshake (see wireHandshakeSigning:
+            // `integration.provideLocalSignerIdentityKey`, backed by
+            // `identityManager.loadIdentity()?.signingPublic`). Previously this published the
             // DeviceKeyManager DEVICE key (`manager.currentEd25519Pub()`), a
             // different keypair. A peer (Android/Desktop) GETting our
             // identity-key then received the device key while our signed bundle
@@ -16033,9 +16045,22 @@ final class AppState: ObservableObject {
                 signingPrivateKeyRaw: id.signingPrivate)
         }
         // Local signer identity pubkey (32-byte raw Ed25519) for the bundle's
-        // signerIdentityKey field. Captured by value now (we are on MainActor).
-        // nil → unsigned.
-        integration.localSignerIdentityKey = identityManager.loadIdentity()?.signingPublic
+        // signerIdentityKey field.
+        //
+        // W-SIGNERWAIT (2026-10-07) — resolved LAZILY, at USE, exactly like
+        // `signTranscript` above. It used to be copied once, here, when the
+        // integration was wired: a cold-start responder is wired by the very
+        // first OFFER, before a first-launch device had an identity (nothing at
+        // account setup created it — only the first key exchange did) or while
+        // the Keychain could not be read yet, and the copy stayed nil for the
+        // life of the integration, so every OFFER retry failed with
+        // `sign_unavailable` (call b0d7ba30, 2026-10-07: three failures in 1 s,
+        // then the relay fallback; the same phone signed an outgoing call 40 s
+        // later, once the end-of-call key exchange had created the identity).
+        // The closure creates the identity if — and only if — none is stored
+        // and the Keychain is readable (`SovereignIdentityBootstrap`); nil
+        // means "not ready", never "send it unsigned".
+        integration.provideLocalSignerIdentityKey = { identityManager.signingPublicKeyEnsuringIdentity() }
 
         // Trust sources (spec §5c): pinned key first, then server/QR-fetched key.
         // D11: per-(peer, device) pin. A nil device id resolves to the legacy
