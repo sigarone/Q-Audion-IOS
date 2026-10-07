@@ -270,6 +270,18 @@ final class ChatMessageSendService {
     /// key exchange a refused text send does and answers `false`. The network is not part of the question: a descriptor
     /// that cannot go out because the socket is down is queued by `sendEncryptedDurable`, not refused.
     func canSendText(peerUserId: String) -> Bool {
+        if hasTextChannel(peerUserId: peerUserId) { return true }
+        // No session and no pairwise key: the same key exchange a refused text send starts (unless the user is not signed in).
+        if let token = appState.authService.loadToken(), !token.isEmpty, appState.currentUserId != nil {
+            appState.triggerKeyExchange(with: peerUserId)
+        }
+        return false
+    }
+
+    /// The question of `canSendText` without its side effect: can a TEXT message be sealed for this peer right now (a v4 session, else
+    /// a pairwise PSK)? Nothing is sealed and no key exchange is started, so a caller that asks about many contacts in a row (the
+    /// avatar broadcast) does not start one per contact.
+    func hasTextChannel(peerUserId: String) -> Bool {
         guard let token = appState.authService.loadToken(), !token.isEmpty, appState.currentUserId != nil else {
             return false
         }
@@ -281,7 +293,6 @@ final class ChatMessageSendService {
         let prefix = peerUserId.count > 8 ? String(peerUserId.prefix(8)) : peerUserId
         if let stored = try? vault.loadPsk(name: "auto:\(prefix):\(peerUserId)"), !stored.isEmpty { return true }
         if let stored = try? vault.loadPsk(name: peerUserId), !stored.isEmpty { return true }
-        appState.triggerKeyExchange(with: peerUserId)
         return false
     }
 

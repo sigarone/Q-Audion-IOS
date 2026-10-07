@@ -8,29 +8,52 @@ public struct FileV2ChatFile: Equatable, Sendable {
     /// The real size of the file; 0 when it is not known (a send that has not built its descriptor yet).
     public let size: UInt64
     public let mimeType: String?
-    /// The `kind` of the descriptor (`file`, `image`, ...); this step shows every kind as a document.
+    /// The `kind` of the descriptor (`file`, `image`, `video`, `voice`, `avatar`, `thumb`).
     public let kind: String
     /// `ex`: -1 view once, 0 none, N seconds; `nil` when the sender did not set it.
     public let ex: Int64?
     /// `xp`: 0 export blocked; `nil` when the sender did not set it (allowed).
     public let xp: Int64?
+    /// The display hints of the descriptor (`m`), already limited (`FileV2MediaHints`): what a bubble may draw or allocate from.
+    public let hints: FileV2MediaHints
+    /// The tiny preview (`pv`), at most 2048 bytes, a small JPEG; `nil` when the descriptor has none.
+    public let preview: Data?
+    /// Whether the descriptor carries a valid thumbnail (`th`) the receiver may fetch.
+    public let hasThumbnail: Bool
 
-    public init(displayName: String, size: UInt64, mimeType: String?, kind: String, ex: Int64?, xp: Int64?) {
+    public init(displayName: String, size: UInt64, mimeType: String?, kind: String, ex: Int64?, xp: Int64?,
+                hints: FileV2MediaHints = FileV2MediaHints(), preview: Data? = nil, hasThumbnail: Bool = false) {
         self.displayName = displayName
         self.size = size
         self.mimeType = mimeType
         self.kind = kind
         self.ex = ex
         self.xp = xp
+        self.hints = hints
+        self.preview = preview
+        self.hasThumbnail = hasThumbnail
     }
 
     init(descriptor: FileV2Descriptor) {
         self.init(displayName: FileV2LocalName.sanitised(descriptor.name), size: descriptor.size,
-                  mimeType: descriptor.mimeType, kind: descriptor.kind.rawValue, ex: descriptor.ex, xp: descriptor.xp)
+                  mimeType: descriptor.mimeType, kind: descriptor.kind.rawValue, ex: descriptor.ex, xp: descriptor.xp,
+                  hints: FileV2MediaHints(media: descriptor.media), preview: descriptor.preview,
+                  hasThumbnail: descriptor.thumbnail != nil)
     }
 
-    /// One line for the conversation list and a notification.
-    public var previewText: String { FileV2ChatBody.glyph + displayName }
+    /// The kind as the library names it; `nil` for a kind this build does not know (it never comes from a valid descriptor).
+    public var descriptorKind: FileV2Descriptor.Kind? { FileV2Descriptor.Kind(rawValue: kind) }
+
+    /// One line for the conversation list and a notification: the label of the kind for an image, a voice note and a video, the
+    /// file name for anything else.
+    public var previewText: String {
+        switch kind {
+        case "image": return FileV2ChatBody.kindLabelText(.image)
+        case "voice": return FileV2ChatBody.kindLabelText(.voice)
+        case "video": return FileV2ChatBody.kindLabelText(.video)
+        default: return FileV2ChatBody.glyph + displayName
+        }
+    }
 }
 
 /// What a chat text message IS when the v2 file format is concerned (WIRE_SPEC 12.7.1, 12.7.6): ordinary text, a valid
@@ -72,10 +95,43 @@ public enum FileV2ChatBody: Equatable, Sendable {
     }
     static var unsupportedText: String { placeholderText(.unsupportedVersion) }
     static var invalidText: String { placeholderText(.invalid) }
-    /// `Message.mediaMimeType` of a file that is being sent or failed to be sent (no descriptor yet). It keeps such a row
+    /// `Message.mediaMimeType` of a document that is being sent or failed to be sent (no descriptor yet). It keeps such a row
     /// out of the text outbox (`ConversationStore.loadPendingOutboundTextMessages` is text only) so it can never be sent
-    /// as the text it shows.
+    /// as the text it shows. The pending row of another kind has the same value followed by `;kind=<kind>` (`pendingMime(kind:)`).
     public static let pendingMime = "application/x-qaudion-file-pending"
+
+    /// The pending value for a row of `kind` (`file` is `pendingMime` itself).
+    public static func pendingMime(kind: String) -> String {
+        kind == "file" || kind.isEmpty ? pendingMime : pendingMime + ";kind=" + kind
+    }
+
+    /// Whether `mime` is the pending value of any kind.
+    public static func isPending(mime: String?) -> Bool {
+        guard let mime else { return false }
+        return mime == pendingMime || mime.hasPrefix(pendingMime + ";kind=")
+    }
+
+    /// The kind a pending `mime` stands for (`file` when it carries none).
+    public static func pendingKind(mime: String?) -> String {
+        let marker = pendingMime + ";kind="
+        guard let mime, mime.hasPrefix(marker) else { return "file" }
+        let kind = String(mime.dropFirst(marker.count))
+        return FileV2Descriptor.Kind(rawValue: kind) == nil ? "file" : kind
+    }
+
+    /// The labels of the kinds that show a label and not a file name (an image, a voice note, a video), for the conversation
+    /// list and notifications. The engine has no localisation of its own: the default is Italian, and the app installs the
+    /// localised lookup once at launch.
+    public enum KindLabel: Sendable {
+        case image, voice, video
+    }
+    public static var kindLabelText: @Sendable (KindLabel) -> String = { label in
+        switch label {
+        case .image: return "📷 Foto"
+        case .voice: return "🎤 Nota vocale"
+        case .video: return "🎬 Video"
+        }
+    }
 
     public static func classify(utf8 body: Data) -> FileV2ChatBody {
         switch FileV2Message.recognize(utf8: body) {
@@ -118,11 +174,13 @@ public enum FileV2ChatBody: Equatable, Sendable {
     /// What the bubble of `message` shows, or `nil` when the message is not a v2 file: a valid descriptor, or a file that is
     /// being sent (its row holds the name, with `pendingMime`).
     public static func bubbleInfo(for message: Message) -> FileV2ChatFile? {
-        if message.mediaMimeType == pendingMime {
+        if isPending(mime: message.mediaMimeType) {
             var name = message.plaintext
             if name.hasPrefix(glyph) { name = String(name.dropFirst(glyph.count)) }
-            return FileV2ChatFile(displayName: FileV2LocalName.sanitised(name), size: 0, mimeType: nil, kind: "file",
-                                  ex: nil, xp: nil)
+            let duration = message.mediaDurationMs.map { min(max($0, 0), FileV2MediaHints.maxDurationMs) }
+            return FileV2ChatFile(displayName: FileV2LocalName.sanitised(name), size: 0, mimeType: nil,
+                                  kind: pendingKind(mime: message.mediaMimeType), ex: nil, xp: nil,
+                                  hints: FileV2MediaHints(durationMs: duration))
         }
         if case .file(let file) = classify(text: message.plaintext) { return file }
         return nil

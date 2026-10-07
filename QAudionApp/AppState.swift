@@ -10661,6 +10661,15 @@ final class AppState: ObservableObject {
         // GroupAttachmentEnvelope JSON, NOT text. Branch on the transport
         // msg_type (never on speculative JSON-sniffing of a text body).
         if msgType == GroupAttachmentEnvelope.msgTypeAttachment {
+            // File transfer v2 (WIRE_SPEC 12.7): the content of a group payload with msg_type 1 is a file message when it begins with
+            // one of the three prefixes (a descriptor, or a control message); anything else is the old attachment envelope.
+            if FileV2Message.hasFileMessagePrefix(plaintext) {
+                landIncomingGroupFileV2(
+                    plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
+                    senderId: senderId, serverMsgId: serverMsgId,
+                    clientMsgId: clientMsgId, ts: ts, live: live)
+                return
+            }
             landIncomingGroupAttachment(
                 plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
                 senderId: senderId, selfId: selfId, serverMsgId: serverMsgId,
@@ -10668,26 +10677,18 @@ final class AppState: ObservableObject {
             return
         }
 
-        // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message is never shown as the text it is. This version
-        // does not send or open v2 files in groups, so such a message is a line that says so (the descriptor holds the key of
-        // the file and never reaches a row, a banner or a log); a control message is dropped.
-        let groupFileBody = FileV2ChatBody.classify(text: plaintext)
-        if groupFileBody == .control {
-            let controlGroup: String = String(groupHex.prefix(8))
-            RTLog.warn("group", "text filev2_control=1 dropped=1 g=" + controlGroup)
-            if live { sendGroupDelivered(serverMsgId) }
+        // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message is never shown as the text it is. The group
+        // descriptor travels with msg_type 1 (above); one that arrives in a TEXT frame is read the same way (it is a file message
+        // whichever frame carried it, and never text): a descriptor becomes a file row, a control message is dropped, a rejected one
+        // is a placeholder.
+        if FileV2Message.hasFileMessagePrefix(plaintext) {
+            landIncomingGroupFileV2(
+                plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
+                senderId: senderId, serverMsgId: serverMsgId,
+                clientMsgId: clientMsgId, ts: ts, live: live)
             return
         }
-        let shownText: String
-        switch groupFileBody {
-        case .text:
-            shownText = plaintext
-        case .file(let groupFile):
-            let groupFileLine: String = groupFile.previewText
-            shownText = String(localized: "file_v2.group_unavailable", defaultValue: "\(groupFileLine) (non ancora disponibile nei gruppi)", comment: "Row for a file message received in a group, which this version cannot open; %@ is the file name line.")
-        case .unsupportedVersion, .invalid, .control:
-            shownText = groupFileBody.displayText ?? ""
-        }
+        let shownText: String = plaintext
 
         // Store posts didChangeNotification → an open GroupChatScreen
         // reloads live; persisted so it also shows on next open.
@@ -10804,6 +10805,75 @@ final class AppState: ObservableObject {
         if live { sendGroupDelivered(serverMsgId) }
     }
 
+    /// File transfer v2 in a group (WIRE_SPEC 12.7, 12.11): the descriptor message of a file, sealed in the group payload with
+    /// msg_type 1. A valid descriptor becomes a row that holds the descriptor (the download needs it; the key in it is never shown
+    /// as text), with its own timer and export permission; what is fetched on arrival starts at once (the thumbnail, an image or a
+    /// voice note up to 25 MiB), a video, a document and anything larger wait for a tap. A control message and a file of kind
+    /// `avatar` or `thumb` have no row; a rejected descriptor is one placeholder row, never its content.
+    private func landIncomingGroupFileV2(
+        plaintext: String, groupIdUuid: String, groupHex: String, senderId: String,
+        serverMsgId: String, clientMsgId: String?, ts: Date, live: Bool
+    ) {
+        // The id of the row names the directory of its files on this device: it is made here, at random, and never taken from the
+        // wire (a sender must not be able to pick a name that another row, or another file, already has). A redelivery of the same
+        // message is recognised by its server message id, which `append` and the early `contains` check already use.
+        let rowId = UUID().uuidString
+        let groupShort: String = String(groupHex.prefix(8))
+        let body = FileV2ChatBody.classify(text: plaintext)
+        switch body {
+        case .file(let info) where info.kind != "avatar" && info.kind != "thumb":
+            // Same resolver the 1:1 path and the old group envelope use: the descriptor's `ex` is the per-attachment override.
+            let effectiveTimerSecs = AttachmentTimerResolver.resolve(
+                overrideSeconds: info.ex.map { Int(clamping: $0) }, conversationDefault: nil)
+            let isViewOnce = (effectiveTimerSecs ?? 0) == -1
+            let ephExpiry: Date? = effectiveTimerSecs.flatMap { s in
+                s > 0 ? ts.addingTimeInterval(Double(s)) : nil
+            }
+            let exportBlocked: Bool? = ((info.xp ?? 1) == 0) ? true : nil
+            let stored = GroupMessageStore.Stored(
+                id: rowId,
+                serverMessageId: serverMsgId,
+                senderId: senderId,
+                mine: false,
+                text: "",
+                ts: ts,
+                attachmentKind: info.kind,
+                mediaMime: info.mimeType,
+                fileName: info.displayName,
+                byteLength: Int64(clamping: info.size),
+                mediaLocalPath: nil,
+                descriptorJson: plaintext,
+                expiresAt: ephExpiry,
+                isViewOnce: isViewOnce ? true : nil,
+                exportBlocked: exportBlocked,
+                fileV2: true)
+            let inserted = GroupMessageStore.shared.append(groupHex: groupHex, stored)
+            if inserted {
+                presentGroupMessageBanner(groupHex: groupHex, senderId: senderId, plaintext: info.previewText)
+                sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    FileV2DownloadCenter.shared.autoStart(groupRow: stored, groupHex: groupHex, appState: self)
+                }
+            }
+        case .unsupportedVersion, .invalid:
+            let placeholder = GroupMessageStore.shared.append(
+                groupHex: groupHex,
+                GroupMessageStore.Stored(
+                    id: rowId,
+                    serverMessageId: serverMsgId,
+                    senderId: senderId,
+                    mine: false,
+                    text: body.displayText ?? "",
+                    ts: ts))
+            if placeholder { sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId) }
+        default:
+            // A control message, or a file that is not a chat attachment: dropped silently, no row.
+            RTLog.info("group", "filev2 nonrow=1 dropped=1 g=" + groupShort)
+        }
+        if live { sendGroupDelivered(serverMsgId) }
+    }
+
     /// Fase 1B — on group-chat open, re-kick the download+decrypt for any
     /// inbound attachment row whose descriptor was retained but whose blob
     /// never landed (a prior download failed, or the app was killed before
@@ -10821,8 +10891,28 @@ final class AppState: ObservableObject {
     func retryPendingGroupAttachmentDownloads(groupHex: String) {
         let selfId = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
         guard !selfId.isEmpty else { return }
+        // File transfer v2: a row of this device that was uploading when the app was closed or killed will never finish: it shows as
+        // failed (with "Riprova") instead of waiting for ever. A send that is running in this process is left alone.
+        for row in GroupMessageStore.shared.messages(forGroupHex: groupHex)
+        where row.mine && row.fileV2 == true && row.descriptorJson == nil && row.serverMessageId == nil && row.sendFailed != true {
+            let staleRowId = row.id
+            Task { @MainActor in
+                if !FileV2OutboundRunner.isInFlight(key: staleRowId) {
+                    GroupMessageStore.shared.markSendFailed(groupHex: groupHex, clientMsgId: staleRowId)
+                }
+            }
+        }
         for row in GroupMessageStore.shared.messages(forGroupHex: groupHex)
         where row.mediaLocalPath == nil && !row.mine {
+            if row.fileV2 == true {
+                // File transfer v2: the thumbnail, and the file when it is fetched on arrival.
+                let v2Row = row
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    FileV2DownloadCenter.shared.autoStart(groupRow: v2Row, groupHex: groupHex, appState: self)
+                }
+                continue
+            }
             guard let json = row.descriptorJson,
                   let envelope = try? GroupAttachmentEnvelope.parse(json) else { continue }
             let rowId = row.id
@@ -11527,6 +11617,19 @@ final class AppState: ObservableObject {
                     clientMsgId: clientMsgId, settleClientKey: true)
                 return
             }
+            // File transfer v2: a file of kind `avatar` is the picture of the contact, sent as a chat message to each contact (and a file of
+            // kind `thumb` alone means nothing): consumed here, acked and settled, never a row, a preview, an unread count, a banner or a
+            // conversation.
+            if case .file(let pictureFile) = FileV2ChatBody.classify(text: decryptedRaw),
+               pictureFile.kind == "avatar" || pictureFile.kind == "thumb" {
+                if pictureFile.kind == "avatar" {
+                    avatarAnnounceCoordinator.handleInboundFileV2(body: decryptedRaw, senderId: senderId)
+                }
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
+                return
+            }
             plaintext = Self.renderInboundPlaintext(decryptedRaw)
         } catch {
             // Fix (2026-07-31, found during full-audit): was bare print() —
@@ -11846,6 +11949,16 @@ final class AppState: ObservableObject {
                     ],
                     delay: 0.1
                 )
+            }
+        }
+        // File transfer v2: what is fetched on arrival (the thumbnail of an image or a video, an image or a voice note up to 25 MiB).
+        // A video, a document and anything larger wait for a tap on the card; the bubble asks again when it appears, in case the app
+        // was not running when the message arrived.
+        if case .file = fileV2Body {
+            let arrived = msg
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                FileV2DownloadCenter.shared.autoStart(message: arrived, appState: self)
             }
         }
         // W80: async download + decrypt + cache. We kick this off here

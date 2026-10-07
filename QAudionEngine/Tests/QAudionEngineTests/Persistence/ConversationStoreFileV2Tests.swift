@@ -112,4 +112,29 @@ final class ConversationStoreFileV2Tests: XCTestCase {
         store.replaceContent(id: id, plaintext: FileV2ChatBody.glyph + "relazione.pdf", mediaMimeType: FileV2ChatBody.pendingMime)
         XCTAssertFalse(store.loadPendingOutboundTextMessages().contains { $0.id == id })
     }
+
+    func test_theRowOfAnImageOrAVoiceNote_withItsLocalCopy_isStillInTheTextOutbox() throws {
+        // the sender's own bubble shows the local copy of the file (`mediaLocalPath`); the row is the descriptor message all the same
+        let id = UUID()
+        let body = try descriptorBody()
+        store.appendMessage(Message(
+            id: id, conversationId: convId, direction: .outgoing, plaintext: body, sentAt: Date(), deliveredAt: nil,
+            readAt: nil, status: .sending, mediaLocalPath: "/caches/images/x.jpg", clientMsgId: id.uuidString))
+        XCTAssertTrue(store.loadPendingOutboundTextMessages().contains { $0.id == id })
+
+        // a row with a local copy and ordinary text is an attachment of the old kind and stays out
+        let other = UUID()
+        store.appendMessage(Message(
+            id: other, conversationId: convId, direction: .outgoing, plaintext: "📷 Foto", sentAt: Date(), deliveredAt: nil,
+            readAt: nil, status: .sending, mediaLocalPath: "/caches/images/y.jpg", clientMsgId: other.uuidString))
+        XCTAssertFalse(store.loadPendingOutboundTextMessages().contains { $0.id == other })
+
+        // and while it is a pending file of any kind it never is
+        let pending = UUID()
+        store.appendMessage(Message(
+            id: pending, conversationId: convId, direction: .outgoing, plaintext: "📷 Foto", sentAt: Date(), deliveredAt: nil,
+            readAt: nil, status: .sending, mediaLocalPath: "/caches/images/z.jpg",
+            mediaMimeType: FileV2ChatBody.pendingMime(kind: "image"), clientMsgId: pending.uuidString))
+        XCTAssertFalse(store.loadPendingOutboundTextMessages().contains { $0.id == pending })
+    }
 }

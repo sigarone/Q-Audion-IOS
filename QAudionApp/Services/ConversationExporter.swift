@@ -85,7 +85,7 @@ enum ConversationExporter {
         } else if let shown = FileV2ChatBody.classify(text: m.plaintext).displayText {
             // A file message (WIRE_SPEC 12.7.1): its one-line preview, never the descriptor (it holds the key of the file).
             body = shown
-        } else if m.mediaMimeType == FileV2ChatBody.pendingMime {
+        } else if FileV2ChatBody.isPending(mime: m.mediaMimeType) {
             // A file still being sent: its row already is the one-line name.
             body = m.plaintext
         } else if let mime = m.mediaMimeType, !mime.isEmpty {

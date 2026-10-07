@@ -75,7 +75,7 @@ enum FileV2FailureText {
         case .unreadable:
             return String(localized: "file_v2.fail.unreadable", defaultValue: "Impossibile leggere il file.", comment: "File transfer error: the file could not be read from disk.")
         case .viewOnceUnsupported:
-            return String(localized: "file_v2.fail.view_once", defaultValue: "Un documento non può essere inviato con «visualizza una volta».", comment: "File transfer error: view-once is not available for documents.")
+            return String(localized: "file_v2.fail.view_once", defaultValue: "Documenti e video non possono essere inviati con «visualizza una volta».", comment: "File transfer error: view-once is not available for documents and videos.")
         case .noSecureChannel:
             return String(localized: "file_v2.fail.no_channel", defaultValue: "Il canale cifrato con questo contatto non è ancora pronto. Riprova tra un momento.", comment: "File transfer error: no encrypted session with the contact yet, so the file message cannot be sealed.")
         case .unavailable:
@@ -87,6 +87,11 @@ enum FileV2FailureText {
         case .transfer(let error):
             return message(for: error, server: failure.server)
         }
+    }
+
+    /// A photo that is not an image the device can read, or that is above 10 MB after it was downscaled: nothing is sent.
+    static var imageMessage: String {
+        String(localized: "file_v2.fail.image", defaultValue: "Immagine non valida o troppo grande.", comment: "File transfer error: the picked photo cannot be decoded, or is too large to send.")
     }
 
     private static func message(for error: FileV2TransferError, server: FileV2ServerError?) -> String {
@@ -138,6 +143,16 @@ enum FileV2FailureText {
 /// once at launch; the engine writes it into the row and the preview at the moment the message arrives.
 enum FileV2PlaceholderText {
     static func install() {
+        FileV2ChatBody.kindLabelText = { label in
+            switch label {
+            case .image:
+                return String(localized: "file_v2.kind.image", defaultValue: "📷 Foto", comment: "One-line label of an image message in the conversation list and in notifications.")
+            case .voice:
+                return String(localized: "file_v2.kind.voice", defaultValue: "🎤 Nota vocale", comment: "One-line label of a voice note in the conversation list and in notifications.")
+            case .video:
+                return String(localized: "file_v2.kind.video", defaultValue: "🎬 Video", comment: "One-line label of a video message in the conversation list and in notifications.")
+            }
+        }
         FileV2ChatBody.placeholderText = { placeholder in
             switch placeholder {
             case .unsupportedVersion:
@@ -146,116 +161,5 @@ enum FileV2PlaceholderText {
                 return String(localized: "file_v2.placeholder.invalid", defaultValue: "📎 Allegato non valido", comment: "Placeholder row for a file message that was rejected as invalid.")
             }
         }
-    }
-}
-
-// MARK: - Download of a received file
-
-/// Downloads, verifies and decrypts the file of a received v2 message when the user taps it, and keeps what the bubble shows
-/// meanwhile (progress, or the failure). In memory only: a download that the app does not finish is started again by the next
-/// tap, from the descriptor that is still in the message.
-///
-/// A finished download is recorded on the row (`mediaLocalPath`), and from then on the bubble shows the ordinary save and share
-/// buttons. The file lives in the caches directory, where the system may reclaim it: the row then shows the download button
-/// again (and the descriptor's token may by then have expired, which the user is told).
-@MainActor
-final class FileV2DownloadCenter: ObservableObject {
-
-    static let shared = FileV2DownloadCenter()
-
-    enum State: Equatable {
-        /// `progress` is `0...1`.
-        case downloading(progress: Double)
-        /// The sentence the user reads.
-        case failed(String)
-    }
-
-    @Published private(set) var states: [UUID: State] = [:]
-    private var tasks: [UUID: Task<Void, Never>] = [:]
-
-    func state(for messageId: UUID) -> State? { states[messageId] }
-
-    func cancel(_ messageId: UUID) {
-        tasks[messageId]?.cancel()
-    }
-
-    /// Starts the download of the file of `message` (an incoming row that carries a valid descriptor). Does nothing when one is
-    /// already running for the row.
-    func start(message: Message, appState: AppState) {
-        let messageId = message.id
-        guard tasks[messageId] == nil else { return }
-        guard let descriptor = FileV2ChatBody.descriptor(ofBody: message.plaintext) else {
-            states[messageId] = .failed(FileV2FailureText.message(for: FileV2Failure(.format("bad_descriptor"))))
-            return
-        }
-        let conversationId = message.conversationId
-        let peerUserId = message.senderUserId
-        let destination = Self.destination(messageId: messageId, descriptor: descriptor)
-        let server = FileV2AppServices.makeServer(appState: appState)
-        states[messageId] = .downloading(progress: 0)
-        tasks[messageId] = Task { [weak self] in
-            await BackgroundUploadTask.run(name: "file-v2-download") {
-                guard let self else { return }
-                await self.run(descriptor: descriptor, destination: destination, server: server, messageId: messageId,
-                               conversationId: conversationId, peerUserId: peerUserId)
-            }
-        }
-    }
-
-    private func run(descriptor: FileV2Descriptor, destination: URL, server: FileV2Server, messageId: UUID,
-                     conversationId: UUID, peerUserId: String?) async {
-        let receiver = FileV2Receiver(server: server)
-        do {
-            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try await receiver.download(descriptor, to: destination) { done, total in
-                Task { @MainActor in
-                    FileV2DownloadCenter.shared.setProgress(messageId, done: done, total: total)
-                }
-            }
-            ConversationStore().setMediaInfo(
-                localId: messageId, conversationId: conversationId, plaintext: nil,
-                mediaLocalPath: destination.path, mediaDurationMs: nil, mediaMimeType: nil)
-            finish(messageId)
-            RTLog.info("chat", "filev2 download ok=1")
-            var info: [String: Any] = ["conversationId": conversationId]
-            if let peerUserId { info["peerUserId"] = peerUserId }
-            NotificationCenter.default.post(name: AppState.chatRefreshNotification, object: nil, userInfo: info)
-        } catch is CancellationError {
-            try? FileManager.default.removeItem(at: destination.deletingLastPathComponent())
-            finish(messageId)
-        } catch let failure as FileV2Failure {
-            RTLog.warn("chat", "filev2 download failed code=\(failure.code)")
-            fail(messageId, FileV2FailureText.message(for: failure), directory: destination.deletingLastPathComponent())
-        } catch {
-            RTLog.warn("chat", "filev2 download failed code=io")
-            fail(messageId, FileV2FailureText.message(for: FileV2Failure(.unreadable)),
-                 directory: destination.deletingLastPathComponent())
-        }
-    }
-
-    private func setProgress(_ messageId: UUID, done: Int64, total: Int64) {
-        guard total > 0, tasks[messageId] != nil else { return }
-        states[messageId] = .downloading(progress: min(1, max(0, Double(done) / Double(total))))
-    }
-
-    private func finish(_ messageId: UUID) {
-        states.removeValue(forKey: messageId)
-        tasks.removeValue(forKey: messageId)
-    }
-
-    private func fail(_ messageId: UUID, _ text: String, directory: URL) {
-        try? FileManager.default.removeItem(at: directory)
-        tasks.removeValue(forKey: messageId)
-        states[messageId] = .failed(text)
-    }
-
-    /// `Caches/files_v2/<message id>/<sanitised name>`: the name is the peer's, cut to one safe path component.
-    private static func destination(messageId: UUID, descriptor: FileV2Descriptor) -> URL {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return base
-            .appendingPathComponent("files_v2", isDirectory: true)
-            .appendingPathComponent(messageId.uuidString, isDirectory: true)
-            .appendingPathComponent(FileV2LocalName.sanitised(descriptor.name), isDirectory: false)
     }
 }

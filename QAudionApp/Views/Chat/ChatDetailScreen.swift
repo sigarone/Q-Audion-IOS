@@ -35,6 +35,8 @@ enum PendingAttachmentSend {
     /// W91/W447: multi-select photo picker — one timer choice applies
     /// to the whole batch (asking once per photo would be unusable).
     case multiImage([Data])
+    /// A selection of the photo picker that holds at least one video: its photos and its videos, one dialog for the whole batch.
+    case media(images: [Data], videos: [URL])
     case file(URL)
     case voiceNote(VoiceNoteRecorder.Recording)
 }
@@ -399,7 +401,7 @@ struct ChatDetailScreen: View {
         .photosPicker(isPresented: $showingPhotoPicker,
                       selection: $multiPickerItems,
                       maxSelectionCount: 10,
-                      matching: .images)
+                      matching: .any(of: [.images, .videos]))
         // W259: extracted the multi-photo picker callback into methods.
         // Same pattern as W258 voice-note fix — inline closure body was
         // 4+ levels deep (closure → Task → for → if → MainActor.run with
@@ -567,9 +569,7 @@ struct ChatDetailScreen: View {
                 // before this sheet ever appeared, and cancelling here must
                 // not orphan that temp file — mirror
                 // VoiceNoteRecorder.cancel()'s exact best-effort idiom.
-                if case .voiceNote(let recording) = pendingAttachmentSend {
-                    try? FileManager.default.removeItem(at: recording.fileURL)
-                }
+                FileV2PickedMovie.discardTemporaryFiles(of: pendingAttachmentSend)
                 pendingAttachmentSend = nil
             }
         )) {
@@ -581,9 +581,7 @@ struct ChatDetailScreen: View {
                     performAttachmentSend(pending, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
                 },
                 onCancel: {
-                    if case .voiceNote(let recording) = pendingAttachmentSend {
-                        try? FileManager.default.removeItem(at: recording.fileURL)
-                    }
+                    FileV2PickedMovie.discardTemporaryFiles(of: pendingAttachmentSend)
                     pendingAttachmentSend = nil
                 }
             )
@@ -1038,12 +1036,17 @@ struct ChatDetailScreen: View {
     /// `EphemeralMessageJanitor` sweeps it.
     private func imageGalleryItems(_ messages: [Message]) -> [ImageGalleryItem] {
         messages.compactMap { m in
-            guard let mime = m.mediaMimeType, mime.hasPrefix("image/"),
-                  let path = m.mediaLocalPath, !path.isEmpty else { return nil }
+            guard let path = m.mediaLocalPath, !path.isEmpty, Self.isImageRow(m) else { return nil }
             let isVO = m.isViewOnce == true && m.direction != .outgoing
             guard !isVO else { return nil }
             return ImageGalleryItem(id: m.id, localPath: path)
         }
+    }
+
+    /// Whether the row is an image: a legacy attachment (an `image/*` mime type) or a file transfer v2 message of kind `image`.
+    private static func isImageRow(_ m: Message) -> Bool {
+        if let mime = m.mediaMimeType { return mime.hasPrefix("image/") }
+        return FileV2ChatBody.bubbleInfo(for: m)?.kind == "image"
     }
 
     @ViewBuilder
@@ -1131,12 +1134,7 @@ struct ChatDetailScreen: View {
                 .foregroundStyle(scheme.onSurfaceVariant)
             } else if let fileInfo = FileV2ChatBody.bubbleInfo(for: msg) {
                 // File transfer v2: the body of such a message is a descriptor, never shown as text (WIRE_SPEC 12.7.1).
-                FileV2BubbleContent(
-                    message: msg,
-                    info: fileInfo,
-                    downloads: fileV2Downloads,
-                    onDownload: { fileV2Downloads.start(message: msg, appState: appState) }
-                )
+                fileV2Bubble(msg, fileInfo, galleryItems: galleryItems)
             } else if let mime = msg.mediaMimeType, mime.hasPrefix("audio/") {
                 VoiceNoteBubbleContent(
                     player: VoiceNotePlayer.shared,
@@ -1191,6 +1189,29 @@ struct ChatDetailScreen: View {
         .onLongPressGesture(minimumDuration: 0.4) {
             actionTargetId = msg.id
         }
+    }
+
+    /// The bubble of a file transfer v2 message (a document, an image, a voice note, a video), received or sent. A received one that
+    /// is fetched on arrival (an image or a voice note up to 25 MiB) asks the download center when it appears, in case the app was
+    /// not running when it arrived.
+    private func fileV2Bubble(_ msg: Message, _ info: FileV2ChatFile, galleryItems: [ImageGalleryItem]) -> some View {
+        let isIncoming = msg.direction == .incoming
+        return FileV2BubbleContent(
+            rowKey: msg.id.uuidString,
+            rowId: msg.id,
+            isOutgoing: !isIncoming,
+            info: info,
+            localPath: msg.mediaLocalPath,
+            exportBlocked: msg.exportBlocked ?? false,
+            downloads: fileV2Downloads,
+            saveRequest: mediaSaveRequestBinding(for: msg.id),
+            shareRequest: mediaShareRequestBinding(for: msg.id),
+            galleryItems: galleryItems,
+            onDownload: { fileV2Downloads.start(message: msg, appState: appState) },
+            onAppearWithoutFile: {
+                if isIncoming { fileV2Downloads.autoStart(message: msg, appState: appState) }
+            }
+        )
     }
 
     private var typingRow: some View {
@@ -1343,9 +1364,17 @@ struct ChatDetailScreen: View {
         // the user confirms a timer in the pre-send dialog (one dialog
         // for the whole batch, not one per photo).
         var loaded: [Data] = []
+        var videos: [URL] = []
         var failures = 0
         for item in items {
-            if let data = try? await item.loadTransferable(type: Data.self) {
+            if FileV2PickedMovie.isVideo(item) {
+                // A video is handed over as a file, never as bytes in memory.
+                if let url = await FileV2PickedMovie.load(item) {
+                    videos.append(url)
+                } else {
+                    failures += 1
+                }
+            } else if let data = try? await item.loadTransferable(type: Data.self) {
                 loaded.append(data)
             } else {
                 failures += 1
@@ -1364,8 +1393,9 @@ struct ChatDetailScreen: View {
                     durationSeconds: 3))
             }
         }
-        guard !loaded.isEmpty else { return }
-        await MainActor.run { pendingAttachmentSend = .multiImage(loaded) }
+        guard !loaded.isEmpty || !videos.isEmpty else { return }
+        let pending: PendingAttachmentSend = videos.isEmpty ? .multiImage(loaded) : .media(images: loaded, videos: videos)
+        await MainActor.run { pendingAttachmentSend = pending }
     }
 
     private static func photoFailureSnackbarText(failed: Int, total: Int) -> String {
@@ -1430,6 +1460,8 @@ struct ChatDetailScreen: View {
                     severity: .warning,
                     durationSeconds: 3))
             }
+        case .media(let images, let videos):
+            sendPickedMedia(images: images, videos: videos, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
         case .file(let url):
             // File transfer v2: a file that cannot be sent at all (empty, unreadable, above 5 GiB, no encrypted channel yet) is
             // refused here with the reason, before any row is shown.
@@ -1441,6 +1473,38 @@ struct ChatDetailScreen: View {
             }
         case .voiceNote(let recording):
             container.sendVoiceNote(recording, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked)
+        }
+    }
+
+    /// The photos of a selection that also holds videos, then its videos (each prepared and started in turn: a video is a file,
+    /// not bytes in memory).
+    private func sendPickedMedia(images: [Data], videos: [URL], overrideSeconds: Int?, exportBlocked: Bool) {
+        var failed = 0
+        for data in images {
+            if !container.sendImage(data, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked) {
+                failed += 1
+            }
+        }
+        if failed > 0 {
+            snackbar?.show(.init(
+                text: Self.photoSendFailureSnackbarText(failed: failed, total: images.count),
+                severity: .warning,
+                durationSeconds: 3))
+        }
+        guard !videos.isEmpty else { return }
+        Task { await self.sendPickedVideos(videos, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked) }
+    }
+
+    @MainActor
+    private func sendPickedVideos(_ urls: [URL], overrideSeconds: Int?, exportBlocked: Bool) async {
+        for url in urls {
+            let failure = await container.sendVideo(url: url, overrideTimerSeconds: overrideSeconds, exportBlocked: exportBlocked)
+            if let failure {
+                snackbar?.show(.init(
+                    text: FileV2FailureText.message(for: failure),
+                    severity: .warning,
+                    durationSeconds: 4))
+            }
         }
     }
 
@@ -1608,6 +1672,15 @@ struct ChatDetailScreen: View {
     private func mediaKind(for id: UUID) -> BubbleActionSheet.MediaKind {
         guard let msg = container.viewModel.messages.first(where: { $0.id == id }) else {
             return .none
+        }
+        // A file transfer v2 message: save and share only act on a file that is on this device.
+        if let info = FileV2ChatBody.bubbleInfo(for: msg) {
+            guard FileV2DownloadCenter.fileExists(atPath: msg.mediaLocalPath) else { return .none }
+            switch info.kind {
+            case "image": return .image
+            case "voice": return .voiceNote
+            default: return .none
+            }
         }
         if let mime = msg.mediaMimeType, mime.hasPrefix("image/") {
             return .image

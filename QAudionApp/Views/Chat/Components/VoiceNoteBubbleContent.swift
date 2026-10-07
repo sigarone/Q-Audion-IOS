@@ -57,6 +57,9 @@ struct VoiceNoteBubbleContent: View {
     /// `qa_att_receipt:1` back to the sender. `nil`/never called for
     /// outbound bubbles (the caller only passes it for inbound rows).
     var onOpened: (() -> Void)? = nil
+    /// File transfer v2: the waveform of the descriptor, each sample a fraction `0...1` of the loudest one
+    /// (`FileV2MediaHints.drawableWave`); empty = the bars are the pseudo-random ones of every other voice note.
+    var wave: [Double] = []
 
     private var isReady: Bool { mediaLocalPath != nil }
     private var isActive: Bool { player.currentlyPlayingId == messageId }
@@ -213,6 +216,7 @@ struct VoiceNoteBubbleContent: View {
             barCount: barCount,
             seed: Int(messageId.uuidString.utf8.prefix(8).reduce(0) { ($0 &+ Int($1)) & 0x7FFF_FFFF }),
             progress: p,
+            wave: wave,
             playedColor: scheme.primary,
             unplayedColor: scheme.onSurfaceVariant.opacity(isActive ? 0.45 : 0.30),
             // W98: drag-to-scrub only enabled while this bubble is the
@@ -235,6 +239,7 @@ struct VoiceNoteBubbleContent: View {
         let barCount: Int
         let seed: Int
         let progress: Double
+        let wave: [Double]
         let playedColor: Color
         let unplayedColor: Color
         let onScrub: ((Double) -> Void)?
@@ -245,7 +250,7 @@ struct VoiceNoteBubbleContent: View {
                 let cursorIdx = Int(Double(barCount) * progress)
                 HStack(alignment: .center, spacing: 2) {
                     ForEach(0..<barCount, id: \.self) { i in
-                        let amp = pseudoAmplitude(barIndex: i)
+                        let amp = amplitude(barIndex: i)
                         let h = max(2, geo.size.height * CGFloat(amp))
                         RoundedRectangle(cornerRadius: 1)
                             .fill(i < cursorIdx ? playedColor : unplayedColor)
@@ -264,6 +269,17 @@ struct VoiceNoteBubbleContent: View {
                     }
                 )
             }
+        }
+
+        /// The height of bar `barIndex` as a fraction of the row: the sample of the descriptor's waveform that falls under it (the bars
+        /// are 28 and the waveform has at most 64 samples, so each bar takes the loudest sample it covers), never below 0.15 so that
+        /// silence still shows a stub; the pseudo-random shape when the descriptor has no waveform.
+        private func amplitude(barIndex: Int) -> Double {
+            guard !wave.isEmpty else { return pseudoAmplitude(barIndex: barIndex) }
+            let start = barIndex * wave.count / barCount
+            let end = max(start + 1, (barIndex + 1) * wave.count / barCount)
+            let loudest = wave[start..<min(end, wave.count)].max() ?? 0
+            return max(0.15, min(1.0, loudest))
         }
 
         /// Park-Miller-style LCG keyed by (seed, barIndex). Output

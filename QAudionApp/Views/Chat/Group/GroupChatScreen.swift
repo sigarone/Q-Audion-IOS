@@ -56,6 +56,9 @@ struct GroupChatScreen: View {
     @EnvironmentObject private var capabilityGate: CapabilityGate
     /// Entitlements Task 5 — drives `.sheet(item:)` for `UpgradeSheet`.
     @State private var upgradeSheetCapability: Capability? = nil
+    /// File transfer v2: the upload progress of the rows of this device being sent (shown in place of the tick).
+    @ObservedObject private var fileV2Uploads: GroupUploadProgress = .shared
+    @State private var showingDocPicker = false
 
     let groupId: UUID
     @State private var state: GroupChatUiState
@@ -151,21 +154,22 @@ struct GroupChatScreen: View {
                 Label("Galleria", systemImage: "photo.on.rectangle")
             }
             Button {
-                // File transfer v2 (WIRE_SPEC 12.7.1) does not travel in groups yet: the old group file format is gone, so the
-                // option says so instead of doing anything half way.
-                snackbar?.show(.init(
-                    text: String(localized: "file_v2.group_attach_unavailable", defaultValue: "L'invio di documenti nei gruppi non è ancora disponibile in questa versione.", comment: "Snackbar shown when the user tries to attach a document in a group chat."),
-                    severity: .warning,
-                    durationSeconds: 4))
+                showingDocPicker = true
             } label: {
                 Label("File", systemImage: "doc")
             }
             Button("Annulla", role: .cancel) { }
         }
+        .sheet(isPresented: $showingDocPicker) {
+            DocumentPicker { url in
+                pendingGroupAttachmentSend = .file(url)
+                showingDocPicker = false
+            }
+        }
         .photosPicker(isPresented: $showingPhotoPicker,
                       selection: $photoPickerItems,
                       maxSelectionCount: 10,
-                      matching: .images)
+                      matching: .any(of: [.images, .videos]))
         .onChange(of: photoPickerItems) { newItems in
             handlePickedPhotos(newItems)
         }
@@ -177,7 +181,12 @@ struct GroupChatScreen: View {
         // dismissal binding is simpler).
         .sheet(isPresented: Binding(
             get: { pendingGroupAttachmentSend != nil },
-            set: { presented in if !presented { pendingGroupAttachmentSend = nil } }
+            set: { presented in
+                if !presented {
+                    FileV2PickedMovie.discardTemporaryFiles(of: pendingGroupAttachmentSend)
+                    pendingGroupAttachmentSend = nil
+                }
+            }
         )) {
             AttachmentSendOptionsSheet(
                 currentDefaultSeconds: nil,
@@ -186,7 +195,10 @@ struct GroupChatScreen: View {
                     pendingGroupAttachmentSend = nil
                     performGroupAttachmentSend(pending, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
                 },
-                onCancel: { pendingGroupAttachmentSend = nil }
+                onCancel: {
+                    FileV2PickedMovie.discardTemporaryFiles(of: pendingGroupAttachmentSend)
+                    pendingGroupAttachmentSend = nil
+                }
             )
             .presentationDetents([.medium])
         }
@@ -386,7 +398,9 @@ struct GroupChatScreen: View {
                         emptyState
                     } else {
                         ForEach(state.messages) { msg in
-                            GroupMessageBubble(message: msg, galleryItems: galleryItems, onRetry: retryFailedSend)
+                            GroupMessageBubble(message: msg, galleryItems: galleryItems, onRetry: retryFailedSend,
+                                               uploadProgress: fileV2Uploads.values[msg.id],
+                                               onFileDownload: downloadFileV2, onFileAppear: autoDownloadFileV2)
                                 .id(msg.id)
                         }
                     }
@@ -637,7 +651,9 @@ struct GroupChatScreen: View {
                 fileName: m.fileName,
                 byteLength: m.byteLength,
                 delivery: deliveryStatus(for: m),
-                exportBlocked: m.exportBlocked)
+                exportBlocked: m.exportBlocked,
+                fileV2: m.fileV2 == true,
+                descriptorJson: m.fileV2 == true ? m.descriptorJson : nil)
         }
         // Viewing the group == reading it: clear the unread badge shown in
         // the chat list (mirrors ChatContainer.markRead for 1:1).
@@ -696,6 +712,15 @@ struct GroupChatScreen: View {
     private func handleSend() {
         let trimmed = state.composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // WIRE_SPEC 12.7.1: text the user supplies that begins like a file message is refused as an ordinary message; only the
+        // file builders of the engine produce such a body.
+        guard FileV2ChatBody.isUserTextAllowed(trimmed) else {
+            snackbar?.show(.init(
+                text: String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused."),
+                severity: .warning,
+                durationSeconds: 3))
+            return
+        }
         state.composerText = ""
 
         let memberRows = makeInfoState().members
@@ -736,11 +761,24 @@ struct GroupChatScreen: View {
     private func retryFailedSend(clientMsgId: String) {
         guard let row = GroupMessageStore.shared.messages(forGroupHex: groupHex)
             .first(where: { $0.id == clientMsgId }) else { return }
-        GroupMessageStore.shared.clearSendFailed(groupHex: groupHex, clientMsgId: clientMsgId)
         let memberRows = makeInfoState().members
         let memberIds = memberRows.map { $0.userId }
         let selfId = memberRows.first(where: { $0.isSelf })?.userId
             ?? (AppState.currentUserIdSnapshot ?? "u-self")
+        // A file transfer v2 row: the descriptor goes again, or the upload starts again from the copy the row keeps.
+        if row.fileV2 == true {
+            let target = GroupFileV2Send.Target(
+                groupHex: groupHex, groupId: groupId.uuidString.lowercased(), memberIds: memberIds, selfId: selfId)
+            let started = GroupFileV2Send.retry(row: row, target: target, appState: appState, onFailure: showGroupFileFailure)
+            if !started {
+                snackbar?.show(.init(
+                    text: String(localized: "file_v2.retry_source_gone", defaultValue: "Il file non è più disponibile: allegalo di nuovo.", comment: "Shown when a failed file cannot be retried because the app no longer has the picked file."),
+                    severity: .warning,
+                    durationSeconds: 4))
+            }
+            return
+        }
+        GroupMessageStore.shared.clearSendFailed(groupHex: groupHex, clientMsgId: clientMsgId)
         Task {
             await sendGroupOverWire(
                 plaintext: row.text,
@@ -825,12 +863,19 @@ struct GroupChatScreen: View {
 
     private func processPickedGroupPhotos(_ items: [PhotosPickerItem]) async {
         var loaded: [Data] = []
+        var videos: [URL] = []
         var failures = 0
         for item in items {
-            if let raw = try? await item.loadTransferable(type: Data.self),
-               let img = UIImage(data: raw),
-               let jpeg = img.jpegData(compressionQuality: 0.85) {
-                loaded.append(jpeg)
+            if FileV2PickedMovie.isVideo(item) {
+                // A video is handed over as a file, never as bytes in memory.
+                if let url = await FileV2PickedMovie.load(item) {
+                    videos.append(url)
+                } else {
+                    failures += 1
+                }
+            } else if let raw = try? await item.loadTransferable(type: Data.self) {
+                // The bytes as the picker gave them: the sender normalises them (EXIF dropped, 2048 px at most).
+                loaded.append(raw)
             } else {
                 failures += 1
             }
@@ -842,150 +887,38 @@ struct GroupChatScreen: View {
                     severity: .warning, durationSeconds: 3))
             }
         }
-        guard !loaded.isEmpty else { return }
-        await MainActor.run { pendingGroupAttachmentSend = .multiImage(loaded) }
+        guard !loaded.isEmpty || !videos.isEmpty else { return }
+        let pending: PendingAttachmentSend = videos.isEmpty ? .multiImage(loaded) : .media(images: loaded, videos: videos)
+        await MainActor.run { pendingGroupAttachmentSend = pending }
     }
 
-    /// Fires the actual group attachment send for a `PendingAttachmentSend`
-    /// captured earlier, now that the user has confirmed the pre-send
-    /// options. `.voiceNote` is unreachable — group has no voice-note
-    /// send flow — kept only to satisfy the shared enum's exhaustiveness.
+    /// Fires the actual group attachment send for a `PendingAttachmentSend` captured earlier, now that the user has confirmed the
+    /// pre-send options: every kind goes through file transfer v2 with one group token (`GroupFileV2Send`).
     private func performGroupAttachmentSend(_ pending: PendingAttachmentSend, overrideSeconds: Int?, exportBlocked: Bool) {
-        switch pending {
-        case .image(let data):
-            let img = UIImage(data: data)
-            Task {
-                await sendAttachmentOverWire(
-                    data: data, mime: "image/jpeg", kind: GroupAttachmentEnvelope.kindImage,
-                    filename: "IMG-\(Int(Date().timeIntervalSince1970)).jpg",
-                    width: img.map { Int($0.size.width) }, height: img.map { Int($0.size.height) },
-                    timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
-            }
-        case .multiImage(let items):
-            for data in items {
-                let img = UIImage(data: data)
-                Task {
-                    await sendAttachmentOverWire(
-                        data: data, mime: "image/jpeg", kind: GroupAttachmentEnvelope.kindImage,
-                        filename: "IMG-\(Int(Date().timeIntervalSince1970)).jpg",
-                        width: img.map { Int($0.size.width) }, height: img.map { Int($0.size.height) },
-                        timerOverrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
-                }
-            }
-        case .file:
-            // Not reachable: the group attach menu no longer offers documents (file transfer v2 does not travel in groups yet).
-            break
-        case .voiceNote:
-            break
-        }
-    }
-
-    /// Encrypt+upload the blob, mint per-member capability tokens, seal the
-    /// descriptor into the 0xE4 group payload, and ship ONE `group_msg_send`
-    /// frame with `msg_type == 1`. The sender_key_init distribution runs
-    /// first, exactly like the text path.
-    ///
-    /// - Parameter timerOverrideSeconds: W-XPTTL — per-attachment TTL/
-    ///   view-once override chosen in the pre-send options sheet. `nil`
-    ///   (default) preserves pre-existing behaviour for any caller that
-    ///   hasn't migrated. Threaded to `GroupAttachmentSender.prepare` AND
-    ///   used to stamp the sender's own local echo `expiresAt`/
-    ///   `isViewOnce` via the SAME `AttachmentTimerResolver` the receive
-    ///   path (`AppState.landIncomingGroupAttachment`) already uses,
-    ///   `conversationDefault: nil` (group has no per-conversation
-    ///   default).
-    /// - Parameter exportBlocked: export-permission choice from the
-    ///   pre-send options sheet. `false` (default) = export allowed.
-    @MainActor
-    private func sendAttachmentOverWire(
-        data: Data, mime: String, kind: String, filename: String,
-        width: Int?, height: Int?, caption: String? = nil,
-        timerOverrideSeconds: Int? = nil, exportBlocked: Bool = false
-    ) async {
         let memberRows = makeInfoState().members
         let memberIds = memberRows.map { $0.userId }
         let selfId = memberRows.first(where: { $0.isSelf })?.userId
             ?? (AppState.currentUserIdSnapshot ?? "u-self")
+        let target = GroupFileV2Send.Target(
+            groupHex: groupHex, groupId: groupId.uuidString.lowercased(), memberIds: memberIds, selfId: selfId)
+        GroupFileV2Send.perform(pending, target: target, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked,
+                                appState: appState, onFailure: showGroupFileFailure)
+    }
 
-        let prepared: GroupAttachmentSender.Prepared
-        do {
-            prepared = try await GroupAttachmentSender(appState: appState).prepare(
-                data: data, mime: mime, kind: kind, filename: filename,
-                caption: caption, width: width, height: height,
-                members: memberIds, selfId: selfId,
-                timerOverrideSeconds: timerOverrideSeconds, exportBlocked: exportBlocked)
-        } catch {
-            snackbar?.show(.init(text: String(localized: "group_chat.attachment_send_failed", defaultValue: "Allegato non inviato — \(error.localizedDescription)", comment: "Snackbar error in group chat / in-call chat panel when preparing or sending a group attachment throws; %@ is the underlying error's localized description."),
-                                 severity: .error, durationSeconds: 5))
-            return
-        }
+    /// One sentence on a file that could not be sent (already localised).
+    private func showGroupFileFailure(_ text: String) {
+        snackbar?.show(.init(text: text, severity: .warning, durationSeconds: 4))
+    }
 
-        // Same resolver + stamping the RECEIVE path uses (see kdoc above) —
-        // the sender's own optimistic row gets the identical expiresAt/
-        // isViewOnce/exportBlocked treatment as an inbound row, so the
-        // janitor sweeps a self-sent view-once/TTL row too and the
-        // sender's own bubble gates Save/Condividi consistently.
-        let now = Date()
-        let effectiveTimerSecs = AttachmentTimerResolver.resolve(
-            overrideSeconds: timerOverrideSeconds, conversationDefault: nil)
-        let isViewOnce = (effectiveTimerSecs ?? 0) == -1
-        let ephExpiry: Date? = effectiveTimerSecs.flatMap { s in
-            s > 0 ? now.addingTimeInterval(Double(s)) : nil
-        }
+    /// A received v2 file of this group: the download the user asked for, or what is fetched on arrival when the row appears.
+    private func downloadFileV2(_ rowId: String) {
+        guard let row = GroupMessageStore.shared.messages(forGroupHex: groupHex).first(where: { $0.id == rowId }) else { return }
+        FileV2DownloadCenter.shared.start(groupRow: row, groupHex: groupHex, appState: appState)
+    }
 
-        // Optimistic PERSISTENT row (the sender already has the plaintext on
-        // disk, so the bubble renders immediately). Keyed by clientMsgId so
-        // the server self-echo binds instead of duplicating.
-        let clientMsgId = UUID().uuidString
-        GroupMessageStore.shared.append(
-            groupHex: groupHex,
-            GroupMessageStore.Stored(
-                id: clientMsgId,
-                serverMessageId: nil,
-                senderId: selfId,
-                mine: true,
-                text: prepared.caption ?? "",
-                ts: now,
-                attachmentKind: prepared.kind,
-                mediaMime: prepared.mime,
-                fileName: prepared.filename,
-                byteLength: prepared.byteLength,
-                mediaLocalPath: prepared.localPath,
-                descriptorJson: prepared.descriptorJson,
-                expiresAt: ephExpiry,
-                isViewOnce: isViewOnce ? true : nil,
-                exportBlocked: exportBlocked ? true : nil))
-
-        // sender_key_init distribution first (recv chains before ciphertext).
-        let pendingInits = GroupChatService.shared.pendingInitsAfterBootstrap(
-            groupId: groupHex, members: memberIds, selfId: selfId)
-        for init_ in pendingInits {
-            NotificationCenter.default.post(
-                name: AppState.groupSenderKeyCtlNotification,
-                object: nil,
-                userInfo: ["recipient": init_.recipientId,
-                           "envelopeJson": init_.envelopeJson])
-        }
-
-        // Seal the descriptor JSON into the 0xE4 group wire and ship it with
-        // msg_type == 1.
-        guard let sealed = GroupChatService.shared.encryptForWire(
-            plaintext: prepared.descriptorJson,
-            groupId: groupHex, members: memberIds, selfId: selfId
-        ) else {
-            print("[GroupChatScreen] attachment encrypt failed for group \(groupHex.prefix(8))…")
-            return
-        }
-        NotificationCenter.default.post(
-            name: AppState.groupMsgSendNotification,
-            object: nil,
-            userInfo: [
-                "groupId": groupId.uuidString.lowercased(),
-                "wire": sealed.wire,
-                "clientMsgId": clientMsgId,
-                "groupEpoch": Int(sealed.groupEpoch),
-                "msgType": GroupAttachmentEnvelope.msgTypeAttachment,
-            ])
+    private func autoDownloadFileV2(_ rowId: String) {
+        guard let row = GroupMessageStore.shared.messages(forGroupHex: groupHex).first(where: { $0.id == rowId }) else { return }
+        FileV2DownloadCenter.shared.autoStart(groupRow: row, groupHex: groupHex, appState: appState)
     }
 
     /// Fase 1A — is the local user an admin of THIS group? Drives the
@@ -1076,6 +1009,19 @@ struct GroupMessageBubble: View {
     /// W-GRPOUTBOX — tap-to-retry for a `.failed` row (message id ==
     /// clientMsgId). nil for callers that don't need it (e.g. previews).
     var onRetry: ((String) -> Void)? = nil
+    /// File transfer v2: the upload progress of this row (a row of this device that is being sent), shown in place of the tick.
+    var uploadProgress: Double? = nil
+    /// File transfer v2: the user asked to download the file of the row (by its id).
+    var onFileDownload: ((String) -> Void)? = nil
+    /// File transfer v2: the bubble of a received file appeared and the file is not on this device: the screen asks the download
+    /// center for what is fetched on arrival.
+    var onFileAppear: ((String) -> Void)? = nil
+
+    /// The delivery state to show: the upload progress while the file uploads, else the one of the row.
+    private var shownDelivery: MessageDelivery? {
+        if message.mine, let uploadProgress { return .uploading(progress: uploadProgress) }
+        return message.delivery
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
@@ -1100,7 +1046,7 @@ struct GroupMessageBubble: View {
                         // Reuses the shared `MessageDelivery` type + the
                         // same 4 icon mappings as the 1:1
                         // `MessageBubble.deliveryIcon(_:)` footer.
-                        if message.mine, let delivery = message.delivery {
+                        if message.mine, let delivery = shownDelivery {
                             if delivery == .failed, let onRetry {
                                 Button(action: { onRetry(message.id) }) {
                                     groupDeliveryIcon(delivery)
@@ -1136,7 +1082,12 @@ struct GroupMessageBubble: View {
     @ViewBuilder
     private func groupDeliveryIcon(_ delivery: MessageDelivery) -> some View {
         switch delivery {
-        case .sending, .uploading:
+        case .uploading(let progress):
+            ProgressView(value: progress)
+                .progressViewStyle(.circular)
+                .scaleEffect(0.55)
+                .frame(width: 14, height: 14)
+        case .sending:
             Image(systemName: "clock")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -1162,8 +1113,43 @@ struct GroupMessageBubble: View {
     /// Fase 1B — bubble body: an image/file attachment (reusing the exact
     /// 1:1 ``ImageBubbleContent`` / ``FileBubbleContent`` views) with an
     /// optional caption, or plain text when this row is not an attachment.
+    /// What the bubble of a file transfer v2 row shows: the descriptor's values when the row has the descriptor, else (a row of the
+    /// sender that is still uploading) what the row itself knows.
+    private var fileV2Info: FileV2ChatFile {
+        if let body = message.descriptorJson, case .file(let file) = FileV2ChatBody.classify(text: body) { return file }
+        return FileV2ChatFile(
+            displayName: FileV2LocalName.sanitised(message.fileName), size: UInt64(max(0, message.byteLength ?? 0)),
+            mimeType: message.mediaMime, kind: message.attachmentKind ?? "file", ex: nil, xp: nil)
+    }
+
+    private var fileV2Bubble: some View {
+        FileV2BubbleContent(
+            // the same id mapping as the gallery, so that a tapped image opens the gallery on itself
+            rowKey: message.id,
+            rowId: deterministicGalleryId(for: message.id),
+            isOutgoing: message.mine,
+            info: fileV2Info,
+            localPath: message.mediaLocalPath,
+            exportBlocked: message.exportBlocked ?? false,
+            downloads: FileV2DownloadCenter.shared,
+            galleryItems: galleryItems,
+            onDownload: { onFileDownload?(message.id) },
+            onAppearWithoutFile: {
+                if !message.mine { onFileAppear?(message.id) }
+            })
+    }
+
     @ViewBuilder
     private var messageBody: some View {
+        if message.fileV2 {
+            fileV2Bubble
+        } else {
+            legacyMessageBody
+        }
+    }
+
+    @ViewBuilder
+    private var legacyMessageBody: some View {
         switch message.attachmentKind {
         case GroupAttachmentEnvelope.kindImage?:
             ImageBubbleContent(

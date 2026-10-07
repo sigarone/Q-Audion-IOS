@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import CryptoKit
 import QAudionEngine
 
@@ -175,7 +176,7 @@ final class AvatarAnnounceCoordinator {
             return
         }
         guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
-              let jpegBytes = try? Data(contentsOf: cacheURL) else {
+              FileManager.default.fileExists(atPath: cacheURL.path) else {
             // Reachable state, not a corner case: a photo chosen in a build
             // that predates the E2EE transport left a server avatar_url and
             // NO local self.jpg. The user has to re-pick it once — same on
@@ -184,46 +185,31 @@ final class AvatarAnnounceCoordinator {
             return
         }
         await sendEnvelope(to: peerId, peer8: peer8, trigCode: trigCode,
-                           jpegBytes: jpegBytes, version: version)
+                           avatarFile: cacheURL, version: version)
     }
 
-    /// Extracted so the send body stays one `do/catch` deep — see
-    /// SWIFT6_PATTERNS.md rule 4.
+    /// The avatar goes to the contact as a file transfer v2 file of kind `avatar` (`FileV2AvatarSender`): uploaded with a key of its
+    /// own for this contact and announced by a descriptor that is the body of an end-to-end encrypted chat message. As before, the
+    /// version is marked sent ONLY when the message really left the device, and a contact the chat cannot seal a message for yet
+    /// is skipped (the next real exchange with them triggers the announce again).
     private func sendEnvelope(
         to peerId: String,
         peer8: String,
         trigCode: Int,
-        jpegBytes: Data,
+        avatarFile: URL,
         version: Int
     ) async {
-        do {
-            let json = try await AvatarAnnounceSender(appState: appState).prepareEnvelopeJson(
-                avatarJpegBytes: jpegBytes, recipientUserId: peerId, version: version)
-            // 2026-09-19 service-message root fix — avatar_announce is SERVICE
-            // traffic: CONTROL only, never the chat ladder. It is best-effort
-            // (the coordinator re-announces on the next trigger), so with no
-            // CONTROL session it is dropped rather than held, and — exactly as
-            // before — the version is marked sent ONLY when the frame really
-            // left the device.
-            let submission = await ChatMessageSendService(appState: appState).sendService(
-                peerUserId: peerId, plaintext: json, label: "avatar_announce",
-                delivery: .bestEffort)
-            switch submission {
-            case .sent:
-                Self.markSent(version: version, toPeer: peerId)
-                RTLog.info("avatar", "send ok=1 del=0 to=\(peer8) version=\(version) trig=\(trigCode)")
-            case .held, .dropped:
-                RTLog.warn("avatar", "send ok=0 code=4 to=\(peer8) version=\(version) trig=\(trigCode) reason=nocontrol")
-            }
-        } catch AvatarAnnounceSender.SendError.pskMissing {
-            // Fail-closed, exactly like Android's send path: no PSK bound to
-            // this contact yet, so there is nothing to encrypt under. The
-            // caller that owns the relationship (the call-connect hook)
-            // triggers the key exchange; doing it from here as well would
-            // make every avatar attempt wire-chatty.
+        let outcome = await FileV2AvatarSender.send(avatarFile: avatarFile, to: peerId, appState: appState)
+        switch outcome {
+        case .sent:
+            Self.markSent(version: version, toPeer: peerId)
+            RTLog.info("avatar", "send ok=1 del=0 to=\(peer8) version=\(version) trig=\(trigCode)")
+        case .noChannel:
+            // Fail-closed, like Android's send path: nothing to seal under yet. The caller that owns the relationship (the
+            // call-connect hook) triggers the key exchange; doing it from here as well would make every avatar attempt chatty.
             RTLog.warn("avatar", "send ok=0 code=2 to=\(peer8) version=\(version) trig=\(trigCode)")
-        } catch {
-            RTLog.warn("avatar", "send ok=0 code=3 to=\(peer8) version=\(version) trig=\(trigCode) error=\(error)")
+        case .failed(let code):
+            RTLog.warn("avatar", "send ok=0 code=3 to=\(peer8) version=\(version) trig=\(trigCode) v2=\(code)")
         }
     }
 
@@ -268,6 +254,64 @@ final class AvatarAnnounceCoordinator {
             return
         }
         await downloadAndApply(envelope, senderId: senderId, peer8: peer8, version: version, isRetry: false)
+    }
+
+    // MARK: - Receive (file transfer v2)
+
+    /// An avatar that arrived as a v2 file of kind `avatar`, the body of a chat message from `senderId`: downloads, verifies and
+    /// decrypts it, checks it is an image, and keeps it as the picture of the contact. Serialised per sender like the old announce
+    /// (the same file of the peer avatar cache is written). The descriptor carries no version, so the picture is applied as the
+    /// newest the contact announced: its version is the time it arrived, never below the last one.
+    func handleInboundFileV2(body: String, senderId: String) {
+        guard !senderId.isEmpty else { return }
+        let previous = receiveChain[senderId]
+        let task = Task { @MainActor [weak self] in
+            _ = await previous?.value
+            await self?.performInboundFileV2(body: body, senderId: senderId)
+        }
+        receiveChain[senderId] = task
+    }
+
+    private func performInboundFileV2(body: String, senderId: String) async {
+        let peer8 = String(senderId.prefix(8))
+        guard let descriptor = FileV2ChatBody.descriptor(ofBody: body), descriptor.kind == .avatar,
+              FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: descriptor.size) else {
+            RTLog.warn("avatar", "recv applied=0 code=6 from=\(peer8)")
+            return
+        }
+        // The download lands in a directory of its own in the caches directory, removed whatever happens.
+        let directory = FileV2LocalFiles.directory(base: FileV2DownloadCenter.cachesBase, rowKey: "avatar-" + senderId)
+        let downloaded = directory.appendingPathComponent("avatar.jpg")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let server = FileV2AppServices.makeServer(appState: appState)
+            try await FileV2Receiver(server: server).download(descriptor, to: downloaded)
+            let data = try Data(contentsOf: downloaded)
+            guard UIImage(data: data) != nil else {
+                RTLog.warn("avatar", "recv applied=0 code=7 from=\(peer8)")
+                return
+            }
+            let fileURL = try Self.peerAvatarFileURL(senderId: senderId)
+            try data.write(to: fileURL, options: [.atomic])
+            let cached = ContactsStore().load().first(where: { $0.userId == senderId })?.avatarVersion ?? -1
+            let version = max(cached + 1, Int(Date().timeIntervalSince1970))
+            let applied = ContactsStore().setAvatarLocalPath(userId: senderId, path: fileURL, version: version)
+            guard applied else {
+                RTLog.info("avatar", "recv applied=0 code=3 from=\(peer8) version=\(version)")
+                return
+            }
+            RTLog.info("avatar", "recv applied=1 from=\(peer8) version=\(version) v2=1")
+            NotificationCenter.default.post(
+                name: AppState.chatRefreshNotification,
+                object: nil,
+                userInfo: ["peerUserId": senderId]
+            )
+        } catch let failure as FileV2Failure {
+            RTLog.warn("avatar", "recv applied=0 code=5 from=\(peer8) v2=\(failure.code)")
+        } catch {
+            RTLog.warn("avatar", "recv applied=0 code=5 from=\(peer8) v2=io")
+        }
     }
 
     // MARK: - Inner-payload buffer+retry (W-AVATARPAYLOADRETRY, 2026-09-18)
