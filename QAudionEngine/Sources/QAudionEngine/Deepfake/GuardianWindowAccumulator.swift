@@ -51,17 +51,15 @@ struct GuardianWindowAccumulator {
         let sampleCount = pcm.count / 2
         guard sampleCount > 0 else { return [] }
 
-        var samples = [Float](repeating: 0, count: sampleCount)
-        var sumSquares: Float = 0
-        pcm.withUnsafeBytes { raw in
-            // Byte-wise little-endian read: valid for any alignment of the backing storage.
+        // Two passes over the bytes, no temporary array per chunk: RMS first, then (voiced only) straight
+        // into the window buffer.
+        let sumSquares: Float = pcm.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Float in
+            var acc: Float = 0
             for i in 0..<sampleCount {
-                let lo = UInt16(raw[2 * i])
-                let hi = UInt16(raw[2 * i + 1])
-                let v = Float(Int16(bitPattern: lo | (hi << 8))) / 32_768.0
-                samples[i] = v
-                sumSquares += v * v
+                let v = Self.sample(raw, i)
+                acc += v * v
             }
+            return acc
         }
         guard (sumSquares / Float(sampleCount)).squareRoot() >= vadRmsThreshold else {
             silentChunks += 1
@@ -70,17 +68,23 @@ struct GuardianWindowAccumulator {
         voicedChunks += 1
 
         var windows: [[Float]] = []
-        var offset = 0
-        while offset < sampleCount {
-            let take = min(sampleCount - offset, windowSamples - count)
-            buffer.replaceSubrange(count..<(count + take), with: samples[offset..<(offset + take)])
-            count += take
-            offset += take
-            if count == windowSamples {
-                windows.append(buffer)
-                count = 0
+        pcm.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            for i in 0..<sampleCount {
+                buffer[count] = Self.sample(raw, i)
+                count += 1
+                if count == windowSamples {
+                    windows.append(buffer)
+                    count = 0
+                }
             }
         }
         return windows
+    }
+
+    /// Sample `i` of little-endian Int16 bytes, as Float in [-1, 1). Byte-wise read: valid for any alignment
+    /// of the backing storage.
+    private static func sample(_ raw: UnsafeRawBufferPointer, _ i: Int) -> Float {
+        let bits = UInt16(raw[2 * i]) | (UInt16(raw[2 * i + 1]) << 8)
+        return Float(Int16(bitPattern: bits)) / 32_768.0
     }
 }
