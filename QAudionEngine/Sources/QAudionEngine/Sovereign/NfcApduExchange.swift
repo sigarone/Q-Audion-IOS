@@ -162,7 +162,10 @@ public final class NfcApduExchange: NSObject {
 
     // MARK: - Init
 
-    public override init() {
+    private let availability: NfcAvailability
+
+    public init(availability: NfcAvailability = .device) {
+        self.availability = availability
         super.init()
     }
 
@@ -171,14 +174,14 @@ public final class NfcApduExchange: NSObject {
     /// Begin the NFC reader session. On macOS (no CoreNFC) transitions immediately to `.error`.
     public func start() {
         guard let idPub = localIdentityPublicKey, idPub.count == 32 else {
-            state = .error("Local identity public key not set or invalid (must be 32B Ed25519)")
+            state = .error(String(localized: "nfc.error.identity_key_invalid", defaultValue: "Chiave pubblica d'identità locale mancante o non valida", comment: "NFC pairing error: this phone's own identity key is missing or malformed."))
+            return
+        }
+        guard availability.isAvailable else {
+            state = .error(NfcAvailability.unavailableMessage)
             return
         }
         #if canImport(CoreNFC) && os(iOS)
-        guard NFCTagReaderSession.readingAvailable else {
-            state = .error("NFC reading is not available on this device")
-            return
-        }
         endSessionIfActive()
         let d = TagDelegate()
         d.owner = self
@@ -188,15 +191,15 @@ public final class NfcApduExchange: NSObject {
             delegate: d,
             queue: nil
         ) else {
-            state = .error("Failed to create NFC reader session")
+            state = .error(String(localized: "nfc.error.session_failed", defaultValue: "Impossibile avviare la lettura NFC", comment: "NFC pairing error: the NFC reader session could not be created."))
             return
         }
-        session.alertMessage = "Hold your iPhone near the Android device running Q-Audion."
+        session.alertMessage = String(localized: "nfc.session.hold_near", defaultValue: "Avvicina l'iPhone al telefono Android con Q-Audion.", comment: "System NFC sheet message: hold the iPhone near the other phone.")
         nfcSession = session
         session.begin()
         state = .waiting
         #else
-        state = .error("NFC is not available on this platform")
+        state = .error(NfcAvailability.unavailableMessage)
         #endif
     }
 
@@ -352,7 +355,7 @@ public final class NfcApduExchange: NSObject {
         )
         let gate = NfcSasConfirmGate()
         sasGate = gate
-        state = .sasConfirm(sas: sas, peerDeviceName: "Android peer")
+        state = .sasConfirm(sas: sas, peerDeviceName: Self.peerDeviceName)
         let confirmed = await gate.awaitConfirmation()
         sasGate = nil
         guard confirmed else {
@@ -362,7 +365,12 @@ public final class NfcApduExchange: NSObject {
         // Notify the integration layer.
         try await onPskDerived?(psk, peerIdentityPub)
 
-        return "Android peer"
+        return Self.peerDeviceName
+    }
+
+    /// Name shown for the phone at the other end of the tap.
+    private static var peerDeviceName: String {
+        String(localized: "nfc.peer_name", defaultValue: "Telefono Android", comment: "Name shown for the Android phone the iPhone was tapped against during NFC pairing.")
     }
 
     fileprivate func handleSessionError(_ error: Error) {
@@ -474,15 +482,16 @@ public final class NfcApduExchange: NSObject {
         public var errorDescription: String? {
             switch self {
             case .identityKeyMissing:
-                return "Local identity key not configured"
+                return String(localized: "nfc.error.identity_key_missing", defaultValue: "Chiave d'identità locale non configurata", comment: "NFC pairing error: this phone has no identity key yet.")
             case .apduFailed(let cmd, let sw1, let sw2):
-                return "\(cmd) failed: SW=\(String(format: "%02X%02X", sw1, sw2))"
+                let status: String = String(format: "%02X%02X", sw1, sw2)
+                return String(localized: "nfc.error.apdu_failed", defaultValue: "\(cmd) non riuscito: SW=\(status)", comment: "NFC pairing error: a command sent to the other phone failed; first %@ is the command name, second %@ the status word.")
             case .invalidResponse(let msg):
-                return "Invalid APDU response: \(msg)"
+                return String(localized: "nfc.error.invalid_response", defaultValue: "Risposta non valida dall'altro telefono: \(msg)", comment: "NFC pairing error: the other phone answered with unexpected data; %@ is a short technical detail.")
             case .peerIdentityMismatch:
-                return "Peer identity key changed since last pairing — aborting (possible attack)"
+                return String(localized: "nfc.error.peer_identity_changed", defaultValue: "La chiave d'identità dell'altro telefono è cambiata dall'ultima associazione: operazione annullata (possibile attacco)", comment: "NFC pairing error: the other phone presented a different identity key than the one stored.")
             case .sasRejected:
-                return "SAS non confermato — scambio annullato"
+                return String(localized: "nfc.error.sas_rejected", defaultValue: "Codice non confermato — scambio annullato", comment: "NFC pairing: the user said the 6-digit codes do not match, the exchange is cancelled.")
             }
         }
     }
@@ -569,7 +578,7 @@ private final class TagDelegate: NSObject, NFCTagReaderSessionDelegate {
 
     func tagReaderSession(_ session: NFCTagReaderSession, didDetect tags: [NFCTag]) {
         guard let tag = tags.first, case .iso7816(let iso) = tag else {
-            session.invalidate(errorMessage: "Incompatible tag — Q-Audion requires ISO-7816 (Android HCE)")
+            session.invalidate(errorMessage: String(localized: "nfc.error.incompatible_tag", defaultValue: "Tag non compatibile: serve un telefono Android con Q-Audion", comment: "System NFC sheet message: the tapped object is not a phone running Q-Audion."))
             return
         }
         Task { [weak owner] in
@@ -581,7 +590,7 @@ private final class TagDelegate: NSObject, NFCTagReaderSessionDelegate {
                 await MainActor.run { [ownerRef] in
                     ownerRef?.state = .success(peerDeviceName: peerName)
                 }
-                session.alertMessage = "Paired with \(peerName)"
+                session.alertMessage = String(localized: "nfc.session.paired", defaultValue: "Associato con \(peerName)", comment: "System NFC sheet message after a successful pairing; %@ is the other phone's name.")
                 session.invalidate()
             } catch {
                 let errMsg = error.localizedDescription

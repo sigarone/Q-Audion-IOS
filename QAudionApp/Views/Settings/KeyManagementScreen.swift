@@ -18,6 +18,9 @@ struct KeyManagementScreen: View {
     @State private var pendingDeletePskName: String?
 
     private let appState: AppState
+    /// Whether this device can read NFC tags; the NFC row is replaced by a
+    /// neutral line when it cannot.
+    private let nfcAvailability: NfcAvailability = .device
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -58,14 +61,21 @@ struct KeyManagementScreen: View {
                                   title: "Scansiona QR contatto") {
                             showingQrScanner = true
                         }
-                        NavigationLink {
-                            NfcExchangeView()
-                        } label: {
-                            SettingsRow(icon: "wave.3.right",
-                                        iconColor: extras.pqcAccent,
-                                        title: "Accoppia via NFC")
+                        if nfcAvailability.isAvailable {
+                            NavigationLink {
+                                NfcExchangeView()
+                            } label: {
+                                SettingsRow(icon: "wave.3.right",
+                                            iconColor: extras.pqcAccent,
+                                            title: "Accoppia via NFC")
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text(NfcAvailability.unavailableMessage)
+                                .qaudionStyle(type.labelSmall)
+                                .foregroundStyle(scheme.onSurfaceVariant)
+                                .padding(.horizontal, 14)
                         }
-                        .buttonStyle(.plain)
                         Text("Scansiona il QR del tuo contatto per salvare la sua chiave pubblica nel vault. Puoi anche condividere il tuo QR qui sopra.")
                             .qaudionStyle(type.labelSmall)
                             .foregroundStyle(scheme.onSurfaceVariant)
