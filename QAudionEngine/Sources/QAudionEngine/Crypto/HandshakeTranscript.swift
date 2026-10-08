@@ -292,8 +292,14 @@ public enum HandshakeTranscript {
     /// Verify a detached Ed25519 signature (64 B) over [transcript] under
     /// [signerIdentityKey] (32 B raw Ed25519 public key). Returns false (never throws)
     /// for any malformed input or a bad signature — fail-closed.
+    ///
+    /// A small-order or non-canonically encoded key is refused here, before CryptoKit sees it: with a
+    /// permissive verifier the signature `01 || 0^63` under the neutral element is valid for every
+    /// message, so it would prove possession of nothing (`Ed25519IdentityKeyPolicy`). Same verdict as
+    /// a malformed key, nothing on the wire changes.
     public static func verify(transcript: Data, signature: Data, signerIdentityKey: Data) -> Bool {
         guard signature.count == 64, signerIdentityKey.count == 32 else { return false }
+        guard Ed25519IdentityKeyPolicy.isAcceptable(signerIdentityKey) else { return false }
         guard let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: signerIdentityKey) else {
             return false
         }

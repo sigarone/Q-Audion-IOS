@@ -159,13 +159,14 @@ public final class PeerIdentityPinStore {
     /// `.pinnedNew` (not `.mismatch`). When `deviceId` is nil/empty the legacy
     /// bare-`contactId` account is used (migration anchor / graceful fallback).
     ///
-    /// Returns `.mismatch` for a malformed argument (empty / not 32 bytes) so
+    /// Returns `.mismatch` for a malformed argument (empty / not 32 bytes, or a
+    /// small-order / non-canonical Ed25519 key: `Ed25519IdentityKeyPolicy`) so
     /// the caller fails closed rather than pinning garbage. The `@discardableResult`
     /// lets call sites that only care about the side-effect (first-contact pin
     /// after a successful verify) ignore the return.
     @discardableResult
     public func pinOrMatch(contactId: String, ed25519Pub: Data, deviceId: String? = nil) -> PinResult {
-        guard !contactId.isEmpty, ed25519Pub.count == 32 else { return .mismatch }
+        guard !contactId.isEmpty, Ed25519IdentityKeyPolicy.isAcceptable(ed25519Pub) else { return .mismatch }
 
         let account = Self.account(contactId, deviceId)
 
@@ -257,7 +258,9 @@ public final class PeerIdentityPinStore {
 
     @discardableResult
     public func repin(contactId: String, ed25519Pub: Data, deviceId: String? = nil) -> RepinOutcome {
-        guard !contactId.isEmpty, ed25519Pub.count == 32 else { return .failed }
+        // A small-order / non-canonical key is never written (`Ed25519IdentityKeyPolicy`): same outcome
+        // as a failed write, the previous pin stays.
+        guard !contactId.isEmpty, Ed25519IdentityKeyPolicy.isAcceptable(ed25519Pub) else { return .failed }
         let account = Self.account(contactId, deviceId)
         let existing = rawPinnedKey(account: account)
         if existing == ed25519Pub { return .unchanged }
