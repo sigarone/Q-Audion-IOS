@@ -9746,47 +9746,6 @@
         }
       }
     },
-    "CRONOLOGIA VERSIONI": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CRONOLOGIA VERSIONI"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VERSION HISTORY"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "HISTORIAL DE VERSIONES"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "HISTORIQUE DES VERSIONS"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VERSIONSVERLAUF"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "HISTÓRICO DE VERSÕES"
-          }
-        }
-      }
-    },
     "Calcoliamo l'hash di ogni numero localmente con un pepper fornito dal server, poi chiediamo al server quali hash corrispondono a utenti noti. La tua rubrica non lascia mai il dispositivo in chiaro.": {
       "extractionState": "manual",
       "localizations": {
@@ -27124,47 +27083,6 @@
         }
       }
     },
-    "Solo ultime 5": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Solo ultime 5"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Last 5 only"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Solo las últimas 5"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "5 dernières uniquement"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nur letzte 5"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Somente as últimas 5"
-          }
-        }
-      }
-    },
     "Stai modificando un messaggio": {
       "extractionState": "manual",
       "localizations": {
@@ -28443,17 +28361,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "UPLOAD CONCLUÍDO — fileId:"
-          }
-        }
-      }
-    },
-    "Ultime \\(generatedEntries.count) versioni, generate automaticamente dalla cronologia git a ogni release.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ultime \\(generatedEntries.count) versioni, generate automaticamente dalla cronologia git a ogni release."
           }
         }
       }
