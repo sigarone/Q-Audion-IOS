@@ -274,7 +274,7 @@ enum DisplayName {
     /// rows persisted before addScannedContact stopped writing the raw
     /// userId as displayName (W-UUIDSWEEP).
     static func looksLikeUUID(_ s: String) -> Bool {
-        if s.count == 36 && s.filter({ $0 == "-" }).count == 4 { return true }
+        if s.count == 36 && s.count(where: { $0 == "-" }) == 4 { return true }
         if s.count == 32 && s.allSatisfy({ $0.isHexDigit }) { return true }
         return false
     }

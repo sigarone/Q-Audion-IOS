@@ -993,6 +993,7 @@ final class ChatContainer: ObservableObject {
         let peerId = peerUserId
         guard let contact = appState.cachedContacts.first(where: { $0.userId == peerId }),
               let nodeHex = MeshFeature.nodeHexes(forContact: contact).first else { return }
+        var readStamps: [ConversationStore.MessageStatusUpdate] = []
         for msg in meshInbound {
             guard let cid = msg.clientMsgId else { continue }
             appState.sendMeshReceipt(
@@ -1002,12 +1003,14 @@ final class ChatContainer: ObservableObject {
             // Stamp readAt locally, or the filter above matches the same
             // messages again on the next chat open and the peer receives a
             // fresh read receipt for their whole mesh history every time the
-            // screen appears.
-            store.updateMessageStatus(
-                id: msg.id, conversationId: conversationId, newStatus: msg.status,
+            // screen appears. Collected and written in ONE transaction below
+            // instead of one write per message.
+            readStamps.append(ConversationStore.MessageStatusUpdate(
+                id: msg.id, newStatus: msg.status,
                 deliveredAt: msg.deliveredAt, readAt: Date()
-            )
+            ))
         }
+        store.updateMessageStatuses(readStamps)
     }
 
     /// W446: record upload progress for an in-flight attachment send.

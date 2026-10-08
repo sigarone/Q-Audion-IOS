@@ -194,7 +194,7 @@ public struct RelayLatencyProbe: Sendable {
             }
             return (host, 3478)
         }
-        let colonCount = rest.filter { $0 == ":" }.count
+        let colonCount = rest.count(where: { $0 == ":" })
         if colonCount > 1 {
             // Bare IPv6 literal — every colon belongs to the address.
             return (rest, 3478)

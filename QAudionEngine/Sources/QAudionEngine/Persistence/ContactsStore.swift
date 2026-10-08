@@ -615,6 +615,25 @@ public final class ContactsStore {
         save(current)
     }
 
+    /// Batch form of ``upsert(_:)``: ONE load (decrypt) + ONE save (encrypt,
+    /// write, `.contactsDidChange` post) for the whole list instead of one
+    /// round trip per contact. Per-contact semantics are identical to
+    /// `upsert(_:)` applied in order (full-record overwrite of an existing
+    /// `userId`, append otherwise; a later duplicate wins). An empty list is
+    /// a no-op, like looping over nothing.
+    public func upsert(contentsOf contacts: [StoredContact]) {
+        guard !contacts.isEmpty else { return }
+        var current = load()
+        for contact in contacts {
+            if let idx = current.firstIndex(where: { $0.userId == contact.userId }) {
+                current[idx] = contact
+            } else {
+                current.append(contact)
+            }
+        }
+        save(current)
+    }
+
     public func remove(userId: String) {
         var current = load()
         current.removeAll { $0.userId == userId }

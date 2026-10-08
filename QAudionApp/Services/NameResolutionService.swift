@@ -313,7 +313,7 @@ final class NameResolutionService: @unchecked Sendable {
     /// I/O. `internal` (not `private`) so it is directly unit-testable.
     static func phoneNumberOf(_ s: String?) -> String? {
         guard let t = s?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return nil }
-        let digitCount = t.filter { $0.isNumber }.count
+        let digitCount = t.count(where: { $0.isNumber })
         guard digitCount > 0 else { return nil }
         return (t.hasPrefix("+") || digitCount >= 7) ? t : nil
     }

@@ -48,7 +48,7 @@ enum DeviceContactLookup {
     /// found. Stops enumerating as soon as a match is found.
     static func lookup(phoneNumber: String, store: CNContactStore = CNContactStore()) -> Match? {
         let target = normalizedDigits(phoneNumber)
-        guard target.filter(\.isNumber).count >= 6 else { return nil }
+        guard target.count(where: { $0.isNumber }) >= 6 else { return nil }
 
         let request = CNContactFetchRequest(keysToFetch: keysToFetch)
         var found: Match?

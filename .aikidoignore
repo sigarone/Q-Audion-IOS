@@ -12,8 +12,8 @@
 # When adding a rule: paste the Aikido issue title + sub-issue ID in the
 # comment so we can cross-reference with the dashboard.
 #
-# Status as of 2026-08-21:
-#   This repo is NOT YET CONNECTED to the Aikido dashboard (no findings have
+# Status as of 2026-08-21 (superseded, see update below):
+#   This repo was NOT YET CONNECTED to the Aikido dashboard (no findings have
 #   been triaged here). Placeholder file added to match the convention used
 #   in bcrypto-server, qaudion-android-new, and qaudion-desktop, so the
 #   moment this repo is connected in Aikido's external dashboard, the triage
@@ -21,5 +21,39 @@
 #   findings can be added here following the numbered-section pattern used
 #   in the sibling repos' .aikidoignore files.
 #
-# No rules yet — nothing to ignore because no scan has run against this
-# repo's Swift/Xcode sources.
+# Update 2026-10: the repo is now scanned by Aikido; the first triaged false
+# positives are the numbered sections below.
+
+# ─────────────────────────────────────────────────────────────────
+# 1. PUBLIC verification keys flagged as "exposed secret" (HIGH)
+# ─────────────────────────────────────────────────────────────────
+# `EntitlementPublicKey.swift` and `WipeSigningPublicKey.swift` (and the SPKI
+# PEM build assets they load, `bcrypto_entitlement_pubkey.pem` and
+# `wipe_signing_pubkey.pem`) hold ONLY the *public* half of an Ed25519
+# keypair, pinned in the app to VERIFY server-signed entitlements and wipe
+# commands. A public verification key is not a secret by design: shipping it
+# in the binary is the whole point of pinning. The matching private keys live
+# server-side and never appear in this repository (verified: no
+# `-----BEGIN ... PRIVATE KEY-----` block in any tracked source file).
+#
+# Matches Aikido issues: "Exposed secret" (HIGH) in the two Swift files above.
+QAudionEngine/Sources/QAudionEngine/Entitlements/EntitlementPublicKey.swift
+QAudionEngine/Sources/QAudionEngine/Security/WipeSigningPublicKey.swift
+QAudionEngine/Sources/QAudionEngine/Resources/bcrypto_entitlement_pubkey.pem
+QAudionEngine/Sources/QAudionEngine/Resources/wipe_signing_pubkey.pem
+
+# ─────────────────────────────────────────────────────────────────
+# 2. Synthetic JWT test vectors in the log-redaction self-tests (HIGH)
+# ─────────────────────────────────────────────────────────────────
+# `scripts/ship-ios-logs.py` (built-in redaction self-test, ~line 3031) and
+# `scripts/test_redact_structured_parity.py` (~line 96) contain a
+# deliberately fake JWT whose payload decodes to `{"sub":"synthetic"}` with a
+# placeholder signature ("synthetic" marker in the source comment). It is the
+# NEGATIVE test input that proves the redactor masks JWT-shaped strings; it
+# authenticates nothing. The same string exists in git history, which is why
+# Aikido reports "JWT found in git history": no credential was ever exposed,
+# so no rotation is required.
+#
+# Matches Aikido issue: "JWT found in git history" (HIGH).
+scripts/ship-ios-logs.py
+scripts/test_redact_structured_parity.py

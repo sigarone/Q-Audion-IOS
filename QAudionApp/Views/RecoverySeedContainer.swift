@@ -174,5 +174,16 @@ struct RecoverySeedContainerView: View {
                 onDismiss: { container.dismiss() }
             )
         }
+        // SECURITY H-18: in `.setup` mode this screen displays the recovery
+        // mnemonic in clear. Mirror ChatDetailScreen's secure-window lifecycle
+        // so it cannot be screenshotted / recorded / AirPlay-mirrored while
+        // shown. `.verify` mode (the user TYPES a phrase they already hold)
+        // takes no lock, and therefore releases none either.
+        .onAppear {
+            if container.mode == .setup { ScreenshotLockService.lock() }
+        }
+        .onDisappear {
+            if container.mode == .setup { ScreenshotLockService.unlock() }
+        }
     }
 }

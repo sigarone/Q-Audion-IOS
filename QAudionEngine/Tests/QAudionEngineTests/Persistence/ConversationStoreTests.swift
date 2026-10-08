@@ -111,6 +111,29 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertEqual(updated.plaintext, "hello")
     }
 
+    /// Batch form: every listed row is updated (same per-row semantics as the
+    /// single-row call), unknown ids are skipped, an empty list is a no-op.
+    func test_updateMessageStatuses_batchUpdatesEachRow() {
+        store.upsertConversation(makeConv(id: convId))
+        let idA = UUID()
+        let idB = UUID()
+        store.appendMessage(makeMsg(id: idA, in: convId, direction: .incoming, status: .delivered))
+        store.appendMessage(makeMsg(id: idB, in: convId, direction: .incoming, status: .delivered))
+        let readAt = Date(timeIntervalSince1970: 1_745_002_000)
+
+        store.updateMessageStatuses([])  // no-op, must not crash
+        store.updateMessageStatuses([
+            ConversationStore.MessageStatusUpdate(id: idA, newStatus: .delivered, readAt: readAt),
+            ConversationStore.MessageStatusUpdate(id: UUID(), newStatus: .delivered, readAt: readAt),  // unknown id
+            ConversationStore.MessageStatusUpdate(id: idB, newStatus: .delivered, readAt: readAt)
+        ])
+
+        let loaded = store.loadMessages(conversationId: convId)
+        XCTAssertEqual(loaded.count, 2)
+        XCTAssertTrue(loaded.allSatisfy { $0.readAt != nil })
+        XCTAssertTrue(loaded.allSatisfy { $0.plaintext == "hello" })
+    }
+
     /// Regression guard for the fetch-all/loop-save → `updateAll` rewrite:
     /// the batched UPDATE must still touch only the row matching
     /// `serverMessageId`, still leave `readAt` alone when the caller only

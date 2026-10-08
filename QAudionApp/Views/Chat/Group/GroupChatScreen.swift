@@ -124,9 +124,16 @@ struct GroupChatScreen: View {
             // server id, once per chat-open (mirrors the 1:1
             // container.emitReadReceipts() call in ChatDetailScreen.onAppear).
             appState.emitGroupReadReceipts(groupId: groupId.uuidString.lowercased())
+            // SECURITY H-18: same secure-window lifecycle and same default-on
+            // preference as ChatDetailScreen (1:1), so group chat content is
+            // not screenshot-/recording-capturable by default either.
+            if (UserDefaults.standard.object(forKey: "qaudion.chat.screenshot_lock_enabled") as? Bool) ?? true {
+                ScreenshotLockService.lock()
+            }
         }
         .onDisappear {
             if appState.activeGroupHex == groupHex { appState.activeGroupHex = nil }
+            ScreenshotLockService.unlock()
         }
         // Fase 2 — group typing indicator. Filtered to this screen's own
         // group; is_typing=false removes the sender, true adds it — no
