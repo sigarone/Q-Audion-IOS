@@ -3523,6 +3523,13 @@ final class AppState: ObservableObject {
     }
 
     func initialize() {
+        // W-VOIPSYNC (2026-10-08) — count every run of initialize() in this process
+        // (`voip init count=N site=2`, 1 in a healthy process). It is reached from
+        // `.onAppear`, which a reconnected scene fires again; the PushKit
+        // registration below must survive that (see its guard).
+        AppState.initializeCount += 1
+        RTLog.info("call", VoipPushDiagnostics.initLine(
+            count: AppState.initializeCount, site: VoipPushDiagnostics.siteAppInitialize))
         // Route the auth-recovery coordinator's reason-coded lines to RTLog before any
         // provider (or any 401) can exist.
         AuthCoordinatorLogging.installIfNeeded()
@@ -4721,8 +4728,19 @@ final class AppState: ObservableObject {
         // by AppDelegate → handleApnsDeviceToken → server. Flag OFF → unchanged.
         if CallsGate.callKitFreeMode {
             print("[AppState] W-NOCALLKIT callKitFreeMode ON — PushKit/VoIP NOT registered; using APNs alert path")
-        } else {
+        } else if self.pushKit != nil {
+            // W-VOIPSYNC (2026-10-08) — initialize() ran again in this process (its
+            // `voip init count=N site=2` line says how often). The registration is
+            // ONE per process: a second PushKitProvider used to replace the first,
+            // releasing the delegate PushKit was about to call (a candidate for the
+            // b0d7ba30 / eb2a6367 kills). Keep the one that exists.
+            RTLog.warn("call", VoipPushDiagnostics.initSkippedLine())
+        } else if let voipReporter = self.callKit as? VoipCallReporter {
         self.pushKit = PushKitProvider(
+            reporter: voipReporter,
+            // On main (the PushKit callback runs on the registry's `.main` queue),
+            // so RTLog records each line into the crash ring synchronously.
+            log: { line in RTLog.info("call", line) },
             // W60: rimosso `[weak self]` non usato — il body del closure
             // logga solo il token, no riferimenti a self. Eliminava il
             // warning compile "variable 'self' was written to, but never
@@ -4741,281 +4759,22 @@ final class AppState: ObservableObject {
                     self?.registerVoipPushToken(hex: hex)
                 }
             },
-            onIncomingCall: { [weak self] payload in
-                guard let self = self else { return }
-                // Set activeCallKitId BEFORE reporting to CallKit so a racing WS
-                // `call_incoming` for the SAME call sees it already registered and
-                // dedups (skips its own report) — closes the window that produced
-                // the intermittent "seconda chiamata" double dialer in chiaro.
-                // Resolve the caller name from the LOCAL address book (rubrica)
-                // here — the push payload's caller_name is server-supplied — so
-                // the native UI shows the same rubrica name the WS path resolves.
-                // Body extracted to a method (CLAUDE.md §13/§14: keep the nested
-                // MainActor.run closure to a single call to avoid type-checker
-                // timeouts).
-                let display: String = await MainActor.run {
-                    self.prepareIncomingPushCall(
-                        callId: payload.callId,
-                        callerId: payload.callerId,
-                        hasVideo: payload.hasVideo,
-                        fallbackName: payload.callerName
-                    )
-                }
-                // W-CARPLAYVIDEOFIX — see below: the force is CarPlay-gated now.
-                let pkCarPlay: Bool = Self.isCarPlayConnected()
-                let pkReportedVideo: Bool = pkCarPlay ? payload.hasVideo : true
-                let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId.uuidString.prefix(8))… hasVideo=\(payload.hasVideo) reportedHasVideo=\(pkReportedVideo)(forced=\(!pkCarPlay)) carplay=\(pkCarPlay ? 1 : 0)"
-                print(pkDiag)
-                // W-CALLKITVIDEOFORCE (2026-07-27, Pavel) — always report
-                // hasVideo=true to CallKit regardless of the real call type.
-                // iOS only auto-foregrounds the app on answer when the
-                // CXCallUpdate says the call carries video (CallKit's native
-                // chrome can't render video, so it must hand off); a pure
-                // voice call left the user stuck on the native screen with
-                // no way back except a hard swipe + manual relaunch. The
-                // REAL call type (payload.hasVideo, above) still drives
-                // everything that matters — isVideoCall, the offer/answer
-                // negotiation, the UI the user actually sees — only what
-                // CallKit itself is told is forced. Deliberate deviation
-                // from Apple's documented hasVideo semantics ("indicates
-                // whether the call includes video"); accepted knowingly.
-                //
-                // W-CARPLAYVIDEOFIX (2026-09-08) — NOT forced when CarPlay is
-                // the current audio route. The whole point of the force is
-                // to trigger iOS's video-call auto-foreground handoff — but
-                // while CarPlay is connected, iOS blocks foregrounding a
-                // non-CarPlay-entitled app for driving-safety reasons, so
-                // the handoff this flag requests can never complete. Forcing
-                // hasVideo=true there told CallKit "hand off to the app" for
-                // a transition the OS itself refuses, which is the leading
-                // hypothesis for a reported CarPlay incoming-call freeze
-                // (no device log line existed to prove it — see chat).
-                // Reporting the REAL call type in that case is always safe:
-                // it just means a plain voice call announces as voice.
-                await self.callKit?.reportIncomingCall(
-                    uuid: payload.callId,
-                    callerName: display,
-                    hasVideo: pkReportedVideo
-                )
-                // CRITICAL: bring the signalling WS up NOW so the buffered
-                // call_offer redelivery + PQC handshake can flow (see
-                // reviveSignalingSocket). Kicked in a detached Task so PushKit's
-                // completion() — already satisfied by the reportIncomingCall above —
-                // fires promptly; the revive runs while the native UI rings.
-                Task { @MainActor [weak self] in
-                    await self?.reviveSignalingSocket()
-                }
+            // W-VOIPSYNC (2026-10-08) — the report is decided here, on main, inside
+            // the PushKit callback, and handed to CallKit by the provider BEFORE the
+            // callback returns; see `prepareVoipPushReport`.
+            prepare: { [weak self] event in
+                self?.prepareVoipPushReport(event)
             },
-            onIncomingGroupCall: { [weak self] payload in
-                guard let self = self else { return }
-                // W-GRPRING — incoming GROUP call while the app is closed /
-                // suspended (server commit 9619df4 now fans a VoIP push out to
-                // every invitee not on a fresh socket). Byte-for-byte the same
-                // shape as the 1:1 branch above: report to CallKit FIRST (the
-                // PushKit mandate — a VoIP push that does not report an incoming
-                // call gets the app killed and future VoIP pushes throttled),
-                // then revive the WS so the `group_call_join` on accept has a
-                // live socket. Deduped against the WS `group_call_invite` by
-                // call_id inside `presentIncomingGroupCall`.
-                let prepared: (uuid: UUID, display: String, presented: Bool) = await MainActor.run {
-                    self.prepareIncomingPushGroupCall(payload)
-                }
-                // Pre-bound single-segment locals — SWIFT6_PATTERNS rule 1 (no
-                // multi-segment interpolation inside a closure).
-                let grpUuid: String = String(prepared.uuid.uuidString.prefix(8)) + "…"
-                let grpPresented: String = String(describing: prepared.presented)
-                // W-CARPLAYVIDEOFIX — same CarPlay gate as the 1:1 branch.
-                let grpCarPlay: Bool = Self.isCarPlayConnected()
-                let grpReportedVideo: Bool = grpCarPlay ? payload.hasVideo : true
-                let grpCarPlayFlag: String = grpCarPlay ? "1" : "0"
-                let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented + " carplay=" + grpCarPlayFlag
-                print(grpDiag)
-                // W-CALLKITVIDEOFORCE — same rationale as the 1:1 branch
-                // above: force hasVideo=true so answering a group call at
-                // screen-off auto-dismisses CallKit's native UI into the
-                // app. Real call type (payload.hasVideo) still drives
-                // everything else.
-                //
-                // W-CARPLAYVIDEOFIX (2026-09-08) — not forced on CarPlay,
-                // same reasoning as the 1:1 branch's kdoc above.
-                await self.callKit?.reportIncomingCall(
-                    uuid: prepared.uuid,
-                    callerName: prepared.display,
-                    hasVideo: grpReportedVideo
-                )
-                guard prepared.presented else {
-                    // The PushKit contract is satisfied (we reported), but there
-                    // is nothing to ring for — already accepted/rejected, or we
-                    // are busy in another call. End it right away rather than
-                    // leaving a dead call in the system UI. Same shape as
-                    // `onMalformedPush`.
-                    await self.callKit?.reportCallEnded(
-                        uuid: prepared.uuid, reason: .failed("group-call-not-presentable"))
-                    return
-                }
-                // W-GRPDOUBLEDIALER (2026-07-27, live-confirmed via screenshot) —
-                // `prepareIncomingPushGroupCall` above already called
-                // `presentIncomingGroupCall`, which sets `incomingGroupCallInvite`
-                // UNCONDITIONALLY regardless of source — so our own full-screen
-                // `IncomingCallScreen` is already primed BEFORE the CallKit report
-                // above even runs. If the app is already foreground (VoIP pushes
-                // still deliver to a foregrounded app), iOS shows CallKit's native
-                // UI as a compact TOP BANNER (not full-screen, since the app is
-                // already frontmost) — visibly on top of our own screen at the same
-                // time (confirmed: the banner's "<name> · 🔒 Cifrata" text is
-                // exactly `CallKitProvider.reportIncomingCall`'s
-                // `localizedCallerName`). The 1:1 path avoids this via
-                // `registerSuppressedCall` (skips the report entirely for a
-                // foreground WS call) — not available here since this is a push,
-                // and the mandate to report was already satisfied above. Instead,
-                // release the native UI immediately: unlike
-                // `dismissNativeCallUIAfterAnswer` (which failed because the
-                // device was genuinely LOCKED and iOS has no API to foreground an
-                // app from there), the app is ALREADY frontmost here — nothing
-                // needs foregrounding, only hiding, which `releaseFromSystemUI`
-                // does safely (ends only CallKit's own administrative call
-                // record; does not touch `incomingGroupCallInvite`, the ring
-                // timers, or trigger `onEndCall`/`endCall()` — it's a one-way
-                // notification, not a `CXEndCallAction`).
-                let releasedNativeUI: Bool = await MainActor.run {
-                    guard UIApplication.shared.applicationState == .active else { return false }
-                    return (self.callKit as? CallKitProvider)?.releaseFromSystemUI(prepared.uuid) ?? false
-                }
-                if releasedNativeUI {
-                    RTLog.info("call", "W-GRPDOUBLEDIALER foreground push-sourced group call — released native CallKit UI, our own IncomingCallScreen is the ring")
-                }
-                // CRITICAL (same as the 1:1 branch): bring the signalling WS up
-                // NOW so the `group_call_join` fired on accept — and the
-                // sender-key control envelopes — have a live socket.
-                Task { @MainActor [weak self] in
-                    await self?.reviveSignalingSocket()
-                }
-            },
-            onIncomingOpaqueCallWakeup: { [weak self] payload in
-                guard let self = self else { return }
-                // TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security
-                // audit backlog item 9) — the push carries NO caller
-                // identity and NO call_id by design (see
-                // `PushKitProvider.OpaqueCallWakeupPayload`'s kdoc). Report
-                // a GENERIC placeholder to CallKit right away — same
-                // "report something, satisfy the mandate" shape as
-                // `onMalformedPush` below, except this call keeps ringing
-                // instead of being ended immediately. Deliberately does
-                // NOT set `activeCallKitId` — see
-                // `reconcileOpaqueCallWakeup`'s kdoc for why that has to
-                // stay nil until the REAL server call_id is known over the
-                // WS.
-                //
-                // W-GHOSTCALL (2026-09-25) — KNOWN LIMIT, latent. Because the
-                // placeholder is not in `activeCallKitId`, `refuseStaleAnswer`
-                // (via `performAcceptIncoming`) refuses an Answer tapped on it
-                // BEFORE the real `call_incoming` arrives (log `answerguard
-                // refuse=1 why=3`): the CXAnswerCallAction fails, the placeholder
-                // is ended, and the user answers the real ring that follows. Before
-                // the guard that tap set `activeCallKitId` to the placeholder, the
-                // real `call_incoming` was then dropped as `differentCallActive`
-                // and the call sat "answered with no call" (the e3acecd7 state), so
-                // this is not a regression; and it is unreachable today because
-                // bcrypto-server's `internal/push/apns.go` has no `opaque_wakeup`
-                // sender. BEFORE the server enables TRUST-6 on iOS: register these
-                // placeholder uuids in a third ledger and DEFER the answer (latch,
-                // replayed on the real call) instead of refusing it.
-                let placeholderUuid = UUID()
-                let placeholderUuid8: String = String(placeholderUuid.uuidString.prefix(8))
-                let shash8: String = String(payload.senderHash.prefix(8))
-                // W-CARPLAYVIDEOFIX — opaque wakeups carry no real call-type
-                // info by design (TRUST-6), so there is no "real" value to
-                // fall back to on CarPlay — report false (plain voice
-                // announce), the safe default, instead of forcing true into
-                // a foreground handoff CarPlay's driving-mode restriction
-                // would block. See the 1:1 branch's kdoc above for why the
-                // force is CarPlay-gated at all.
-                let opaqueCarPlay: Bool = Self.isCarPlayConnected()
-                let diag: String = "[AppState] TRUST-6 PushKit→opaque call wakeup uuid=\(placeholderUuid8)… shash=\(shash8)… carplay=\(opaqueCarPlay ? 1 : 0)"
-                print(diag)
-                await self.callKit?.reportIncomingCall(
-                    uuid: placeholderUuid,
-                    callerName: "Q-Audion",
-                    hasVideo: !opaqueCarPlay
-                )
-                // CRITICAL (same rationale as the 1:1/group branches above):
-                // bring the signalling WS up NOW — this is the ONLY way the
-                // real call_incoming (caller/call_id/call_type) can reach
-                // this device at all for an opaque wakeup.
-                Task { @MainActor [weak self] in
-                    await self?.reviveSignalingSocket()
-                }
-                Task { @MainActor [weak self] in
-                    await self?.reconcileOpaqueCallWakeup(placeholderCallKitId: placeholderUuid)
-                }
-            },
-            onIncomingCancel: { [weak self] payload in
-                guard let self = self else { return }
-                // W-CANCELPUSH (2026-09-03) — the caller hung up before this
-                // device answered, and the WS-based `call_hangup`/
-                // `call_cancel` relay may have missed the window (see
-                // APNsClient.SendVoIPCallCancel's doc for the live incident
-                // this closes). Report-then-immediately-end the SAME
-                // `payload.callId` UUID the original `incoming_call` push
-                // already reported to CallKit — CallKit recognizes the UUID
-                // and dismisses THAT ring, satisfying the PushKit mandate
-                // without ever surfacing a new visible call. `.remoteEnded`
-                // (not `.failed`) because this genuinely is the far end
-                // ending the call, not an error on this device.
-                //
-                // Idempotent by construction: if this device already
-                // answered/ended the call itself before the push arrived,
-                // CallKit has no record of `payload.callId` to match against
-                // (or it is already ended) and this is a harmless no-op —
-                // same as `onMalformedPush` below reporting a UUID CallKit
-                // has never seen.
-                let diag: String = "[AppState] W-CANCELPUSH PushKit→cancel uuid=\(payload.callId.uuidString.prefix(8))…"
-                print(diag)
-                // W-GHOSTCALL (2026-09-25) — the "idempotent by construction"
-                // claim above only holds while CallKit still knows the uuid. It
-                // does NOT when this device already ended the call itself (the
-                // caller's hangup usually wins the race over the WS): CallKit
-                // dropped the uuid, so reporting it again is not a no-op, it is
-                // a NEW ring for a dead call, answerable by the user (incident
-                // e3acecd7, 2026-09-23: report ok=1 dup=0, Answer +1.9 s later).
-                // The PushKit mandate still requires SOME report, so when the uuid
-                // is already in `recentlyEndedCallIds` a fresh placeholder uuid is
-                // reported instead, ended at once and marked unanswerable.
-                let cancelPlan: GhostCallPolicy.CancelReportPlan = await MainActor.run {
-                    self.planIncomingCancelReport(callId: payload.callId)
-                }
-                await self.callKit?.reportIncomingCall(uuid: cancelPlan.reportUuid, callerName: "Q-Audion", hasVideo: false)
-                await self.callKit?.reportCallEnded(uuid: cancelPlan.reportUuid, reason: .remoteEnded)
-                // The call already ended here, so its own teardown (stop ring
-                // UI/sound, clear the ring flag) has already run; repeating it now
-                // could hide the ring of a DIFFERENT call that arrived since.
-                guard !cancelPlan.isPlaceholder else { return }
-                // W-GHOSTCALL — the push can also win the race the other way
-                // round: it clears the ring flag below, and without it the later
-                // WS hangup no longer sees a ringing call, so the missed call is
-                // never recorded (and never, if that hangup does not arrive).
-                // Record it now, while the flag is still up.
-                self.recordMissedOnCancelPush(callId: payload.callId)
-                // Same local teardown a WS-delivered call_cancel/call_hangup
-                // would have driven for this call, in case the push wins
-                // the race against a delayed WS message for the SAME call:
-                // stop any ring UI/sound and clear latched invite state so
-                // this device doesn't also show its own stale ring screen.
-                self.stopInAppRingtone()
-                self.incomingCallRingVisible = false
-            },
-            onMalformedPush: { [weak self] in
-                guard let self = self else { return }
-                // A VoIP push arrived that we cannot turn into a call (malformed /
-                // non-call payload). We MUST still report a call to CallKit to
-                // satisfy the PushKit contract, then end it immediately — otherwise
-                // iOS terminates the app and throttles future VoIP pushes, which
-                // silently makes the device unreachable for incoming calls.
-                let placeholder = UUID()
-                await self.callKit?.reportIncomingCall(uuid: placeholder, callerName: "Q-Audion", hasVideo: false)
-                await self.callKit?.reportCallEnded(uuid: placeholder, reason: .failed("malformed-voip-push"))
+            // Whatever does not decide the report (WS revive, ghost bookkeeping,
+            // group UI): runs once CallKit has answered, before PushKit's completion.
+            afterReport: { [weak self] event, spec, outcome in
+                self?.finishVoipPushReport(event, spec: spec, outcome: outcome)
             }
         )
+        } else {
+            // No CallKit reporter (cannot happen on iOS: `callKit` is a CallKitProvider):
+            // registering PushKit without one would get every VoIP push killed.
+            RTLog.error("call", VoipPushDiagnostics.initNoReporterLine())
         }  // W-NOCALLKIT — end `if !callKitFreeMode` PushKit registration guard
         #endif
 
@@ -16586,7 +16345,7 @@ final class AppState: ObservableObject {
     /// shows "Mario Rossi" instead of the raw caller id. The encrypted-call
     /// "Cifrata" tag is appended by CallKitProvider.reportIncomingCall (native UI
     /// only), so this returns just the clean name.
-    /// PushKit incoming-call setup, extracted from the `onIncomingCall` closure
+    /// PushKit incoming-call setup (W-VOIPSYNC: called from `prepareVoipIncomingReport`)
     /// so the nested `MainActor.run` body is a single call (CLAUDE.md §13/§14
     /// type-checker hygiene). Stamps the active-call ids and returns the native
     /// CallKit display name (rubrica-resolved).
@@ -16627,11 +16386,187 @@ final class AppState: ObservableObject {
         return display
     }
 
+    // MARK: - W-VOIPSYNC (2026-10-08): the PushKit report, decided inside the callback
+
+    /// Runs of `initialize()` in this process (`voip init count=N site=2`).
+    private static var initializeCount: Int = 0
+
+    /// W-VOIPSYNC (2026-10-08) — what CallKit is told for this VoIP push, decided ON
+    /// MAIN inside the PushKit callback (`PushKitProvider.PrepareHandler`); the
+    /// provider hands it to CallKit before the callback returns. These are the
+    /// decisions the five push handlers used to take before their own
+    /// `await reportIncomingCall`, now synchronous: incidents b0d7ba30 and eb2a6367
+    /// (2026-10-07) were PushKit kills 0.8 s after the push with no report ever
+    /// attempted. Everything that does not decide the report is in
+    /// `finishVoipPushReport`. nil = nothing to ring (the provider reports and
+    /// ends a placeholder).
+    func prepareVoipPushReport(_ event: PushKitProvider.PushEvent) -> PushKitProvider.ReportSpec? {
+        switch event {
+        case .incoming(let payload):
+            return prepareVoipIncomingReport(payload)
+        case .group(let payload):
+            return prepareVoipGroupReport(payload)
+        case .opaque(let payload):
+            return prepareVoipOpaqueReport(payload)
+        case .cancel(let payload):
+            return prepareVoipCancelReport(payload)
+        case .unparsed:
+            return nil
+        }
+    }
+
+    /// 1:1 push. `prepareIncomingPushCall` sets `activeCallKitId` BEFORE the report
+    /// so a racing WS `call_incoming` for the same call sees it registered and does
+    /// not report a second dialer, and resolves the caller from the LOCAL rubrica
+    /// (the payload's caller_name is server-supplied).
+    private func prepareVoipIncomingReport(
+        _ payload: PushKitProvider.ParsedPayload
+    ) -> PushKitProvider.ReportSpec {
+        let display: String = prepareIncomingPushCall(
+            callId: payload.callId,
+            callerId: payload.callerId,
+            hasVideo: payload.hasVideo,
+            fallbackName: payload.callerName
+        )
+        // W-CALLKITVIDEOFORCE (2026-07-27) — CallKit is told hasVideo=true whatever
+        // the real call type, because iOS only auto-foregrounds the app on answer for
+        // a video call; the real type (payload.hasVideo) still drives everything
+        // else. W-CARPLAYVIDEOFIX (2026-09-08) — not forced while CarPlay is the
+        // route: iOS refuses that foreground handoff in the car, so the real type is
+        // reported there.
+        let pkCarPlay: Bool = Self.isCarPlayConnected()
+        let pkReportedVideo: Bool = pkCarPlay ? payload.hasVideo : true
+        let pkDiag: String = "[AppState] W-CALLDIAG PushKit→report uuid=\(payload.callId.uuidString.prefix(8))… hasVideo=\(payload.hasVideo) reportedHasVideo=\(pkReportedVideo)(forced=\(!pkCarPlay)) carplay=\(pkCarPlay ? 1 : 0)"
+        print(pkDiag)
+        return PushKitProvider.ReportSpec(
+            uuid: payload.callId, callerName: display, hasVideo: pkReportedVideo, endReason: nil)
+    }
+
+    /// W-GRPRING group push: ring through the same invite path as the WS, report
+    /// the uuid DERIVED from the call_id (a WS invite and a push for the same room
+    /// resolve to the same uuid), and end it at once when there is nothing to ring
+    /// (already handled, or busy in another call).
+    private func prepareVoipGroupReport(
+        _ payload: PushKitProvider.ParsedGroupPayload
+    ) -> PushKitProvider.ReportSpec {
+        let prepared: (uuid: UUID, display: String, presented: Bool) = prepareIncomingPushGroupCall(payload)
+        let grpUuid: String = String(prepared.uuid.uuidString.prefix(8)) + "…"
+        let grpPresented: String = String(describing: prepared.presented)
+        // W-CARPLAYVIDEOFIX — same CarPlay gate as the 1:1 report.
+        let grpCarPlay: Bool = Self.isCarPlayConnected()
+        let grpReportedVideo: Bool = grpCarPlay ? payload.hasVideo : true
+        let grpCarPlayFlag: String = grpCarPlay ? "1" : "0"
+        let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented + " carplay=" + grpCarPlayFlag
+        print(grpDiag)
+        let endReason: CallEndReason? = prepared.presented ? nil : .failed("group-call-not-presentable")
+        return PushKitProvider.ReportSpec(
+            uuid: prepared.uuid, callerName: prepared.display, hasVideo: grpReportedVideo, endReason: endReason)
+    }
+
+    /// TRUST-6 opaque wake: no identity, no call_id in the push, so a GENERIC
+    /// placeholder keeps ringing until the real `call_incoming` arrives over the WS
+    /// (`reconcileOpaqueCallWakeup`). Deliberately NOT stored in `activeCallKitId`.
+    /// W-GHOSTCALL known limit (unreachable today, the server has no iOS
+    /// `opaque_wakeup` sender): an Answer tapped on the placeholder before the real
+    /// call arrives is refused (`answerguard refuse=1 why=3`); before the server
+    /// enables TRUST-6 on iOS these uuids need their own ledger and a deferred answer.
+    private func prepareVoipOpaqueReport(
+        _ payload: PushKitProvider.OpaqueCallWakeupPayload
+    ) -> PushKitProvider.ReportSpec {
+        let placeholderUuid = UUID()
+        let placeholderUuid8: String = String(placeholderUuid.uuidString.prefix(8))
+        let shash8: String = String(payload.senderHash.prefix(8))
+        // W-CARPLAYVIDEOFIX — an opaque wake carries no call type: voice on CarPlay.
+        let opaqueCarPlay: Bool = Self.isCarPlayConnected()
+        let diag: String = "[AppState] TRUST-6 PushKit→opaque call wakeup uuid=\(placeholderUuid8)… shash=\(shash8)… carplay=\(opaqueCarPlay ? 1 : 0)"
+        print(diag)
+        return PushKitProvider.ReportSpec(
+            uuid: placeholderUuid, callerName: PushKitProvider.placeholderCallerName,
+            hasVideo: !opaqueCarPlay, endReason: nil)
+    }
+
+    /// W-CANCELPUSH (2026-09-03) cancel push: the caller hung up before this device
+    /// answered. Report-then-end the SAME uuid the original incoming push reported,
+    /// so CallKit dismisses that ring (`.remoteEnded`: the far end ended it).
+    /// W-GHOSTCALL (2026-09-25): when this device already ended that call itself,
+    /// reporting its uuid again would ring a dead call (e3acecd7), so
+    /// `planIncomingCancelReport` swaps in a placeholder, marked unanswerable.
+    private func prepareVoipCancelReport(
+        _ payload: PushKitProvider.ParsedCancelPayload
+    ) -> PushKitProvider.ReportSpec {
+        let diag: String = "[AppState] W-CANCELPUSH PushKit→cancel uuid=\(payload.callId.uuidString.prefix(8))…"
+        print(diag)
+        let cancelPlan: GhostCallPolicy.CancelReportPlan = planIncomingCancelReport(callId: payload.callId)
+        return PushKitProvider.ReportSpec(
+            uuid: cancelPlan.reportUuid, callerName: PushKitProvider.placeholderCallerName,
+            hasVideo: false, endReason: .remoteEnded)
+    }
+
+    /// W-VOIPSYNC (2026-10-08) — the part of each push handler that does not decide
+    /// the report. Runs on main once CallKit has answered the report (and after
+    /// the provider ended a report-and-end spec), right before PushKit's
+    /// completion; anything async is started as a Task, as before.
+    func finishVoipPushReport(
+        _ event: PushKitProvider.PushEvent,
+        spec: PushKitProvider.ReportSpec,
+        outcome: PushKitProvider.ReportOutcome
+    ) {
+        switch event {
+        case .incoming:
+            // CRITICAL: bring the signalling WS up NOW so the buffered call_offer
+            // redelivery + PQC handshake can flow while the native UI rings.
+            Task { @MainActor [weak self] in
+                await self?.reviveSignalingSocket()
+            }
+        case .group:
+            // Not presentable: the provider already ended it, nothing rings.
+            guard spec.endReason == nil else { return }
+            // W-GRPDOUBLEDIALER (2026-07-27) — a foreground app already shows its
+            // own IncomingCallScreen for this invite, and CallKit's banner would sit
+            // on top of it: release the native UI (ends only CallKit's record, not
+            // the invite, the ring timers or `onEndCall`).
+            let isForeground: Bool = UIApplication.shared.applicationState == .active
+            let releasedNativeUI: Bool = isForeground
+                && ((self.callKit as? CallKitProvider)?.releaseFromSystemUI(spec.uuid) ?? false)
+            if releasedNativeUI {
+                RTLog.info("call", "W-GRPDOUBLEDIALER foreground push-sourced group call — released native CallKit UI, our own IncomingCallScreen is the ring")
+            }
+            // Same as 1:1: the `group_call_join` on accept and the sender-key
+            // control envelopes need a live socket.
+            Task { @MainActor [weak self] in
+                await self?.reviveSignalingSocket()
+            }
+        case .opaque:
+            // The ONLY way the real call_incoming (caller / call_id / type) can
+            // reach this device for an opaque wake is the WS.
+            Task { @MainActor [weak self] in
+                await self?.reviveSignalingSocket()
+            }
+            let placeholder: UUID = spec.uuid
+            Task { @MainActor [weak self] in
+                await self?.reconcileOpaqueCallWakeup(placeholderCallKitId: placeholder)
+            }
+        case .cancel(let payload):
+            // A placeholder (W-GHOSTCALL): the call already ended here, its own
+            // teardown already ran; repeating it could hide the ring of a
+            // DIFFERENT call that arrived since.
+            guard spec.uuid == payload.callId else { return }
+            // W-GHOSTCALL — record the missed call while the ring flag is still up
+            // (the later WS hangup would no longer see a ringing call).
+            self.recordMissedOnCancelPush(callId: payload.callId)
+            // Same local teardown a WS call_cancel / call_hangup would drive.
+            self.stopInAppRingtone()
+            self.incomingCallRingVisible = false
+        case .unparsed:
+            break
+        }
+    }
+
     /// W-GHOSTCALL (2026-09-25) — decide which uuid the `call_cancelled` push
     /// handler reports to CallKit (see `GhostCallPolicy.cancelReportPlan`), and,
     /// for a placeholder, record it as unanswerable BEFORE the report reaches
     /// CallKit so an Answer that lands on its fading ring is already known to be a
-    /// ghost. Extracted from the `onIncomingCancel` closure so that closure stays
+    /// ghost. Called from `prepareVoipCancelReport` (W-VOIPSYNC) so that closure stays
     /// a single main-actor call (CLAUDE.md §13/§14).
     @MainActor
     private func planIncomingCancelReport(callId: UUID) -> GhostCallPolicy.CancelReportPlan {
@@ -16684,7 +16619,7 @@ final class AppState: ObservableObject {
     /// ## Why a placeholder UUID, and why it is NEVER written to
     /// `activeCallKitId`
     /// Apple's PushKit mandate requires reporting SOME call to CallKit
-    /// before the push completes (`onMalformedPush`'s kdoc has the
+    /// before the push completes (`PushKitProvider`'s delegate has the
     /// citation) — but an opaque wakeup carries no `call_id`, so there is
     /// nothing real to report yet. `placeholderCallKitId` is a throwaway
     /// local UUID, reported purely to satisfy that mandate and give the
