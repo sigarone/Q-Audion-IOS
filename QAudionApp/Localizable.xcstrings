@@ -2030,13 +2030,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il tuo piano non include le videochiamate di gruppo."
+            "value": "Le videochiamate di gruppo non sono disponibili per il tuo account."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your plan does not include group calls."
+            "value": "Group video calls are not available for your account."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las videollamadas de grupo no están disponibles para tu cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les appels vidéo de groupe ne sont pas disponibles pour ton compte."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppen-Videoanrufe sind für Ihr Konto nicht verfügbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As chamadas de vídeo em grupo não estão disponíveis para a sua conta."
           }
         }
       }
@@ -2703,90 +2727,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sessão encerrada."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.already_redeemed": {
-      "extractionState": "manual",
-      "comment": "Snackbar — the activation code was already redeemed on this account (idempotent replay)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Codice già attivo su questo account."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code already active on this account."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código ya activo en esta cuenta."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code déjà actif sur ce compte."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code auf diesem Konto bereits aktiv."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código já ativo nesta conta."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.activated": {
-      "extractionState": "manual",
-      "comment": "Snackbar — Pro account activation succeeded after redeeming a code",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account attivato."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account activated."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cuenta activada."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Compte activé."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Konto aktiviert."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conta ativada."
           }
         }
       }
@@ -6055,396 +5995,6 @@
         }
       }
     },
-    "upgrade_sheet.error.invalid_checksum": {
-      "extractionState": "manual",
-      "comment": "Error text — the pasted activation code failed the local checksum validation before any network call",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Codice non valido — controlla di averlo copiato per intero."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid code — check that you copied it in full."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código no válido — comprueba que lo copiaste completo."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code invalide — vérifie que tu l'as copié en entier."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ungültiger Code — bitte prüfen Sie, ob Sie ihn vollständig kopiert haben."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código inválido — confira se você copiou tudo."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.network_generic": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with a non-BCryptoError (generic network failure)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Errore di rete — verifica la connessione e riprova."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Network error — check your connection and try again."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error de red — comprueba la conexión e inténtalo de nuevo."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erreur réseau — vérifie la connexion et réessaie."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Netzwerkfehler — bitte überprüfen Sie Ihre Verbindung und versuchen Sie es erneut."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erro de rede — verifique sua conexão e tente novamente."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.connection_failed": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with httpError status 0 (connectivity glitch)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Errore di connessione — verifica la rete e riprova."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connection error — check your network and try again."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error de conexión — comprueba la red e inténtalo de nuevo."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erreur de connexion — vérifie le réseau et réessaie."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verbindungsfehler — bitte überprüfen Sie Ihr Netzwerk und versuchen Sie es erneut."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erro de conexão — verifique a rede e tente novamente."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.code_invalid": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with HTTP 400 (invalid/unknown/revoked/expired/bind-mismatch code)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Codice non valido."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid code."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código no válido."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code invalide."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ungültiger Code."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código inválido."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.session_inactive": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with HTTP 401/403 or unauthorized (session no longer valid)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sessione non attiva — accedi di nuovo."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Session not active — sign in again."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sesión no activa — vuelve a iniciar sesión."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Session inactive — reconnecte-toi."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sitzung nicht aktiv — bitte melden Sie sich erneut an."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sessão inativa — faça login novamente."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.code_conflict": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with HTTP 409 (code already redeemed/exhausted/grant revoked)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Codice già utilizzato o non disponibile."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code already used or unavailable."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código ya utilizado o no disponible."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code déjà utilisé ou indisponible."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code bereits verwendet oder nicht verfügbar."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Código já usado ou indisponível."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.rate_limited": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with HTTP 429 (rate limited)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Troppi tentativi — riprova più tardi."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Too many attempts — try again later."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Demasiados intentos — inténtalo más tarde."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Trop de tentatives — réessaie plus tard."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zu viele Versuche — bitte versuchen Sie es später erneut."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Muitas tentativas — tente novamente mais tarde."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.server_error": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with HTTP 5xx",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Errore del server — riprova più tardi."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Server error — try again later."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error del servidor — inténtalo más tarde."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erreur du serveur — réessaie plus tard."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Serverfehler — bitte versuchen Sie es später erneut."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erro do servidor — tente novamente mais tarde."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.unexpected_status": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with an unenumerated HTTP status, %lld is the raw status code",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Errore imprevisto (%lld)."
-          }
-        }
-      }
-    },
-    "upgrade_sheet.error.unexpected_generic": {
-      "extractionState": "manual",
-      "comment": "Error text — redeem failed with no specific message (fallback default)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Errore imprevisto."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unexpected error."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error inesperado."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erreur inattendue."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unerwarteter Fehler."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erro inesperado."
-          }
-        }
-      }
-    },
     "account_settings.error.not_signed_in": {
       "extractionState": "manual",
       "comment": "Error banner — the action requires an active session but no auth token is available",
@@ -7494,47 +7044,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Conta"
-          }
-        }
-      }
-    },
-    "Account Pro": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Account Pro"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pro account"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cuenta Pro"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Compte Pro"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pro-Konto"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conta Pro"
           }
         }
       }
@@ -9063,47 +8572,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verifique se o fone está ligado e em modo de pareamento, depois inicie a busca."
-          }
-        }
-      }
-    },
-    "Attiva Pro": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Attiva Pro"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Activate Pro"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Activar Pro"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Activer Pro"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pro aktivieren"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ativar Pro"
           }
         }
       }
@@ -18394,47 +17862,6 @@
         }
       }
     },
-    "Inserisci il codice di attivazione del tuo account Pro": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inserisci il codice di attivazione del tuo account Pro"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enter your Pro account activation code"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Introduce el código de activación de tu cuenta Pro"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saisis le code d'activation de ton compte Pro"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Geben Sie den Aktivierungscode für Ihr Pro-Konto ein"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Digite o código de ativação da sua conta Pro"
-          }
-        }
-      }
-    },
     "Inserisci il tuo numero": {
       "extractionState": "manual",
       "localizations": {
@@ -23194,47 +22621,6 @@
         }
       }
     },
-    "PRO": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PRO"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PRO"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PRO"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PRO"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PRO"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "PRO"
-          }
-        }
-      }
-    },
     "PSK": {
       "extractionState": "manual",
       "localizations": {
@@ -23920,47 +23306,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Proteção de chaves"
-          }
-        }
-      }
-    },
-    "Prova Pro attiva": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prova Pro attiva"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pro trial active"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prueba Pro activa"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Essai Pro actif"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pro-Testphase aktiv"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Teste Pro ativo"
           }
         }
       }
@@ -25328,47 +24673,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Revogar dispositivo?"
-          }
-        }
-      }
-    },
-    "Richiede account Pro": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Richiede account Pro"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requires a Pro account"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requiere cuenta Pro"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nécessite un compte Pro"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erfordert Pro-Konto"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requer conta Pro"
           }
         }
       }
@@ -33409,13 +32713,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il tuo piano non include l'invio di file."
+            "value": "L'invio di file non è disponibile per il tuo account."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your plan does not include sending files."
+            "value": "Sending files is not available for your account."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El envío de archivos no está disponible para tu cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'envoi de fichiers n'est pas disponible pour ton compte."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Senden von Dateien ist für Ihr Konto nicht verfügbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O envio de arquivos não está disponível para a sua conta."
           }
         }
       }
@@ -35264,6 +34592,171 @@
           "stringUnit": {
             "state": "translated",
             "value": "A mensagem à qual você responde agora é temporária e seu conteúdo não será citado. Envie novamente para confirmar."
+          }
+        }
+      }
+    },
+    "Funzione non disponibile": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funzione non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feature not available"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Función no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fonctionnalité non disponible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funktion nicht verfügbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recurso indisponível"
+          }
+        }
+      }
+    },
+    "Funzione non disponibile per il tuo account.": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funzione non disponibile per il tuo account."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This feature is not available for your account."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta función no está disponible para tu cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette fonctionnalité n'est pas disponible pour ton compte."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Funktion ist für Ihr Konto nicht verfügbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este recurso não está disponível para a sua conta."
+          }
+        }
+      }
+    },
+    "Funzione non abilitata": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funzione non abilitata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Feature not enabled"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Función no habilitada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fonctionnalité non activée"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funktion nicht aktiviert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recurso não habilitado"
+          }
+        }
+      }
+    },
+    "error.feature_not_available_for_account": {
+      "extractionState": "manual",
+      "comment": "Shown when the server refuses a request because the account does not have the feature enabled.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funzione non disponibile per il tuo account."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This feature is not available for your account."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta función no está disponible para tu cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette fonctionnalité n'est pas disponible pour ton compte."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Funktion ist für Ihr Konto nicht verfügbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este recurso não está disponível para a sua conta."
           }
         }
       }

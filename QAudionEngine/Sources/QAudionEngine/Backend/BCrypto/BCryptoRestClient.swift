@@ -789,17 +789,12 @@ public enum BCryptoError: Error {
     /// entitlement-denial status (`requireFeatureHTTP`/`requireAnyFeatureHTTP`
     /// in `entitlements_enforce.go`: "design doc §4.5 typed 402 body",
     /// written whenever a caller's current grant doesn't cover the `feat.*`
-    /// capability a request needs). Previously indistinguishable from any
-    /// other client error on THIS client — arrived as the generic
-    /// `httpError(402)`, so no call site could show a dedicated "serve un
-    /// account Pro" message instead of a raw status code (2026-09-01
-    /// stability audit, item B10). Bare case, no associated status/body:
+    /// capability a request needs). Kept distinct from the generic
+    /// `httpError(402)` so call sites can show a dedicated message instead
+    /// of a raw status code. Bare case, no associated status/body:
     /// matches this file's own existing convention for `.unauthorized`/
     /// `.notFound`/`.certPinningFailed`, and `performRequest` already
-    /// discards the response BODY for every non-2xx status (see
-    /// `UpgradeSheet.swift`'s `redemptionErrorMessage` doc for why parsing
-    /// the `{"error","feature","package"}` shape server-side would need a
-    /// wider, out-of-scope change to this type's error contract).
+    /// discards the response BODY for every non-2xx status.
     ///
     /// SCOPE NOTE: the server writes this same 402 body for VPN and
     /// files-tus denials too, but on iOS those go through their OWN
@@ -814,14 +809,10 @@ public enum BCryptoError: Error {
     case paymentRequired
 }
 
-/// W-B10PAYREQ (2026-09-02) — a short, ready-to-show string for the ONE
-/// case (`.paymentRequired`) this fix set out to give a dedicated message.
-/// Deliberately narrow, not a general BCryptoError→String mapper: every
-/// other case falls back to a generic line here, and `UpgradeSheet.swift`'s
-/// own `UpgradeSheetContainer.redemptionErrorMessage(_:)` keeps owning the
-/// full per-status routing for the redeem flow specifically (400/401/403/
-/// 409/429/5xx) — that switch is NOT replaced or generalized by this one.
-/// Any current or future call site that catches a `BCryptoError` from a
+/// A short, ready-to-show string for the ONE case (`.paymentRequired`) that
+/// has a dedicated message. Deliberately narrow, not a general
+/// BCryptoError→String mapper: every other case falls back to a generic
+/// line here. Any current or future call site that catches a `BCryptoError` from a
 /// `feat.*`-gated request can show `error.userFacingMessage` (e.g. via
 /// `QAudionSnackbar`, this app's one existing transient-message component —
 /// see `QAudionSnackbar.swift`) instead of `error.localizedDescription`,
@@ -831,7 +822,7 @@ public extension BCryptoError {
     var userFacingMessage: String {
         switch self {
         case .paymentRequired:
-            return "Questa funzione richiede un account Pro."
+            return String(localized: "error.feature_not_available_for_account", defaultValue: "Funzione non disponibile per il tuo account.", comment: "Shown when the server refuses a request because the account does not have the feature enabled.")
         default:
             return "Errore di rete — riprova."
         }

@@ -1673,7 +1673,7 @@ class GroupCallViewModel: ObservableObject {
         case .entitlementRequired:
             return String(
                 localized: "group_call.media_error.entitlement",
-                defaultValue: "Il tuo piano non include le videochiamate di gruppo.",
+                defaultValue: "Le videochiamate di gruppo non sono disponibili per il tuo account.",
                 comment: "Snackbar — the server refused to open the media room of the group call because this account does not hold the group-call entitlement; the call is then ended")
         case .transportPolicy:
             return String(
