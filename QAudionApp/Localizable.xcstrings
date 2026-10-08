@@ -12857,47 +12857,6 @@
         }
       }
     },
-    "Cronologia release pubblica del progetto": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cronologia release pubblica del progetto"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Project's public release history"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historial de releases públicas del proyecto"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Historique des releases publiques du projet"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Öffentlicher Release-Verlauf des Projekts"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Histórico público de releases do projeto"
-          }
-        }
-      }
-    },
     "Cross-platform (beta)": {
       "extractionState": "manual",
       "localizations": {
@@ -27571,47 +27530,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sim, aceito"
-          }
-        }
-      }
-    },
-    "Tags GitHub": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tags GitHub"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "GitHub tags"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tags de GitHub"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tags GitHub"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "GitHub-Tags"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tags do GitHub"
           }
         }
       }

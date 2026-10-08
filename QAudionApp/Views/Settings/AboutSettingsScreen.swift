@@ -292,45 +292,6 @@ struct AboutSettingsScreen: View {
                         }
                         .buttonStyle(.plain)
 
-                        // W291: open the public Q-Audion-IOS GitHub
-                        // repo in browser. Useful for testers who want
-                        // to see release tags / commit history /
-                        // CHANGELOG without leaving the app.
-                        Button {
-                            #if canImport(UIKit)
-                            let url = URL(string: "https://github.com/sigarone/Q-Audion-IOS/tags")
-                            if let u = url {
-                                UIApplication.shared.open(u)
-                            }
-                            #endif
-                        } label: {
-                            HStack(spacing: 14) {
-                                Image(systemName: "arrow.triangle.branch")
-                                    .font(.system(size: 17, weight: .regular))
-                                    .foregroundStyle(scheme.primary)
-                                    .frame(width: 22)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Tags GitHub")
-                                        .qaudionStyle(type.bodyMedium)
-                                        .foregroundStyle(scheme.onSurface)
-                                    Text("Cronologia release pubblica del progetto")
-                                        .qaudionStyle(type.labelSmall)
-                                        .foregroundStyle(scheme.onSurfaceVariant)
-                                }
-                                Spacer()
-                                Image(systemName: "arrow.up.right.square")
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundStyle(scheme.onSurfaceVariant)
-                            }
-                            .padding(.horizontal, 14)
-                            .frame(minHeight: 52)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(scheme.surfaceVariant.opacity(0.4))
-                            )
-                        }
-                        .buttonStyle(.plain)
-
                         // W288: open TestFlight feedback URL in browser.
                         // The standard public TestFlight feedback URL
                         // for an app uses the App Apple ID; ours is
