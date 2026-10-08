@@ -9,7 +9,7 @@ import SwiftUI
 ///   - Caller display name (displaySmall, italic, semibold)
 ///   - Subtitle "Chiamata audio sicura" / "Videochiamata sicura"
 ///   - 3 `MetaPill`s (PQC ACTIVE / VOICE VERIFIED / LOW RISK · C=0.NN)
-///   - "Hybrid ML-KEM-1024 + PSK hardware · E2E" footer line
+///   - "Hybrid ML-KEM-1024 · E2E" footer line
 ///   - Bottom action row (3 buttons, SpaceEvenly):
 ///       • Reject  — `CircularAction(72, riskHigh, "phone.down.fill")`
 ///       • Reply   — `CircularAction(56, surfaceVariant, "message.fill")`
@@ -158,7 +158,7 @@ struct IncomingCallScreen: View {
                 }
                 .padding(.bottom, 12)
 
-                Text("Hybrid ML-KEM-1024 + PSK hardware · E2E")
+                Text("Hybrid ML-KEM-1024 · E2E")
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
 

@@ -334,7 +334,7 @@ final class ChatFileAttachmentReceiver {
         case BCryptoError.httpError(let code):
             return "il server ha risposto con codice \(code) dopo i tentativi di ripetizione"
         case BCryptoError.paymentRequired:
-            return "il nodo che ospita il file richiede un account Pro"
+            return "il nodo che ospita il file non è disponibile per questo account"
         case BCryptoError.unauthorized:
             return "sessione scaduta — riprova ad accedere"
         default:

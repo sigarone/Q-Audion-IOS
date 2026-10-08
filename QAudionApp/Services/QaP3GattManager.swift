@@ -1,3 +1,5 @@
+// Developer tool: compiled only when QAUDION_DEV_TOOLS is set.
+#if QAUDION_DEV_TOOLS
 import Foundation
 import CoreBluetooth
 
@@ -255,3 +257,4 @@ public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency 
         }
     }
 }
+#endif

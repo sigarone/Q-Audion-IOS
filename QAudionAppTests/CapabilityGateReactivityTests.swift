@@ -7,8 +7,8 @@ import QAudionEngine
 /// Entitlements Task 5 (2026-08-17) — coverage for the ONE thing this task
 /// can actually verify mechanically without a render tree or a simulator
 /// (neither is available in this environment — Windows, no Xcode/Swift
-/// toolchain, same disclosed gap `CapabilityGateTests`/
-/// `UpgradeSheetContainerTests` already document): that `CapabilityGate`
+/// toolchain, same disclosed gap `CapabilityGateTests` already documents):
+/// that `CapabilityGate`
 /// genuinely publishes `objectWillChange` on every state-mutating method
 /// (`adopt`/`loadCached`/`discard`/`refresh`'s success path).
 ///
@@ -209,18 +209,12 @@ private final class RejectingApiClient: EntitlementsApiClient {
     func fetchEntitlementsToken() async throws -> EntitlementsTokenResponse {
         fatalError("RejectingApiClient.fetchEntitlementsToken should not be called from CapabilityGateReactivityTests")
     }
-    func redeemActivationCode(_ code: String) async throws -> RedeemActivationCodeResponse {
-        fatalError("RejectingApiClient.redeemActivationCode should not be called from CapabilityGateReactivityTests")
-    }
 }
 
 private final class FakeEntitlementsApiClient: EntitlementsApiClient {
     private let result: Result<EntitlementsTokenResponse, Error>
     init(result: Result<EntitlementsTokenResponse, Error>) { self.result = result }
     func fetchEntitlementsToken() async throws -> EntitlementsTokenResponse { try result.get() }
-    func redeemActivationCode(_ code: String) async throws -> RedeemActivationCodeResponse {
-        fatalError("FakeEntitlementsApiClient.redeemActivationCode should not be called from CapabilityGateReactivityTests")
-    }
 }
 
 // Test-only base64url helper — same shape as CapabilityGateTests' own

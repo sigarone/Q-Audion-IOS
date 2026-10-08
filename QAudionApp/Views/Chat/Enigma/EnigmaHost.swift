@@ -9,8 +9,8 @@ import QAudionEngine
 // closures and engine types.
 
 /// The remote flag. Same key as Android (`enigma_mode.enabled`), default OFF. iOS reads ONLY the public flags file (the same
-/// value for every install): the key is deliberately NOT in `FeatureFlags.overlayEligibleKeys`, because a visible feature that
-/// differs by account is exactly what Guideline 5.6 forbids (see the note there).
+/// value for every install): the key is deliberately NOT in `FeatureFlags.overlayEligibleKeys`, so a visible feature never
+/// differs by account.
 @MainActor
 enum EnigmaFeature {
     static var flagOn: Bool {

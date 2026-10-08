@@ -377,6 +377,9 @@ struct ContactsListView: View {
     @State private var showingQrScanner: Bool = false
     @State private var showingMyIdentity: Bool = false
     @State private var showingNfcPair: Bool = false
+    /// Whether this device can read NFC tags; the NFC row is replaced by a
+    /// neutral line when it cannot.
+    private let nfcAvailability: NfcAvailability = .device
     /// In-person QR + Bluetooth pairing, displayer side.
     @State private var showingProximityPair: Bool = false
     /// W-PAIRFB — the in-person pairing final outcome, presented as its own
@@ -455,12 +458,20 @@ struct ContactsListView: View {
                     // (never removed, matching design doc §7.2) whose
                     // ACTION branches on entitlement instead: unlocked →
                     // the real NFC pairing sheet, locked → UpgradeSheet.
-                    Button("Aggiungi via NFC", systemImage: "wave.3.right") {
-                        if capabilityGate.isUnlocked(.nfc) {
-                            showingNfcPair = true
-                        } else {
-                            showNfcUpgradeSheet = true
+                    if nfcAvailability.isAvailable {
+                        Button("Aggiungi via NFC", systemImage: "wave.3.right") {
+                            if capabilityGate.isUnlocked(.nfc) {
+                                showingNfcPair = true
+                            } else {
+                                showNfcUpgradeSheet = true
+                            }
                         }
+                    } else {
+                        Button {
+                        } label: {
+                            Label(NfcAvailability.unavailableMessage, systemImage: "wave.3.right")
+                        }
+                        .disabled(true)
                     }
                     Button("Importa dal telefono", systemImage: "phone.badge.plus") {
                         showingPhonebookImport = true

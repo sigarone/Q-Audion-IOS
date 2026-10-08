@@ -6,10 +6,8 @@ import SwiftUI
 /// `docs/superpowers/specs/2026-09-03-key-exchange-avatar-animation-design.md`
 /// for the full design.
 ///
-/// Always a SINGLE segment — iOS has no local earbud-hardware media path
-/// (`earbudHwVerified`/`earbudActive` are hardcoded `false` at their one
-/// call site, `LiveInCallScreen.swift:320-321`), so there is nothing real
-/// for a second segment to represent. Do not add one.
+/// Always a SINGLE segment: there is nothing real for a second segment to
+/// represent. Do not add one.
 ///
 /// Driven by `TimelineView(.animation(paused: phase == .settled))` — when
 /// paused, SwiftUI does not invoke the closure at all, which is the direct

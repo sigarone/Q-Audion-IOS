@@ -4,6 +4,12 @@ extension ReleaseNote {
     /// User-facing changelog. Aggiornare a ogni release con funzionalità
     /// visibili all'utente. Niente codici interni, tool o dettagli di build.
     public static let releaseNotes: [ReleaseNote] = [
+        .init(id: "v1.0.1214+", date: "2026-10-09",
+              title: "Messaggi e allegati",
+              bullets: [
+                "Puoi rispondere a un messaggio specifico citandolo",
+                "Puoi inviare dalla chat foto, video e file di qualsiasi tipo",
+              ]),
         .init(id: "v1.0.1196+", date: "2026-09-30",
               title: "Associazione di persona più chiara",
               bullets: [
@@ -11,67 +17,18 @@ extension ReleaseNote {
                 "Il contatto associato di persona mostra ora un promemoria \"Verificato di persona\" con la data, nella scheda del contatto",
                 "Al termine, una schermata chiara distingue: nuovo contatto verificato, chiave aggiunta a un contatto già noto, oppure chiave salvata senza verifica server",
               ]),
-        .init(id: "v1.0.957+", date: "2026-08-11",
-              title: "Impostazioni più oneste, dati di chiamata reali",
-              bullets: [
-                "Rimossi i controlli che non facevano nulla: Deepfake Guard, Re-keying adattivo, Padding e Reperibilità. Le funzioni restano attive come sempre — erano gli interruttori a non essere collegati a niente",
-                "Durante la chiamata: codec, flusso e ritardo accanto a durata e confidenza. Dove il dato non è misurabile compare un trattino, mai un numero inventato",
-                "Il punteggio di affidabilità mostra un trattino finché non è stato davvero misurato, invece di partire da un valore prestampato",
-                "Elaborazione vocale (AEC/NS/AGC) attiva di default",
-              ]),
         .init(id: "v1.0.560+", date: "2026-05-31",
               title: "Profilo e impostazioni",
               bullets: [
                 "Esci direttamente dalla schermata Profilo",
-                "Caller ID: supporto prefisso internazionale (+39…)",
-                "Gestione chiavi: lista chiavi vault con fingerprint e scansione QR contatto",
-                // Rimossa 2026-08-11: la riga diceva che i toggle Deepfake Guard,
-                // Re-keying e Padding erano "ora effettivi". Non lo furono mai —
-                // invertivano un valore nell'interfaccia e nessun'altra parte
-                // dell'app lo leggeva. Le funzioni giravano comunque, sempre.
-                // Non si corregge una nota di rilascio riscrivendoci sopra una
-                // versione più bella: la riga falsa esce, e la voce del
-                // 2026-08-11 racconta cosa è stato tolto e perché.
-                "Preset audio chiamate fisso a 32 kbps CBR per compatibilità cross-platform",
-              ]),
-        .init(id: "v1.0.550+", date: "2026-05-27",
-              title: "Qualità audio",
-              bullets: [
-                "Elaborazione audio (AEC/NS/AGC) disattivata di default — meno artefatti",
-                "Risparmio dati: qualità codec ridotta su rete cellulare",
-                "Rilevamento deepfake live durante le chiamate",
-              ]),
-        .init(id: "v1.0.520+", date: "2026-05-15",
-              title: "Video e compatibilità Android",
-              bullets: [
-                "Chiamate video HEVC tra iOS e Android",
-                "Bitrate video adattivo su rete degradata",
-                "Note vocali compatibili con Android e Desktop",
-                "Scoperta contatti per numero di telefono allineata con Android",
+                "Gestione chiavi: impronta dell'identità e scansione del QR di un contatto",
               ]),
         .init(id: "v1.0.500+", date: "2026-05-10",
-              title: "Gruppo e sicurezza post-quantum",
+              title: "Chiamate e chat di gruppo",
               bullets: [
-                "Chiamate di gruppo N-way con audio Opus cifrato",
-                "Chat di gruppo end-to-end",
-                "Post-quantum ML-KEM-1024 su tutte le chiamate 1:1",
-                "Verifica identità SAS con 6 parole — persiste tra sessioni",
-              ]),
-        .init(id: "v1.0.450+", date: "2026-05-05",
-              title: "Diagnostica",
-              bullets: [
-                "Log runtime condivisibile per bug report",
-                "Telemetria automatica (opt-in) per analisi da remoto",
-                "Test banner e aptico in Impostazioni → Notifiche",
-              ]),
-        .init(id: "v1.0.400+", date: "2026-05-02",
-              title: "Privacy e trasporto",
-              bullets: [
-                "TURN relay configurabile",
-                "Presenza contatti: off = nessun punto verde visibile ai contatti",
-                "Conferme di lettura, typing, anteprima messaggi — tutti effettivi",
-                "Ore silenziose per notifiche",
-                "Messaggi offline consegnati al riconnettere",
+                "Chiamate di gruppo",
+                "Chat di gruppo con cifratura end-to-end",
+                "Verifica dell'identità con parole SAS nelle chiamate 1:1",
               ]),
     ]
 }

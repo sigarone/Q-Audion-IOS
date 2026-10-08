@@ -119,9 +119,8 @@
 
         <!-- Device ID - APNs and PushKit VoIP tokens registered with the server so
              incoming calls and messages can wake the device (AppState
-             registerVoipPushToken / handleApnsDeviceToken); the earbud
-             accessory id when the optional Q-Audion earbuds are paired
-             (BCryptoKmsClient). Required for the service. -->
+             registerVoipPushToken / handleApnsDeviceToken). Required for the
+             service. -->
         <dict>
             <key>NSPrivacyCollectedDataType</key>
             <string>NSPrivacyCollectedDataTypeDeviceID</string>

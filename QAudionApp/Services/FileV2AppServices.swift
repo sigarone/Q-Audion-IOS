@@ -99,7 +99,7 @@ enum FileV2FailureText {
     private static func message(for error: FileV2TransferError, server: FileV2ServerError?) -> String {
         switch error {
         case .entitlement:
-            return String(localized: "file_v2.fail.entitlement", defaultValue: "Il tuo piano non include l'invio di file.", comment: "File transfer error: the account has no file-sending entitlement.")
+            return String(localized: "file_v2.fail.entitlement", defaultValue: "L'invio di file non è disponibile per il tuo account.", comment: "File transfer error: the account has no file-sending entitlement.")
         case .quota:
             if let server, server.code == "quota_exceeded", let used = server.details.used, let limit = server.details.limit {
                 let usedText: String = bytes(used)

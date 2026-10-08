@@ -27,8 +27,8 @@ import QAudionEngine
 ///   4. **Trust bar** — SAS ✓ / PQC / transport chips + shield-to-expand.
 ///   5. **Guardian ribbon** — real-FFT MiniSpectrum + cipher-seal chip +
 ///      3 gauges (STRESS / BREATH·HNR / PITCH) + ENGINE CipherFlowTube.
-///   6. **TrustChainCard** — Mic→Seal→Air custody visual, full
-///      phone-vs-earbud model (iOS-only card, honest data).
+///   6. **TrustChainCard** — Mic→Seal→Air custody visual (iOS-only card,
+///      honest data).
 ///   7. **SAS verification panel** — visible only when `sasWords.count == 6`.
 ///   8. **Key info panel** — visible only when `keyInfo != nil`.
 ///   9. **Pills row** — LIVENESS / PSK ROTATION badges.
@@ -224,18 +224,6 @@ struct InCallScreen: View {
     /// Priorità assoluta nel cerchietto dell'avatar. Port di Android
     /// `AvatarImage.kt` `shortNumber` param.
     let peerShortNumber: String?
-    /// TrustChainCard — true when the active media provider is the earbud
-    /// secure element (mic + seal both live in earbud hardware, so the
-    /// protection envelope reaches the microphone). Android parity:
-    /// `GuardianRibbon.kt` `TrustChainCard(earbudActive:)`. iOS has NO
-    /// earbud media-provider path yet, so live call sites wire a constant
-    /// `false` — the view still implements BOTH states so the card is
-    /// ready the day the provider lands (and for design previews).
-    let earbudActive: Bool
-    /// TrustChainCard — true when the earbud's CRACEN secure element was
-    /// confirmed active (drives the "Secure element CRACEN ✓ / linking…"
-    /// stat row). Only meaningful while `earbudActive == true`.
-    let earbudHwVerified: Bool
     /// Unified call UI — live Guardian voice-biometrics snapshot for the
     /// security sheet + Guardian ribbon mini-gauges. nil while unavailable
     /// (engine flag off, or no result yet — both call directions wired) —
@@ -456,8 +444,6 @@ struct InCallScreen: View {
          hasVideo: Bool = false,
          cameraOn: Bool = false,
          peerShortNumber: String? = nil,
-         earbudActive: Bool = false,
-         earbudHwVerified: Bool = false,
          voiceBiometrics: VoiceBiometrics? = nil,
          voiceSpectrum: [Float]? = nil,
          keyEpoch: Int? = nil,
@@ -518,8 +504,6 @@ struct InCallScreen: View {
         self.hasVideo = hasVideo
         self.cameraOn = cameraOn
         self.peerShortNumber = peerShortNumber
-        self.earbudActive = earbudActive
-        self.earbudHwVerified = earbudHwVerified
         self.voiceBiometrics = voiceBiometrics
         self.voiceSpectrum = voiceSpectrum
         self.keyEpoch = keyEpoch
@@ -1868,76 +1852,37 @@ struct InCallScreen: View {
 
     // MARK: - Trust-chain card (unified call UI — custody of your voice)
     //
-    // Full native port of the approved "custody of your voice" mockup
-    // (trust-chain.html, scratchpad design spec): two ambient particle-flow
-    // lanes either side of a glowing pulsing seal core, a morphing bordered
-    // "protection boundary" box with a floating label, a callout-box verdict,
-    // a 5-cell stat ring row, and a collapsible earbud detail panel. This
-    // REPLACES the previous plain 3-label chain + thin progress bar
-    // (2026-07-04 unified-call-ui redesign) — no second component, no dead
-    // code left behind (`trustNode`/`trustStat`/`trustArrow` plain helpers
-    // removed with it).
+    // Two ambient particle-flow lanes either side of a glowing pulsing seal
+    // core, a bordered "protection boundary" box with a floating label, a
+    // callout-box verdict and a 5-cell stat ring row.
     //
-    // All animation follows the two conventions ALREADY established in this
-    // same file rather than inventing new ones:
-    //  - continuous per-frame drawing → `TimelineView(.animation(paused:
-    //    reduceMotion))` + `Canvas`, deterministic golden-ratio index hashing
-    //    for per-particle phase/speed/lane/wobble (see `drawCipherTube`/
-    //    `drawMiniSpectrum` above) — cheap, stable across frames, paused
-    //    under Reduce Motion exactly like the spectrum/cipher-tube visuals.
-    //  - the boundary-box morph (position/width/color/label) is a plain
-    //    `.animation(.linear(duration: 0.6), value: earbudActive)` layout
-    //    tween — the SAME 0.6s duration the old progress-bar envelope used,
-    //    preserved rather than inventing a different timing.
+    // All animation uses the convention already established in this file:
+    // continuous per-frame drawing → `TimelineView(.animation(paused:
+    // reduceMotion))` + `Canvas`, deterministic golden-ratio index hashing
+    // for per-particle phase/speed/lane/wobble (see `drawCipherTube`/
+    // `drawMiniSpectrum` above) — cheap, stable across frames, paused under
+    // Reduce Motion exactly like the spectrum/cipher-tube visuals.
     //
-    // All data is real, unchanged from the previous implementation:
-    // `earbudActive`/`earbudHwVerified` from the call site (constant `false`
-    // today pending the iOS earbud media-provider — see LiveInCallScreen),
-    // plus `sasVerified`/`pqcActive`/`transportMode` already stored on this
-    // view for the trust bar above. The mockup's manual toggle button is a
-    // demo-only affordance and is intentionally NOT ported — production
-    // state is always driven by these real flags.
-    //
-    // NOT ported: the mockup's bottom "how it reads inside the call" one-
-    // line strip preview. This screen's `trustBar` (SAS ✓ / PQC / transport
-    // chips, rendered just above the Guardian ribbon) already surfaces the
-    // same "how it reads" summary in a slot that exists today — a second
-    // strip directly under this card would duplicate it rather than adding
-    // information, so it is intentionally omitted per the task's own
-    // "don't force it" guidance.
+    // All data is real: `sasVerified`/`pqcActive`/`transportMode` already
+    // stored on this view for the trust bar above.
 
-    /// Protection-envelope start fraction for the SOFTWARE path: the seal
-    /// happens on the phone, so the envelope covers Seal→Air and the MIC
-    /// sits just OUTSIDE it on the left. Same 0.42 constant as Android's
-    /// `TrustChainCard` software branch (and the mockup's `left:40%`). The
-    /// earbud path starts at 0.0 (the envelope reaches the microphone).
+    /// Protection-envelope start fraction: the seal happens on the phone,
+    /// so the envelope covers Seal→Air and the MIC sits just OUTSIDE it on
+    /// the left. Same 0.42 constant as Android's `TrustChainCard`.
     private static let trustEnvelopeStartSoftware: CGFloat = 0.42
 
     /// Trust-chain card — the honest "where is the voice sealed, and does
     /// the protection reach the microphone?" visual.
     ///
-    ///  - SOFTWARE (`earbudActive == false`, today's only live iOS state):
-    ///    the seal happens ON THE PHONE, so the protection envelope starts
-    ///    at 42% and the MICROPHONE sits just outside it — raw audio exists
-    ///    in the phone's audio pipeline for an instant before it is sealed.
-    ///    The OS keystore/Keychain keeps the KEYS safe, but a compromised
-    ///    OS could tap the mic upstream of encryption. Cyan accent,
-    ///    "GRADE A".
-    ///  - EARBUD (`earbudActive == true`, ready for when the earbud media
-    ///    provider lands on iOS): mic AND seal both live inside the
-    ///    earbud's secure chip, so the envelope extends to the microphone
-    ///    and raw voice never reaches the phone. Gold accent, "GRADE A+ ·
-    ///    SOVEREIGN", plus a live "Secure element CRACEN ✓ / linking…"
-    ///    stat driven by `earbudHwVerified`. (Android also shows battery/
-    ///    ANC from its BudsStatus; iOS has no equivalent source yet, so
-    ///    those rows are omitted rather than fabricated — same discipline
-    ///    as before this redesign.)
+    /// The seal happens ON THE PHONE, so the protection envelope starts at
+    /// 42% and the MICROPHONE sits just outside it — raw audio exists in the
+    /// phone's audio pipeline for an instant before it is sealed. The OS
+    /// keystore/Keychain keeps the KEYS safe, but a compromised OS could tap
+    /// the mic upstream of encryption.
     private var trustChainCard: some View {
-        let gold = extras.warning          // sovereign-hardware accent (amber/gold)
-        let cyan = extras.pqcAccent
-        let cipher = extras.pqcAccent      // mockup's --cipher lane tint (violet)
-        let envColor = earbudActive ? gold : cyan
-        let envelopeStart: CGFloat = earbudActive ? 0.0 : Self.trustEnvelopeStartSoftware
+        let envColor = extras.pqcAccent
+        let cipher = extras.pqcAccent      // cipher lane tint (violet)
+        let envelopeStart: CGFloat = Self.trustEnvelopeStartSoftware
         return VStack(alignment: .leading, spacing: 0) {
             // header
             HStack {
@@ -1948,7 +1893,7 @@ struct InCallScreen: View {
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(scheme.onSurfaceVariant)
                 Spacer(minLength: 0)
-                Text(earbudActive ? "HARDWARE-SEALED · SOVEREIGN" : "SOFTWARE-SEALED")
+                Text("SOFTWARE-SEALED")
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(envColor)
             }
@@ -1962,22 +1907,12 @@ struct InCallScreen: View {
                 .frame(height: 118)
             Spacer().frame(height: 14)
 
-            trustVerdictCallout(gold: gold)
+            trustVerdictCallout()
                 .padding(.horizontal, 14)
             Spacer().frame(height: 10)
 
-            trustStatRing(gold: gold)
+            trustStatRing()
                 .padding(.horizontal, 6)
-
-            // live earbud stat when connected — CRACEN secure-element
-            // confirmation only (no battery/ANC: iOS has no BudsStatus
-            // source, and fabricating one would break the honest-data rule).
-            if earbudActive {
-                Divider().background(gold.opacity(0.25))
-                    .padding(.horizontal, 14)
-                trustEarbudPanel(gold: gold)
-                    .padding(.horizontal, 14)
-            }
         }
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1987,10 +1922,8 @@ struct InCallScreen: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(earbudActive ? gold.opacity(0.5) : scheme.outline.opacity(0.5),
-                        lineWidth: earbudActive ? 1.3 : 1)
+                .stroke(scheme.outline.opacity(0.5), lineWidth: 1)
         )
-        .animation(.linear(duration: 0.6), value: earbudActive)
     }
 
     // MARK: Trust-chain diagram (particle lanes + seal core + boundary box)
@@ -2008,9 +1941,7 @@ struct InCallScreen: View {
             let boundaryWidth = max(w - boundaryX, 0)
 
             ZStack(alignment: .topLeading) {
-                // Protection boundary — bordered glowing box, grows left to
-                // swallow the mic node in earbud mode. Position/width/color
-                // all animate on the shared 0.6s tween (see trustChainCard).
+                // Protection boundary — bordered glowing box.
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(
                         RadialGradient(
@@ -2029,7 +1960,7 @@ struct InCallScreen: View {
                         // to the (not-yet-offset) rectangle's own bounds, so
                         // it rides along correctly once the whole composite
                         // is shifted by the trailing `.offset` below.
-                        Text(earbudActive ? "protection reaches the mic" : "protected from here →")
+                        Text("protected from here →")
                             .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
                             .foregroundStyle(envColor)
                             .padding(.horizontal, 7)
@@ -2062,8 +1993,8 @@ struct InCallScreen: View {
                     trustEndpointNode(
                         icon: "mic.fill",
                         title: "Microphone",
-                        sub: earbudActive ? "protected" : "exposed",
-                        accent: earbudActive ? envColor : extras.riskHigh
+                        sub: "exposed",
+                        accent: extras.riskHigh
                     )
                     .frame(width: w * 0.30)
 
@@ -2147,11 +2078,11 @@ struct InCallScreen: View {
                         )
                         .frame(width: 64, height: 64)
                         .shadow(color: envColor.opacity(0.45), radius: 10)
-                    Image(systemName: earbudActive ? "waveform.badge.mic" : "lock.rectangle.stack.fill")
+                    Image(systemName: "lock.rectangle.stack.fill")
                         .font(.system(size: 26, weight: .medium))
                         .foregroundStyle(envColor)
                 }
-                Text(earbudActive ? "Sealed inside the earbud" : "Sealed on the phone")
+                Text("Sealed on the phone")
                     .font(.system(size: 7, weight: .semibold, design: .monospaced))
                     .foregroundStyle(envColor)
                     .padding(.horizontal, 7)
@@ -2210,15 +2141,13 @@ struct InCallScreen: View {
     /// Verdict callout box — bordered/tinted box with a leading icon,
     /// matching the mockup's `.verdict .v` treatment (the previous
     /// implementation had the same copy as a bare paragraph with no box).
-    private func trustVerdictCallout(gold: Color) -> some View {
+    private func trustVerdictCallout() -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: earbudActive ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+            Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(earbudActive ? gold : extras.riskHigh)
+                .foregroundStyle(extras.riskHigh)
                 .padding(.top, 1)
-            Text(earbudActive
-                 ? "The mic and the seal both live inside the earbud's secure chip — your voice is sealed at the source and never reaches the phone."
-                 : "Keys stay safe in the OS keystore, but the raw mic audio exists in the phone for an instant before the seal — an OS compromise could tap it upstream of encryption.")
+            Text("Keys stay safe in the OS keystore, but the raw mic audio exists in the phone for an instant before the seal — an OS compromise could tap it upstream of encryption.")
                 .font(.system(size: 11))
                 .foregroundStyle(scheme.onSurface.opacity(0.9))
                 .fixedSize(horizontal: false, vertical: true)
@@ -2226,11 +2155,11 @@ struct InCallScreen: View {
         .padding(11)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill((earbudActive ? gold : extras.riskHigh).opacity(0.08))
+                .fill(extras.riskHigh.opacity(0.08))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke((earbudActive ? gold : extras.riskHigh).opacity(0.28), lineWidth: 1)
+                .stroke(extras.riskHigh.opacity(0.28), lineWidth: 1)
         )
     }
 
@@ -2238,18 +2167,17 @@ struct InCallScreen: View {
 
     /// Row of 5 stat cells (icon + label + value), wired to REAL state
     /// already threaded to this view for the trust bar above — no new
-    /// state invented. Only "Seal point" changes with `earbudActive`; the
-    /// rest are informational badges of already-real values:
+    /// state invented. Informational badges of already-real values:
     ///  - Identity      → `sasVerified` (same flag the trust bar's "SAS ✓" chip uses)
     ///  - Post-quantum  → `pqcActive` (same flag the trust bar's "PQC" chip uses)
     ///  - Cipher        → static "AES-256" label (the one algorithm string this
     ///                     screen already commits to elsewhere — see
     ///                     `cipherKeySectionBody`'s doc comment on why no
     ///                     second, possibly-wrong cipher string is fabricated)
-    ///  - Seal point    → `earbudActive` (Phone vs Earbud HW, cyan vs gold)
+    ///  - Seal point    → static "Phone" (the seal happens on the phone)
     ///  - Liveness      → static "Guardian" badge, same unconditional
     ///                     "LIVENESS OK" the pills row already shows today
-    private func trustStatRing(gold: Color) -> some View {
+    private func trustStatRing() -> some View {
         HStack(spacing: 0) {
             trustStatCell(icon: "checkmark.seal.fill", label: "Identity",
                           value: sasVerified ? "SAS ✓" : "unverified",
@@ -2259,10 +2187,10 @@ struct InCallScreen: View {
                           active: pqcActive, accent: extras.success)
             trustStatCell(icon: "lock.rectangle.stack.fill", label: "Cipher",
                           value: "AES-256", active: true, accent: extras.success)
-            trustStatCell(icon: earbudActive ? "waveform.badge.mic" : "iphone",
+            trustStatCell(icon: "iphone",
                           label: "Seal point",
-                          value: earbudActive ? "Earbud HW" : "Phone",
-                          active: true, accent: earbudActive ? gold : extras.success)
+                          value: "Phone",
+                          active: true, accent: extras.success)
             trustStatCell(icon: "shield.checkerboard", label: "Liveness",
                           value: "Guardian", active: true, accent: extras.success)
         }
@@ -2297,44 +2225,6 @@ struct InCallScreen: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
-    }
-
-    // MARK: Earbud detail panel
-
-    /// Collapsible earbud detail panel — shown ONLY when `earbudActive`.
-    /// iOS has NO real battery/ANC/seals-per-second/key-epoch data source
-    /// (no `BudsStatus`-shaped provider exists here the way Android's does,
-    /// and no live seal-rate or key-epoch counter exists elsewhere in this
-    /// codebase either — `keyEpoch` is a call-level nil-by-default counter
-    /// with no earbud-specific meaning; see its doc comment above). Rather
-    /// than fabricate those cells, this panel keeps the SAME honest single
-    /// row the previous implementation had: CRACEN secure-element
-    /// confirmation, driven by the real `earbudHwVerified` flag.
-    private func trustEarbudPanel(gold: Color) -> some View {
-        HStack(spacing: 9) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(gold.opacity(0.14))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(gold.opacity(0.35), lineWidth: 1)
-                    )
-                    .frame(width: 26, height: 26)
-                Image(systemName: "waveform.badge.mic")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(gold)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text("SECURE ELEMENT")
-                    .font(.system(size: 7, design: .monospaced))
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                Text(earbudHwVerified ? "CRACEN ✓" : "linking…")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(earbudHwVerified ? gold : scheme.onSurfaceVariant)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 10)
     }
 
     // MARK: - Crypto-engine meter (unified call UI)
@@ -3182,26 +3072,6 @@ struct InCallScreen: View {
         confidence: 0.55,
         rekeyInSeconds: 295,
         transportMode: .disconnected,
-        onHangup: {}
-    )
-    .qAudionTheme(dark: true)
-}
-
-#Preview("Earbud sovereign (TrustChainCard A+)") {
-    // Design preview of the TrustChainCard earbud branch (gold accent,
-    // envelope reaching the mic, CRACEN stat). No live iOS call site can
-    // produce this state yet — the earbud media provider lands later.
-    InCallScreen(
-        peerDisplayName: "Mario Rossi",
-        durationSeconds: 340,
-        confidence: 0.95,
-        rekeyInSeconds: 120,
-        rekeyTotalSeconds: 300,
-        pqcActive: true,
-        transportMode: .p2pSrtp,
-        earbudActive: true,
-        earbudHwVerified: true,
-        cryptoOpsPerSec: 102,
         onHangup: {}
     )
     .qAudionTheme(dark: true)

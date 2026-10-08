@@ -50,7 +50,6 @@ import Foundation
 ///   | `LOG_OTLP_EXPORT_ENABLED`| Bool | `true` | RUNTIME kill-switch for the log SHIPPER (`LiveLogWorker.tick`, driven by `LiveLogStreamer`), ANDed with the user's local consent (`LiveLogStreamer.isEnabled`, default OFF) -- it can only ever turn shipping OFF, never ON for a device without consent. `false` STOPS uploads on an already-shipped build within the ~15 min refresh window; `true`/absent allow them. **Gates SHIP only -- egress REDACTION (`RuntimeLogSink.redactStructured`) is unconditional and is NEVER gated on this or any flag.** |
 ///   | `ios_bypass_echo_duck`   | Bool | `true` | Remote kill-switch for the TX echo ducker (`BypassEchoDuck`, W-BYPASSDUCK) that runs only while VP-IO is bypassed AND the output is the loudspeaker (`CallsGate.bypassEchoDuckEnabled()`, read once per call at capture creation). `false` switches it off for the next call; `true`/absent leave it armed. Public flags only -- not overlay-eligible. |
 ///   | `ios_dc_wedge_fallback`  | Bool | `true` | W-DCWEDGE kill-switch of the DataChannel-wedge diversion: `true`/absent = while the sealed-audio DataChannel is wedged (send queue stuck over 1500 B for 1 s or 15 shed frames in a row, released only after 3 s drained + a frame received on it) the audio TX goes on the WS relay; `false` = the pre-W-DCWEDGE routing (frames over the back-pressure threshold are dropped, nothing is diverted, a shed hangup / NACK is lost as before). Read once per call, at its first encrypted TX frame (`CallService.refreshDcWedgeFlag`); it can only turn the diversion OFF, never enable anything new. |
-///   | `ENTITLEMENTS_CODE_UI_ENABLED` | Bool | `false` | Shows the activation-code field + "Attiva" in `UpgradeSheet`; `false`/absent shows the plain "funzione non attiva" notice instead. Same value for every install -- App Review, TestFlight, and production all read this exact flag with no install-channel branching (W-5POINT6FIX, 2026-09-14: an earlier version of this ALSO checked the receipt type to hide the field specifically from an App Store install, which is what triggered a Guideline 5.6 rejection -- never reintroduce a receipt/environment check here).
 ///   | `calls.native_srtp_kill` | Bool | `false` | W-NATIVESRTPKILL -- remote kill switch for the native-SRTP audio path, checked at every per-call snapshot decision (`AppState.logNativeSrtpSnapshot`). `true` forces THAT call's snapshot to `false` WITHOUT touching the persisted local override slot (`CallCapabilities.savePersistedAudioSrtpOverride`, now written only by the crash-streak safety net -- there is no more user-facing toggle, W-SRTPALWAYSON 2026-09-29/30: native SRTP audio is the unconditional default on every build). `false`/absent leaves the snapshot at whatever the compiled default (always on) or the crash-streak safety net already decided. Same key name on Android (`FeatureFlags`), so one flag flip kills the feature on both platforms at once. Public flags only -- not overlay-eligible (a kill switch that could be scoped to one account is not a fleet-wide safety net). |
 ///   | `enigma_mode.enabled` | Bool | `false` | Enigma mode (visual effect only, a port of the Android feature): `true` shows Settings > Privacy > "Modalita' Enigma" (Off / Leggera / Scenografica, stored default Off) and lets the chat morph a message into its real packet and back; `false`/absent hides the entry and switches the effect off whatever the user stored. It changes nothing about the messages (no byte on the wire, no nonce, no tag check). Read live from the PUBLIC flags file only (`EnigmaFeature.flagOn`); deliberately NOT in `overlayEligibleKeys`: a user-visible feature that differs by account is what Guideline 5.6 forbids. Same key name on Android. |
 ///   | `calls.ring_signaling_only` | -- | (not read) | REMOVED (v6 timer round, T2): the callee has ONE path, answer first (WIRE_SPEC 3.7.4 R-ANSWER-FIRST). A flags.json that still carries this key is ignored; no code reads it. |
@@ -274,9 +273,8 @@ public final class FeatureFlags {
     // MARK: - Overlay allowlist (W-5POINT6HARDEN, 2026-09-18)
 
     /// Keys the per-user AUTHENTICATED overlay is permitted to answer for.
-    /// Guideline 5.6 forbids behavior that differs by WHO is looking at the
-    /// app; the public flags.json is safe by construction (one file, one
-    /// value, for everyone -- including App Review). The authenticated
+    /// The public flags.json resolves to one value for every install (one
+    /// file, one value, for everyone). The authenticated
     /// overlay is per-user/per-group BY DESIGN (see `startAuthenticated`'s
     /// doc), so any key resolved through it could in principle be set
     /// differently for one account than another. Default-deny: a key not
@@ -285,11 +283,7 @@ public final class FeatureFlags {
     /// account-targeted. `LOG_OTLP_EXPORT_ENABLED` is the only member: it
     /// can only ever turn telemetry SHIPPING off (never on, and it changes
     /// no rendered UI), so per-account targeting of it changes no visible
-    /// behavior. `ENTITLEMENTS_CODE_UI_ENABLED` is deliberately NOT here --
-    /// see its doc row above (W-5POINT6FIX): a reviewer-differential value
-    /// on that flag is exactly what got this app rejected under 5.6, and
-    /// this keeps that true even if the overlay service is ever misused to
-    /// target it, not just for the client-side check that was removed.
+    /// behavior.
     private static let overlayEligibleKeys: Set<String> = ["LOG_OTLP_EXPORT_ENABLED"]
 
     // MARK: - Typed lookups (compiled default always wins on absence)

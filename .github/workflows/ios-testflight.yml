@@ -1015,7 +1015,14 @@ jobs:
             echo "::error::TestFlight-only surface compiled into the store binary (itms-beta / testflight.apple.com string found) — QAUDION_DEV_TOOLS must be OFF for a tag build"
             exit 1
           fi
-          echo "store-readiness gates: privacy manifests present (x3), no TestFlight strings in binary"
+          # Repository-URL gate: the shipped app binary must not contain the
+          # project's GitHub repository URL (runs for every build, including
+          # dev_tools dispatches).
+          if strings "$APP/QAudionApp" | grep -qiF "github.com/sigarone"; then
+            echo "::error::repository URL (github.com/sigarone) found in the app binary"
+            exit 1
+          fi
+          echo "store-readiness gates: privacy manifests present (x3), no TestFlight strings in binary, no repository URL in binary"
 
           rm -f "$GITHUB_WORKSPACE/$IPA_PATH"
           zip -qr "$GITHUB_WORKSPACE/$IPA_PATH" Payload

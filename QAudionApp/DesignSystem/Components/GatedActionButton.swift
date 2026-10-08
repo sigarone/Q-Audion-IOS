@@ -104,14 +104,12 @@ private struct LockBadgeGlyph: View {
 /// like Android's entry swap. Reactive by construction: reads
 /// `capabilityGate.isUnlocked(capability)` from `@EnvironmentObject`,
 /// so a grant that lands after this destination is already on-screen
-/// (a redemption completed from the upsell right here) flips it to the
-/// real content on the next recomposition, no back-and-forth navigation
-/// required.
+/// flips it to the real content on the next recomposition, no
+/// back-and-forth navigation required.
 ///
 /// Reuses `UpgradeSheet` itself as the locked-state content rather than
-/// building a second, parallel "upsell page" type — same
-/// `UpgradeSheetContainer` redeem logic Task 4 already tested, pushed
-/// instead of sheeted. `UpgradeSheet`'s own `.presentationDetents(_:)` /
+/// building a second, parallel page type, pushed instead of sheeted.
+/// `UpgradeSheet`'s own `.presentationDetents(_:)` /
 /// drag-capsule handle are sheet-only affordances that render as
 /// harmless no-ops in a pushed `NavigationLink` destination (SwiftUI
 /// ignores a presentation-only modifier outside its matching

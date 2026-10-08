@@ -4,10 +4,43 @@ import CryptoKit
 
 public struct NfcExchangeView: View {
     @StateObject private var driver = NfcExchangeDriver()
+    private let availability: NfcAvailability
 
-    public init() {}
+    public init(availability: NfcAvailability = .device) {
+        self.availability = availability
+    }
 
     public var body: some View {
+        bodyContent
+            .padding()
+            .navigationTitle("Associazione NFC")
+    }
+
+    @ViewBuilder
+    private var bodyContent: some View {
+        if availability.isAvailable {
+            pairingContent
+        } else {
+            unavailableContent
+        }
+    }
+
+    /// Shown on a device that cannot read NFC tags: one neutral line, no
+    /// actions and no error state.
+    private var unavailableContent: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "wave.3.right.circle")
+                .font(.system(size: 64))
+                .foregroundStyle(.secondary)
+            Text(NfcAvailability.unavailableMessage)
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+            Spacer()
+        }
+    }
+
+    private var pairingContent: some View {
         VStack(spacing: 28) {
             Spacer()
             stateIcon
@@ -21,8 +54,6 @@ public struct NfcExchangeView: View {
             actionButton
             Spacer().frame(height: 32)
         }
-        .padding()
-        .navigationTitle("Associazione NFC")
     }
 
     private var stateIcon: some View {
@@ -56,17 +87,23 @@ public struct NfcExchangeView: View {
 
     private var stateLabelText: String {
         switch driver.state {
-        case .idle: return "Pronto per l\u{2019}associazione"
-        case .waiting: return "Avvicina l\u{2019}iPhone al dispositivo Android"
-        case .exchanging: return "Scambio chiavi\u{2026}"
-        case .sasConfirm(_, let peer): return "Confronta questo codice con \(peer)"
-        case .success(let peer): return "Associato con \(peer)"
-        case .error(let msg): return "Errore: \(msg)"
+        case .idle:
+            return String(localized: "nfc.state.idle", defaultValue: "Pronto per l\u{2019}associazione", comment: "NFC pairing screen: ready to start.")
+        case .waiting:
+            return String(localized: "nfc.state.waiting", defaultValue: "Avvicina l\u{2019}iPhone al telefono Android", comment: "NFC pairing screen: waiting for the other phone to be tapped.")
+        case .exchanging:
+            return String(localized: "nfc.state.exchanging", defaultValue: "Scambio chiavi\u{2026}", comment: "NFC pairing screen: keys are being exchanged.")
+        case .sasConfirm(_, let peer):
+            return String(localized: "nfc.state.compare", defaultValue: "Confronta questo codice con \(peer)", comment: "NFC pairing screen: compare the 6-digit code with the one on the other phone; %@ is the other phone's name.")
+        case .success(let peer):
+            return String(localized: "nfc.state.success", defaultValue: "Associato con \(peer)", comment: "NFC pairing screen: pairing completed; %@ is the other phone's name.")
+        case .error(let msg):
+            return String(localized: "nfc.state.error", defaultValue: "Errore: \(msg)", comment: "NFC pairing screen: an error happened; %@ is the already localized reason.")
         }
     }
 
     private var stateHelp: some View {
-        Text("L\u{2019}iPhone funge da lettore NFC. Il dispositivo Android deve avere il servizio HCE di Q-Audion attivo.")
+        Text("L\u{2019}iPhone funge da lettore NFC. Il telefono Android deve avere Q-Audion attivo.")
             .font(.caption)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
@@ -181,7 +218,7 @@ private final class NfcExchangeDriver: ObservableObject {
             // service returns SW_TECHNICAL_PROBLEM with "Identità non ancora
             // inizializzata" when its own identity provider has nothing
             // (NfcApduService.kt onGetIdentityKey).
-            state = .error(message: "Identità non ancora inizializzata: completa la configurazione prima di scambiare una chiave via NFC")
+            state = .error(message: String(localized: "nfc.error.identity_not_initialized", defaultValue: "Identità non ancora inizializzata: completa la configurazione prima di scambiare una chiave via NFC", comment: "NFC pairing error: this phone has no identity yet, finish the setup first."))
         }
     }
 

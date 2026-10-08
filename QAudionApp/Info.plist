@@ -47,7 +47,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and for voice authentication.</string>
 	<key>NFCReaderUsageDescription</key>
-	<string>Q-Audion reads NFC tags to securely import encryption keys from Android devices.</string>
+	<string>Q-Audion uses NFC only when you pair a contact in person: you hold your iPhone against their Android phone running Q-Audion, and the two phones together derive a shared key that you compare using a 6-digit code.</string>
 	<!-- W-NFCIOS  -  the AID of the Android HCE service we tap against
 	     (NfcConstants.AID_HEX, apduservice.xml). Without this array CoreNFC
 	     never sends SELECT for our application, so it never surfaces an
@@ -86,7 +86,7 @@
 	<!-- NSBluetoothPeripheralUsageDescription (deprecated since iOS 13) is
 	     intentionally absent: the Always key covers every supported iOS. -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Q-Audion uses Bluetooth to exchange encryption keys directly with a contact's phone when you pair in person by QR code, to pair with Q-Audion earbuds for hardware-backed key custody, and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available.</string>
+	<string>Q-Audion uses Bluetooth to exchange encryption keys directly with a contact's phone when you pair in person by QR code and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available.</string>
 	<!-- WebRTC gathers host ICE candidates, so a call between two devices on
 	     the same Wi-Fi can connect directly; iOS 14+ shows the local-network
 	     prompt for that and requires this string to be present. -->

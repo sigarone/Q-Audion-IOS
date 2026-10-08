@@ -324,15 +324,6 @@ struct LiveInCallScreen: View {
                 hasVideo: appState.isVideoCall,
                 cameraOn: cameraOn,
                 peerShortNumber: cachedPeerShortNumber,
-                // TrustChainCard phone-vs-earbud model: iOS has NO earbud
-                // media-provider path yet (EarbudCounterpartyService only
-                // handles the PQC handshake toward a PEER's earbud, never a
-                // local earbud media route), so both flags are a constant
-                // false — the software branch renders. When the earbud
-                // provider lands, wire its "active + CRACEN verified" state
-                // here (Android: SecureMediaProviderSelector).
-                earbudActive: false,
-                earbudHwVerified: false,
                 // Unified call UI — Guardian ribbon + security-sheet
                 // biometrics. nil while appState.voiceAnalysis is nil
                 // (engine flag off, or no result has arrived yet) —

@@ -1,3 +1,5 @@
+// Developer tool: compiled only when QAUDION_DEV_TOOLS is set.
+#if QAUDION_DEV_TOOLS
 import SwiftUI
 import CoreBluetooth
 
@@ -927,3 +929,4 @@ struct ToggleRow: View {
         .padding(.vertical, 6)
     }
 }
+#endif
