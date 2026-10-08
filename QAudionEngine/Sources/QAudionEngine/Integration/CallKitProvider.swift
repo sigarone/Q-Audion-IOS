@@ -105,7 +105,31 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
 
     // MARK: - CallKitManaging
 
+    /// W-VOIPSYNC (2026-10-08) — the WS path and every other async caller keep this
+    /// signature; it is now a thin wrapper over `reportIncomingCallNow`, so the
+    /// PushKit callback (which must report before it returns, without an await)
+    /// and these callers share ONE implementation: the same ledger claim, the same
+    /// duplicate labelling, the same `callkit report` line.
     public func reportIncomingCall(uuid: UUID, callerName: String, hasVideo: Bool) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            reportIncomingCallNow(uuid: uuid, callerName: callerName, hasVideo: hasVideo) { _ in
+                cont.resume()
+            }
+        }
+    }
+
+    /// W-VOIPSYNC (2026-10-08) — synchronous form of `reportIncomingCall`: hands
+    /// the report to CallKit before it returns and calls `completion` once CallKit
+    /// has answered (success or refusal), after the ledger has been updated.
+    /// `completion` runs on whatever queue CallKit answers on; callers that need
+    /// main hop themselves. Called directly from the PushKit delegate, which must
+    /// post the report inside the callback (incidents b0d7ba30 / eb2a6367,
+    /// 2026-10-07: the app was killed by PushKit 0.8 s after the push with no
+    /// report ever attempted).
+    public func reportIncomingCallNow(
+        uuid: UUID, callerName: String, hasVideo: Bool,
+        completion: @escaping (PushKitProvider.ReportOutcome) -> Void
+    ) {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: callerName)
         update.hasVideo = hasVideo
@@ -141,53 +165,79 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         let alreadyUp: Bool = !claimed
         // Only the report that took the claim releases it: a duplicate that comes
         // back from CallKit first must not reopen the "first report" window while
-        // the claimer is still in flight.
-        defer { if claimed { ledger.finishReport(uuid) } }
+        // the claimer is still in flight. Released in the completion below, after
+        // the ledger update, exactly where the old `defer` released it.
         // I8 FIX — truncate the call UUID (same convention as AppState's
         // W-CALLDIAG lines for this same call) instead of printing it whole.
         print("[CallKitProvider] W-CALLDIAG reportNewIncomingCall uuid=\(uuid.uuidString.prefix(8))… hasVideo=\(hasVideo) alreadyReported=\(alreadyUp)")
-        do {
-            try await provider.reportNewIncomingCall(with: uuid, update: update)
-            // W-WAKEONLY (native UI up) + outstanding, one atomic insert.
-            let outstanding: Int = ledger.recordNativeReport(uuid)
-            log?("callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstanding)")
-        } catch {
-            // W478 — log instead of silently dropping. CallKit rejects with:
-            //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
-            //   Code=3 filteredByDoNotDisturb (Focus / DnD active on device),
-            //   Code=4 filteredByBlockList.
-            // Only Code=3/4 (and any first-attempt Code=2 we didn't cause
-            // ourselves) mean the system call UI genuinely never appeared —
-            // that is the ONLY case where arming the in-app manual-answer
-            // fallback is correct. When `alreadyUp` is true this rejection is
-            // OUR OWN second call (PushKit+WS both reported the same uuid):
-            // the FIRST call already succeeded, a real native CallKit UI is
-            // live and answerable right now. Arming the fallback here used to
-            // stack the in-app ringing banner on top of that working native
-            // UI — the "seconda chiamata in chiaro" the user sees, and
-            // answering FROM the fallback banner did nothing because the
-            // call CallKit actually knows about was reported by the other
-            // branch, never latched to this banner's answer path.
-            let nsErr = error as NSError
-            // W-GHOSTCALL — Code=2 (callUUIDAlreadyExists) is not a rejection
-            // either: CallKit already HAS this call and its native UI is live, so
-            // the manual-answer fallback must not be armed over it, whichever
-            // report of the uuid got the refusal. See CallKitReportFailurePolicy.
-            let armFallback: Bool = CallKitReportFailurePolicy.shouldArmManualAnswer(
-                alreadyReported: alreadyUp, errorCode: nsErr.code)
-            // I8 FIX — truncated uuid, see above.
-            print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(armFallback ? "arming in-app manual answer path" : "native UI already live, NOT arming fallback") for \(uuid.uuidString.prefix(8))…")
-            // Numeric tail so this survives the remote-log redactor: without it
-            // the whole CallKit path is invisible off-device, and a rejection
-            // that costs the user an incoming call looks exactly like silence.
-            log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
-            if armFallback {
-                ledger.recordRejected(uuid)
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+            let outcome: PushKitProvider.ReportOutcome
+            if let self {
+                outcome = self.finishIncomingReport(
+                    uuid: uuid, alreadyUp: alreadyUp, error: error)
+                if claimed { self.ledger.finishReport(uuid) }
+            } else {
+                let code: Int = (error as NSError?)?.code ?? 0
+                outcome = PushKitProvider.ReportOutcome(ok: error == nil, code: code, duplicate: alreadyUp)
             }
+            completion(outcome)
         }
     }
 
+    /// W-VOIPSYNC — the ledger update and the log lines of a report CallKit has
+    /// answered, unchanged from the former `do/catch` of `reportIncomingCall`.
+    private func finishIncomingReport(
+        uuid: UUID, alreadyUp: Bool, error: Error?
+    ) -> PushKitProvider.ReportOutcome {
+        guard let error else {
+            // W-WAKEONLY (native UI up) + outstanding, one atomic insert.
+            let outstanding: Int = ledger.recordNativeReport(uuid)
+            log?("callkit report ok=1 dup=\(alreadyUp ? 1 : 0) outstanding=\(outstanding)")
+            return PushKitProvider.ReportOutcome(ok: true, code: 0, duplicate: alreadyUp)
+        }
+        // W478 — log instead of silently dropping. CallKit rejects with:
+        //   Code=2 callUUIDAlreadyExists (PushKit+WS duplicate),
+        //   Code=3 filteredByDoNotDisturb (Focus / DnD active on device),
+        //   Code=4 filteredByBlockList.
+        // Only Code=3/4 (and any first-attempt Code=2 we didn't cause
+        // ourselves) mean the system call UI genuinely never appeared —
+        // that is the ONLY case where arming the in-app manual-answer
+        // fallback is correct. When `alreadyUp` is true this rejection is
+        // OUR OWN second call (PushKit+WS both reported the same uuid):
+        // the FIRST call already succeeded, a real native CallKit UI is
+        // live and answerable right now. Arming the fallback here used to
+        // stack the in-app ringing banner on top of that working native
+        // UI — the "seconda chiamata in chiaro" the user sees, and
+        // answering FROM the fallback banner did nothing because the
+        // call CallKit actually knows about was reported by the other
+        // branch, never latched to this banner's answer path.
+        let nsErr = error as NSError
+        // W-GHOSTCALL — Code=2 (callUUIDAlreadyExists) is not a rejection
+        // either: CallKit already HAS this call and its native UI is live, so
+        // the manual-answer fallback must not be armed over it, whichever
+        // report of the uuid got the refusal. See CallKitReportFailurePolicy.
+        let armFallback: Bool = CallKitReportFailurePolicy.shouldArmManualAnswer(
+            alreadyReported: alreadyUp, errorCode: nsErr.code)
+        // I8 FIX — truncated uuid, see above.
+        print("[CallKitProvider] reportNewIncomingCall rejected (domain=\(nsErr.domain) code=\(nsErr.code)) alreadyReported=\(alreadyUp) — \(armFallback ? "arming in-app manual answer path" : "native UI already live, NOT arming fallback") for \(uuid.uuidString.prefix(8))…")
+        // Numeric tail so this survives the remote-log redactor: without it
+        // the whole CallKit path is invisible off-device, and a rejection
+        // that costs the user an incoming call looks exactly like silence.
+        log?("callkit report ok=0 code=\(nsErr.code) dup=\(alreadyUp ? 1 : 0)")
+        if armFallback {
+            ledger.recordRejected(uuid)
+        }
+        return PushKitProvider.ReportOutcome(ok: false, code: nsErr.code, duplicate: alreadyUp)
+    }
+
     public func reportCallEnded(uuid: UUID, reason: CallEndReason) async {
+        reportCallEndedNow(uuid: uuid, reason: reason)
+    }
+
+    /// W-VOIPSYNC (2026-10-08) — synchronous body of `reportCallEnded` (which never
+    /// awaited anything), so the PushKit callback can end a cancel / placeholder
+    /// report inside CallKit's completion, before PushKit's own completion.
+    public func reportCallEndedNow(uuid: UUID, reason: CallEndReason) {
         // W-RTCLOCKMIGRATE (2026-09-09) — balances every `activateAudioSession`
         // call. Live evidence this was missing: `RTCAudioSession.activationCount`
         // on a real device climbed 1 -> 3 across a start-then-answer pair of
@@ -906,4 +956,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         onAudioSessionDeactivated?()
     }
 }
+
+/// W-VOIPSYNC (2026-10-08) — the PushKit delegate reports through this, held
+/// STRONGLY by `PushKitProvider` (never through its weak owner).
+extension CallKitProvider: VoipCallReporter {}
 #endif
