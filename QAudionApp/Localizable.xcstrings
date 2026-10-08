@@ -33690,6 +33690,510 @@
         }
       }
     },
+    "enigma.label.verified": {
+      "extractionState": "manual",
+      "comment": "Enigma mode scene label of a received message after the tag was verified. %lld = real packet size in bytes. Never names the tag size (GCM tag is 128 bit).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · chiave 256 bit · %lld byte · integrità verificata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · 256-bit key · %lld bytes · integrity verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · 256-Bit-Schlüssel · %lld Byte · Integrität geprüft"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · clave de 256 bits · %lld bytes · integridad verificada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · clé de 256 bits · %lld octets · intégrité vérifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · chave de 256 bits · %lld bytes · integridade verificada"
+          }
+        }
+      }
+    },
+    "enigma.label.sealed": {
+      "extractionState": "manual",
+      "comment": "Enigma mode scene label of a sent message (sealed by the app, not yet verified by anyone). %lld = real packet size in bytes.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · chiave 256 bit · %lld byte · integrità protetta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · 256-bit key · %lld bytes · integrity protected"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · 256-Bit-Schlüssel · %lld Byte · Integrität geschützt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · clave de 256 bits · %lld bytes · integridad protegida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · clé de 256 bits · %lld octets · intégrité protégée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-256-GCM · chave de 256 bits · %lld bytes · integridade protegida"
+          }
+        }
+      }
+    },
+    "enigma.label.file": {
+      "extractionState": "manual",
+      "comment": "Enigma mode label of the upload panel of a file. %lld = percent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "file cifrato · AES-256-GCM · chiave 256 bit · %lld%%"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "encrypted file · AES-256-GCM · 256-bit key · %lld%%"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datei verschlüsselt · AES-256-GCM · 256-Bit-Schlüssel · %lld%%"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "archivo cifrado · AES-256-GCM · clave de 256 bits · %lld%%"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "fichier chiffré · AES-256-GCM · clé de 256 bits · %lld%%"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "arquivo cifrado · AES-256-GCM · chave de 256 bits · %lld%%"
+          }
+        }
+      }
+    },
+    "enigma.rotors.caption": {
+      "extractionState": "manual",
+      "comment": "Caption under the decorative rotors: they are graphics only.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "solo grafica, il cifrario è AES-256-GCM"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "graphics only, the cipher is AES-256-GCM"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nur Grafik, die Verschlüsselung ist AES-256-GCM"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "solo gráficos, el cifrado es AES-256-GCM"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "graphisme uniquement, le chiffrement est AES-256-GCM"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "apenas gráfico, a cifra é AES-256-GCM"
+          }
+        }
+      }
+    },
+    "enigma.rejected.label": {
+      "extractionState": "manual",
+      "comment": "Enigma mode: caption of a message whose integrity check failed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scartato · verifica di integrità non riuscita"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discarded · integrity check failed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verworfen · Integritätsprüfung fehlgeschlagen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descartado · falló la verificación de integridad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rejeté · échec de la vérification d’intégrité"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descartado · falha na verificação de integridade"
+          }
+        }
+      }
+    },
+    "enigma.degraded.notice": {
+      "extractionState": "manual",
+      "comment": "Enigma mode: shown once when the effect was lowered to keep the chat smooth.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effetto Enigma ridotto per mantenere fluida la chat"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enigma effect reduced to keep the chat smooth"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enigma-Effekt reduziert, damit der Chat flüssig bleibt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Efecto Enigma reducido para mantener el chat fluido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effet Enigma réduit pour garder la discussion fluide"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Efeito Enigma reduzido para manter o chat fluido"
+          }
+        }
+      }
+    },
+    "enigma.settings.section": {
+      "extractionState": "manual",
+      "comment": "Header of the Enigma mode section in Settings > Privacy.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MODALITÀ ENIGMA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ENIGMA MODE"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ENIGMA-MODUS"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MODO ENIGMA"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MODE ENIGMA"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MODO ENIGMA"
+          }
+        }
+      }
+    },
+    "enigma.settings.title": {
+      "extractionState": "manual",
+      "comment": "Title of the Enigma mode control (a visual effect on message bubbles).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modalità Enigma"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enigma mode"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enigma-Modus"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modo Enigma"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode Enigma"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modo Enigma"
+          }
+        }
+      }
+    },
+    "enigma.settings.off": {
+      "extractionState": "manual",
+      "comment": "Enigma mode: effect off (default).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aus"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desactivado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactivé"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desativado"
+          }
+        }
+      }
+    },
+    "enigma.settings.lite": {
+      "extractionState": "manual",
+      "comment": "Enigma mode: light effect (text morphing only).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leggera"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Light"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leicht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ligero"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Léger"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leve"
+          }
+        }
+      }
+    },
+    "enigma.settings.full": {
+      "extractionState": "manual",
+      "comment": "Enigma mode: full effect (text morphing and the historical rotors).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scenografica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spectacular"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Szenisch"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espectacular"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spectaculaire"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espetacular"
+          }
+        }
+      }
+    },
+    "enigma.settings.caption": {
+      "extractionState": "manual",
+      "comment": "Caption under the Enigma mode control: it is only a visual effect.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo effetto visivo. Non cambia la sicurezza dei messaggi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visual effect only. It does not change message security."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur ein visueller Effekt. Ändert nichts an der Sicherheit der Nachrichten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo un efecto visual. No cambia la seguridad de los mensajes."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simple effet visuel. Ne change rien à la sécurité des messages."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apenas efeito visual. Não altera a segurança das mensagens."
+          }
+        }
+      }
+    },
     "file_v2.text_refused": {
       "extractionState": "manual",
       "comment": "Shown when the typed text begins like an internal file message and is refused.",

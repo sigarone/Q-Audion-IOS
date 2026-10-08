@@ -331,6 +331,10 @@ struct PrivacySettingsScreen: View {
                         )
                     }
 
+                    // Enigma mode (visual effect only): Off / Leggera / Scenografica. Appears only while the remote flag
+                    // `enigma_mode.enabled` is on (default OFF); see EnigmaSettingsSection.
+                    EnigmaSettingsSection()
+
                     // 2026-08-10: the "MESSAGGI A SCADENZA" picker and the
                     // "ANONIMIZZAZIONE RETE" Tor toggle were removed here —
                     // both wrote a preference no production path ever read.

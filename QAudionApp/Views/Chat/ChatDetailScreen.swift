@@ -957,6 +957,11 @@ struct ChatDetailScreen: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
+            .enigmaChatBinding(
+                conversationKey: container.viewModel.conversation.id.uuidString,
+                changeToken: EnigmaRowMapper.changeToken(container.viewModel.messages),
+                rows: enigmaRowsProvider()
+            )
             // W260: preemptively flattened the scroll-to-bottom closures.
             // `if let last = container.viewModel.messages.last` is the same
             // antipattern as the lines we already fixed — optional chain
@@ -1181,11 +1186,7 @@ struct ChatDetailScreen: View {
                     onBlockedByCall: callAudioBlock
                 )
             } else {
-                Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
-                    .qaudionStyle(type.bodyMedium)
-                    .foregroundStyle(scheme.onSurface)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .tint(extras.success)
+                plainTextBody(msg)
             }
         }
         .onLongPressGesture(minimumDuration: 0.4) {
@@ -1193,10 +1194,45 @@ struct ChatDetailScreen: View {
         }
     }
 
+    /// The text of a plain text bubble. Enigma mode (visual effect only) may draw a scene in its place while this row is the one
+    /// being animated; with the effect off it is exactly the text it always was. Extracted from `messageRow` (CLAUDE.md §13/§14).
+    private func plainTextBody(_ msg: Message) -> some View {
+        let rowId: String = msg.id.uuidString
+        let finalText: String = msg.plaintext
+        return EnigmaAwareBody(rowId: rowId, fallback: finalText) {
+            plainTextNormal(msg)
+        }
+    }
+
+    /// What the effect reads from this chat: its newest rows, as engine values (no message type of the app, no text of a file).
+    private func enigmaRowsProvider() -> () -> [EnigmaRow] {
+        let bound: ChatContainer = container
+        return { EnigmaRowMapper.rows(bound.viewModel.messages) }
+    }
+
+    private func plainTextNormal(_ msg: Message) -> some View {
+        Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
+            .qaudionStyle(type.bodyMedium)
+            .foregroundStyle(scheme.onSurface)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .tint(extras.success)
+    }
+
     /// The bubble of a file transfer v2 message (a document, an image, a voice note, a video), received or sent. A received one that
     /// is fetched on arrival (an image or a voice note up to 25 MiB) asks the download center when it appears, in case the app was
     /// not running when it arrived.
     private func fileV2Bubble(_ msg: Message, _ info: FileV2ChatFile, galleryItems: [ImageGalleryItem]) -> some View {
+        // Enigma mode (visual effect only): the panel of drums under a file that is uploading, turned by the real progress.
+        // Nothing at all for a row without progress, or with the effect off or below the full level.
+        let rowId: String = msg.id.uuidString
+        let uploadFraction: Double? = container.uploadProgress[msg.id]
+        return VStack(alignment: .leading, spacing: 0) {
+            fileV2Content(msg, info, galleryItems: galleryItems)
+            EnigmaUploadPanel(rowId: rowId, fraction: uploadFraction)
+        }
+    }
+
+    private func fileV2Content(_ msg: Message, _ info: FileV2ChatFile, galleryItems: [ImageGalleryItem]) -> some View {
         let isIncoming = msg.direction == .incoming
         return FileV2BubbleContent(
             rowKey: msg.id.uuidString,
