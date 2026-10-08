@@ -108,7 +108,8 @@ public enum LocalStoreCipher {
         let output = AeadCipher.CipherOutput(
             nonce: Data(nonce), ciphertext: Data(ciphertext), tag: Data(tag))
         guard let plaintext = try? cipher.decrypt(cipherOutput: output, key: key) else { return nil }
-        return String(data: plaintext, encoding: .utf8)
+        // Not `String(data:encoding:)` alone: it may drop a leading U+FEFF, and a body that begins with one is not a reply (WIRE_SPEC 13.3).
+        return StrictUTF8.string(from: plaintext)
     }
 
     /// True when `stored` is in this format — used by the lazy migration in

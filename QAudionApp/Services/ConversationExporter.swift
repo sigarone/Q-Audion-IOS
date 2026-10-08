@@ -39,6 +39,7 @@ enum ConversationExporter {
         let body = messages
             .sorted { $0.sentAt < $1.sentAt }
             .map { format(message: $0,
+                          among: messages,
                           peerDisplayName: peerDisplayName,
                           myDisplayLabel: myDisplayLabel) }
             .joined(separator: "\n")
@@ -75,6 +76,7 @@ enum ConversationExporter {
     }
 
     private static func format(message m: Message,
+                               among all: [Message],
                                peerDisplayName: String,
                                myDisplayLabel: String) -> String {
         let stamp = humanFormatter.string(from: m.sentAt)
@@ -97,12 +99,37 @@ enum ConversationExporter {
         } else {
             // Strip newlines from the message body so each entry stays
             // on a single line — easier to scan, paste, search.
-            body = m.plaintext
+            // A reply is exported as its `b` (WIRE_SPEC 13.7), never the object, followed by what it answers.
+            let shown: String = MessageReplyCodec.shownText(ofBody: m.plaintext)
                 .replacingOccurrences(of: "\r\n", with: " ")
                 .replacingOccurrences(of: "\n", with: " ")
+            body = shown + replyNote(for: m, among: all, peerDisplayName: peerDisplayName, myDisplayLabel: myDisplayLabel)
         }
         let editedSuffix = (m.edited == true) ? " (modificato)" : ""
         return "[\(stamp)] \(author): \(body)\(editedSuffix)"
+    }
+
+    /// ` (in risposta a <autore>: <estratto>)` for a valid reply, empty for any other row. The quote is resolved as the chat resolves it
+    /// (`MessageReplyCodec.resolve`, WIRE_SPEC 13.6): the local row of the same conversation gives author and excerpt, a row that is gone
+    /// gives "non disponibile" (never the `q` it carried), an unknown row gives the sanitised `q` without an author.
+    private static func replyNote(for m: Message, among all: [Message], peerDisplayName: String, myDisplayLabel: String) -> String {
+        guard MessageReplyCodec.hasReplyPrefix(m.plaintext),
+              case .reply(let reply) = MessageReplyCodec.recognize(m.plaintext) else { return "" }
+        var rows: [MessageReplyRow] = []
+        for other in all where other.serverMessageId == reply.to {
+            let author: String = (other.direction == .outgoing) ? myDisplayLabel : peerDisplayName
+            if let row = MessageReplyCodec.row(for: other, author: author) { rows.append(row) }
+        }
+        let block = MessageReplyCodec.resolve(reply, rows: rows)
+        switch block.source {
+        case .unavailable:
+            return " (in risposta a un messaggio: non disponibile)"
+        case .local:
+            let who: String = block.author ?? "un messaggio"
+            return block.excerpt.isEmpty ? " (in risposta a \(who))" : " (in risposta a \(who): \(block.excerpt))"
+        case .quote:
+            return block.excerpt.isEmpty ? " (in risposta a un messaggio)" : " (in risposta a un messaggio: \(block.excerpt))"
+        }
     }
 
     /// 01/05/2026, 14:32 — short date+time in the app's effective language.

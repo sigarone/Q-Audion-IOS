@@ -108,6 +108,10 @@ public final class GroupMessageStore: ObservableObject {
         /// pre-existing persisted row (additive optional field, decodes
         /// unchanged like every other Fase 1B/2 field above).
         public var sendFailed: Bool?
+        /// Message replies (WIRE_SPEC 13.7, "same rules" in a group): the body of a VALID reply exactly as received (the object with `to`,
+        /// `k`, `q`, `b`), kept beside `text` (which holds `b`, what the row shows and previews) so that the references are not lost and
+        /// the quote block can be drawn. nil for every other row and for every row stored before this field (additive optional field).
+        public var replyObject: String?
 
         public init(id: String, serverMessageId: String?, senderId: String,
                     mine: Bool, text: String, ts: Date,
@@ -117,7 +121,7 @@ public final class GroupMessageStore: ObservableObject {
                     deliveredBy: [String]? = nil, readBy: [String]? = nil,
                     expiresAt: Date? = nil, isViewOnce: Bool? = nil,
                     viewOnceOpened: Bool? = nil, exportBlocked: Bool? = nil,
-                    sendFailed: Bool? = nil, fileV2: Bool? = nil) {
+                    sendFailed: Bool? = nil, fileV2: Bool? = nil, replyObject: String? = nil) {
             self.id = id
             self.serverMessageId = serverMessageId
             self.senderId = senderId
@@ -138,6 +142,7 @@ public final class GroupMessageStore: ObservableObject {
             self.exportBlocked = exportBlocked
             self.sendFailed = sendFailed
             self.fileV2 = fileV2
+            self.replyObject = replyObject
         }
     }
 

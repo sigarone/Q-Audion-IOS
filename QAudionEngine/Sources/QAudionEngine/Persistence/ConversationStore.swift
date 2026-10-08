@@ -370,7 +370,11 @@ public final class ConversationStore {
             // Anything that is not plain text is refused, an attachment announce included:
             // callers pass the friendly text ("Nota vocale"), never the announce JSON.
             let bodyIsService = ServicePayloadDetector.classify(message.plaintext) != .notService
-            let previewIsService = ServicePayloadDetector.classify(preview) != .notService
+            // A valid reply (WIRE_SPEC 13.3, 13.6 step 4): the service-shape test runs on the whole body, which covers the reserved members of
+            // its first level; its preview is `b`, which "never goes through recognition again", so a `b` such as {"qa_ctl":1} is plain text.
+            let previewIsReply: Bool
+            if case .reply = MessageReplyCodec.recognize(message.plaintext) { previewIsReply = true } else { previewIsReply = false }
+            let previewIsService = !previewIsReply && ServicePayloadDetector.classify(preview) != .notService
             if bodyIsService || previewIsService {
                 print("[ConversationStore] recordInboundUserMessage refused=1 reason=service_shaped")
                 if Self.assertOnServiceRefusal {
@@ -876,6 +880,11 @@ public final class ConversationStore {
             print("[ConversationStore] applyEditByClientMsgId refused=1 reason=file_message")
             return false
         }
+        // Nor can an edit turn a row into a reply (WIRE_SPEC 13.5: no user text can become a reply, the quote it names would be spoofed).
+        guard !MessageReplyCodec.hasReplyPrefix(newPlaintext) else {
+            print("[ConversationStore] applyEditByClientMsgId refused=1 reason=reply_message")
+            return false
+        }
         do {
             return try db.writer.write { db in
                 if var msg = try Message.filter(Column("clientMsgId") == clientMsgId).fetchOne(db) {
@@ -935,6 +944,9 @@ public final class ConversationStore {
                     // is about to be wiped from the row below.
                     cachedPathToRemove = msg.mediaLocalPath
                     rowKeyToRemove = msg.id.uuidString
+                    // What the replies to this message must forget (below, in the same transaction).
+                    let quotedServerId: String? = msg.serverMessageId
+                    let quotedConversationId: UUID = msg.conversationId
                     msg = Message(
                         id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
                         plaintext: tombstone,
@@ -956,6 +968,9 @@ public final class ConversationStore {
                         isPlaceholder: nil
                     )
                     try msg.save(db)
+                    if let quotedId = quotedServerId, MessageReplyCodec.isServerMessageId(quotedId) {
+                        try Self.clearQuotes(ofServerMessageId: quotedId, conversationId: quotedConversationId, in: db)
+                    }
                     return true
                 }
                 return false
@@ -979,6 +994,22 @@ public final class ConversationStore {
         // File transfer v2: the thumbnail and the rest of the row's files go with it.
         if applied, let key = rowKeyToRemove { FileV2LocalFiles.removeRowDirectory(rowKey: key) }
         return applied
+    }
+
+    /// Message replies (WIRE_SPEC 13.6): once the quoted message is gone, nothing of it may come back through a reply, and a reply carries
+    /// an excerpt of it (`q`) that is also in the backups. In the transaction of the tombstone, every reply of the same conversation whose
+    /// `to` is that server message id is rewritten with an empty `q` (canonical form, `b` untouched). The rows are read decrypted, so the
+    /// match is made here and not in SQL; the tombstones themselves are skipped.
+    private static func clearQuotes(ofServerMessageId quotedId: String, conversationId: UUID, in db: Database) throws {
+        let rows: [Message] = try Message
+            .filter(Column("conversationId") == conversationId)
+            .filter(Column("deletedAt") == nil)
+            .fetchAll(db)
+        for row in rows where MessageReplyCodec.hasReplyPrefix(row.plaintext) {
+            guard case .reply(let reply) = MessageReplyCodec.recognize(row.plaintext), reply.to == quotedId,
+                  let cleared = MessageReplyCodec.clearingQuote(ofBody: row.plaintext) else { continue }
+            try row.replacingPlaintext(cleared).save(db)
+        }
     }
 
     @discardableResult

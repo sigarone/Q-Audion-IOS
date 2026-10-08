@@ -99,6 +99,9 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
     /// The descriptor message of a v2 row (it holds the key of the file: it is only read to build the bubble, never shown as text);
     /// nil for a row of the sender that is still uploading.
     public let descriptorJson: String?
+    /// Message replies (WIRE_SPEC 13): what the quote block of a received reply shows, resolved by the screen against the rows of the
+    /// group; nil for every other row. Internal, and set after the memberwise init (a public init cannot take an app type).
+    var replyQuote: ReplyQuoteDisplay? = nil
 
     public init(id: String, text: String, senderLabel: String,
                 timestamp: String, mine: Bool,

@@ -9,3 +9,7 @@ WIRE_SPEC.md -text
 # The file transfer v2 server conformance transcript is a byte-for-byte copy of the server repository's file
 # (test/kat/file_v2_server/transcript.json) and the tests pin its SHA-256: git must never rewrite its line endings.
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/file-v2-server-transcript.json -text
+
+# The message reply (WIRE_SPEC section 13) known-answer vectors are a byte-for-byte copy of the server repository's file
+# (test/kat/reply_v1/reply-kat.json) and the tests pin its SHA-256: git must never rewrite its line endings.
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/reply-kat.json -text

@@ -1,4 +1,5 @@
 import SwiftUI
+import QAudionEngine
 
 /// Chat input bar. 1:1 port of Android
 /// `qaudion-android-new/feature/feature-chat/.../components/MessageComposer.kt`.
@@ -235,13 +236,18 @@ struct MessageComposer: View {
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
+    /// The heading of the reply banner ("Rispondi a <autore>"), localised: `%@` is the author of the message being answered.
+    private func replyBannerTitle(_ author: String) -> String {
+        String(localized: "reply.banner.title", defaultValue: "Rispondi a \(author)", comment: "Heading of the reply banner above the composer; %@ is the author of the message being answered.")
+    }
+
     private func replyBanner(_ reply: ReplyTarget) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Rectangle()
                 .fill(extras.success)
                 .frame(width: 2, height: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Rispondi a \(reply.author)")
+                Text(verbatim: replyBannerTitle(reply.author))
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.0)
                     .foregroundStyle(extras.success)
@@ -427,6 +433,8 @@ extension MessageComposer {
         let messageId: String
         let author: String
         let excerpt: String
+        /// Message replies (WIRE_SPEC 13): what the engine builder takes from the message being answered. `nil` only in previews.
+        var quote: MessageReplyQuoteInfo? = nil
     }
 }
 

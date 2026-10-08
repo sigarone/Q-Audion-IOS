@@ -34553,6 +34553,720 @@
           }
         }
       }
+    },
+    "reply.action": {
+      "extractionState": "manual",
+      "comment": "Action of the message menu: answer this message, quoting it.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rispondi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reply"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Responder"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répondre"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antworten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Responder"
+          }
+        }
+      }
+    },
+    "reply.author_me": {
+      "extractionState": "manual",
+      "comment": "Author label of the quote block when the quoted message is the user's own.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tú"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você"
+          }
+        }
+      }
+    },
+    "reply.kind.file": {
+      "extractionState": "manual",
+      "comment": "Quote block of a reply to a document that has no name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Allegato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Attachment"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Adjunto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Pièce jointe"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Anhang"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Anexo"
+          }
+        }
+      }
+    },
+    "reply.generic_message": {
+      "extractionState": "manual",
+      "comment": "Quote block of a reply when the text of the quoted message is not shown.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messaggio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensaje"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nachricht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensagem"
+          }
+        }
+      }
+    },
+    "reply.unavailable": {
+      "extractionState": "manual",
+      "comment": "Quote block of a reply whose quoted message has expired or been deleted.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messaggio non più disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message no longer available"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensaje ya no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message plus disponible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nachricht nicht mehr verfügbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensagem não está mais disponível"
+          }
+        }
+      }
+    },
+    "reply.a11y.to_voice": {
+      "extractionState": "manual",
+      "comment": "VoiceOver text of the quote block of a reply to a voice note.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In risposta a un messaggio vocale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In reply to a voice message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En respuesta a un mensaje de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En réponse à un message vocal"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antwort auf eine Sprachnachricht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em resposta a uma mensagem de voz"
+          }
+        }
+      }
+    },
+    "reply.a11y.to_author_excerpt": {
+      "extractionState": "manual",
+      "comment": "VoiceOver text of the quote block: %1$@ is the author, %2$@ the excerpt of the quoted message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In risposta a %1$@: %2$@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In reply to %1$@: %2$@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En respuesta a %1$@: %2$@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En réponse à %1$@ : %2$@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antwort auf %1$@: %2$@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em resposta a %1$@: %2$@"
+          }
+        }
+      }
+    },
+    "reply.a11y.to_message": {
+      "extractionState": "manual",
+      "comment": "VoiceOver text of the quote block when it has no author or no excerpt.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In risposta a un messaggio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In reply to a message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En respuesta a un mensaje"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En réponse à un message"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antwort auf eine Nachricht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em resposta a uma mensagem"
+          }
+        }
+      }
+    },
+    "reply.a11y.go_to_message": {
+      "extractionState": "manual",
+      "comment": "VoiceOver action of the quote block of a reply: scroll to the quoted message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vai al messaggio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ir al mensaje"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aller au message"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zur Nachricht springen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ir para a mensagem"
+          }
+        }
+      }
+    },
+    "reply.banner.ephemeral": {
+      "extractionState": "manual",
+      "comment": "Composer banner when the message being answered has a timer or is view-once: its content is not shown.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messaggio a scadenza"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disappearing message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensaje temporal"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message éphémère"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selbstlöschende Nachricht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensagem temporária"
+          }
+        }
+      }
+    },
+    "reply.refused.size": {
+      "extractionState": "manual",
+      "comment": "Shown when a reply would exceed the 8 KiB limit of the message and is not sent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La risposta è troppo lunga per essere inviata. Accorcia il testo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This reply is too long to send. Shorten the text."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La respuesta es demasiado larga para enviarla. Acorta el texto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La réponse est trop longue pour être envoyée. Raccourcissez le texte."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Antwort ist zu lang zum Senden. Kürze den Text."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A resposta é longa demais para ser enviada. Encurte o texto."
+          }
+        }
+      }
+    },
+    "reply.refused.generic": {
+      "extractionState": "manual",
+      "comment": "Shown when the builder refuses a reply (the quoted message cannot be named).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è possibile rispondere a questo messaggio."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This message cannot be replied to."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se puede responder a este mensaje."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de répondre à ce message."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auf diese Nachricht kann nicht geantwortet werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não é possível responder a esta mensagem."
+          }
+        }
+      }
+    },
+    "reply.banner.title": {
+      "extractionState": "manual",
+      "comment": "Heading of the reply banner above the composer; %@ is the author of the message being answered.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rispondi a %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reply to %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Responder a %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répondre à %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antwort an %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Responder a %@"
+          }
+        }
+      }
+    },
+    "edit.refused.size": {
+      "extractionState": "manual",
+      "comment": "Shown when an edited message would exceed the 8 KiB limit and the edit is not applied.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il testo modificato è troppo lungo per essere inviato. Accorcialo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The edited text is too long to be sent. Shorten it."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El texto editado es demasiado largo para enviarse. Acórtalo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le texte modifié est trop long pour être envoyé. Raccourcissez-le."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der geänderte Text ist zu lang zum Senden. Kürze ihn."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O texto editado é longo demais para ser enviado. Encurte-o."
+          }
+        }
+      }
+    },
+    "edit.refused.generic": {
+      "extractionState": "manual",
+      "comment": "Shown when an edit of a message is not applied (a reply, a file, a message that is gone).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo messaggio non si può modificare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This message cannot be edited."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este mensaje no se puede editar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce message ne peut pas être modifié."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Nachricht kann nicht bearbeitet werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta mensagem não pode ser editada."
+          }
+        }
+      }
+    },
+    "reply.refused.gone": {
+      "extractionState": "manual",
+      "comment": "Shown when the message being answered was deleted or expired before the reply was sent; the reply is not sent and the draft stays.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il messaggio a cui rispondi non è più disponibile. Il testo è rimasto nella bozza."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The message you are replying to is no longer available. Your text is still in the draft."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El mensaje al que respondes ya no está disponible. Tu texto sigue en el borrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le message auquel vous répondez n'est plus disponible. Votre texte est resté dans le brouillon."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Nachricht, auf die du antwortest, ist nicht mehr verfügbar. Dein Text bleibt im Entwurf."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A mensagem à qual você responde não está mais disponível. Seu texto continua no rascunho."
+          }
+        }
+      }
+    },
+    "reply.refused.changed": {
+      "extractionState": "manual",
+      "comment": "Shown when the message being answered became a timed or view-once message before the reply was sent; the reply is not sent yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il messaggio a cui rispondi ora è a scadenza e il suo contenuto non verrà citato. Invia di nuovo per confermare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The message you are replying to is now timed, so its content will not be quoted. Send again to confirm."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El mensaje al que respondes ahora es temporal, por lo que su contenido no se citará. Envía de nuevo para confirmar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le message auquel vous répondez est désormais temporaire : son contenu ne sera pas cité. Envoyez à nouveau pour confirmer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Nachricht, auf die du antwortest, ist jetzt zeitlich begrenzt, daher wird ihr Inhalt nicht zitiert. Sende erneut zur Bestätigung."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A mensagem à qual você responde agora é temporária e seu conteúdo não será citado. Envie novamente para confirmar."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

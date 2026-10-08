@@ -52,6 +52,13 @@ struct BubbleActionSheet: View {
     /// W445: forward message to another conversation. Default no-op so
     /// existing call sites without forward wiring continue to compile.
     var onForward: () -> Void = {}
+    /// Message replies (WIRE_SPEC 13): whether "Rispondi" is offered. The row is shown disabled, not hidden, for a message that cannot
+    /// be answered (a message of one's own that has no server id yet, a mesh message, a deleted one). Default `nil`: no row at all, for
+    /// the call sites that have no reply wiring (the group chat).
+    var canReply: Bool? = nil
+    var onReply: () -> Void = {}
+    /// A reply cannot be edited: the edit would replace the object and lose the quote.
+    var isReply: Bool = false
     /// W446: media type of this bubble — gates the save/share rows
     /// below. Default `.none` preserves old behaviour for text-only
     /// call sites.
@@ -113,12 +120,21 @@ struct BubbleActionSheet: View {
 
             Divider().background(scheme.outline.opacity(0.4))
 
+            // Scrolls when the rows do not fit the detent (one more row, "Rispondi", on a small phone).
+            ScrollView {
             VStack(spacing: 0) {
                 // W141: edit row only when own + text + still within
                 // the edit window. Past the cutoff it disappears
                 // entirely so the user doesn't try and get a surprise
                 // failure from the engine.
-                if isOwn && isText && withinEditWindow {
+                if let replyEnabled = canReply {
+                    actionRow(label: Self.replyLabel,
+                              icon: "arrowshape.turn.up.left",
+                              danger: false,
+                              enabled: replyEnabled,
+                              action: { onReply(); dismiss() })
+                }
+                if isOwn && isText && withinEditWindow && !isReply {
                     actionRow(label: "Modifica",
                               icon: "pencil",
                               danger: false,
@@ -178,6 +194,7 @@ struct BubbleActionSheet: View {
                           action: { onDeleteForMe(); dismiss() })
             }
             .padding(.bottom, 8)
+            }
         }
         .background(scheme.surface)
     }
@@ -280,9 +297,14 @@ struct BubbleActionSheet: View {
 
     // MARK: - Action row
 
+    private static var replyLabel: String {
+        String(localized: "reply.action", defaultValue: "Rispondi", comment: "Action of the message menu: answer this message, quoting it.")
+    }
+
     private func actionRow(label: String,
                            icon: String,
                            danger: Bool,
+                           enabled: Bool = true,
                            action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 16) {
@@ -300,6 +322,8 @@ struct BubbleActionSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
     }
 }
 

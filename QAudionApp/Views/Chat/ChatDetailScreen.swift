@@ -81,6 +81,8 @@ struct ChatDetailScreen: View {
     // MARK: - Local UI state (until engine exposes these fields)
 
     @State private var replyTarget: MessageComposer.ReplyTarget? = nil
+    /// Message replies: the row the user asked to go to by tapping the quote block of a reply. The list scrolls to it once and clears it.
+    @State private var scrollTargetId: UUID? = nil
     @State private var editingTarget: MessageComposer.EditingTarget? = nil
     @State private var actionTargetId: UUID? = nil
     /// Downloads of received v2 documents (progress and failures of the file cards).
@@ -413,65 +415,7 @@ struct ChatDetailScreen: View {
             handleMultiPhotoPicker(newItems)
         }
         .sheet(item: actionSheetBinding) { msgIdWrapper in
-            BubbleActionSheet(
-                isOwn: messageIsOwn(msgIdWrapper.id),
-                isText: !isFileMessage(msgIdWrapper.id),  // a file message is not text: no edit, no copy
-                onReact: { emoji in
-                    // W87: toggle a qa_ctl:1 reaction. ChatContainer
-                    // applies the local toggle immediately + emits the
-                    // envelope to the peer. Toggle semantics — second
-                    // tap with the same emoji removes the reaction.
-                    if let target = container.viewModel.messages
-                        .first(where: { $0.id == msgIdWrapper.id }) {
-                        container.toggleReaction(target, emoji: emoji)
-                    }
-                },
-                onEdit: { startEdit(messageId: msgIdWrapper.id) },
-                onCopy: {
-                    copyMessage(messageId: msgIdWrapper.id)
-                    snackbar?.show(.init(
-                        text: String(localized: "chat_detail.text_copied", defaultValue: "Testo copiato negli appunti.", comment: "Snackbar confirming a message's text was copied to the clipboard from the bubble action sheet."),
-                        severity: .info,
-                        durationSeconds: 2
-                    ))
-                },
-                onDeleteForAll: {
-                    // W145: don't fire the destructive action straight
-                    // away — surface a confirm dialog. The actual delete
-                    // runs from the dialog's destructive button below.
-                    pendingDeleteForAllId = msgIdWrapper.id
-                },
-                onDeleteForMe: {
-                    // W326: wired to ChatContainer.deleteMessageLocally
-                    // via method extraction (defensive against the
-                    // type-checker saga in this file). The closure
-                    // body stays a single statement.
-                    handleDeleteForMe(messageId: msgIdWrapper.id)
-                },
-                // W445: forward message. Find the target message and
-                // open the forward picker sheet. The closure body stays
-                // a single-statement guard to keep type-checker happy.
-                onForward: { handleForward(messageId: msgIdWrapper.id) },
-                // W446: media save/share — gated by mediaKind, routed
-                // back to the specific row's ImageBubbleContent /
-                // VoiceNoteBubbleContent via the id-scoped bindings
-                // (see BubbleActionSheet's doc comment for why the
-                // actions moved here from an inner .contextMenu).
-                mediaKind: mediaKind(for: msgIdWrapper.id),
-                onSaveImage: { mediaSaveRequestId = msgIdWrapper.id },
-                onShareMedia: { mediaShareRequestId = msgIdWrapper.id },
-                exportBlocked: mediaExportBlocked(for: msgIdWrapper.id),
-                // W141: surface the sentAt so BubbleActionSheet can
-                // hide the Modifica row past the 15-min edit window.
-                sentAt: container.viewModel.messages
-                    .first(where: { $0.id == msgIdWrapper.id })?.sentAt
-            )
-            // iOS 16.0 deployment target: `.medium` is the only detent
-            // available; `.height(_:)` and `.presentationDragIndicator`
-            // both require iOS 16.4+. The .medium detent gives roughly
-            // half the screen, which is plenty for the 6-emoji row +
-            // up to 4 action rows.
-            .presentationDetents([.medium])
+            bubbleActionSheet(for: msgIdWrapper.id)
         }
         // W145: confirm before "delete for everyone". This is a
         // destructive action that ships a qa_ctl:1 t="delete" envelope
@@ -981,6 +925,18 @@ struct ChatDetailScreen: View {
                     proxy.scrollTo(lastId, anchor: .bottom)
                 }
             }
+            // Message replies: the quoted row disappeared (deleted for everyone, expired): the pending reply is withdrawn, the draft stays.
+            .onChange(of: replyTargetIsStale) { stale in
+                if stale { replyTarget = nil }
+            }
+            // Message replies: a tap on the quote block of a reply scrolls to the quoted message (and only then: nothing else moves the list).
+            .onChange(of: scrollTargetId) { target in
+                guard let target = target else { return }
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    proxy.scrollTo(target, anchor: .center)
+                }
+                scrollTargetId = nil
+            }
             .onAppear {
                 // W71: late-bind AppState so the send pipeline can encrypt
                 // + ship via WS. Idempotent.
@@ -1196,12 +1152,38 @@ struct ChatDetailScreen: View {
 
     /// The text of a plain text bubble. Enigma mode (visual effect only) may draw a scene in its place while this row is the one
     /// being animated; with the effect off it is exactly the text it always was. Extracted from `messageRow` (CLAUDE.md §13/§14).
+    ///
+    /// A reply (WIRE_SPEC 13) shows its quote block over `b`; the text shown, drawn by the effect or not, is always `b`.
+    @ViewBuilder
     private func plainTextBody(_ msg: Message) -> some View {
         let rowId: String = msg.id.uuidString
-        let finalText: String = msg.plaintext
-        return EnigmaAwareBody(rowId: rowId, fallback: finalText) {
-            plainTextNormal(msg)
+        let finalText: String = MessageReplyCodec.shownText(ofBody: msg.plaintext)
+        if let display = replyDisplay(for: msg) {
+            ReplyQuotedBody(rowId: rowId, isSent: msg.direction == .outgoing, display: display,
+                            onOpen: openQuotedMessage) {
+                EnigmaAwareBody(rowId: rowId, fallback: finalText) {
+                    plainTextNormal(msg)
+                }
+            }
+        } else {
+            EnigmaAwareBody(rowId: rowId, fallback: finalText) {
+                plainTextNormal(msg)
+            }
         }
+    }
+
+    /// The quote block of a reply row, or `nil` for any other row (an ordinary text, or a body that is not a valid reply, which is
+    /// displayed as the text it is). Resolved when drawn: the row keeps the body as received and never a copy of the quoted text.
+    private func replyDisplay(for msg: Message) -> ReplyQuoteDisplay? {
+        guard MessageReplyCodec.hasReplyPrefix(msg.plaintext) else { return nil }
+        guard case .reply(let reply) = MessageReplyCodec.recognize(msg.plaintext) else { return nil }
+        return ReplyQuotePresenter.display(
+            for: reply, messages: container.viewModel.messages,
+            meLabel: ReplyQuotePresenter.meLabel, peerLabel: resolvedPeerTitle)
+    }
+
+    private func openQuotedMessage(_ id: UUID) {
+        scrollTargetId = id
     }
 
     /// What the effect reads from this chat: its newest rows, as engine values (no message type of the app, no text of a file).
@@ -1211,7 +1193,7 @@ struct ChatDetailScreen: View {
     }
 
     private func plainTextNormal(_ msg: Message) -> some View {
-        Text(Self.attributedBody(msg.plaintext, linkColor: extras.success))
+        Text(Self.attributedBody(MessageReplyCodec.shownText(ofBody: msg.plaintext), linkColor: extras.success))
             .qaudionStyle(type.bodyMedium)
             .foregroundStyle(scheme.onSurface)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1673,23 +1655,80 @@ struct ChatDetailScreen: View {
         if let target = editingTarget,
            let targetUUID = UUID(uuidString: target.messageId),
            let original = container.viewModel.messages.first(where: { $0.id == targetUUID }) {
-            container.editMessage(original, newPlaintext: container.composerText)
-            container.composerText = ""
-            editingTarget = nil
-            replyTarget = nil
+            // The draft and the edit mode are left only when the edit was accepted; a refusal (a reserved prefix, too long) keeps
+            // both and the container says why.
+            if container.editMessage(original, newPlaintext: container.composerText) {
+                container.composerText = ""
+                editingTarget = nil
+                replyTarget = nil
+            }
             return
         }
         editingTarget = nil
-        let replyHandled = (replyTarget != nil)
-        replyTarget = nil
-        container.sendMessage()
-        // replyHandled is reserved for a future `sendMessage(replyTo:)`
-        // overload on `ChatContainer`.
-        _ = replyHandled
+        // Message replies (WIRE_SPEC 13): the quote goes to the builder; if the send is refused (too long, the text is not allowed) the
+        // draft and the quote stay as they are and the container says why.
+        var quote: MessageReplyQuoteInfo? = nil
+        if let target = replyTarget {
+            // The quote held by the composer is a snapshot: the live row is read again now.
+            switch container.checkReplyQuote(messageId: target.messageId, shown: target.quote) {
+            case .use(let fresh):
+                quote = fresh
+            case .changed(let fresh):
+                replyTarget = Self.refreshedReplyTarget(target, with: fresh)
+                return
+            case .gone:
+                // The row is gone: there is nothing left to quote. The draft stays; the quote cannot be kept.
+                replyTarget = nil
+                return
+            }
+        }
+        let sent: Bool = container.sendMessage(replyTo: quote)
+        if sent { replyTarget = nil }
+    }
+
+    /// The pending reply with the values of the live row (the banner shows the new line; the next send uses them).
+    private static func refreshedReplyTarget(_ target: MessageComposer.ReplyTarget, with fresh: MessageReplyQuoteInfo) -> MessageComposer.ReplyTarget {
+        MessageComposer.ReplyTarget(
+            messageId: target.messageId, author: target.author,
+            excerpt: ReplyQuotePresenter.bannerExcerpt(for: fresh), quote: fresh)
+    }
+
+    /// `true` while the composer holds a reply whose row can no longer be named (deleted for everyone, expired, gone from the list). The
+    /// pending reply is withdrawn then, instead of waiting for the send to be refused.
+    private var replyTargetIsStale: Bool {
+        guard let target = replyTarget else { return false }
+        guard let localId = UUID(uuidString: target.messageId),
+              let live = container.viewModel.messages.first(where: { $0.id == localId }) else { return true }
+        return MessageReplyCodec.quoteInfo(for: live) == nil
+    }
+
+    /// "Rispondi": the message becomes the quote of the next message. Only a row the engine can name (a server message id, not a mesh
+    /// message, not deleted) qualifies; `canReplyTo` disables the action otherwise.
+    private func startReply(messageId: UUID) {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }),
+              let info = MessageReplyCodec.quoteInfo(for: msg) else { return }
+        let author: String = msg.direction == .outgoing ? ReplyQuotePresenter.meLabel : resolvedPeerTitle
+        editingTarget = nil
+        replyTarget = MessageComposer.ReplyTarget(
+            messageId: msg.id.uuidString, author: author,
+            excerpt: ReplyQuotePresenter.bannerExcerpt(for: info), quote: info)
+    }
+
+    private func canReplyTo(messageId: UUID) -> Bool {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else { return false }
+        return MessageReplyCodec.quoteInfo(for: msg) != nil
+    }
+
+    /// A row whose body is a valid reply (it cannot be edited).
+    private func isReplyMessage(_ id: UUID) -> Bool {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == id }) else { return false }
+        return MessageReplyCodec.hasReplyPrefix(msg.plaintext)
     }
 
     private func startEdit(messageId: UUID) {
         guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else { return }
+        // A reply is not edited: the edit would replace the object and lose the quote.
+        guard !MessageReplyCodec.hasReplyPrefix(msg.plaintext) else { return }
         editingTarget = .init(messageId: msg.id.uuidString, previewText: msg.plaintext)
         container.composerText = msg.plaintext
     }
@@ -1697,7 +1736,8 @@ struct ChatDetailScreen: View {
     private func copyMessage(messageId: UUID) {
         guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else { return }
         #if canImport(UIKit)
-        UIPasteboard.general.string = msg.plaintext
+        // Copying a reply copies `b` (WIRE_SPEC 13.7), never the object.
+        UIPasteboard.general.string = MessageReplyCodec.shownText(ofBody: msg.plaintext)
         #endif
     }
 
@@ -1879,6 +1919,76 @@ struct ChatDetailScreen: View {
     }()
 
     // MARK: - sheet item plumbing
+
+    /// The menu of a message. Extracted from the `.sheet(item:)` closure (CLAUDE.md sections 13 and 14: a call with this many
+    /// arguments and closures is checked in a scope of its own).
+    @ViewBuilder
+    private func bubbleActionSheet(for targetId: UUID) -> some View {
+        BubbleActionSheet(
+            isOwn: messageIsOwn(targetId),
+            isText: !isFileMessage(targetId),  // a file message is not text: no edit, no copy
+            onReact: { emoji in
+                // W87: toggle a qa_ctl:1 reaction. ChatContainer
+                // applies the local toggle immediately + emits the
+                // envelope to the peer. Toggle semantics — second
+                // tap with the same emoji removes the reaction.
+                if let target = container.viewModel.messages
+                    .first(where: { $0.id == targetId }) {
+                    container.toggleReaction(target, emoji: emoji)
+                }
+            },
+            onEdit: { startEdit(messageId: targetId) },
+            onCopy: {
+                copyMessage(messageId: targetId)
+                snackbar?.show(.init(
+                    text: String(localized: "chat_detail.text_copied", defaultValue: "Testo copiato negli appunti.", comment: "Snackbar confirming a message's text was copied to the clipboard from the bubble action sheet."),
+                    severity: .info,
+                    durationSeconds: 2
+                ))
+            },
+            onDeleteForAll: {
+                // W145: don't fire the destructive action straight
+                // away — surface a confirm dialog. The actual delete
+                // runs from the dialog's destructive button below.
+                pendingDeleteForAllId = targetId
+            },
+            onDeleteForMe: {
+                // W326: wired to ChatContainer.deleteMessageLocally
+                // via method extraction (defensive against the
+                // type-checker saga in this file). The closure
+                // body stays a single statement.
+                handleDeleteForMe(messageId: targetId)
+            },
+            // W445: forward message. Find the target message and
+            // open the forward picker sheet. The closure body stays
+            // a single-statement guard to keep type-checker happy.
+            onForward: { handleForward(messageId: targetId) },
+            // Message replies (WIRE_SPEC 13): disabled on a row that cannot be named (no server id yet, mesh, deleted); a reply
+            // itself cannot be edited.
+            canReply: canReplyTo(messageId: targetId),
+            onReply: { startReply(messageId: targetId) },
+            isReply: isReplyMessage(targetId),
+            // W446: media save/share — gated by mediaKind, routed
+            // back to the specific row's ImageBubbleContent /
+            // VoiceNoteBubbleContent via the id-scoped bindings
+            // (see BubbleActionSheet's doc comment for why the
+            // actions moved here from an inner .contextMenu).
+            mediaKind: mediaKind(for: targetId),
+            onSaveImage: { mediaSaveRequestId = targetId },
+            onShareMedia: { mediaShareRequestId = targetId },
+            exportBlocked: mediaExportBlocked(for: targetId),
+            // W141: surface the sentAt so BubbleActionSheet can
+            // hide the Modifica row past the 15-min edit window.
+            sentAt: container.viewModel.messages
+                .first(where: { $0.id == targetId })?.sentAt
+        )
+        // iOS 16.0 deployment target: `.medium` is the only detent
+        // available; `.height(_:)` and `.presentationDragIndicator`
+        // both require iOS 16.4+. The .medium detent gives roughly
+        // half the screen, which is plenty for the 6-emoji row +
+        // up to 4 action rows.
+        .presentationDetents([.medium])
+    }
 
     /// `Item`-binding helper so `.sheet(item:)` can drive the action sheet
     /// from a UUID. We wrap the optional UUID in an `Identifiable` shim

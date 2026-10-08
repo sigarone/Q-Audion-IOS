@@ -314,16 +314,53 @@ final class ChatContainer: ObservableObject {
         }
     }
 
-    func sendMessage() {
+    /// Sends the text of the composer. With `quote` it is a reply (WIRE_SPEC 13): the canonical object of the engine builder is the
+    /// plaintext of an ordinary text send, nothing else changes. Returns `false` when nothing was sent (empty text, text refused,
+    /// a reply the builder refuses): the composer keeps the draft and the screen keeps the quote.
+    @discardableResult
+    func sendMessage(replyTo quote: MessageReplyQuoteInfo? = nil) -> Bool {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        // WIRE_SPEC 12.7.1: text the user supplies that begins like a file message is refused as an ordinary message; only the
-        // file builders of the engine produce such a body.
+        guard !text.isEmpty else { return false }
+        // WIRE_SPEC 12.7.1 and 13.5: text the user supplies that begins like a file message or a reply is refused as an ordinary
+        // message; only the builders of the engine produce such a body.
         guard FileV2ChatBody.isUserTextAllowed(text) else {
             transientNotice = String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused.")
-            return
+            return false
         }
+        var wireBody: String = text
+        if let quote = quote {
+            let built = MessageReplyCodec.build(
+                to: quote.serverMessageId, kind: quote.kind.rawValue, quoteSource: quote.source,
+                quotedIsEphemeral: quote.ephemeral, body: text)
+            switch built {
+            case .success(let canonical):
+                wireBody = canonical
+            case .failure(let refusal):
+                transientNotice = Self.replyRefusalNotice(refusal)
+                return false
+            }
+        }
+        dispatchOutboundText(body: wireBody, preview: text, clearsComposer: true)
+        return true
+    }
 
+    /// The notice for a reply the builder refuses (WIRE_SPEC 13.5). The draft and the quote stay where they are; nothing is cut.
+    private static func replyRefusalNotice(_ refusal: MessageReplyRefusal) -> String {
+        switch refusal {
+        case .size:
+            return String(localized: "reply.refused.size", defaultValue: "La risposta è troppo lunga per essere inviata. Accorcia il testo.", comment: "Shown when a reply would exceed the 8 KiB limit of the message and is not sent.")
+        case .bodyPrefix:
+            return String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused.")
+        case .to, .kind, .bodyEmpty:
+            return String(localized: "reply.refused.generic", defaultValue: "Non è possibile rispondere a questo messaggio.", comment: "Shown when the builder refuses a reply (the quoted message cannot be named).")
+        }
+    }
+
+    /// The row, the preview and the send of an outbound text, whatever its body: the typed text, or the object of a reply. `body` is
+    /// the plaintext of the message (the row keeps it, the outbox re-seals it, the wire carries it); `preview` is what the conversation
+    /// list shows (the typed text, never the object). This is the former tail of `sendMessage()`, unchanged except for these two names.
+    private func dispatchOutboundText(body: String, preview: String, clearsComposer: Bool) {
+        let text = body
         // W114: soft haptic tap so the user feels the send fire.
         HapticFeedback.messageSent()
         let outboundId = UUID()
@@ -358,15 +395,17 @@ final class ChatContainer: ObservableObject {
         // they typed). Truncated preview is computed inside the store.
         store.recordNewMessage(
             conversationId: conversationId,
-            lastMessagePreview: text,
+            lastMessagePreview: preview,
             lastActivity: Date(),
             incrementUnread: false
         )
-        composerText = ""
-        // W137: a successful send clears the persisted draft so the
-        // next entry into this conversation starts fresh.
-        ComposerDraftStore.clear(for: conversationId)
-        draftSaveWorkItem?.cancel()
+        if clearsComposer {
+            composerText = ""
+            // W137: a successful send clears the persisted draft so the
+            // next entry into this conversation starts fresh.
+            ComposerDraftStore.clear(for: conversationId)
+            draftSaveWorkItem?.cancel()
+        }
         refreshFromStore()
 
         // BLE-mesh offline chat fallback (branch claude/ble-mesh-cleanroom-spike):
@@ -850,20 +889,42 @@ final class ChatContainer: ObservableObject {
     /// W86: ship a `qa_ctl:1` t="edit" envelope to the peer + replace
     /// the body locally. Only own outbound text messages can be edited
     /// (peer's spoof check rejects edits of their own messages too).
-    func editMessage(_ message: Message, newPlaintext: String) {
+    ///
+    /// Returns `true` when the edit was applied and shipped, `false` when it was refused: the screen then keeps the draft and the edit
+    /// mode, and `transientNotice` says why (an empty text is refused without a notice).
+    @discardableResult
+    func editMessage(_ message: Message, newPlaintext: String) -> Bool {
         let trimmed = newPlaintext.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        guard message.direction == .outgoing else { return }
-        guard let cmid = message.clientMsgId, !cmid.isEmpty else { return }
-        // A file message is not text (it cannot be edited), and an edit cannot turn text into one (WIRE_SPEC 12.7.1).
-        guard FileV2ChatBody.classify(text: message.plaintext) == .text, FileV2ChatBody.isUserTextAllowed(trimmed) else { return }
+        guard !trimmed.isEmpty else { return false }
+        guard message.direction == .outgoing, let cmid = message.clientMsgId, !cmid.isEmpty else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
+        // A file message is not text (it cannot be edited), and an edit cannot turn text into one (WIRE_SPEC 12.7.1, 13.5).
+        guard FileV2ChatBody.classify(text: message.plaintext) == .text else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
+        guard FileV2ChatBody.isUserTextAllowed(trimmed) else {
+            transientNotice = String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused.")
+            return false
+        }
+        // A reply is not edited (the edit would replace the object and lose the quote).
+        guard !MessageReplyCodec.hasReplyPrefix(message.plaintext) else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
         // Cap body at the cross-platform limit (8 KiB).
         guard trimmed.utf8.count <= ChatControlEnvelope.editBodyCapBytes else {
             print("[ChatContainer] editMessage rejected: body > 8 KiB")
-            return
+            transientNotice = String(localized: "edit.refused.size", defaultValue: "Il testo modificato è troppo lungo per essere inviato. Accorcialo.", comment: "Shown when an edited message would exceed the 8 KiB limit and the edit is not applied.")
+            return false
         }
         // 1. Apply locally.
-        store.applyEditByClientMsgId(cmid, newPlaintext: trimmed)
+        guard store.applyEditByClientMsgId(cmid, newPlaintext: trimmed) else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
         refreshFromStore()
         // 2. Ship envelope.
         let envelope = ChatControlEnvelope.edit(
@@ -872,6 +933,40 @@ final class ChatContainer: ObservableObject {
             ts: ChatControlEnvelope.nowTsSeconds()
         )
         emitControlEnvelope(envelope)
+        return true
+    }
+
+    private static func editRefusedNotice() -> String {
+        String(localized: "edit.refused.generic", defaultValue: "Questo messaggio non si può modificare.", comment: "Shown when an edit of a message is not applied (a reply, a file, a message that is gone).")
+    }
+
+    /// What the live row of a pending reply says at the moment the reply is sent (WIRE_SPEC 13.5).
+    enum ReplyQuoteCheck: Equatable {
+        /// Send with these values (read from the live row now, not the ones shown when the reply was started).
+        case use(MessageReplyQuoteInfo)
+        /// The row now has a lifetime (a timer or view-once): nothing was sent, the notice is raised and the screen shows these values;
+        /// the next send writes an empty `q`.
+        case changed(MessageReplyQuoteInfo)
+        /// The row is gone (deleted, expired, no server message id): nothing was sent and the notice is raised.
+        case gone
+    }
+
+    /// Re-reads the row named by `messageId` (the local id of the row being answered) and rebuilds what the builder takes from it with
+    /// `MessageReplyCodec.quoteInfo(for:)`. The quote held by the composer is a snapshot taken when the user tapped "Rispondi": the
+    /// quoted message may have been deleted for everyone, may have expired or may have become view-once since, and the reply must not
+    /// send back in `q` a text that is no longer there. `shown` is the snapshot, to tell a row that only now has a lifetime.
+    func checkReplyQuote(messageId: String, shown: MessageReplyQuoteInfo?) -> ReplyQuoteCheck {
+        guard let localId = UUID(uuidString: messageId),
+              let live = viewModel.messages.first(where: { $0.id == localId }),
+              let fresh = MessageReplyCodec.quoteInfo(for: live) else {
+            transientNotice = String(localized: "reply.refused.gone", defaultValue: "Il messaggio a cui rispondi non è più disponibile. Il testo è rimasto nella bozza.", comment: "Shown when the message being answered was deleted or expired before the reply was sent; the reply is not sent and the draft stays.")
+            return .gone
+        }
+        if fresh.ephemeral && shown?.ephemeral != true {
+            transientNotice = String(localized: "reply.refused.changed", defaultValue: "Il messaggio a cui rispondi ora è a scadenza e il suo contenuto non verrà citato. Invia di nuovo per confermare.", comment: "Shown when the message being answered became a timed or view-once message before the reply was sent; the reply is not sent yet.")
+            return .changed(fresh)
+        }
+        return .use(fresh)
     }
 
     /// W87: toggle a reaction on any message (own or peer's). Updates
@@ -1100,6 +1195,14 @@ final class ChatContainer: ObservableObject {
             }
             return
         }
+        // A reply (WIRE_SPEC 13): the row holds the canonical object. It is sent again as it is (the quote is not rebuilt, the composer
+        // is left alone), and the old row is removed so there are not two copies.
+        if case .reply(let failedReply) = MessageReplyCodec.recognize(msg.plaintext) {
+            store.removeMessage(id: id, conversationId: conversationId)
+            refreshFromStore()
+            dispatchOutboundText(body: msg.plaintext, preview: failedReply.body, clearsComposer: false)
+            return
+        }
         // Text fallback: pop the body back into the composer and ship
         // via sendMessage. Hard-remove the old row so we don't end up
         // with two copies of the same line.
@@ -1142,11 +1245,18 @@ final class ChatContainer: ObservableObject {
         // Find or bootstrap the target conversation's container and send.
         // We send directly via the send service to keep the implementation
         // self-contained — no need to spin up a full ChatContainer.
-        let text = message.plaintext
+        // A reply is forwarded as its `b`, a new ordinary text: the quote is not forwarded (WIRE_SPEC 13.7).
+        let text = MessageReplyCodec.shownText(ofBody: message.plaintext)
         // A forwarded file is a NEW file (WIRE_SPEC 12.2: a key is never reused), which this version does not do: never forward the
         // descriptor itself, it carries the key of the original.
         guard FileV2ChatBody.classify(text: text) == .text, !FileV2ChatBody.isPending(mime: message.mediaMimeType) else {
             transientNotice = String(localized: "file_v2.forward_unavailable", defaultValue: "Gli allegati non si possono inoltrare in questa versione.", comment: "Shown when the user tries to forward a file message.")
+            return
+        }
+        // The entry-point rule applies to the forwarded text: a `b` received from another client that begins with a recognised prefix
+        // cannot be forwarded (WIRE_SPEC 13.7).
+        guard FileV2ChatBody.isUserTextAllowed(text) else {
+            transientNotice = String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused.")
             return
         }
         guard !text.isEmpty, let sendService = self.sendService else {

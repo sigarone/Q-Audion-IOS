@@ -241,7 +241,8 @@ public final class GroupChatService {
         guard let pt = engine.decryptFromGroup(state: state, senderId: senderId, wire: wire) else {
             return nil
         }
-        return String(data: pt, encoding: .utf8)
+        // The byte order mark stays: a body that begins with one is not a reply (WIRE_SPEC 13.3), whatever the Foundation version.
+        return StrictUTF8.string(from: pt)
     }
 
     /// Drop the cached state for a group. Used after `handleMemberRemoved`
