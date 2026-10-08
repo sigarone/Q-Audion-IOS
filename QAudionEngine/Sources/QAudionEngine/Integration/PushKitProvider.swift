@@ -1,12 +1,13 @@
 import Foundation
 #if canImport(PushKit) && os(iOS)
 import PushKit
+import UIKit
 #endif
 
 public final class PushKitProvider {
 
     /// Decoded form of the §5.7 VoIP payload. Public so unit tests can use it.
-    public struct ParsedPayload: Equatable {
+    public struct ParsedPayload: Equatable, Sendable {
         public let callId: UUID
         public let callerId: String
         public let callerName: String
@@ -181,130 +182,355 @@ public final class PushKitProvider {
         return ParsedCancelPayload(callId: callId)
     }
 
+    // MARK: - W-VOIPSYNC (2026-10-08): what the PushKit callback reports, decided before it returns
+
+    /// What a VoIP push turned out to be, in the order the delegate has always tried
+    /// the parsers (1:1, group, opaque wake, cancel). Anything else is `.unparsed`,
+    /// which is reported as a placeholder and ended at once.
+    public enum PushEvent: Sendable {
+        case incoming(ParsedPayload)
+        case group(ParsedGroupPayload)
+        case opaque(OpaqueCallWakeupPayload)
+        case cancel(ParsedCancelPayload)
+        case unparsed
+
+        /// `kind=` of the `voip` diagnostic lines: 0 unparsed, 1 incoming, 2 group,
+        /// 3 opaque wake, 4 cancel.
+        public var kindCode: Int {
+            switch self {
+            case .unparsed: return 0
+            case .incoming: return 1
+            case .group: return 2
+            case .opaque: return 3
+            case .cancel: return 4
+            }
+        }
+
+        /// The first 8 characters of the call id the push carries (`call8=` field);
+        /// nil when it carries none (opaque wake, unparsed).
+        public var id8: String? {
+            switch self {
+            case .incoming(let p): return VoipPushDiagnostics.id8(p.callId.uuidString)
+            case .group(let p): return VoipPushDiagnostics.id8(p.callId)
+            case .cancel(let p): return VoipPushDiagnostics.id8(p.callId.uuidString)
+            case .opaque, .unparsed: return nil
+            }
+        }
+
+        public var isUnparsed: Bool {
+            if case .unparsed = self { return true }
+            return false
+        }
+    }
+
+    /// What the delegate tells CallKit before it returns. `endReason` non-nil means
+    /// "report, then end at once" (cancel push, group call that cannot ring,
+    /// placeholder).
+    public struct ReportSpec: Sendable {
+        public let uuid: UUID
+        public let callerName: String
+        public let hasVideo: Bool
+        public let endReason: CallEndReason?
+
+        public init(uuid: UUID, callerName: String, hasVideo: Bool, endReason: CallEndReason?) {
+            self.uuid = uuid
+            self.callerName = callerName
+            self.hasVideo = hasVideo
+            self.endReason = endReason
+        }
+    }
+
+    /// CallKit's answer to one report: `code` is 0 on success, the NSError code
+    /// otherwise; `duplicate` = another report of the same uuid was already in
+    /// flight or up (the ledger's `beginReport` claim was not ours).
+    public struct ReportOutcome: Equatable, Sendable {
+        public let ok: Bool
+        public let code: Int
+        public let duplicate: Bool
+
+        public init(ok: Bool, code: Int, duplicate: Bool) {
+            self.ok = ok
+            self.code = code
+            self.duplicate = duplicate
+        }
+    }
+
+    /// Name shown by every placeholder report.
+    public static let placeholderCallerName = "Q-Audion"
+
+    /// Classify a VoIP payload. Same precedence the delegate always used.
+    public static func classify(_ dict: [String: Any]) -> PushEvent {
+        if let p = try? parsePayload(dict) { return .incoming(p) }
+        if let g = try? parseGroupPayload(dict) { return .group(g) }
+        if let o = try? parseOpaqueCallWakeup(dict) { return .opaque(o) }
+        if let c = try? parseCancelPayload(dict) { return .cancel(c) }
+        return .unparsed
+    }
+
+    /// The report used when there is nothing better: a payload that does not
+    /// decode, no owner, or an owner with no handler for this kind. A fresh uuid,
+    /// reported and ended at once: the PushKit mandate is one report per push.
+    public static func placeholderSpec(uuid: UUID = UUID()) -> ReportSpec {
+        ReportSpec(uuid: uuid, callerName: placeholderCallerName, hasVideo: false,
+                   endReason: .failed("malformed-voip-push"))
+    }
+
+    /// The spec the delegate reports: the app's own for a decoded push, the
+    /// placeholder otherwise. Never nil: every VoIP push is reported.
+    public static func resolveSpec(event: PushEvent, prepared: ReportSpec?) -> ReportSpec {
+        if event.isUnparsed { return placeholderSpec() }
+        return prepared ?? placeholderSpec()
+    }
+
     // MARK: - PushKit-only behaviors (iOS-only)
 
     #if canImport(PushKit) && os(iOS)
     public typealias TokenHandler = (Data) async -> Void
-    public typealias IncomingHandler = (ParsedPayload) async -> Void
-    /// W-GRPRING — fired for a `type == "incoming_group_call"` VoIP push. The
-    /// handler carries the SAME iOS mandate as `IncomingHandler`: it MUST
-    /// report a new incoming call to CallKit before the push completes.
-    public typealias IncomingGroupHandler = (ParsedGroupPayload) async -> Void
-    /// TRUST-6 — fired for a `type == "opaque_wakeup", kind == "call"` VoIP
-    /// push. Same iOS mandate as `IncomingHandler`: the handler MUST report
-    /// SOME incoming call to CallKit before the push completes — see
-    /// `AppState`'s wiring for how it does that with no identity to show yet.
-    public typealias IncomingOpaqueCallWakeupHandler = (OpaqueCallWakeupPayload) async -> Void
-    /// W-CANCELPUSH — fired for a `type == "call_cancelled"` VoIP push. Same
-    /// iOS mandate as the other handlers: it MUST report SOME call to
-    /// CallKit before the push completes — in practice this means reporting
-    /// the SAME `callId` UUID that is already ringing (from the original
-    /// invite) and immediately ending it, so CallKit dismisses that ring
-    /// without ever surfacing a new one. See `AppState`'s wiring.
-    public typealias IncomingCancelHandler = (ParsedCancelPayload) async -> Void
-    /// Fired when a VoIP push arrives that we CANNOT decode into a call
-    /// (wrong type / missing field / bad UUID / non-[String:Any] payload).
-    /// The handler MUST still report-and-end a placeholder call to CallKit —
-    /// see the iOS mandate note in `didReceiveIncomingPushWith`.
-    public typealias MalformedHandler = () async -> Void
+    /// W-VOIPSYNC — runs ON MAIN, inside the PushKit callback and before the
+    /// report: decides what CallKit is told (uuid, name, video, end at once).
+    /// Must be synchronous and cheap; it is the old `MainActor.run { prepare… }`
+    /// step of each handler. nil = no handler for this kind: a placeholder is
+    /// reported and ended.
+    public typealias PrepareHandler = @MainActor (PushEvent) -> ReportSpec?
+    /// W-VOIPSYNC — runs on main once CallKit has answered the report (and after
+    /// the end of a report-and-end spec), right before PushKit's completion. Only
+    /// for pushes `PrepareHandler` answered. Everything that does not decide the
+    /// report lives here (WS revive, ghost bookkeeping, group UI); anything async
+    /// it needs is started from here as a Task, never awaited before the report.
+    public typealias AfterReportHandler = @MainActor (PushEvent, ReportSpec, ReportOutcome) -> Void
 
-    private let registry: PKPushRegistry
+    /// W-VOIPSYNC — the CallKit reporter, held STRONGLY: the report never depends
+    /// on a weak reference being alive.
+    private let reporter: VoipCallReporter
     private let onTokenUpdate: TokenHandler
-    private let onIncomingCall: IncomingHandler
-    private let onIncomingGroupCall: IncomingGroupHandler?
-    private let onIncomingOpaqueCallWakeup: IncomingOpaqueCallWakeupHandler?
-    private let onIncomingCancel: IncomingCancelHandler?
-    private let onMalformedPush: MalformedHandler?
+    fileprivate let prepare: PrepareHandler
+    fileprivate let afterReport: AfterReportHandler
+
+    /// W-VOIPSYNC — ONE registry and ONE delegate per process, created by the
+    /// first `init` and never replaced: a second `init` only re-attaches the
+    /// owner, the reporter and the log sink. Main thread only (init runs from
+    /// `AppState.initialize()`, the delegate on the registry's `.main` queue).
+    private static var sharedRegistry: PKPushRegistry?
+    private static var sharedDelegate: Delegate?
+    /// How many times `init` ran in this process: 1 in a healthy process
+    /// (`voip init count=N site=1`, `voip rx … init=N`).
+    public private(set) static var initCount = 0
+
+    /// Set from both the callback and the late timer, on main only.
+    private final class LateFlag: @unchecked Sendable {
+        var answered = false
+    }
 
     private final class Delegate: NSObject, PKPushRegistryDelegate {
         weak var owner: PushKitProvider?
+        /// STRONG (W-VOIPSYNC): a nil owner still gets its push reported.
+        var reporter: VoipCallReporter
+        var log: ((String) -> Void)?
+
+        init(reporter: VoipCallReporter) {
+            self.reporter = reporter
+        }
+
         func pushRegistry(_ registry: PKPushRegistry,
                           didUpdate pushCredentials: PKPushCredentials,
                           for type: PKPushType) {
             guard type == .voIP else { return }
             Task { await self.owner?.onTokenUpdate(pushCredentials.token) }
         }
+
+        // iOS MANDATE (iOS 13+): every VoIP push MUST report a new incoming call to
+        // CallKit before completion(); otherwise PushKit raises "Killing app because
+        // it never posted an incoming call…" and, on repeated violations, stops
+        // delivering VoIP pushes. W-VOIPSYNC (2026-10-08, incidents b0d7ba30 and
+        // eb2a6367): the report used to sit behind a Task, the WEAK owner and a
+        // main-actor hop; twice the app was killed 0.8 s after the push with not one
+        // line from this path. Now the report is handed to CallKit here, before this
+        // method returns, through the strongly held reporter; completion() is called
+        // only from CallKit's own completion.
         func pushRegistry(_ registry: PKPushRegistry,
                           didReceiveIncomingPushWith payload: PKPushPayload,
                           for type: PKPushType,
                           completion: @escaping () -> Void) {
             guard type == .voIP else { completion(); return }
-            // iOS MANDATE (iOS 13+): every VoIP push MUST report a new incoming
-            // call to CallKit before completion(). If it doesn't, the system
-            // terminates the app and — on repeated violations — STOPS delivering
-            // VoIP pushes, so the device silently goes unreachable for calls.
-            // Therefore on ANY decode failure we STILL report (then end) a
-            // placeholder call via onMalformedPush. Also use a SAFE cast: the old
-            // `as! [String: Any]` could crash on a non-string-keyed payload — an
-            // uncaught crash, which is itself a missed-report violation.
+            let startNs: UInt64 = DispatchTime.now().uptimeNanoseconds
             let dict = (payload.dictionaryPayload as? [String: Any]) ?? [:]
-            if let parsed = try? PushKitProvider.parsePayload(dict) {
-                Task {
-                    await self.owner?.onIncomingCall(parsed)
-                    completion()
-                }
-            } else if let owner = self.owner,
-                      let groupHandler = owner.onIncomingGroupCall,
-                      let group = try? PushKitProvider.parseGroupPayload(dict) {
-                // W-GRPRING — incoming GROUP call. Same mandate as the 1:1
-                // branch: the handler reports a new incoming call to CallKit.
-                // If no group handler is wired we deliberately fall through to
-                // onMalformedPush (report-and-end) rather than completing the
-                // push silently — a VoIP push with no report kills the app.
-                Task {
-                    await groupHandler(group)
-                    completion()
-                }
-            } else if let owner = self.owner,
-                      let opaqueCallHandler = owner.onIncomingOpaqueCallWakeup,
-                      let opaqueCall = try? PushKitProvider.parseOpaqueCallWakeup(dict) {
-                // TRUST-6 — opaque call wakeup, no caller identity in the
-                // push. Same mandate: report SOME call to CallKit before
-                // completion(). If no handler is wired, fall through to
-                // onMalformedPush exactly like the group branch above,
-                // rather than completing silently.
-                Task {
-                    await opaqueCallHandler(opaqueCall)
-                    completion()
-                }
-            } else if let owner = self.owner,
-                      let cancelHandler = owner.onIncomingCancel,
-                      let cancel = try? PushKitProvider.parseCancelPayload(dict) {
-                // W-CANCELPUSH — same mandate as every other branch: the
-                // handler reports (and immediately ends) a call to CallKit
-                // before completion(). If no handler is wired, fall through
-                // to onMalformedPush rather than completing silently.
-                Task {
-                    await cancelHandler(cancel)
-                    completion()
-                }
-            } else {
-                Task {
-                    await self.owner?.onMalformedPush?()
+            let event: PushEvent = PushKitProvider.classify(dict)
+            let kind: Int = event.kindCode
+            let owner: PushKitProvider? = self.owner
+            let reporter: VoipCallReporter = self.reporter
+            let log: ((String) -> Void)? = self.log
+            // The registry's queue is `.main`, so this callback runs on the main
+            // thread: the first line goes into the ring synchronously, and the
+            // main-actor prepare step runs inline, with no hop.
+            let prepared: ReportSpec? = MainActor.assumeIsolated { () -> ReportSpec? in
+                let appState: Int = UIApplication.shared.applicationState.rawValue
+                let rxLine: String = VoipPushDiagnostics.rxLine(
+                    kind: kind, owner: owner != nil, initCount: PushKitProvider.initCount,
+                    appState: appState, id8: event.id8)
+                log?(rxLine)
+                guard let owner, !event.isUnparsed else { return nil }
+                return owner.prepare(event)
+            }
+            let spec: ReportSpec = PushKitProvider.resolveSpec(event: event, prepared: prepared)
+            let late = LateFlag()
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(VoipPushDiagnostics.lateAfterMs)
+            ) {
+                guard !late.answered else { return }
+                log?(VoipPushDiagnostics.lateLine(kind: kind, ms: VoipPushDiagnostics.lateAfterMs))
+            }
+            reporter.reportIncomingCallNow(
+                uuid: spec.uuid, callerName: spec.callerName, hasVideo: spec.hasVideo
+            ) { outcome in
+                PushKitProvider.onMain {
+                    late.answered = true
+                    let reportMs: Int = PushKitProvider.elapsedMs(since: startNs)
+                    log?(VoipPushDiagnostics.reportLine(
+                        kind: kind, outcome: outcome, ms: reportMs,
+                        id8: VoipPushDiagnostics.id8(spec.uuid.uuidString)))
+                    if let reason = spec.endReason {
+                        reporter.reportCallEndedNow(uuid: spec.uuid, reason: reason)
+                    }
+                    if prepared != nil, let owner {
+                        MainActor.assumeIsolated {
+                            owner.afterReport(event, spec, outcome)
+                        }
+                    }
+                    log?(VoipPushDiagnostics.doneLine(
+                        kind: kind, ok: outcome.ok, ms: PushKitProvider.elapsedMs(since: startNs)))
                     completion()
                 }
             }
         }
     }
 
-    private let delegate = Delegate()
+    /// Run `body` on main: inline when already there (CallKit usually answers on
+    /// the provider's delegate queue, which is main here), otherwise async.
+    fileprivate static func onMain(_ body: @escaping () -> Void) {
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.async { body() }
+        }
+    }
 
-    public init(onTokenUpdate: @escaping TokenHandler,
-                onIncomingCall: @escaping IncomingHandler,
-                onIncomingGroupCall: IncomingGroupHandler? = nil,
-                onIncomingOpaqueCallWakeup: IncomingOpaqueCallWakeupHandler? = nil,
-                onIncomingCancel: IncomingCancelHandler? = nil,
-                onMalformedPush: MalformedHandler? = nil) {
+    fileprivate static func elapsedMs(since startNs: UInt64) -> Int {
+        let now: UInt64 = DispatchTime.now().uptimeNanoseconds
+        return now > startNs ? Int((now - startNs) / 1_000_000) : 0
+    }
+
+    public init(reporter: VoipCallReporter,
+                log: ((String) -> Void)?,
+                onTokenUpdate: @escaping TokenHandler,
+                prepare: @escaping PrepareHandler,
+                afterReport: @escaping AfterReportHandler) {
+        self.reporter = reporter
         self.onTokenUpdate = onTokenUpdate
-        self.onIncomingCall = onIncomingCall
-        self.onIncomingGroupCall = onIncomingGroupCall
-        self.onIncomingOpaqueCallWakeup = onIncomingOpaqueCallWakeup
-        self.onIncomingCancel = onIncomingCancel
-        self.onMalformedPush = onMalformedPush
-        self.registry = PKPushRegistry(queue: .main)
-        delegate.owner = self
-        registry.delegate = delegate
-        registry.desiredPushTypes = [.voIP]
+        self.prepare = prepare
+        self.afterReport = afterReport
+        PushKitProvider.initCount += 1
+        if let registry = PushKitProvider.sharedRegistry, let delegate = PushKitProvider.sharedDelegate {
+            delegate.owner = self
+            delegate.reporter = reporter
+            delegate.log = log
+            registry.delegate = delegate
+        } else {
+            let delegate = Delegate(reporter: reporter)
+            delegate.owner = self
+            delegate.log = log
+            let registry = PKPushRegistry(queue: .main)
+            PushKitProvider.sharedDelegate = delegate
+            PushKitProvider.sharedRegistry = registry
+            // Delegate first, push types second (Apple's order).
+            registry.delegate = delegate
+            registry.desiredPushTypes = [.voIP]
+        }
+        log?(VoipPushDiagnostics.initLine(count: PushKitProvider.initCount, site: VoipPushDiagnostics.siteRegistry))
     }
     #endif
+}
+
+/// W-VOIPSYNC (2026-10-08) — what the PushKit delegate needs from CallKit, called
+/// synchronously from the PushKit callback. `CallKitProvider` implements it with
+/// the same ledger as its async `reportIncomingCall`, so a later report of the
+/// same uuid from the WS path stays a labelled duplicate.
+public protocol VoipCallReporter: AnyObject {
+    /// Hand the report to CallKit before returning; `completion` once CallKit has
+    /// answered, on any queue.
+    func reportIncomingCallNow(uuid: UUID, callerName: String, hasVideo: Bool,
+                               completion: @escaping (PushKitProvider.ReportOutcome) -> Void)
+    /// End a reported call at once (cancel push, placeholder), synchronously.
+    func reportCallEndedNow(uuid: UUID, reason: CallEndReason)
+}
+
+/// W-VOIPSYNC (2026-10-08) — the `voip` diagnostic lines (tag "call"). Every shape
+/// is pinned by `VoipPushSyncReportTests` and checked against the phone-log
+/// shipper's vocabulary gate by `scripts/test_ship_ios_voip_vocab.py` (keep the
+/// two in sync with this file). Read together they settle the next PushKit kill in
+/// one look: no `voip rx` before the kill = PushKit never called the delegate;
+/// `owner=0` = the provider was gone; `init` above 1 = a second registration;
+/// `rx` without `report` = killed while CallKit had the report.
+public enum VoipPushDiagnostics {
+
+    /// A report CallKit has not answered after this long gets a `voip late` line.
+    public static let lateAfterMs: Int = 2000
+
+    /// `site=` of `voip init`: 1 = PushKitProvider.init, 2 = AppState.initialize().
+    public static let siteRegistry: Int = 1
+    public static let siteAppInitialize: Int = 2
+
+    /// First line of the PushKit callback. `appState` is
+    /// `UIApplication.State.rawValue` (0 active, 1 inactive, 2 background).
+    public static func rxLine(kind: Int, owner: Bool, initCount: Int, appState: Int, id8: String?) -> String {
+        let ownerFlag: String = owner ? "1" : "0"
+        var line: String = "voip rx kind=" + String(kind) + " owner=" + ownerFlag
+        line += " init=" + String(initCount) + " state=" + String(appState)
+        if let id8 { line += " call8=" + id8 }
+        return line
+    }
+
+    public static func initLine(count: Int, site: Int) -> String {
+        "voip init count=" + String(count) + " site=" + String(site)
+    }
+
+    /// `AppState.initialize()` ran again and kept the registration it already had.
+    public static func initSkippedLine() -> String {
+        "voip init skip=1 site=" + String(siteAppInitialize)
+    }
+
+    /// No CallKit reporter: PushKit was NOT registered (cannot happen on iOS).
+    public static func initNoReporterLine() -> String {
+        "voip init count=0 site=" + String(siteRegistry)
+    }
+
+    /// CallKit's answer to the report.
+    public static func reportLine(kind: Int, outcome: PushKitProvider.ReportOutcome, ms: Int, id8: String?) -> String {
+        let okFlag: String = outcome.ok ? "1" : "0"
+        let dupFlag: String = outcome.duplicate ? "1" : "0"
+        var line: String = "voip report kind=" + String(kind) + " ok=" + okFlag
+        line += " code=" + String(outcome.code) + " dup=" + dupFlag + " ms=" + String(ms)
+        if let id8 { line += " call8=" + id8 }
+        return line
+    }
+
+    /// Right before PushKit's completion.
+    public static func doneLine(kind: Int, ok: Bool, ms: Int) -> String {
+        let okFlag: String = ok ? "1" : "0"
+        return "voip done kind=" + String(kind) + " ok=" + okFlag + " ms=" + String(ms)
+    }
+
+    public static func lateLine(kind: Int, ms: Int) -> String {
+        "voip late kind=" + String(kind) + " ms=" + String(ms)
+    }
+
+    /// The first 8 characters of an id, lower-cased (the server journal's form),
+    /// only when they are all hex (a uuid today); nil otherwise, so no free text
+    /// reaches the line. Shipped as `call8=`: the shipper keeps that key's value
+    /// even when all eight are digits, where `id=` would be masked as a phone
+    /// number.
+    public static func id8(_ id: String) -> String? {
+        let head = String(id.prefix(8))
+        guard head.count == 8, head.allSatisfy({ $0.isHexDigit }) else { return nil }
+        return head.lowercased()
+    }
 }
