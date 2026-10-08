@@ -49,11 +49,13 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
     public init() {}
 
     /// Remember the signer key of a round whose identity could not be resolved. `round` must be the
-    /// bundle's signed `rekeyRound` (>= 1); anything else is ignored. A 32-byte key is required. A key
-    /// that differs from the call's first unresolved key puts the call in conflict.
+    /// bundle's signed `rekeyRound` (>= 1); anything else is ignored. A 32-byte key is required, and a
+    /// small-order or non-canonical one is ignored like a malformed key (`Ed25519IdentityKeyPolicy`): it
+    /// can then never be the candidate a SAS confirmation pins. A key that differs from the call's first
+    /// unresolved key puts the call in conflict.
     public func noteUnresolved(callId: String, round: Int?, signerKey: Data?) {
         guard let round = round, round >= 1, round <= Int(UInt32.max),
-              let key = signerKey, key.count == 32 else { return }
+              let key = signerKey, Ed25519IdentityKeyPolicy.isAcceptable(key) else { return }
         let id = callId.lowercased()
         guard !id.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
@@ -112,7 +114,7 @@ public final class CallScopedSasPinBook: @unchecked Sendable {
 
     /// Record the user's explicit SAS confirmation of `key` as this call's pin.
     public func confirm(callId: String, key: Data) {
-        guard key.count == 32 else { return }
+        guard Ed25519IdentityKeyPolicy.isAcceptable(key) else { return }
         let id = callId.lowercased()
         guard !id.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
@@ -185,7 +187,9 @@ public enum SasSignerPinPolicy {
     }
 
     public static func decide(storedPin: Data?, confirmedKey: Data) -> Decision {
-        guard confirmedKey.count == 32 else { return .conflict }
+        // Not 32 bytes, small-order or non-canonical (`Ed25519IdentityKeyPolicy`): never pinned. The app
+        // treats `.conflict` as "no pin written, call untouched" (W-NOBRICK).
+        guard Ed25519IdentityKeyPolicy.isAcceptable(confirmedKey) else { return .conflict }
         guard let stored = storedPin else { return .pin }
         return stored == confirmedKey ? .alreadyPinned : .conflict
     }

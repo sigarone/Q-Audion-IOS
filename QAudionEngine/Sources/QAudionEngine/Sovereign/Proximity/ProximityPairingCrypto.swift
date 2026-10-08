@@ -319,11 +319,14 @@ public enum ProximityPairingCrypto {
     }
 
     /// False (never a crash) for wrong key / signature lengths, an empty
-    /// payload, an invalid key encoding or a bad signature.
+    /// payload, an invalid key encoding, a small-order or non-canonical key
+    /// (`Ed25519IdentityKeyPolicy`: the peer supplies this key in the sealed
+    /// identity box) or a bad signature.
     public static func verify(signature: Data, payload: Data, signingPublicKey: Data) -> Bool {
         guard signature.count == ProximityPairing.ed25519SignatureBytes,
               signingPublicKey.count == ProximityPairing.ed25519PublicKeyBytes,
-              !payload.isEmpty else {
+              !payload.isEmpty,
+              Ed25519IdentityKeyPolicy.isAcceptable(signingPublicKey) else {
             return false
         }
         let key: Curve25519.Signing.PublicKey

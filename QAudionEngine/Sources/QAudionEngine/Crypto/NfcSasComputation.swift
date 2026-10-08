@@ -39,19 +39,6 @@ public enum NfcSasComputation {
         case smallOrderPoint
     }
 
-    /// The 8 small-order points of the Ed25519 curve, canonical 32-byte RFC 8032 §5.1.2
-    /// little-endian encoding — byte-identical table to Android's `SMALL_ORDER_POINTS`.
-    private static let smallOrderPoints: [Data] = [
-        Data(hex: "0100000000000000000000000000000000000000000000000000000000000000"),
-        Data(hex: "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
-        Data(hex: "0000000000000000000000000000000000000000000000000000000000000000"),
-        Data(hex: "0000000000000000000000000000000000000000000000000000000000000080"),
-        Data(hex: "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"),
-        Data(hex: "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85"),
-        Data(hex: "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac0374"),
-        Data(hex: "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03f4"),
-    ]
-
     /// Derive the 6-digit SAS for a tap-paired peer.
     public static func computeSas(selfIkEdPub: Data, peerIkEdPub: Data) throws -> String {
         guard selfIkEdPub.count == ikEdPubLen, peerIkEdPub.count == ikEdPubLen else {
@@ -98,7 +85,9 @@ public enum NfcSasComputation {
     }
 
     private static func requireNonSmallOrder(_ point: Data) throws {
-        for small in smallOrderPoints where constantTimeEquals(point, small) {
+        // The 8-point table lives in `Ed25519IdentityKeyPolicy` (shared with the handshake verify and the
+        // SAS-PIN pin). Only the table is used here, so the outcomes of this ceremony are unchanged.
+        if Ed25519IdentityKeyPolicy.isCanonicalSmallOrderPoint(point) {
             throw SasError.smallOrderPoint
         }
         // CryptoKit's Curve25519 signing key validates canonical encoding / on-curve
@@ -127,23 +116,5 @@ public enum NfcSasComputation {
             diff |= a[a.startIndex + i] ^ b[b.startIndex + i]
         }
         return diff == 0
-    }
-}
-
-private extension Data {
-    // force-unwrap safe: this init is `private` (file-scoped) and, within
-    // this file, only ever called with the 8 hardcoded literal hex strings
-    // above (each verified even-length, valid hex) — never with network/
-    // peer-controlled input. Not a general-purpose hex decoder.
-    init(hex: String) {
-        var out = Data(capacity: hex.count / 2)
-        var idx = hex.startIndex
-        while idx < hex.endIndex {
-            let next = hex.index(idx, offsetBy: 2)
-            // swiftlint:disable:next force_unwrapping
-            out.append(UInt8(hex[idx..<next], radix: 16)!)
-            idx = next
-        }
-        self = out
     }
 }

@@ -26942,6 +26942,10 @@ extension AppState {
     /// computes a self-sig, and v2 always carries the X25519 leg) — treated
     /// as verify-failure rather than guessed at.
     private static func verifyPeerBundleSelfSig(_ bundle: BCryptoKmsClient.IdentityBundleV2) -> Bool {
+        // The peer-published identity key must be a usable Ed25519 key before either branch below: a
+        // small-order or non-canonical key would "verify" any self-sig under a permissive verifier, and
+        // the TOFU-accept branch must not take one either (`Ed25519IdentityKeyPolicy`).
+        guard Ed25519IdentityKeyPolicy.isAcceptable(bundle.ed25519Pub) else { return false }
         guard let sig = bundle.selfSig, !sig.isEmpty else { return true }
         guard sig.count == 64, let xPub = bundle.x25519Pub, xPub.count == 32 else { return false }
         guard let preimage = try? IdentityKeyV2Preimage.buildV2(
