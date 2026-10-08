@@ -129,7 +129,7 @@
     "q_display": "Chi porta il vino?",
     "to": "e52ab577-f281-4ef0-a263-80210ff6a88a"
    },
-   "why": "a reply in a group: same body inside the group payload 0xE4 msg_type 1; to is the server_message_id"
+   "why": "a reply in a group: same body inside the group payload 0xE4 with msg_type 0 (an ordinary text; a receiver also accepts msg_type 1); to is the server_message_id"
   },
   {
    "name": "valid_object_other_first_member",

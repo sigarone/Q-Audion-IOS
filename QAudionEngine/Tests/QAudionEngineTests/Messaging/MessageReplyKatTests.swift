@@ -110,8 +110,8 @@ struct ReplyKat: Decodable {
 /// This code was written on a machine that cannot compile Swift: the macOS CI job is the only thing that has run it.
 final class MessageReplyKatTests: XCTestCase {
 
-    static let pinnedSHA256 = "59abb544efa5bedc20ddba6831a1af2ce48c91822643f9f370e289bbbe25606f"
-    static let pinnedLength = 140_608
+    static let pinnedSHA256 = "d09254402dd11a35889539ba0cef3e64ae2c999072a29ca02c2ff9cb7130abb5"
+    static let pinnedLength = 140_668
 
     // MARK: The file
 

@@ -371,6 +371,15 @@ final class MessageReplyStoreTests: XCTestCase {
         XCTAssertEqual(conversation()?.lastMessagePreview, body)
     }
 
+    func test_aReplyThatCarriesAReservedServiceMember_isDiscardedByTheServiceFilter_notShown() {
+        // WIRE_SPEC 13.3: the structural filter runs before recognition; such a body is neither a reply nor a text.
+        let body = #"{"qa_reply":1,"to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472","k":"text","q":"","b":"x","qa_ctl":1}"#
+        let result = store.recordInboundUserMessage(inbound(body), preview: body, incrementUnread: true, kind: .text)
+        XCTAssertEqual(result, .refusedServiceShaped)
+        XCTAssertTrue(store.loadMessages(conversationId: convId).isEmpty)
+        XCTAssertNil(conversation()?.lastMessagePreview)
+    }
+
     func test_anEditCannotTurnARowIntoAReply() {
         let original = inbound("testo", cmid: "cmid-edit", server: serverId)
         XCTAssertEqual(store.recordInboundUserMessage(original, preview: "testo", incrementUnread: false, kind: .text), .inserted)

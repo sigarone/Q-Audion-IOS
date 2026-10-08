@@ -2997,7 +2997,12 @@ This is a HARD SWITCH (§6): one format on every platform, no earlier reply form
 ### 13.1 Where a reply travels
 
 The body of a reply is carried exactly where chat text travels: in a 1:1 chat, as the body of an ordinary chat message
-sealed by the existing message channel; in a group, inside the group payload 0xE4 with `msg_type = 1`. Over the BLE mesh
+sealed by the existing message channel; in a group, inside the group payload 0xE4 with `msg_type = 0` (a reply is an
+ordinary text and takes the path of the text already in use on every platform; `msg_type = 1` remains the type of the
+file descriptors of §12.7.1). The sender emits ONLY 0. The receiver recognises a reply by the prefix of the decrypted
+body (§13.3), never by `msg_type`, and MUST accept a reply carried with `msg_type = 0` or `msg_type = 1` (tolerance: a
+prefix recognised under either type is handled by §13.3; a body under `msg_type = 1` that is not a file message and not
+a reply is handled as before this section). Over the BLE mesh
 (§9) it is the `b` of a `MeshChatMessage`. Nothing else changes: same encryption, sender authentication and per-device
 distribution. A reply is always a text: in version 1 its own content is the text `b`; sending a file, image, video or
 voice note as a reply is not defined.
@@ -3064,6 +3069,13 @@ Validation of version 1:
 A failure of either step is `bad_reply`. The content of `q` and `b` is NEVER a reason to reject: a `q` longer than
 160 scalars, with control, bidirectional or invisible characters, or not empty on a voice note, and a `b` that is
 empty or begins with a recognised prefix, are all accepted (the display rules of §13.4 and §13.6 apply).
+
+Reserved service members (MUST). The structural filter of the service messages runs BEFORE recognition and is not
+changed by this section. A body that contains a member name reserved for service messages (`qa_ctl` and the others
+that filter knows) is neither a reply nor a text: that filter discards it before recognition and it is not displayed.
+This is not a contradiction of the rule above that unknown members are ignored: the validator of this section ignores
+members it does not know, but a reserved service member is not "unknown" to the filter that runs first. A conforming
+builder (§13.5) never writes a member other than the five of §13.2, so it cannot happen to a conforming sender.
 
 Fallback (MUST). A recognised body that is rejected (`bad_reply` or `unsupported_version`) is NOT lost and is NOT an
 error for the user: it becomes an ordinary text message whose text is the whole body as received, displayed, notified,

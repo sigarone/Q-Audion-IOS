@@ -10657,7 +10657,11 @@ final class AppState: ObservableObject {
         // service gate as the 1:1 and mesh paths: a group TEXT frame whose body is
         // a service envelope (or an attachment descriptor, which rides msg_type 1)
         // is dropped and acked, never appended as a row or a banner.
-        if msgType != GroupAttachmentEnvelope.msgTypeAttachment,
+        // A reply is recognised by the prefix of its body, never by msg_type (WIRE_SPEC 13.1): under either type a body that carries a
+        // reserved service member is discarded here, before recognition (13.3).
+        let carriesServiceFilter: Bool = msgType != GroupAttachmentEnvelope.msgTypeAttachment
+            || MessageReplyCodec.hasReplyPrefix(plaintext)
+        if carriesServiceFilter,
            ServicePayloadDetector.classify(plaintext) != .notService {
             let dropGroup: String = String(groupHex.prefix(8))
             let dropLine: String = "text service=1 dropped=1 g=" + dropGroup
@@ -10679,7 +10683,8 @@ final class AppState: ObservableObject {
                     clientMsgId: clientMsgId, ts: ts, live: live)
                 return
             }
-            // A reply (WIRE_SPEC 13.1) travels in a msg_type 1 payload too, but it is text: it goes on to the text path below.
+            // A reply (WIRE_SPEC 13.1) is sent with msg_type 0 but accepted under 1 as well (recognised by its prefix): it is text and goes
+            // on to the text path below.
             if !MessageReplyCodec.hasReplyPrefix(plaintext) {
                 landIncomingGroupAttachment(
                     plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
@@ -10700,7 +10705,8 @@ final class AppState: ObservableObject {
                 clientMsgId: clientMsgId, ts: ts, live: live)
             return
         }
-        // A reply (WIRE_SPEC 13) in a group is shown as its `b` for now (no quote block in the group chat yet); never as the object.
+        // A reply (WIRE_SPEC 13) in a group is shown as its `b` for now (no quote block in the group chat yet); never as the object. Reached
+        // with msg_type 0 or 1.
         let shownText: String = MessageReplyCodec.shownText(ofBody: plaintext)
 
         // Store posts didChangeNotification → an open GroupChatScreen

@@ -364,7 +364,7 @@ let package = Package(
                 // CRLF checkout cannot change it. Re-copy it, never edit it.
                 .copy("Resources/kat/file-v2-server-transcript.json"),
                 // Message replies (WIRE_SPEC section 13): the known-answer vectors, a BYTE-FOR-BYTE copy of bcrypto-server
-                // test/kat/reply_v1/reply-kat.json at commit aa5d64de (generated there by tools/katgen/reply, standard library only).
+                // test/kat/reply_v1/reply-kat.json at commit a7f1b138 (generated there by tools/katgen/reply, standard library only).
                 // MessageReplyKatTests pins its SHA-256 and .gitattributes marks it -text so a CRLF checkout cannot change it.
                 // Re-copy it, never edit it.
                 .copy("Resources/kat/reply-kat.json")
