@@ -36,11 +36,15 @@ struct EnigmaRotorPanel: View, Animatable {
                     .foregroundColor(EnigmaRotorArt.ivory)
                     .tag(i)
             }
-            ForEach(0..<26, id: \.self) { (i: Int) in
-                Text(verbatim: EnigmaRotorArt.letters[i])
+            // The ids of the two groups are DISJOINT (0...25 and 100...125). A Canvas needs every child of `symbols` to have a unique
+            // id, and `ForEach(_, id: \.self)` makes the data value the child id: two blocks over `0..<26` both carried the ids
+            // 0...25 and SwiftUICore stopped the app with "Canvas.swift: child view IDs must be unique" (iOS 27, build 1.0.1214,
+            // as soon as the full level showed the panel). The tag is the id, so the lookup `resolveSymbol(id:)` is unchanged.
+            ForEach(EnigmaRotorArt.windowSymbolIds, id: \.self) { (tag: Int) in
+                Text(verbatim: EnigmaRotorArt.letters[tag - EnigmaRotorArt.windowSymbolBase])
                     .font(.system(size: 15.5, weight: .bold))
                     .foregroundColor(EnigmaRotorArt.windowInk)
-                    .tag(100 + i)
+                    .tag(tag)
             }
         }
         .frame(width: EnigmaRotorPanel.width, height: EnigmaRotorPanel.height)
@@ -52,6 +56,11 @@ enum EnigmaRotorArt {
     static let letters: [String] = (0..<26).map { (i: Int) -> String in
         String(Character(UnicodeScalar(UInt8(65 + i))))
     }
+
+    /// Canvas symbol ids: the ring letters use `0...25`, the big window letters `windowSymbolBase + 0...25`. They must stay disjoint
+    /// (see `EnigmaRotorPanel.body`): the panel and `drawWindow` both derive the window id from `windowSymbolBase`.
+    static let windowSymbolBase: Int = 100
+    static let windowSymbolIds: [Int] = (0..<26).map { (i: Int) -> Int in EnigmaRotorArt.windowSymbolBase + i }
 
     // Palette: black #0B0D0C, brass #B08D3C / #D4B060, ivory #E8E1CF, wood, knurl.
     static let black = Color(hex: 0x0B0D0C)
@@ -272,7 +281,7 @@ enum EnigmaRotorArt {
             if y < geo.winTop - pitch * 0.5 { continue }
             if y > geo.winTop + geo.winH + pitch * 0.5 { continue }
             let tag: Int = ((idx % 26) + 26) % 26
-            guard let symbol = ctx.resolveSymbol(id: 100 + tag) else { continue }
+            guard let symbol = ctx.resolveSymbol(id: windowSymbolBase + tag) else { continue }
             inside.draw(symbol, at: CGPoint(x: cx, y: y + 1), anchor: .center)
         }
 
