@@ -10679,11 +10679,14 @@ final class AppState: ObservableObject {
                     clientMsgId: clientMsgId, ts: ts, live: live)
                 return
             }
-            landIncomingGroupAttachment(
-                plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
-                senderId: senderId, selfId: selfId, serverMsgId: serverMsgId,
-                clientMsgId: clientMsgId, ts: ts, live: live)
-            return
+            // A reply (WIRE_SPEC 13.1) travels in a msg_type 1 payload too, but it is text: it goes on to the text path below.
+            if !MessageReplyCodec.hasReplyPrefix(plaintext) {
+                landIncomingGroupAttachment(
+                    plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
+                    senderId: senderId, selfId: selfId, serverMsgId: serverMsgId,
+                    clientMsgId: clientMsgId, ts: ts, live: live)
+                return
+            }
         }
 
         // File transfer v2 (WIRE_SPEC 12.7.1): a body that begins like a file message is never shown as the text it is. The group
@@ -10697,7 +10700,8 @@ final class AppState: ObservableObject {
                 clientMsgId: clientMsgId, ts: ts, live: live)
             return
         }
-        let shownText: String = plaintext
+        // A reply (WIRE_SPEC 13) in a group is shown as its `b` for now (no quote block in the group chat yet); never as the object.
+        let shownText: String = MessageReplyCodec.shownText(ofBody: plaintext)
 
         // Store posts didChangeNotification → an open GroupChatScreen
         // reloads live; persisted so it also shows on next open.
@@ -11955,7 +11959,8 @@ final class AppState: ObservableObject {
                 forKey: "qaudion.privacy.hide_notification_content") as? Bool) ?? false
             let previewAllowed = PrivacyGate.messagePreviewInNotifications
             // A file message shows its one-line preview, never the descriptor (WIRE_SPEC 12.7.1: not in a notification).
-            let notificationText: String = FileV2ChatBody.classify(text: plaintext).displayText ?? plaintext
+            // A reply shows its `b`, never the object or the quote (WIRE_SPEC 13.7).
+            let notificationText: String = FileV2ChatBody.classify(text: plaintext).displayText ?? MessageReplyCodec.shownText(ofBody: plaintext)
             let bodyText: String
             if hideContent || !previewAllowed {
                 bodyText = "Nuovo messaggio"
@@ -17605,7 +17610,7 @@ final class AppState: ObservableObject {
             // copy would defeat the whole point of that feature.
             for msg in recent where msg.deletedAt == nil && !(msg.isViewOnce ?? false) {
                 // A file message (WIRE_SPEC 12.7.1) is cached as its one-line preview, never as the descriptor it is made of.
-                let cachedText: String = FileV2ChatBody.classify(text: msg.plaintext).displayText ?? msg.plaintext
+                let cachedText: String = FileV2ChatBody.classify(text: msg.plaintext).displayText ?? MessageReplyCodec.shownText(ofBody: msg.plaintext)
                 cached.append(SiriMessageBridgeStore.CachedMessage(
                     peerUserId: conv.peerUserId,
                     peerDisplayName: conv.peerDisplayName,

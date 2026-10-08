@@ -1,4 +1,5 @@
 import SwiftUI
+import QAudionEngine
 
 /// Chat input bar. 1:1 port of Android
 /// `qaudion-android-new/feature/feature-chat/.../components/MessageComposer.kt`.
@@ -427,6 +428,8 @@ extension MessageComposer {
         let messageId: String
         let author: String
         let excerpt: String
+        /// Message replies (WIRE_SPEC 13): what the engine builder takes from the message being answered. `nil` only in previews.
+        var quote: MessageReplyQuoteInfo? = nil
     }
 }
 

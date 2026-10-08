@@ -297,7 +297,7 @@ public enum FileV2DescriptorBuilder {
 
     /// A JSON string literal in the canonical form. Iterates the Unicode scalars: no grapheme or normalisation
     /// logic can alter what is written.
-    private static func string(_ out: inout [UInt8], _ value: String) {
+    static func string(_ out: inout [UInt8], _ value: String) {
         out.append(UInt8(ascii: "\""))
         for scalar in value.unicodeScalars {
             switch scalar.value {

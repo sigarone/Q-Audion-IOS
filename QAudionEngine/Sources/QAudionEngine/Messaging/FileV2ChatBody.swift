@@ -151,8 +151,9 @@ public enum FileV2ChatBody: Equatable, Sendable {
     /// `classify(utf8:)` for the text of a stored row (its UTF-8 bytes are the bytes that were decrypted).
     public static func classify(text: String) -> FileV2ChatBody { classify(utf8: Data(text.utf8)) }
 
-    /// The user's own text may not be a file message (12.7.1): only the builders of the library produce such a body.
-    public static func isUserTextAllowed(_ text: String) -> Bool { !FileV2Message.hasFileMessagePrefix(text) }
+    /// The user's own text may not be a file message (12.7.1) or a reply (13.5): only the builders of the library produce such a body.
+    /// This is the entry-point rule for typing, paste, share, intents and dictation, for the `b` of a reply and for a forward.
+    public static func isUserTextAllowed(_ text: String) -> Bool { !MessageReplyCodec.hasReservedPrefix(text) }
 
     /// The text that stands for the message wherever a body must not appear (placeholder row, preview, notification);
     /// `nil` for ordinary text and for a control message.
@@ -217,6 +218,10 @@ public enum FileV2ChatBody: Equatable, Sendable {
     static func applyInboundBoundary(_ message: Message, preview: String) -> (message: Message, preview: String)? {
         switch classify(text: message.plaintext) {
         case .text:
+            // A reply (WIRE_SPEC 13) keeps the body as received; wherever the message is previewed it shows `b`, never the object.
+            if case .reply(let reply) = MessageReplyCodec.recognize(message.plaintext) {
+                return (message, reply.body)
+            }
             return (message, preview)
         case .control:
             return nil

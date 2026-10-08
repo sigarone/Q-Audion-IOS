@@ -876,6 +876,11 @@ public final class ConversationStore {
             print("[ConversationStore] applyEditByClientMsgId refused=1 reason=file_message")
             return false
         }
+        // Nor can an edit turn a row into a reply (WIRE_SPEC 13.5: no user text can become a reply, the quote it names would be spoofed).
+        guard !MessageReplyCodec.hasReplyPrefix(newPlaintext) else {
+            print("[ConversationStore] applyEditByClientMsgId refused=1 reason=reply_message")
+            return false
+        }
         do {
             return try db.writer.write { db in
                 if var msg = try Message.filter(Column("clientMsgId") == clientMsgId).fetchOne(db) {

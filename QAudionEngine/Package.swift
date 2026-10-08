@@ -362,7 +362,12 @@ let package = Package(
                 // parts protocol; docs/FILES_V2_SERVER_TRANSCRIPT.md there describes it). The tests replay every scenario against the
                 // in-memory fake of the server, FileV2ServerTranscriptTests pins its SHA-256, and .gitattributes marks it -text so a
                 // CRLF checkout cannot change it. Re-copy it, never edit it.
-                .copy("Resources/kat/file-v2-server-transcript.json")
+                .copy("Resources/kat/file-v2-server-transcript.json"),
+                // Message replies (WIRE_SPEC section 13): the known-answer vectors, a BYTE-FOR-BYTE copy of bcrypto-server
+                // test/kat/reply_v1/reply-kat.json at commit aa5d64de (generated there by tools/katgen/reply, standard library only).
+                // MessageReplyKatTests pins its SHA-256 and .gitattributes marks it -text so a CRLF checkout cannot change it.
+                // Re-copy it, never edit it.
+                .copy("Resources/kat/reply-kat.json")
             ]
         )
     ]

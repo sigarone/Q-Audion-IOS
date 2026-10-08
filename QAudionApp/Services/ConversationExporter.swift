@@ -97,7 +97,8 @@ enum ConversationExporter {
         } else {
             // Strip newlines from the message body so each entry stays
             // on a single line — easier to scan, paste, search.
-            body = m.plaintext
+            // A reply is exported as its `b` (WIRE_SPEC 13.7), never the object.
+            body = MessageReplyCodec.shownText(ofBody: m.plaintext)
                 .replacingOccurrences(of: "\r\n", with: " ")
                 .replacingOccurrences(of: "\n", with: " ")
         }

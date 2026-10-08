@@ -31,7 +31,10 @@ enum EnigmaRowMapper {
         let viewOnceReceived: Bool = message.isViewOnce == true && !outgoing
         let placeholder: Bool = message.isPlaceholder == true
         let plain: Bool = !hasMedia && !viewOnceReceived && !placeholder && !message.plaintext.isEmpty
-        return EnigmaRow(id: id, isOutgoing: outgoing, kind: plain ? .text : .other, text: message.plaintext)
+        // The text the effect reveals is what the bubble shows: `b` for a reply (WIRE_SPEC 13.7), never the object; the effect acts on
+        // the sealed packet as a whole and the quote block is revealed together with `b`.
+        let shown: String = MessageReplyCodec.shownText(ofBody: message.plaintext)
+        return EnigmaRow(id: id, isOutgoing: outgoing, kind: plain ? .text : .other, text: shown)
     }
 
     /// Changes whenever the list gains, loses or reorders its last message (cheap: a count and the last id).
