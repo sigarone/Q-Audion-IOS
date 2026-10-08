@@ -11872,6 +11872,16 @@ final class AppState: ObservableObject {
             // File transfer v2: the sender of a file learns it arrived the moment its descriptor lands, like the delivery receipt of a
             // text, not after the download (a video or a document is only fetched on a tap).
             sendFileV2DeliveredReceipt(wireId: fileV2WireId, senderId: senderId)
+            // Enigma mode, hook 2 of 2 (visual effect only): this packet opened (the tag verified) and became a live plain text
+            // row. Placed after the verified open and the write of the row, before the screen is told to refresh, so the row can
+            // be held back before it is first drawn. Synchronous, non-throwing, ignored by everything below; with the effect
+            // off it returns at its first line. A failed open never reaches here (the catch above returns or leaves the
+            // placeholder, which the policy excludes); history (`live == false`) and retries never animate.
+            let enigmaPlainText: Bool = inboundKind == .text && fileV2Body == .text && !isViewOnce
+            if EnigmaHookPolicy.announceReceive(
+                live: live, isRetry: isRetry, isUndecryptablePlaceholder: isUndecryptablePlaceholder, isPlainText: enigmaPlainText) {
+                EnigmaBus.shared.opened(rowId: msgUUID.uuidString, conversationKey: conv.id.uuidString, wire: cipher)
+            }
         case .replacedPlaceholder:
             // The resend of a message we had given up on landed: the
             // placeholder row now carries the real text. No second row, no

@@ -236,6 +236,10 @@ final class ChatMessageSendService {
             case .failure(let reason):
                 return .failed(reason: reason)
             }
+            // Enigma mode, hook 1 of 2 (visual effect only): the packet is sealed, the effect is told its size and its first
+            // bytes. Synchronous, non-throwing, ignored by the send below, which never waits for it; with the effect off it
+            // returns at its first line. Nothing it receives can reach the cipher, a nonce or the tag check.
+            EnigmaBus.shared.sealed(rowId: messageId.uuidString, conversationKey: conversationId.uuidString, wire: wireBlob)
             let serverMsgId = try await live.messageApi.sendMessage(
                 recipientId: peerUserId,
                 content: wireBlob,

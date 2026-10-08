@@ -245,11 +245,15 @@ struct FileV2BubbleContent: View {
                     .foregroundStyle(scheme.onSurface)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(info.displayName)
-                    .qaudionStyle(type.bodyMedium)
-                    .foregroundStyle(scheme.onSurface)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                // Enigma mode (visual effect only): while this row is the one being animated (a file just announced), the name
+                // line is the scene; otherwise it is exactly this Text.
+                EnigmaAwareBody(rowId: rowKey, fallback: info.displayName, lineLimit: 2) {
+                    Text(info.displayName)
+                        .qaudionStyle(type.bodyMedium)
+                        .foregroundStyle(scheme.onSurface)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 cardStatus
             }
             Spacer(minLength: 4)
