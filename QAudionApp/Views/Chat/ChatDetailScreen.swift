@@ -925,6 +925,10 @@ struct ChatDetailScreen: View {
                     proxy.scrollTo(lastId, anchor: .bottom)
                 }
             }
+            // Message replies: the quoted row disappeared (deleted for everyone, expired): the pending reply is withdrawn, the draft stays.
+            .onChange(of: replyTargetIsStale) { stale in
+                if stale { replyTarget = nil }
+            }
             // Message replies: a tap on the quote block of a reply scrolls to the quoted message (and only then: nothing else moves the list).
             .onChange(of: scrollTargetId) { target in
                 guard let target = target else { return }
@@ -1651,18 +1655,51 @@ struct ChatDetailScreen: View {
         if let target = editingTarget,
            let targetUUID = UUID(uuidString: target.messageId),
            let original = container.viewModel.messages.first(where: { $0.id == targetUUID }) {
-            container.editMessage(original, newPlaintext: container.composerText)
-            container.composerText = ""
-            editingTarget = nil
-            replyTarget = nil
+            // The draft and the edit mode are left only when the edit was accepted; a refusal (a reserved prefix, too long) keeps
+            // both and the container says why.
+            if container.editMessage(original, newPlaintext: container.composerText) {
+                container.composerText = ""
+                editingTarget = nil
+                replyTarget = nil
+            }
             return
         }
         editingTarget = nil
         // Message replies (WIRE_SPEC 13): the quote goes to the builder; if the send is refused (too long, the text is not allowed) the
         // draft and the quote stay as they are and the container says why.
-        let quote: MessageReplyQuoteInfo? = replyTarget?.quote
+        var quote: MessageReplyQuoteInfo? = nil
+        if let target = replyTarget {
+            // The quote held by the composer is a snapshot: the live row is read again now.
+            switch container.checkReplyQuote(messageId: target.messageId, shown: target.quote) {
+            case .use(let fresh):
+                quote = fresh
+            case .changed(let fresh):
+                replyTarget = Self.refreshedReplyTarget(target, with: fresh)
+                return
+            case .gone:
+                // The row is gone: there is nothing left to quote. The draft stays; the quote cannot be kept.
+                replyTarget = nil
+                return
+            }
+        }
         let sent: Bool = container.sendMessage(replyTo: quote)
         if sent { replyTarget = nil }
+    }
+
+    /// The pending reply with the values of the live row (the banner shows the new line; the next send uses them).
+    private static func refreshedReplyTarget(_ target: MessageComposer.ReplyTarget, with fresh: MessageReplyQuoteInfo) -> MessageComposer.ReplyTarget {
+        MessageComposer.ReplyTarget(
+            messageId: target.messageId, author: target.author,
+            excerpt: ReplyQuotePresenter.bannerExcerpt(for: fresh), quote: fresh)
+    }
+
+    /// `true` while the composer holds a reply whose row can no longer be named (deleted for everyone, expired, gone from the list). The
+    /// pending reply is withdrawn then, instead of waiting for the send to be refused.
+    private var replyTargetIsStale: Bool {
+        guard let target = replyTarget else { return false }
+        guard let localId = UUID(uuidString: target.messageId),
+              let live = container.viewModel.messages.first(where: { $0.id == localId }) else { return true }
+        return MessageReplyCodec.quoteInfo(for: live) == nil
     }
 
     /// "Rispondi": the message becomes the quote of the next message. Only a row the engine can name (a server message id, not a mesh

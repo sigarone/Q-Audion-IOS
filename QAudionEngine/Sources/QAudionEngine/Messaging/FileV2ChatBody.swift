@@ -95,6 +95,11 @@ public enum FileV2ChatBody: Equatable, Sendable {
     }
     static var unsupportedText: String { placeholderText(.unsupportedVersion) }
     static var invalidText: String { placeholderText(.invalid) }
+
+    /// Whether `text` is the text of the placeholder of a rejected file message (a row whose content is never quoted, WIRE_SPEC 13.5).
+    public static func isRejectedPlaceholderText(_ text: String) -> Bool {
+        text == unsupportedText || text == invalidText
+    }
     /// `Message.mediaMimeType` of a document that is being sent or failed to be sent (no descriptor yet). It keeps such a row
     /// out of the text outbox (`ConversationStore.loadPendingOutboundTextMessages` is text only) so it can never be sent
     /// as the text it shows. The pending row of another kind has the same value followed by `;kind=<kind>` (`pendingMime(kind:)`).

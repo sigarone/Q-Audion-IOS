@@ -158,4 +158,56 @@ final class ConversationExporterTests: XCTestCase {
         let result = ConversationExporter.export(messages: [msg], peerDisplayName: "Mario Rossi", myDisplayLabel: "Tu")
         XCTAssertNil(result, "Export should return nil when file writing fails")
     }
+
+
+    // MARK: - Replies (WIRE_SPEC 13)
+
+    private let quotedServerId = "73740a4d-0d1e-4f08-9f38-5ba1b8fe4472"
+
+    private func replyBody(to: String, quote: String, body: String) -> String {
+        let result = MessageReplyCodec.build(to: to, kind: "text", quoteSource: quote, quotedIsEphemeral: false, body: body)
+        guard case .success(let text) = result else {
+            XCTFail("the builder refused: \(result)")
+            return ""
+        }
+        return text
+    }
+
+    private func exported(_ messages: [Message]) -> String? {
+        guard let url = ConversationExporter.export(messages: messages, peerDisplayName: "Mario Rossi", myDisplayLabel: "Tu") else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func serverRow(_ text: String, outgoing: Bool, server: String, at: TimeInterval, deleted: Bool = false) -> Message {
+        Message(id: UUID(), conversationId: convId, direction: outgoing ? .outgoing : .incoming, plaintext: text,
+                sentAt: Date(timeIntervalSince1970: at), deliveredAt: nil, readAt: nil, status: .sent, senderUserId: "u1",
+                serverMessageId: server, deletedAt: deleted ? Date(timeIntervalSince1970: at) : nil)
+    }
+
+    func test_export_reply_writesB_andWhatItAnswers() {
+        let quoted = serverRow("Ci vediamo alle otto", outgoing: false, server: quotedServerId, at: 1777726200)
+        let reply = serverRow(replyBody(to: quotedServerId, quote: "falso", body: "Va bene"), outgoing: true,
+                              server: "0a1b2c3d-0000-4000-8000-123456789abc", at: 1777726260)
+        guard let contents = exported([quoted, reply]) else { return XCTFail("Failed to read exported file") }
+        // The author and the excerpt come from the local row (`q` is ignored), and the object is never written.
+        XCTAssertTrue(contents.contains("Tu: Va bene (in risposta a Mario Rossi: Ci vediamo alle otto)"))
+        XCTAssertFalse(contents.contains("qa_reply"))
+        XCTAssertFalse(contents.contains("falso"))
+    }
+
+    func test_export_reply_toADeletedMessage_saysItIsNotAvailable_andNeverWritesQ() {
+        let quoted = serverRow("Messaggio eliminato", outgoing: false, server: quotedServerId, at: 1777726200, deleted: true)
+        let reply = serverRow(replyBody(to: quotedServerId, quote: "testo segreto", body: "Ok"), outgoing: true,
+                              server: "0a1b2c3d-0000-4000-8000-123456789abc", at: 1777726260)
+        guard let contents = exported([quoted, reply]) else { return XCTFail("Failed to read exported file") }
+        XCTAssertTrue(contents.contains("Tu: Ok (in risposta a un messaggio: non disponibile)"))
+        XCTAssertFalse(contents.contains("testo segreto"))
+    }
+
+    func test_export_reply_toAnUnknownMessage_writesTheSanitisedQ_withoutAuthor() {
+        let reply = serverRow(replyBody(to: quotedServerId, quote: "citazione", body: "Ok"), outgoing: true,
+                              server: "0a1b2c3d-0000-4000-8000-123456789abc", at: 1777726260)
+        guard let contents = exported([reply]) else { return XCTFail("Failed to read exported file") }
+        XCTAssertTrue(contents.contains("Tu: Ok (in risposta a un messaggio: citazione)"))
+    }
 }

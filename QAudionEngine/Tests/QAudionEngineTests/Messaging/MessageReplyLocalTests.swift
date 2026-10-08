@@ -313,6 +313,64 @@ final class MessageReplyLocalTests: XCTestCase {
     }
 }
 
+/// The rewrite of a reply whose quoted message is deleted (`clearingQuote`) and the decoding of stored bytes (`StrictUTF8`).
+final class MessageReplyQuoteClearingTests: XCTestCase {
+
+    private let serverId = "73740a4d-0d1e-4f08-9f38-5ba1b8fe4472"
+
+    private func built(quoteSource: String, ephemeral: Bool, body: String, kind: String = "text") -> String {
+        let result = MessageReplyCodec.build(to: serverId, kind: kind, quoteSource: quoteSource, quotedIsEphemeral: ephemeral, body: body)
+        guard case .success(let text) = result else {
+            XCTFail("the builder refused: \(result)")
+            return ""
+        }
+        return text
+    }
+
+    func test_clearingTheQuote_givesTheCanonicalBodyOfAnEphemeralQuote() {
+        let original = built(quoteSource: "testo da dimenticare", ephemeral: false, body: "risposta \"con\" virgolette e \u{00E8}")
+        let expected = built(quoteSource: "testo da dimenticare", ephemeral: true, body: "risposta \"con\" virgolette e \u{00E8}")
+        XCTAssertNotEqual(original, expected)
+        XCTAssertEqual(MessageReplyCodec.clearingQuote(ofBody: original), expected)
+    }
+
+    func test_clearingTheQuote_keepsToKindAndB_andDropsUnknownMembers() {
+        let received = #"{"qa_reply":1,"x":[1,2],"b":"ciao","q":"vecchio","k":"image","to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472"}"#
+        let expected = #"{"qa_reply":1,"to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472","k":"image","q":"","b":"ciao"}"#
+        XCTAssertEqual(MessageReplyCodec.clearingQuote(ofBody: received), expected)
+        guard case .reply(let reply) = MessageReplyCodec.recognize(expected) else { return XCTFail("not a reply") }
+        XCTAssertEqual(reply.quote, "")
+        XCTAssertEqual(reply.body, "ciao")
+        XCTAssertEqual(reply.kind, .image)
+    }
+
+    func test_clearingTheQuote_rewritesAReplyWhoseBIsEmptyOrBeginsWithAReservedPrefix() {
+        // Accepted on reception (13.3), so it must be rewritten as it is; the builder would refuse both.
+        let emptyB = #"{"qa_reply":1,"to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472","k":"text","q":"vecchio","b":""}"#
+        XCTAssertEqual(MessageReplyCodec.clearingQuote(ofBody: emptyB),
+                       #"{"qa_reply":1,"to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472","k":"text","q":"","b":""}"#)
+        let prefixedB = #"{"qa_reply":1,"to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472","k":"text","q":"vecchio","b":"{\"qa_reply\":1}"}"#
+        XCTAssertEqual(MessageReplyCodec.clearingQuote(ofBody: prefixedB),
+                       #"{"qa_reply":1,"to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472","k":"text","q":"","b":"{\"qa_reply\":1}"}"#)
+    }
+
+    func test_clearingTheQuote_isNilWhenThereIsNothingToClear() {
+        XCTAssertNil(MessageReplyCodec.clearingQuote(ofBody: "ciao"))
+        XCTAssertNil(MessageReplyCodec.clearingQuote(ofBody: #"{"qa_reply":7,"b":"x"}"#))
+        let alreadyEmpty = built(quoteSource: "qualcosa", ephemeral: true, body: "risposta")
+        XCTAssertNil(MessageReplyCodec.clearingQuote(ofBody: alreadyEmpty))
+    }
+
+    func test_strictUTF8_keepsAByteOrderMark_andRefusesInvalidBytes() {
+        var bytes: [UInt8] = [0xEF, 0xBB, 0xBF]
+        bytes.append(contentsOf: Array(#"{"qa_reply":1}"#.utf8))
+        guard let text = StrictUTF8.string(from: Data(bytes)) else { return XCTFail("valid UTF-8 refused") }
+        XCTAssertEqual(Array(text.utf8), bytes)
+        XCTAssertEqual(text.unicodeScalars.first?.value, 0xFEFF)
+        XCTAssertNil(StrictUTF8.string(from: Data([0x41, 0xFF, 0x42])))
+    }
+}
+
 /// The reply at the store: the inbound write boundary previews `b`, and no edit can turn a row into a reply.
 final class MessageReplyStoreTests: XCTestCase {
 
@@ -387,5 +445,95 @@ final class MessageReplyStoreTests: XCTestCase {
         XCTAssertFalse(store.applyEditByClientMsgId("cmid-edit", newPlaintext: forged))
         XCTAssertEqual(store.loadMessages(conversationId: convId).map { $0.plaintext }, ["testo"])
         XCTAssertTrue(store.applyEditByClientMsgId("cmid-edit", newPlaintext: "testo nuovo"))
+    }
+
+    // MARK: Reply whose `b` looks like a service message (13.3, 13.6 step 4)
+
+    private func replyBody(b: String, to: String? = nil) -> String {
+        let result = MessageReplyCodec.build(to: to ?? serverId, kind: "text", quoteSource: "vecchio", quotedIsEphemeral: false, body: b)
+        guard case .success(let text) = result else {
+            XCTFail("the builder refused: \(result)")
+            return ""
+        }
+        return text
+    }
+
+    private func serviceShapedBodies() -> [String] {
+        [#"{"qa_ctl":1,"t":"x"}"#, #"{"qa_grp":1}"#, #"{"qa_kms":1}"#, #"{"qa_ctl":1,"t":"attach_announce"}"#]
+    }
+
+    func test_aReplyWhoseBLooksLikeAServiceMessage_isStoredShownAndPreviewedAsB() {
+        for (index, b) in serviceShapedBodies().enumerated() {
+            let body = replyBody(b: b)
+            let result = store.recordInboundUserMessage(inbound(body, cmid: "cmid-svc-\(index)", server: "srv-svc-\(index)"),
+                                                         preview: body, incrementUnread: true, kind: .text)
+            XCTAssertEqual(result, .inserted, "b = \(b)")
+            XCTAssertTrue(store.loadMessages(conversationId: convId).contains(where: { $0.plaintext == body }), "b = \(b)")
+            XCTAssertEqual(conversation()?.lastMessagePreview, b, "b = \(b)")
+        }
+        XCTAssertEqual(conversation()?.unreadCount, serviceShapedBodies().count)
+    }
+
+    func test_aReplyWhoseBLooksLikeAServiceMessage_isAlsoStoredWhenItArrivesOverTheMesh() {
+        for (index, b) in serviceShapedBodies().enumerated() {
+            let body = replyBody(b: b)
+            // The mesh path records with the whole body as the preview and `viaMesh` set.
+            let mesh = Message(id: UUID(), conversationId: convId, direction: .incoming, plaintext: body,
+                               sentAt: Date(timeIntervalSince1970: 1_745_000_100), deliveredAt: Date(), readAt: nil,
+                               status: .delivered, senderUserId: peer, clientMsgId: "cmid-mesh-\(index)", viaMesh: true)
+            XCTAssertEqual(store.recordInboundUserMessage(mesh, preview: body, incrementUnread: true, kind: .text), .inserted, "b = \(b)")
+            XCTAssertEqual(conversation()?.lastMessagePreview, b, "b = \(b)")
+        }
+    }
+
+    func test_aBodyThatIsNotAReply_butIsServiceShaped_isStillRefused() {
+        for b in serviceShapedBodies() where !b.contains("attach_announce") {
+            XCTAssertEqual(store.recordInboundUserMessage(inbound(b, cmid: "cmid-plain"), preview: b, incrementUnread: true, kind: .text),
+                           .refusedServiceShaped, "body = \(b)")
+        }
+        XCTAssertTrue(store.loadMessages(conversationId: convId).isEmpty)
+    }
+
+    // MARK: A deleted message takes its excerpt out of the replies (13.6)
+
+    func test_deletingTheQuotedMessage_rewritesTheRepliesToItWithAnEmptyQ() {
+        let quotedServerId = "0a1b2c3d-0000-4000-8000-123456789abc"
+        let otherServerId = "11111111-2222-4333-8444-555555555555"
+        XCTAssertEqual(store.recordInboundUserMessage(inbound("segreto", cmid: "cmid-quoted", server: quotedServerId),
+                                                      preview: "segreto", incrementUnread: false, kind: .text), .inserted)
+        let toQuoted = replyBody(b: "risposta uno", to: quotedServerId)
+        let toOther = replyBody(b: "risposta due", to: otherServerId)
+        XCTAssertEqual(store.recordInboundUserMessage(inbound(toQuoted, cmid: "cmid-r1", server: "srv-r1"), preview: toQuoted,
+                                                      incrementUnread: false, kind: .text), .inserted)
+        XCTAssertEqual(store.recordInboundUserMessage(inbound(toOther, cmid: "cmid-r2", server: "srv-r2"), preview: toOther,
+                                                      incrementUnread: false, kind: .text), .inserted)
+
+        XCTAssertTrue(store.applyDeleteByClientMsgId("cmid-quoted"))
+
+        let rows = store.loadMessages(conversationId: convId)
+        let cleared = MessageReplyCodec.build(to: quotedServerId, kind: "text", quoteSource: nil, quotedIsEphemeral: true, body: "risposta uno")
+        guard case .success(let expected) = cleared else { return XCTFail("the builder refused") }
+        XCTAssertTrue(rows.contains(where: { $0.clientMsgId == "cmid-r1" && $0.plaintext == expected }))
+        // A reply to another message keeps its quote.
+        XCTAssertTrue(rows.contains(where: { $0.clientMsgId == "cmid-r2" && $0.plaintext == toOther }))
+    }
+
+    // MARK: A byte order mark survives the disk (13.3)
+
+    func test_aBodyThatBeginsWithAByteOrderMark_staysOrdinaryText_afterTheRoundTripThroughTheDisk() throws {
+        let body = "\u{FEFF}" + #"{"qa_reply":1,"to":"73740a4d-0d1e-4f08-9f38-5ba1b8fe4472","k":"text","q":"x","b":"y"}"#
+        XCTAssertEqual(MessageReplyCodec.recognize(body), .notReply)
+        // The cipher alone.
+        let sealed = try XCTUnwrap(try LocalStoreCipher.seal(body))
+        let opened = try XCTUnwrap(LocalStoreCipher.open(sealed))
+        XCTAssertEqual(Array(opened.utf8), Array(body.utf8))
+        XCTAssertEqual(opened.unicodeScalars.first?.value, 0xFEFF)
+        XCTAssertEqual(MessageReplyCodec.recognize(opened), .notReply)
+        // And through the store.
+        XCTAssertEqual(store.recordInboundUserMessage(inbound(body, cmid: "cmid-bom"), preview: body, incrementUnread: false, kind: .text),
+                       .inserted)
+        let stored = try XCTUnwrap(store.loadMessages(conversationId: convId).first)
+        XCTAssertEqual(Array(stored.plaintext.utf8), Array(body.utf8))
+        XCTAssertEqual(MessageReplyCodec.recognize(stored.plaintext), .notReply)
     }
 }

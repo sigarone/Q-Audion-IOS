@@ -35057,6 +35057,216 @@
           }
         }
       }
+    },
+    "reply.banner.title": {
+      "extractionState": "manual",
+      "comment": "Heading of the reply banner above the composer; %@ is the author of the message being answered.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rispondi a %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reply to %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Responder a %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répondre à %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antwort an %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Responder a %@"
+          }
+        }
+      }
+    },
+    "edit.refused.size": {
+      "extractionState": "manual",
+      "comment": "Shown when an edited message would exceed the 8 KiB limit and the edit is not applied.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il testo modificato è troppo lungo per essere inviato. Accorcialo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The edited text is too long to be sent. Shorten it."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El texto editado es demasiado largo para enviarse. Acórtalo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le texte modifié est trop long pour être envoyé. Raccourcissez-le."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der geänderte Text ist zu lang zum Senden. Kürze ihn."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O texto editado é longo demais para ser enviado. Encurte-o."
+          }
+        }
+      }
+    },
+    "edit.refused.generic": {
+      "extractionState": "manual",
+      "comment": "Shown when an edit of a message is not applied (a reply, a file, a message that is gone).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo messaggio non si può modificare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This message cannot be edited."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este mensaje no se puede editar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce message ne peut pas être modifié."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Nachricht kann nicht bearbeitet werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta mensagem não pode ser editada."
+          }
+        }
+      }
+    },
+    "reply.refused.gone": {
+      "extractionState": "manual",
+      "comment": "Shown when the message being answered was deleted or expired before the reply was sent; the reply is not sent and the draft stays.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il messaggio a cui rispondi non è più disponibile. Il testo è rimasto nella bozza."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The message you are replying to is no longer available. Your text is still in the draft."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El mensaje al que respondes ya no está disponible. Tu texto sigue en el borrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le message auquel vous répondez n'est plus disponible. Votre texte est resté dans le brouillon."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Nachricht, auf die du antwortest, ist nicht mehr verfügbar. Dein Text bleibt im Entwurf."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A mensagem à qual você responde não está mais disponível. Seu texto continua no rascunho."
+          }
+        }
+      }
+    },
+    "reply.refused.changed": {
+      "extractionState": "manual",
+      "comment": "Shown when the message being answered became a timed or view-once message before the reply was sent; the reply is not sent yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il messaggio a cui rispondi ora è a scadenza e il suo contenuto non verrà citato. Invia di nuovo per confermare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The message you are replying to is now timed, so its content will not be quoted. Send again to confirm."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El mensaje al que respondes ahora es temporal, por lo que su contenido no se citará. Envía de nuevo para confirmar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le message auquel vous répondez est désormais temporaire : son contenu ne sera pas cité. Envoyez à nouveau pour confirmer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Nachricht, auf die du antwortest, ist jetzt zeitlich begrenzt, daher wird ihr Inhalt nicht zitiert. Sende erneut zur Bestätigung."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A mensagem à qual você responde agora é temporária e seu conteúdo não será citado. Envie novamente para confirmar."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

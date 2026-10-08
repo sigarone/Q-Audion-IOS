@@ -53,6 +53,46 @@ enum ReplyQuotePresenter {
         let block = MessageReplyCodec.resolve(reply, rows: rows)
         // The kind of the row that is shown wins over the `k` the sender wrote.
         let kind: MessageReplyKind = rows.first?.kind ?? reply.kind
+        let linkId: UUID? = block.link.flatMap { localIds[$0] }
+        return makeDisplay(block: block, kind: kind, linkId: linkId)
+    }
+
+    /// The block of `reply` among the rows of a GROUP chat (WIRE_SPEC 13.6: the rows of the same group; `to` is the server message id).
+    /// Read-only: the group list keeps no local UUID per row to scroll to, so the block is never a link. `authorOf` is the label of the
+    /// sender of a row (a contact name, or the "you" label).
+    static func display(for reply: MessageReply, groupRows: [GroupMessageStore.Stored],
+                        authorOf: (GroupMessageStore.Stored) -> String) -> ReplyQuoteDisplay {
+        var rows: [MessageReplyRow] = []
+        for stored in groupRows where stored.serverMessageId == reply.to {
+            rows.append(groupRow(for: stored, author: authorOf(stored)))
+        }
+        let block = MessageReplyCodec.resolve(reply, rows: rows)
+        let kind: MessageReplyKind = rows.first?.kind ?? reply.kind
+        return makeDisplay(block: block, kind: kind, linkId: nil)
+    }
+
+    /// A stored row of a group, reduced to what the resolution rule reads. A file message of the v2 format is quoted by its name (a voice
+    /// note by nothing); an attachment of the earlier format and the placeholder of a rejected file message are never quoted; a view-once
+    /// row shows no content. A group row is removed when it is deleted or expires, so it is never "gone": it is found or it is not.
+    private static func groupRow(for stored: GroupMessageStore.Stored, author: String) -> MessageReplyRow {
+        let id: String = stored.serverMessageId ?? ""
+        let viewOnce: Bool = stored.isViewOnce == true
+        if stored.fileV2 == true {
+            let kind: MessageReplyKind = MessageReplyKind(rawValue: stored.attachmentKind ?? "file") ?? .file
+            let name: String = kind == .voice ? "" : (stored.fileName ?? "")
+            return MessageReplyRow(id: id, sameConversation: true, kind: kind, text: name, author: author, viewOnce: viewOnce, gone: false)
+        }
+        if let legacyKind = stored.attachmentKind {
+            let kind: MessageReplyKind = legacyKind == "image" ? .image : .file
+            return MessageReplyRow(id: id, sameConversation: true, kind: kind, text: "", author: author, viewOnce: true, gone: false)
+        }
+        let rejectedFileMessage: Bool = FileV2ChatBody.isRejectedPlaceholderText(stored.text)
+        return MessageReplyRow(id: id, sameConversation: true, kind: .text, text: stored.text, author: author,
+                               viewOnce: viewOnce || rejectedFileMessage, gone: false)
+    }
+
+    /// What is drawn for a resolved block: the same for a 1:1 chat and a group.
+    private static func makeDisplay(block: MessageReplyBlock, kind: MessageReplyKind, linkId: UUID?) -> ReplyQuoteDisplay {
         let shownText: String
         var isLabel = false
         switch block.source {
@@ -67,7 +107,6 @@ enum ReplyQuotePresenter {
                 shownText = block.excerpt
             }
         }
-        let linkId: UUID? = block.link.flatMap { localIds[$0] }
         return ReplyQuoteDisplay(
             author: block.author, text: shownText, textIsLabel: isLabel, linkId: linkId,
             accessibilityText: accessibilityText(author: block.author, excerpt: block.excerpt, kind: kind,
@@ -108,24 +147,24 @@ struct ReplyQuoteBlockView: View {
     let display: ReplyQuoteDisplay
     let onOpen: (UUID) -> Void
 
-    var body: some View {
-        blockWithAction
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(verbatim: display.accessibilityText))
-    }
-
-    /// Only a tap gesture (not a Button): a Button would swallow the long press that opens the menu of the message.
+    /// One accessible element, whose label, trait, hint and action are all applied to the view that collapses the children (applied before
+    /// `.accessibilityElement(children: .ignore)` they would be lost with the collapsed children). Only a tap gesture, not a Button: a
+    /// Button would swallow the long press that opens the menu of the message.
     @ViewBuilder
-    private var blockWithAction: some View {
+    var body: some View {
         if let id = display.linkId {
             content
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen(id) }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: display.accessibilityText))
                 .accessibilityAddTraits(.isLink)
                 .accessibilityHint(Text(verbatim: goToMessageText))
                 .accessibilityAction { onOpen(id) }
         } else {
             content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: display.accessibilityText))
         }
     }
 

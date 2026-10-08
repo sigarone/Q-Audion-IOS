@@ -267,4 +267,23 @@ public enum MessageReplyCodec {
         guard out.count < maxBytes else { return .failure(.size) }
         return .success(String(decoding: out, as: UTF8.self))
     }
+
+    /// The canonical text of the valid reply `body` with an empty `q`, or `nil` when `body` is not a valid reply or its `q` is already
+    /// empty. Used when the quoted message is deleted: the copy of its text that the reply carries must not outlive it (section 13.6: a row
+    /// that is gone shows nothing of itself). `to`, `k` and `b` are kept exactly as they are, so it does not apply the refusals of the
+    /// builder (an empty `b`, or one that begins with a reserved prefix, was accepted on reception and is rewritten as it is).
+    public static func clearingQuote(ofBody body: String) -> String? {
+        guard case .reply(let reply) = recognize(body), !reply.quote.isEmpty else { return nil }
+        var out: [UInt8] = Array(#"{"qa_reply":1,"to":"#.utf8)
+        FileV2DescriptorBuilder.string(&out, reply.to)
+        out.append(contentsOf: Array(#","k":"#.utf8))
+        FileV2DescriptorBuilder.string(&out, reply.kind.rawValue)
+        out.append(contentsOf: Array(#","q":"#.utf8))
+        FileV2DescriptorBuilder.string(&out, "")
+        out.append(contentsOf: Array(#","b":"#.utf8))
+        FileV2DescriptorBuilder.string(&out, reply.body)
+        out.append(UInt8(ascii: "}"))
+        guard out.count < maxBytes else { return nil }
+        return String(decoding: out, as: UTF8.self)
+    }
 }

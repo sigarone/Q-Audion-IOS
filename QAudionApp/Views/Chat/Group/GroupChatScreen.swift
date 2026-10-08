@@ -641,8 +641,8 @@ struct GroupChatScreen: View {
     /// truth (no more ephemeral @State appends).
     private func reloadMessagesFromStore() {
         let stored = GroupMessageStore.shared.messages(forGroupHex: groupHex)
-        state.messages = stored.map { m in
-            GroupMessageRowUi(
+        state.messages = stored.map { (m: GroupMessageStore.Stored) -> GroupMessageRowUi in
+            var row = GroupMessageRowUi(
                 id: m.id,
                 text: m.text,
                 // Fase 1B — resolve the raw sender UUID to a contact name so
@@ -661,10 +661,22 @@ struct GroupChatScreen: View {
                 exportBlocked: m.exportBlocked,
                 fileV2: m.fileV2 == true,
                 descriptorJson: m.fileV2 == true ? m.descriptorJson : nil)
+            row.replyQuote = replyQuoteDisplay(for: m, among: stored)
+            return row
         }
         // Viewing the group == reading it: clear the unread badge shown in
         // the chat list (mirrors ChatContainer.markRead for 1:1).
         GroupMessageStore.shared.markRead(groupHex: groupHex)
+    }
+
+    /// Message replies (WIRE_SPEC 13.6, 13.7: the same rules in a group): the quote block of a stored row that is a valid reply, resolved
+    /// against the rows of THIS group (`to` is the server message id); nil for any other row. Read-only: no link.
+    private func replyQuoteDisplay(for row: GroupMessageStore.Stored, among rows: [GroupMessageStore.Stored]) -> ReplyQuoteDisplay? {
+        guard let object = row.replyObject, case .reply(let reply) = MessageReplyCodec.recognize(object) else { return nil }
+        let meLabel: String = ReplyQuotePresenter.meLabel
+        return ReplyQuotePresenter.display(for: reply, groupRows: rows) { stored in
+            stored.mine ? meLabel : resolveMemberName(stored.senderId)
+        }
     }
 
     /// Fase 2 — roster minus self, used as the ALL-members threshold for
@@ -1186,10 +1198,20 @@ struct GroupMessageBubble: View {
                     .foregroundStyle(scheme.onSurface)
             }
         default:
-            Text(message.text)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
+            groupTextBody
         }
+    }
+
+    /// A plain text row; a reply (WIRE_SPEC 13) shows its read-only quote block over `b`.
+    @ViewBuilder
+    private var groupTextBody: some View {
+        if let quote = message.replyQuote {
+            ReplyQuoteBlockView(isSent: message.mine, display: quote, onOpen: { _ in })
+                .padding(.bottom, 4)
+        }
+        Text(message.text)
+            .qaudionStyle(type.bodyMedium)
+            .foregroundStyle(scheme.onSurface)
     }
 
     @ViewBuilder

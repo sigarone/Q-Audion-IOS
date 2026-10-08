@@ -5258,7 +5258,7 @@ final class AppState: ObservableObject {
                 guard let live = await self.ensurePersistentProviderConnected() else {
                     throw ChatOutboxDrain.TransportError.unavailable
                 }
-                _ = try await live.messageApi.sendMessage(
+                return try await live.messageApi.sendMessage(
                     recipientId: peerUserId, content: wireBlob, clientMsgId: clientMsgId)
             },
             sendReceipt: { [weak self] serverMessageId, senderUserId in
@@ -10464,9 +10464,14 @@ final class AppState: ObservableObject {
                 clientMsgId: clientMsgId, ts: ts, live: live)
             return
         }
-        // A reply (WIRE_SPEC 13) in a group is shown as its `b` for now (no quote block in the group chat yet); never as the object. Reached
-        // with msg_type 0 or 1.
-        let shownText: String = MessageReplyCodec.shownText(ofBody: plaintext)
+        // A reply (WIRE_SPEC 13) in a group shows `b`, never the object; the body as received is kept beside the text (`replyObject`) so
+        // that `to` and `q` are not lost and the group bubble can draw the quote block. Reached with msg_type 0 or 1.
+        var shownText: String = plaintext
+        var replyObject: String? = nil
+        if case .reply(let groupReply) = MessageReplyCodec.recognize(plaintext) {
+            shownText = groupReply.body
+            replyObject = plaintext
+        }
 
         // Store posts didChangeNotification → an open GroupChatScreen
         // reloads live; persisted so it also shows on next open.
@@ -10478,7 +10483,8 @@ final class AppState: ObservableObject {
                 senderId: senderId,
                 mine: false,
                 text: shownText,
-                ts: ts))
+                ts: ts,
+                replyObject: replyObject))
         // Fase 1B — fire the same local banner the 1:1 inbound path fires,
         // but only for a genuinely NEW inbound row (never on a re-delivery
         // that merged into an existing message).
@@ -17580,7 +17586,15 @@ final class AppState: ObservableObject {
         let pending = SiriMessageBridgeStore.shared.drainOutbox()
         guard !pending.isEmpty else { return }
         let store = ConversationStore()
+        var refusedByEntryRule: Int = 0
         for item in pending {
+            // The entry-point rule of the composer (WIRE_SPEC 12.7.1, 13.5): the text of an intent is user text, trimmed as the composer
+            // trims it, and it may not begin like a file message or a reply. A refused element is dropped; only a count is logged.
+            let siriText: String = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !siriText.isEmpty, FileV2ChatBody.isUserTextAllowed(siriText) else {
+                refusedByEntryRule += 1
+                continue
+            }
             guard let match = SiriCallResolution.resolve(
                 handle: item.handle, displayName: item.spokenName, contacts: cachedContacts
             ) else {
@@ -17591,9 +17605,12 @@ final class AppState: ObservableObject {
             let messageId = UUID()
             let message = Message(
                 id: messageId, conversationId: conversationId, direction: .outgoing,
-                plaintext: item.text, sentAt: item.queuedAt, deliveredAt: nil, readAt: nil,
+                plaintext: siriText, sentAt: item.queuedAt, deliveredAt: nil, readAt: nil,
                 status: .sending, clientMsgId: messageId.uuidString)
             store.appendMessage(message)
+        }
+        if refusedByEntryRule > 0 {
+            RTLog.warn("chat", "Siri outbox: refused=\(refusedByEntryRule) reason=entry_rule")
         }
         ChatOutboxDrain.shared.kick(reason: "siri-outbox")
     }
@@ -26903,7 +26920,8 @@ extension AppState {
             if let usedId = parsedForOtp?.oneTimePrekeyId {
                 OneTimePrekeyStore().delete(prekeyId: usedId)
             }
-            return String(data: decoded.payload, encoding: .utf8)
+            // The first message of a conversation is a chat body like any other: a leading byte order mark must survive (WIRE_SPEC 13.3).
+            return StrictUTF8.string(from: decoded.payload)
         } catch {
             print("[AppState] KmsPreBootstrap.decode failed sender=\(senderId.prefix(8))…: \(error)")
             return nil

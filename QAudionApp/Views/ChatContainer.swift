@@ -889,22 +889,42 @@ final class ChatContainer: ObservableObject {
     /// W86: ship a `qa_ctl:1` t="edit" envelope to the peer + replace
     /// the body locally. Only own outbound text messages can be edited
     /// (peer's spoof check rejects edits of their own messages too).
-    func editMessage(_ message: Message, newPlaintext: String) {
+    ///
+    /// Returns `true` when the edit was applied and shipped, `false` when it was refused: the screen then keeps the draft and the edit
+    /// mode, and `transientNotice` says why (an empty text is refused without a notice).
+    @discardableResult
+    func editMessage(_ message: Message, newPlaintext: String) -> Bool {
         let trimmed = newPlaintext.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        guard message.direction == .outgoing else { return }
-        guard let cmid = message.clientMsgId, !cmid.isEmpty else { return }
-        // A file message is not text (it cannot be edited), and an edit cannot turn text into one (WIRE_SPEC 12.7.1).
-        guard FileV2ChatBody.classify(text: message.plaintext) == .text, FileV2ChatBody.isUserTextAllowed(trimmed) else { return }
+        guard !trimmed.isEmpty else { return false }
+        guard message.direction == .outgoing, let cmid = message.clientMsgId, !cmid.isEmpty else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
+        // A file message is not text (it cannot be edited), and an edit cannot turn text into one (WIRE_SPEC 12.7.1, 13.5).
+        guard FileV2ChatBody.classify(text: message.plaintext) == .text else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
+        guard FileV2ChatBody.isUserTextAllowed(trimmed) else {
+            transientNotice = String(localized: "file_v2.text_refused", defaultValue: "Questo testo non può essere inviato come messaggio.", comment: "Shown when the typed text begins like an internal file message and is refused.")
+            return false
+        }
         // A reply is not edited (the edit would replace the object and lose the quote).
-        guard !MessageReplyCodec.hasReplyPrefix(message.plaintext) else { return }
+        guard !MessageReplyCodec.hasReplyPrefix(message.plaintext) else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
         // Cap body at the cross-platform limit (8 KiB).
         guard trimmed.utf8.count <= ChatControlEnvelope.editBodyCapBytes else {
             print("[ChatContainer] editMessage rejected: body > 8 KiB")
-            return
+            transientNotice = String(localized: "edit.refused.size", defaultValue: "Il testo modificato è troppo lungo per essere inviato. Accorcialo.", comment: "Shown when an edited message would exceed the 8 KiB limit and the edit is not applied.")
+            return false
         }
         // 1. Apply locally.
-        store.applyEditByClientMsgId(cmid, newPlaintext: trimmed)
+        guard store.applyEditByClientMsgId(cmid, newPlaintext: trimmed) else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
         refreshFromStore()
         // 2. Ship envelope.
         let envelope = ChatControlEnvelope.edit(
@@ -913,6 +933,40 @@ final class ChatContainer: ObservableObject {
             ts: ChatControlEnvelope.nowTsSeconds()
         )
         emitControlEnvelope(envelope)
+        return true
+    }
+
+    private static func editRefusedNotice() -> String {
+        String(localized: "edit.refused.generic", defaultValue: "Questo messaggio non si può modificare.", comment: "Shown when an edit of a message is not applied (a reply, a file, a message that is gone).")
+    }
+
+    /// What the live row of a pending reply says at the moment the reply is sent (WIRE_SPEC 13.5).
+    enum ReplyQuoteCheck: Equatable {
+        /// Send with these values (read from the live row now, not the ones shown when the reply was started).
+        case use(MessageReplyQuoteInfo)
+        /// The row now has a lifetime (a timer or view-once): nothing was sent, the notice is raised and the screen shows these values;
+        /// the next send writes an empty `q`.
+        case changed(MessageReplyQuoteInfo)
+        /// The row is gone (deleted, expired, no server message id): nothing was sent and the notice is raised.
+        case gone
+    }
+
+    /// Re-reads the row named by `messageId` (the local id of the row being answered) and rebuilds what the builder takes from it with
+    /// `MessageReplyCodec.quoteInfo(for:)`. The quote held by the composer is a snapshot taken when the user tapped "Rispondi": the
+    /// quoted message may have been deleted for everyone, may have expired or may have become view-once since, and the reply must not
+    /// send back in `q` a text that is no longer there. `shown` is the snapshot, to tell a row that only now has a lifetime.
+    func checkReplyQuote(messageId: String, shown: MessageReplyQuoteInfo?) -> ReplyQuoteCheck {
+        guard let localId = UUID(uuidString: messageId),
+              let live = viewModel.messages.first(where: { $0.id == localId }),
+              let fresh = MessageReplyCodec.quoteInfo(for: live) else {
+            transientNotice = String(localized: "reply.refused.gone", defaultValue: "Il messaggio a cui rispondi non è più disponibile. Il testo è rimasto nella bozza.", comment: "Shown when the message being answered was deleted or expired before the reply was sent; the reply is not sent and the draft stays.")
+            return .gone
+        }
+        if fresh.ephemeral && shown?.ephemeral != true {
+            transientNotice = String(localized: "reply.refused.changed", defaultValue: "Il messaggio a cui rispondi ora è a scadenza e il suo contenuto non verrà citato. Invia di nuovo per confermare.", comment: "Shown when the message being answered became a timed or view-once message before the reply was sent; the reply is not sent yet.")
+            return .changed(fresh)
+        }
+        return .use(fresh)
     }
 
     /// W87: toggle a reaction on any message (own or peer's). Updates

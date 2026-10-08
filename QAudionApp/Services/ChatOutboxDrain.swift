@@ -50,7 +50,8 @@ final class ChatOutboxDrain {
     }
 
     typealias TransportReadyProvider = @MainActor () -> Bool
-    typealias WireSender = @MainActor (_ peerUserId: String, _ wireBlob: Data, _ clientMsgId: String) async throws -> Void
+    /// Returns the server message id the server assigned (`msg_sent`), as `messageApi.sendMessage` does.
+    typealias WireSender = @MainActor (_ peerUserId: String, _ wireBlob: Data, _ clientMsgId: String) async throws -> String
     typealias ReceiptSender = @MainActor (_ serverMessageId: String, _ senderUserId: String?) async throws -> Void
     typealias WireEncrypter = @MainActor (_ messageId: UUID, _ peerUserId: String, _ plaintext: String) async -> EncryptOutcome
 
@@ -237,12 +238,19 @@ final class ChatOutboxDrain {
                 continue
             }
             do {
-                try await sendWire(peerUserId, blob, clientMsgId)
+                let serverMessageId = try await sendWire(peerUserId, blob, clientMsgId)
                 // Same optimistic semantics as the live path
                 // (`ChatContainer.sendMessage` `.delivered` branch): the
-                // socket accepted the frame; the real server id is bound
-                // later by the self-echo `msg_receive`.
+                // socket accepted the frame. The server id of the confirmation
+                // (`msg_sent`) is bound to the row as the live path does: without
+                // it a message that left from the outbox (or from Siri) could not
+                // be answered ("Rispondi" needs it) and the replies of the peer
+                // to it would fall back on their `q` (WIRE_SPEC 13.5, 13.6).
                 outbox.remove(id: clientMsgId)
+                if !serverMessageId.isEmpty {
+                    store.setServerMessageId(
+                        localId: row.id, conversationId: row.conversationId, serverMessageId: serverMessageId)
+                }
                 store.updateMessageStatus(
                     id: row.id, conversationId: row.conversationId,
                     newStatus: .delivered, deliveredAt: Date())
