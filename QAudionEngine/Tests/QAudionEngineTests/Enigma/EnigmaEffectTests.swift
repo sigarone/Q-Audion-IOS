@@ -87,26 +87,43 @@ final class EnigmaEffectTests: XCTestCase {
         XCTAssertTrue(EnigmaLabels.line(kind: .sealed, packetBytes: 5, percent: 900).hasSuffix("100%"))
     }
 
-    // MARK: - durations (about one second longer than the first Android version)
+    // MARK: - durations (same values as Android; owner request 2026-10-08, was 900+16*len / 1300...2600 / holds 1100, 1000)
 
     func test_durationsFollowTheLengthenedConstants() {
-        XCTAssertEqual(EnigmaScene.morphMs(length: 0), 1300)
-        XCTAssertEqual(EnigmaScene.morphMs(length: 10), 1300)       // 900 + 160 = 1060 -> clamped up
-        XCTAssertEqual(EnigmaScene.morphMs(length: 50), 1700)       // 900 + 800
-        XCTAssertEqual(EnigmaScene.morphMs(length: 240), 2600)      // clamped down
-        XCTAssertEqual(EnigmaScene.morphMs(length: -4), 1300)
-        XCTAssertEqual(EnigmaScene.backMorphMs(morph: 1300), 650)
-        XCTAssertEqual(EnigmaScene.backMorphMs(morph: 2600), 1300)
-        XCTAssertTrue((1000...1200).contains(EnigmaScene.holdSendMs))
-        XCTAssertTrue((1000...1200).contains(EnigmaScene.holdReceiveMs))
+        XCTAssertEqual(EnigmaScene.morphMs(length: 0), 1500)
+        XCTAssertEqual(EnigmaScene.morphMs(length: 10), 1500)       // 1000 + 180 = 1180 -> clamped up
+        XCTAssertEqual(EnigmaScene.morphMs(length: 30), 1540)       // 1000 + 540
+        XCTAssertEqual(EnigmaScene.morphMs(length: 50), 1900)       // 1000 + 900
+        XCTAssertEqual(EnigmaScene.morphMs(length: 100), 2800)      // 1000 + 1800
+        XCTAssertEqual(EnigmaScene.morphMs(length: 240), 3000)      // clamped down
+        XCTAssertEqual(EnigmaScene.morphMs(length: -4), 1500)
+        XCTAssertEqual(EnigmaScene.backMorphMs(morph: 300), 500)    // clamped up
+        XCTAssertEqual(EnigmaScene.backMorphMs(morph: 1500), 750)
+        XCTAssertEqual(EnigmaScene.backMorphMs(morph: 2800), 1400)
+        XCTAssertEqual(EnigmaScene.backMorphMs(morph: 3000), 1400)  // 1500 -> clamped down
+        XCTAssertEqual(EnigmaScene.holdSendMs, 1300)
+        XCTAssertEqual(EnigmaScene.holdReceiveMs, 1100)
+        XCTAssertEqual(EnigmaEffect.maxBacklogMs, 12_000)
         guard let send = EnigmaScene.build(direction: .send, from: String(repeating: "a", count: 50), to: "QUJD", result: .ok(packetBytes: 3)),
               let receive = EnigmaScene.build(direction: .receive, from: "QUJD", to: String(repeating: "a", count: 50), result: .ok(packetBytes: 3))
         else {
             XCTFail("scenes")
             return
         }
-        XCTAssertEqual(send.totalMs, 1700 + EnigmaScene.holdSendMs + 850)
-        XCTAssertEqual(receive.totalMs, EnigmaScene.holdReceiveMs + 1700)
+        XCTAssertEqual(send.totalMs, 1900 + EnigmaScene.holdSendMs + 950)
+        XCTAssertEqual(receive.totalMs, EnigmaScene.holdReceiveMs + 1900)
+    }
+
+    func test_aThirtyCharacterMessageTakesAbout3600msToSendAnd2650msToReceive() {
+        let plain = String(repeating: "a", count: 30)
+        guard let send = EnigmaScene.build(direction: .send, from: plain, to: "QUJD", result: .ok(packetBytes: 3)),
+              let receive = EnigmaScene.build(direction: .receive, from: "QUJD", to: plain, result: .ok(packetBytes: 3))
+        else {
+            XCTFail("scenes")
+            return
+        }
+        XCTAssertEqual(send.totalMs, 1540 + 1300 + 770)    // 3610
+        XCTAssertEqual(receive.totalMs, 1100 + 1540)       // 2640
     }
 
     // MARK: - queue
@@ -127,6 +144,7 @@ final class EnigmaEffectTests: XCTestCase {
         let results = (1...6).map { playOk(e, "m\($0)", .send, plain: long) }
         XCTAssertEqual(results[0], .active)
         XCTAssertEqual(results[1], .queued)
+        // 100 characters: send = 2800 + 1300 + 1400 = 5500 ms; two fit in 12 s (11 000), a third (16 500) does not
         XCTAssertTrue(results.dropFirst(2).allSatisfy { $0 == .immediate })
         XCTAssertTrue(e.retainedScenes <= 1 + EnigmaEffect.maxQueue)
     }

@@ -82,6 +82,8 @@ struct GroupChatScreen: View {
     /// generalized to a set since a group can have several concurrent
     /// typists.
     @State private var typingSenderIds: Set<String> = []
+    /// Height of the composer, measured so the list can follow the end of the chat while the keyboard is up (`keyboardFollowsBottom`).
+    @State private var composerHeight: CGFloat = 0
 
     init(groupId: UUID, initial: GroupChatUiState) {
         self.groupId = groupId
@@ -95,6 +97,7 @@ struct GroupChatScreen: View {
                 topBar
                 messageList
                 composer
+                    .reportsComposerHeight($composerHeight)
             }
         }
         .navigationBarBackButtonHidden(true)
@@ -398,6 +401,7 @@ struct GroupChatScreen: View {
         // Fase 2 — built once per render (not per row), same reasoning
         // as ChatDetailScreen.messageList.
         let galleryItems = imageGalleryItems
+        let lastMessageId: String? = state.messages.last?.id
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 6) {
@@ -418,6 +422,8 @@ struct GroupChatScreen: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
+            // Keyboard opens / composer changes height while typing: keep the last messages in view (KeyboardScrollPolicy).
+            .keyboardFollowsBottom(proxy: proxy, lastId: lastMessageId, composerHeight: composerHeight)
             .onChange(of: state.messages.count) { _ in
                 if let last = state.messages.last {
                     withAnimation(.easeOut(duration: 0.25)) {

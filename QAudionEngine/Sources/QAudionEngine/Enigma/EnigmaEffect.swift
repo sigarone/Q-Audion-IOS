@@ -17,8 +17,10 @@ public final class EnigmaEffect {
     public static let maxStalls: Int = 2
     /// Longest time a scene may wait behind the ones already running or queued: the sum of the full durations of the running
     /// scene, the queued ones and the new one must not exceed this, otherwise the new message shows its result at once. Keeps a
-    /// burst coherent now that scenes are long (a queued row shows its plain text until its turn). About three typical scenes.
-    public static let maxBacklogMs: Int64 = 11_000
+    /// burst coherent now that scenes are long (a queued row shows its plain text until its turn). About three typical scenes
+    /// (30 characters: send 3610 ms, receive 2640 ms; two longest sends, 2 x 5800 ms, still fit). Was 11_000 before the
+    /// scenes were lengthened; same value as Android.
+    public static let maxBacklogMs: Int64 = 12_000
     public static let fullIntervalMs: Int64 = 33
     public static let liteIntervalMs: Int64 = 66
     /// Display jitter allowance so a 32.9 ms gap still counts as a 33 ms frame.
