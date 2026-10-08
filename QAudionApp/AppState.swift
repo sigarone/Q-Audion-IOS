@@ -5258,7 +5258,7 @@ final class AppState: ObservableObject {
                 guard let live = await self.ensurePersistentProviderConnected() else {
                     throw ChatOutboxDrain.TransportError.unavailable
                 }
-                return try await live.messageApi.sendMessage(
+                _ = try await live.messageApi.sendMessage(
                     recipientId: peerUserId, content: wireBlob, clientMsgId: clientMsgId)
             },
             sendReceipt: { [weak self] serverMessageId, senderUserId in
