@@ -83,6 +83,8 @@ struct ChatDetailScreen: View {
     @State private var replyTarget: MessageComposer.ReplyTarget? = nil
     /// Message replies: the row the user asked to go to by tapping the quote block of a reply. The list scrolls to it once and clears it.
     @State private var scrollTargetId: UUID? = nil
+    /// Height of the composer area, measured so the list can follow the end of the chat while the keyboard is up (`keyboardFollowsBottom`).
+    @State private var composerHeight: CGFloat = 0
     @State private var editingTarget: MessageComposer.EditingTarget? = nil
     @State private var actionTargetId: UUID? = nil
     /// Downloads of received v2 documents (progress and failures of the file cards).
@@ -278,6 +280,7 @@ struct ChatDetailScreen: View {
             // from the surrounding ZStack/VStack ViewBuilder.
             // See CLAUDE.md §13.
             composerView
+                .reportsComposerHeight($composerHeight)
         }
         .background(scheme.background)
         .navigationBarBackButtonHidden(true)
@@ -875,6 +878,7 @@ struct ChatDetailScreen: View {
         // list and the fullscreen gallery can swipe across the whole
         // conversation. See `ImageGalleryItem`.
         let galleryItems = imageGalleryItems(container.viewModel.messages)
+        let lastMessageId: UUID? = container.viewModel.messages.last?.id
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 6) {
@@ -906,6 +910,8 @@ struct ChatDetailScreen: View {
                 changeToken: EnigmaRowMapper.changeToken(container.viewModel.messages),
                 rows: enigmaRowsProvider()
             )
+            // Keyboard opens / composer changes height while typing: keep the last messages in view (KeyboardScrollPolicy).
+            .keyboardFollowsBottom(proxy: proxy, lastId: lastMessageId, composerHeight: composerHeight)
             // W260: preemptively flattened the scroll-to-bottom closures.
             // `if let last = container.viewModel.messages.last` is the same
             // antipattern as the lines we already fixed — optional chain

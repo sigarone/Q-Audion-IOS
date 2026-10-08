@@ -29,10 +29,10 @@ public final class EnigmaScene {
         let base: Int
     }
 
-    /// Pause on the cipher after a send. Longer than the first Android version on purpose (the owner asked for about one
-    /// second more, so the real packet and its label can be read).
-    public static let holdSendMs: Int64 = 1100
-    public static let holdReceiveMs: Int64 = 1000
+    /// Pause on the cipher after a send / on arrival. Same values as Android (owner request 2026-10-08, more time to read the
+    /// real packet and its label). Previously 1100 / 1000 ms.
+    public static let holdSendMs: Int64 = 1300
+    public static let holdReceiveMs: Int64 = 1100
 
     public let direction: EnigmaDirection
     public let labelKind: EnigmaLabelKind
@@ -58,15 +58,16 @@ public final class EnigmaScene {
         self.totalMs = totalMs
     }
 
-    /// Duration of the main morph: clamp(900 + 16 * length, 1300, 2600) ms.
+    /// Duration of the main morph: clamp(1000 + 18 * length, 1500, 3000) ms (was clamp(900 + 16 * length, 1300, 2600)).
+    /// Same values as Android.
     public static func morphMs(length: Int) -> Int64 {
-        let raw = 900 + 16 * Int64(max(0, min(length, 100_000)))
-        return min(2600, max(1300, raw))
+        let raw = 1000 + 18 * Int64(max(0, min(length, 100_000)))
+        return min(3000, max(1500, raw))
     }
 
-    /// Duration of the way back (send only): half of the morph, clamp(d / 2, 650, 1300) ms.
+    /// Duration of the way back (send only): half of the morph, clamp(d / 2, 500, 1400) ms (was 650...1300).
     public static func backMorphMs(morph: Int64) -> Int64 {
-        min(1300, max(650, morph / 2))
+        min(1400, max(500, morph / 2))
     }
 
     /// `from` and `to` are the two strings handed to the effect: plain -> cipher on send, cipher -> plain on receive. The
