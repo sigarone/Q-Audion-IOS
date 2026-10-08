@@ -506,35 +506,83 @@ public final class ConversationStore {
                                     viaMesh: Bool? = nil) {
         do {
             try db.writer.write { db in
-                if var msg = try Message.fetchOne(db, key: id) {
-                    msg = Message(
-                        id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
-                        plaintext: msg.plaintext, sentAt: msg.sentAt,
-                        deliveredAt: deliveredAt ?? msg.deliveredAt,
-                        readAt: readAt ?? msg.readAt,
-                        status: newStatus,
-                        senderUserId: msg.senderUserId,
-                        serverMessageId: msg.serverMessageId,
-                        mediaLocalPath: msg.mediaLocalPath,
-                        mediaDurationMs: msg.mediaDurationMs,
-                        mediaMimeType: msg.mediaMimeType,
-                        clientMsgId: msg.clientMsgId,
-                        edited: msg.edited,
-                        deletedAt: msg.deletedAt,
-                        reactions: msg.reactions,
-                        expiresAt: msg.expiresAt,
-                        isViewOnce: msg.isViewOnce,
-                        viewOnceOpened: msg.viewOnceOpened,
-                        exportBlocked: msg.exportBlocked,
-                        viaMesh: viaMesh ?? msg.viaMesh,
-                        wireAttachmentId: msg.wireAttachmentId,
-                        isPlaceholder: msg.isPlaceholder
-                    )
-                    try msg.save(db)
-                }
+                try Self.applyStatusUpdate(
+                    db, id: id, newStatus: newStatus,
+                    deliveredAt: deliveredAt, readAt: readAt, viaMesh: viaMesh)
             }
         } catch {
             print("[ConversationStore] updateMessageStatus failed: \(error)")
+        }
+    }
+
+    /// One row of ``updateMessageStatuses(_:)``: the same fields
+    /// `updateMessageStatus(id:conversationId:newStatus:deliveredAt:readAt:viaMesh:)`
+    /// takes (`conversationId` is not needed — the row is keyed by `id`).
+    public struct MessageStatusUpdate {
+        public let id: UUID
+        public let newStatus: Message.Status
+        public let deliveredAt: Date?
+        public let readAt: Date?
+
+        public init(id: UUID, newStatus: Message.Status,
+                    deliveredAt: Date? = nil, readAt: Date? = nil) {
+            self.id = id
+            self.newStatus = newStatus
+            self.deliveredAt = deliveredAt
+            self.readAt = readAt
+        }
+    }
+
+    /// Batch form of ``updateMessageStatus(id:conversationId:newStatus:deliveredAt:readAt:viaMesh:)``:
+    /// every update is applied, in order, inside ONE write transaction
+    /// instead of one transaction per message. Per-row semantics are
+    /// identical (absent id = skipped; nil `deliveredAt`/`readAt` keep the
+    /// stored value). A failure rolls the whole batch back and is logged,
+    /// like the single-row form.
+    public func updateMessageStatuses(_ updates: [MessageStatusUpdate]) {
+        guard !updates.isEmpty else { return }
+        do {
+            try db.writer.write { db in
+                for u in updates {
+                    try Self.applyStatusUpdate(
+                        db, id: u.id, newStatus: u.newStatus,
+                        deliveredAt: u.deliveredAt, readAt: u.readAt, viaMesh: nil)
+                }
+            }
+        } catch {
+            print("[ConversationStore] updateMessageStatuses failed: \(error)")
+        }
+    }
+
+    /// Shared body of the single-row and batch status updates, run inside
+    /// the caller's write transaction.
+    private static func applyStatusUpdate(_ db: Database, id: UUID, newStatus: Message.Status,
+                                          deliveredAt: Date?, readAt: Date?, viaMesh: Bool?) throws {
+        if var msg = try Message.fetchOne(db, key: id) {
+            msg = Message(
+                id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
+                plaintext: msg.plaintext, sentAt: msg.sentAt,
+                deliveredAt: deliveredAt ?? msg.deliveredAt,
+                readAt: readAt ?? msg.readAt,
+                status: newStatus,
+                senderUserId: msg.senderUserId,
+                serverMessageId: msg.serverMessageId,
+                mediaLocalPath: msg.mediaLocalPath,
+                mediaDurationMs: msg.mediaDurationMs,
+                mediaMimeType: msg.mediaMimeType,
+                clientMsgId: msg.clientMsgId,
+                edited: msg.edited,
+                deletedAt: msg.deletedAt,
+                reactions: msg.reactions,
+                expiresAt: msg.expiresAt,
+                isViewOnce: msg.isViewOnce,
+                viewOnceOpened: msg.viewOnceOpened,
+                exportBlocked: msg.exportBlocked,
+                viaMesh: viaMesh ?? msg.viaMesh,
+                wireAttachmentId: msg.wireAttachmentId,
+                isPlaceholder: msg.isPlaceholder
+            )
+            try msg.save(db)
         }
     }
 

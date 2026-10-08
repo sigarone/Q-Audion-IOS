@@ -13,7 +13,8 @@ public final class OtaDownloadManager {
         try data.write(to: localPath)
     }
 
-    private static func isValidModelName(_ name: String) -> Bool {
+    // Internal (not private) only so OtaDownloadManagerTests can pin the allow-list table.
+    static func isValidModelName(_ name: String) -> Bool {
         !name.isEmpty
             && name.count <= 128
             && !name.contains("..")

@@ -987,4 +987,38 @@ final class ContactsStoreTests: XCTestCase {
         // the write, the racing writer's name must survive untouched.
         XCTAssertEqual(store.load().first(where: { $0.userId == userId })?.displayName, "Manual Name (won the race)")
     }
+
+    // MARK: - upsert(contentsOf:) (batch form of upsert)
+
+    private func makeContact(_ id: String, name: String) -> ContactsStore.StoredContact {
+        ContactsStore.StoredContact(
+            userId: id, displayName: name,
+            phoneHash: String(repeating: "cd", count: 32),
+            avatarUrl: nil, lastSeen: nil, isVerified: false
+        )
+    }
+
+    /// One batch call must leave the store exactly as the equivalent loop of
+    /// single `upsert` calls would: existing rows overwritten in place (order
+    /// kept), new rows appended in input order, a later duplicate winning.
+    func test_upsertContentsOf_matchesSequentialUpsert() {
+        let seed = [makeContact("u-1", name: "One"), makeContact("u-2", name: "Two")]
+        let batch = [
+            makeContact("u-2", name: "Two (renamed)"),
+            makeContact("u-3", name: "Three"),
+            makeContact("u-3", name: "Three (later wins)")
+        ]
+        store.save(seed)
+        store.upsert(contentsOf: batch)
+
+        XCTAssertEqual(store.load().map(\.userId), ["u-1", "u-2", "u-3"])
+        XCTAssertEqual(store.load().map(\.displayName), ["One", "Two (renamed)", "Three (later wins)"])
+    }
+
+    /// An empty batch is a no-op: nothing is written (no blob appears).
+    func test_upsertContentsOf_emptyList_isNoOp() {
+        store.upsert(contentsOf: [])
+        XCTAssertNil(defaults.data(forKey: "qaudion.contacts.list"))
+        XCTAssertTrue(store.load().isEmpty)
+    }
 }

@@ -368,8 +368,16 @@ struct GroupCallView: View {
             .onDisappear { refreshChatUnreadCount() }
         }
         .onAppear {
+            // SECURITY H-18: the group call surface renders per-participant
+            // verification state + peer identity. Same secure-window
+            // lifecycle as LiveInCallScreen / VideoCallView.
+            ScreenshotLockService.lock()
             refreshChatUnreadCount()
             viewModel.refreshVerification(force: true)
+        }
+        .onDisappear {
+            // Unconditional unlock, same pattern as LiveInCallScreen.
+            ScreenshotLockService.unlock()
         }
         // M3 — the verification of one participant, opened from the banner. The contact screen is the
         // app's existing verification surface (safety number, SAS, in-person); when it closes, the

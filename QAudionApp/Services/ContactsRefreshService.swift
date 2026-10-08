@@ -115,7 +115,7 @@ final class ContactsRefreshService {
                 isVerified: false
             )
         }
-        for c in resolved { store.upsert(c) }
+        store.upsert(contentsOf: resolved)
         return store.load()
     }
 }

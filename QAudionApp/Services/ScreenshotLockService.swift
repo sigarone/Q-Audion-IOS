@@ -26,11 +26,16 @@ import UIKit
 /// the preference itself (it is a pure lock()/unlock() mechanism), so
 /// no default needs flipping here.
 ///
-/// TODO SECURITY H-18: extend secure-window protection to the other
-/// content-sensitive screens (call screen, identity QR, key-export /
-/// device-link, settings showing PSK material). Currently only
-/// ChatDetailScreen installs the secure field, leaving those screens
-/// screenshot-/recording-capturable. Out of scope for this change set.
+/// SECURITY H-18 (secure-window coverage): the secure field is installed by
+/// ChatDetailScreen and GroupChatScreen (preference-gated), LiveInCallScreen,
+/// VideoCallView, GroupCallView, MyIdentityQrSheet, ProximityPairingSheet,
+/// KeyManagementScreen (PSK vault), LinkNewDeviceScreen (device-link) and
+/// RecoverySeedContainerView (mnemonic shown in `.setup` mode).
+/// Deliberately NOT covered: ContactDetailScreen (only public fingerprints,
+/// and it is pushed from ChatDetailScreen whose unconditional unlock could
+/// race its onAppear) and GroupInviteQrSheet (payload is non-sensitive, see
+/// its kdoc). Because lock()/unlock() share ONE sentinel, a screen that is
+/// presented over a locked one must not call unlock() on its own dismissal.
 @MainActor
 public enum ScreenshotLockService {
 

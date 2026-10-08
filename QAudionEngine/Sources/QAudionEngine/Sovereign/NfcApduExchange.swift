@@ -148,11 +148,16 @@ public final class NfcApduExchange: NSObject {
     /// identity key — defending against a key-substitution / MITM
     /// swap on re-pair. When nil, behaviour is unchanged (TOFU).
     ///
-    /// TODO (SECURITY M-6, integration layer): wire this from the
-    /// caller — look up `SovereignKeyVault.identityKey(forPeer:)`,
-    /// pass it here before `start()`, and on mismatch surface a
-    /// prominent "this device's key changed — possible attack" alert
-    /// instead of silently re-trusting.
+    /// Integration status (SECURITY M-6): NOT wired from the UI today, on
+    /// purpose. `NfcExchangeView` is a blind pairing screen — it does not
+    /// know WHICH contact the user means to re-pair with (the peer's
+    /// identity is only learned at the GET_IDENTITY_KEY step), so there is
+    /// no stored key to pass before `start()`. The vault does persist the
+    /// captured identity per NFC entry (`SovereignKeyVault.nfcPeerIdentityKey
+    /// (name:)`). Once a contact-targeted re-pair entry point exists, set
+    /// this property from that stored value before `start()` and surface a
+    /// prominent "this device's key changed — possible attack" alert on
+    /// ``ExchangeError/peerIdentityMismatch`` instead of silently re-trusting.
     public var expectedPeerIdentityPub: Data?
 
     // MARK: - Init
@@ -270,12 +275,10 @@ public final class NfcApduExchange: NSObject {
         // and the tag now presents a different one, abort: this is a
         // key-substitution attempt or a genuine key rotation the
         // user must explicitly re-confirm out of band.
-        if let pinned = expectedPeerIdentityPub {
-            let match = NfcApduExchange.constantTimeEquals(pinned, peerIdentityPub)
-            guard match else {
-                throw ExchangeError.peerIdentityMismatch
-            }
-        }
+        try NfcApduExchange.verifyPinnedPeerIdentity(
+            pinned: expectedPeerIdentityPub,
+            presented: peerIdentityPub
+        )
 
         // Step 3: PUSH_PEER_IDENTITY (0xC5) — send our Ed25519 identity pub
         let pushIdApdu = NFCISO7816APDU(
@@ -509,6 +512,19 @@ public final class NfcApduExchange: NSObject {
         func reject() {
             continuation?.resume(returning: false)
             continuation = nil
+        }
+    }
+
+    /// SECURITY M-6 — the pin decision of `runPhase14cExchange`, extracted as
+    /// a plain CoreNFC-free function so it is unit-testable without NFC
+    /// hardware. `pinned == nil` is TOFU (first pairing): always accepted.
+    /// When `pinned` is set, `presented` must equal it byte-for-byte
+    /// (constant-time, length-checked) or this throws
+    /// ``ExchangeError/peerIdentityMismatch``.
+    static func verifyPinnedPeerIdentity(pinned: Data?, presented: Data) throws {
+        guard let pinned = pinned else { return }
+        guard constantTimeEquals(pinned, presented) else {
+            throw ExchangeError.peerIdentityMismatch
         }
     }
 
