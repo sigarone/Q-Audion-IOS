@@ -113,23 +113,6 @@ struct CallDesignShowcase: View {
                         onHangup: {}
                     )
                 }
-                NavigationLink("InCall · Earbud sovereign (A+)") {
-                    // TrustChainCard earbud branch (gold, envelope reaches
-                    // the mic, CRACEN stat). Design-preview only: no live
-                    // iOS call site can produce earbudActive=true yet.
-                    InCallScreen(
-                        peerDisplayName: "Mario Rossi",
-                        durationSeconds: 340,
-                        confidence: 0.95,
-                        rekeyInSeconds: 120,
-                        rekeyTotalSeconds: 300,
-                        pqcActive: true,
-                        transportMode: .p2pSrtp,
-                        earbudActive: true,
-                        earbudHwVerified: true,
-                        onHangup: {}
-                    )
-                }
             }
 
             Section("Live data preview") {

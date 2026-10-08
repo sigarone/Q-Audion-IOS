@@ -8535,47 +8535,6 @@
         }
       }
     },
-    "Assicurati che l'auricolare sia acceso e in modalità pairing, poi avvia la scansione.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Assicurati che l'auricolare sia acceso e in modalità pairing, poi avvia la scansione."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Make sure the headset is on and in pairing mode, then start the scan."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Asegúrate de que el auricular esté encendido y en modo de emparejamiento, y luego inicia el escaneo."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Assure-toi que l'oreillette est allumée et en mode appairage, puis lance le scan."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stellen Sie sicher, dass das Headset eingeschaltet und im Pairing-Modus ist, und starten Sie dann den Scan."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifique se o fone está ligado e em modo de pareamento, depois inicie a busca."
-          }
-        }
-      }
-    },
     "Attiva video": {
       "extractionState": "manual",
       "localizations": {
@@ -12026,47 +11985,6 @@
         }
       }
     },
-    "Connessione all'auricolare…": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connessione all'auricolare…"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connecting to the headset…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conectando con el auricular…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Connexion à l'oreillette…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verbindung zum Headset wird hergestellt…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conectando ao fone…"
-          }
-        }
-      }
-    },
     "Connetti": {
       "extractionState": "manual",
       "localizations": {
@@ -13207,47 +13125,6 @@
         }
       }
     },
-    "Default firmware": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Default firmware"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Default firmware"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Firmware predeterminado"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Firmware par défaut"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Standard-Firmware"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Firmware padrão"
-          }
-        }
-      }
-    },
     "Dettagli": {
       "extractionState": "manual",
       "localizations": {
@@ -13367,47 +13244,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diagnóstico"
-          }
-        }
-      }
-    },
-    "Diagnostica auricolare": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diagnostica auricolare"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Headset diagnostics"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diagnóstico del auricular"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diagnostic de l'oreillette"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Headset-Diagnose"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diagnóstico do fone"
           }
         }
       }
@@ -15812,43 +15648,43 @@
         }
       }
     },
-    "Hybrid ML-KEM-1024 + PSK hardware · E2E": {
+    "Hybrid ML-KEM-1024 · E2E": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hybrid ML-KEM-1024 + PSK hardware · E2E"
+            "value": "Hybrid ML-KEM-1024 · E2E"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hybrid ML-KEM-1024 + hardware PSK · E2E"
+            "value": "Hybrid ML-KEM-1024 · E2E"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hybrid ML-KEM-1024 + PSK hardware · E2E"
+            "value": "Hybrid ML-KEM-1024 · E2E"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hybrid ML-KEM-1024 + PSK matériel · E2E"
+            "value": "Hybrid ML-KEM-1024 · E2E"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hybrid ML-KEM-1024 + Hardware-PSK · E2E"
+            "value": "Hybrid ML-KEM-1024 · E2E"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hybrid ML-KEM-1024 + PSK hardware · E2E"
+            "value": "Hybrid ML-KEM-1024 · E2E"
           }
         }
       }
@@ -16673,43 +16509,43 @@
         }
       }
     },
-    "Il bitrate è fisso a 32 kbps CBR su tutti i dispositivi (iOS, Android, firmware). Cambiarlo romperebbe la compatibilità cross-platform e la proprietà anti-fingerprinting (frame a dimensione costante).": {
+    "Il bitrate è fisso a 32 kbps CBR su tutti i dispositivi (iOS, Android). Cambiarlo romperebbe la compatibilità cross-platform e la proprietà anti-fingerprinting (frame a dimensione costante).": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il bitrate è fisso a 32 kbps CBR su tutti i dispositivi (iOS, Android, firmware). Cambiarlo romperebbe la compatibilità cross-platform e la proprietà anti-fingerprinting (frame a dimensione costante)."
+            "value": "Il bitrate è fisso a 32 kbps CBR su tutti i dispositivi (iOS, Android). Cambiarlo romperebbe la compatibilità cross-platform e la proprietà anti-fingerprinting (frame a dimensione costante)."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The bitrate is fixed at 32 kbps CBR on every device (iOS, Android, firmware). Changing it would break cross-platform compatibility and the anti-fingerprinting property (constant-size frames)."
+            "value": "The bitrate is fixed at 32 kbps CBR on every device (iOS, Android). Changing it would break cross-platform compatibility and the anti-fingerprinting property (constant-size frames)."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El bitrate es fijo en 32 kbps CBR en todos los dispositivos (iOS, Android, firmware). Cambiarlo rompería la compatibilidad multiplataforma y la propiedad anti-fingerprinting (frames de tamaño constante)."
+            "value": "El bitrate es fijo en 32 kbps CBR en todos los dispositivos (iOS, Android). Cambiarlo rompería la compatibilidad multiplataforma y la propiedad anti-fingerprinting (frames de tamaño constante)."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le débit binaire est fixé à 32 kbps CBR sur tous les appareils (iOS, Android, firmware). Le modifier casserait la compatibilité cross-platform et la propriété anti-fingerprinting (frames de taille constante)."
+            "value": "Le débit binaire est fixé à 32 kbps CBR sur tous les appareils (iOS, Android). Le modifier casserait la compatibilité cross-platform et la propriété anti-fingerprinting (frames de taille constante)."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Bitrate ist auf allen Geräten (iOS, Android, Firmware) fest auf 32 kbps CBR eingestellt. Eine Änderung würde die plattformübergreifende Kompatibilität und die Anti-Fingerprinting-Eigenschaft (Frames mit konstanter Größe) zerstören."
+            "value": "Die Bitrate ist auf allen Geräten (iOS, Android) fest auf 32 kbps CBR eingestellt. Eine Änderung würde die plattformübergreifende Kompatibilität und die Anti-Fingerprinting-Eigenschaft (Frames mit konstanter Größe) zerstören."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A taxa de bits é fixa em 32 kbps CBR em todos os dispositivos (iOS, Android, firmware). Alterá-la quebraria a compatibilidade entre plataformas e a propriedade anti-fingerprinting (frames de tamanho constante)."
+            "value": "A taxa de bits é fixa em 32 kbps CBR em todos os dispositivos (iOS, Android). Alterá-la quebraria a compatibilidade entre plataformas e a propriedade anti-fingerprinting (frames de tamanho constante)."
           }
         }
       }
@@ -20672,47 +20508,6 @@
         }
       }
     },
-    "Nessun auricolare Q-Audion rilevato": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessun auricolare Q-Audion rilevato"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No Q-Audion headset detected"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No se ha detectado ningún auricular Q-Audion"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucune oreillette Q-Audion détectée"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kein Q-Audion-Headset erkannt"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhum fone Q-Audion detectado"
-          }
-        }
-      }
-    },
     "Nessun contatto": {
       "extractionState": "manual",
       "localizations": {
@@ -22371,47 +22166,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ordenar contatos"
-          }
-        }
-      }
-    },
-    "P3 Simboard Control": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "P3 Simboard Control"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "P3 Simboard Control"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "P3 Simboard Control"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "P3 Simboard Control"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "P3-Simboard-Steuerung"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controle P3 Simboard"
           }
         }
       }
@@ -25858,47 +25612,6 @@
         }
       }
     },
-    "Scansiona QA-P3-BENCH": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scansiona QA-P3-BENCH"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan QA-P3-BENCH"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escanear QA-P3-BENCH"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scanner QA-P3-BENCH"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "QA-P3-BENCH scannen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escanear QA-P3-BENCH"
-          }
-        }
-      }
-    },
     "Scansiona QR": {
       "extractionState": "manual",
       "localizations": {
@@ -26711,17 +26424,6 @@
         }
       }
     },
-    "Sicurezza ancorata all'hardware · \\(spec.profile.secureBoundaryLabel)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sicurezza ancorata all'hardware · \\(spec.profile.secureBoundaryLabel)"
-          }
-        }
-      }
-    },
     "Sicurezza chiamata di gruppo": {
       "extractionState": "manual",
       "localizations": {
@@ -26770,17 +26472,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sicurezza chiamata: \\(statusLabel)"
-          }
-        }
-      }
-    },
-    "Sicurezza hardware · \\(spec.profile.secureBoundaryLabel)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sicurezza hardware · \\(spec.profile.secureBoundaryLabel)"
           }
         }
       }
@@ -30203,384 +29894,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "✓ Verificato via \\(methodLabel) il \\(dateLabel)"
-          }
-        }
-      }
-    },
-    "NSMicrophoneUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa il microfono per le chiamate vocali cifrate post-quantistiche e per l'autenticazione vocale."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion uses your microphone for post-quantum encrypted voice calls and voice authentication."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa el micrófono para las llamadas de voz cifradas poscuánticas y para la autenticación de voz."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion utilise le microphone pour les appels vocaux chiffrés post-quantiques et pour l'authentification vocale."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion verwendet das Mikrofon für postquantensicher verschlüsselte Sprachanrufe und für die Sprachauthentifizierung."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion usa o microfone para chamadas de voz criptografadas pós-quânticas e para autenticação por voz."
-          }
-        }
-      }
-    },
-    "NFCReaderUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion legge i tag NFC per importare in modo sicuro le chiavi di cifratura dai dispositivi Android."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion reads NFC tags to securely import encryption keys from Android devices."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion lee etiquetas NFC para importar de forma segura claves de cifrado desde dispositivos Android."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion lit les tags NFC pour importer en toute sécurité des clés de chiffrement depuis des appareils Android."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion liest NFC-Tags, um Verschlüsselungsschlüssel sicher von Android-Geräten zu importieren."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion lê tags NFC para importar com segurança chaves de criptografia de dispositivos Android."
-          }
-        }
-      }
-    },
-    "NSCameraUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa la fotocamera per scansionare i codici QR per lo scambio delle chiavi."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion uses the camera to scan QR codes for key exchange."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa la cámara para escanear códigos QR para el intercambio de claves."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion utilise l'appareil photo pour scanner les codes QR pour l'échange de clés."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion verwendet die Kamera, um QR-Codes für den Schlüsselaustausch zu scannen."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion usa a câmera para escanear códigos QR para troca de chaves."
-          }
-        }
-      }
-    },
-    "NSContactsUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion può usare i tuoi contatti per permetterti di importarli nella rubrica cifrata, e per mostrare automaticamente nome e foto di un contatto telefonico quando ti chiama o lo chiami."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion can use your contacts so you can import them into your encrypted address book, and to automatically show the name and photo of a phone contact when they call you or you call them."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion puede usar tus contactos para que los importes en tu agenda cifrada, y para mostrar automáticamente el nombre y la foto de un contacto telefónico cuando te llama o lo llamas."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion peut utiliser tes contacts pour te permettre de les importer dans ton carnet d'adresses chiffré, et pour afficher automatiquement le nom et la photo d'un contact téléphonique quand il t'appelle ou que tu l'appelles."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion kann auf Ihre Kontakte zugreifen, damit Sie diese in Ihr verschlüsseltes Adressbuch importieren können, und um bei einem Anruf automatisch Name und Foto eines Telefonkontakts anzuzeigen."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion pode usar seus contatos para que você possa importá-los para sua agenda criptografada, e para mostrar automaticamente o nome e a foto de um contato do telefone quando ele liga para você ou você liga para ele."
-          }
-        }
-      }
-    },
-    "NSPhotoLibraryAddUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion salva nella libreria Foto le immagini della chat che scegli di conservare."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion saves chat images you choose to keep into your Photos library."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion guarda en tu biblioteca de Fotos las imágenes del chat que elijas conservar."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion enregistre dans ta pellicule les images de discussion que tu choisis de conserver."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion speichert Chat-Bilder, die Sie behalten möchten, in Ihrer Fotomediathek."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion salva na sua biblioteca de Fotos as imagens do chat que você escolher manter."
-          }
-        }
-      }
-    },
-    "NSFaceIDUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa Face ID per sbloccare l'app quando la funzione di blocco app è attiva."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion uses Face ID to unlock the app when the app lock feature is enabled."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa Face ID para desbloquear la app cuando la función de bloqueo está activada."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion utilise Face ID pour déverrouiller l'app quand la fonction de verrouillage est activée."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion verwendet Face ID, um die App zu entsperren, wenn die App-Sperre aktiviert ist."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion usa o Face ID para desbloquear o app quando o recurso de bloqueio do app está ativado."
-          }
-        }
-      }
-    },
-    "NSBluetoothAlwaysUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa il Bluetooth per connettersi e comunicare con la scheda P3 hardware simulator, e — solo quando attivi l'antenna mesh in una chat — per inoltrare messaggi cifrati direttamente ai dispositivi Q-Audion vicini quando non c'è connessione di rete."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa Bluetooth para conectarse y comunicarse con la placa P3 hardware simulator, y — solo cuando activas la antena mesh en un chat — para retransmitir mensajes cifrados directamente a dispositivos Q-Audion cercanos cuando no hay conexión de red."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion utilise le Bluetooth pour se connecter et communiquer avec la carte P3 hardware simulator, et — seulement quand tu actives l'antenne mesh dans une discussion — pour relayer directement des messages chiffrés vers des appareils Q-Audion à proximité quand aucune connexion réseau n'est disponible."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion verwendet Bluetooth, um sich mit der P3-Hardware-Simulator-Platine zu verbinden und mit ihr zu kommunizieren, und — nur wenn Sie die Mesh-Antenne in einem Chat aktivieren — um verschlüsselte Nachrichten direkt an nahe gelegene Q-Audion-Geräte weiterzuleiten, wenn keine Netzwerkverbindung verfügbar ist."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion usa Bluetooth para se conectar e se comunicar com a placa P3 hardware simulator, e — somente quando você ativa a antena mesh em uma conversa — para retransmitir mensagens criptografadas diretamente para dispositivos Q-Audion próximos quando não há conexão de rede disponível."
-          }
-        }
-      }
-    },
-    "NSBluetoothPeripheralUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa il Bluetooth per connettersi e comunicare con la scheda P3 hardware simulator, e — solo quando attivi l'antenna mesh in una chat — per inoltrare messaggi cifrati direttamente ai dispositivi Q-Audion vicini quando non c'è connessione di rete."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion uses Bluetooth to connect to and communicate with the P3 hardware simulator board, and — only when you turn on the mesh antenna in a chat — to relay encrypted messages directly with nearby Q-Audion devices when no network connection is available."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion usa Bluetooth para conectarse y comunicarse con la placa P3 hardware simulator, y — solo cuando activas la antena mesh en un chat — para retransmitir mensajes cifrados directamente a dispositivos Q-Audion cercanos cuando no hay conexión de red."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion utilise le Bluetooth pour se connecter et communiquer avec la carte P3 hardware simulator, et — seulement quand tu actives l'antenne mesh dans une discussion — pour relayer directement des messages chiffrés vers des appareils Q-Audion à proximité quand aucune connexion réseau n'est disponible."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion verwendet Bluetooth, um sich mit der P3-Hardware-Simulator-Platine zu verbinden und mit ihr zu kommunizieren, und — nur wenn Sie die Mesh-Antenne in einem Chat aktivieren — um verschlüsselte Nachrichten direkt an nahe gelegene Q-Audion-Geräte weiterzuleiten, wenn keine Netzwerkverbindung verfügbar ist."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion usa Bluetooth para se conectar e se comunicar com a placa P3 hardware simulator, e — somente quando você ativa a antena mesh em uma conversa — para retransmitir mensagens criptografadas diretamente para dispositivos Q-Audion próximos quando não há conexão de rede disponível."
-          }
-        }
-      }
-    },
-    "NSSiriUsageDescription": {
-      "extractionState": "manual",
-      "comment": "Info.plist usage-description string (system permission prompt)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion condivide con Siri i nomi dei tuoi contatti per permetterti di avviare una chiamata cifrata dicendo \"Chiama [nome] su Q-Audion\"."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion shares your contacts' names with Siri so you can start an encrypted call by saying \"Call [name] on Q-Audion\"."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion comparte con Siri los nombres de tus contactos para que puedas iniciar una llamada cifrada diciendo \"Llama a [nombre] por Q-Audion\"."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion partage avec Siri les noms de tes contacts pour te permettre de démarrer un appel chiffré en disant « Appelle [nom] sur Q-Audion »."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Q-Audion teilt die Namen Ihrer Kontakte mit Siri, damit Sie mit „Rufe [Name] auf Q-Audion an\" einen verschlüsselten Anruf starten können."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O Q-Audion compartilha com a Siri os nomes dos seus contatos para você iniciar uma chamada criptografada dizendo \"Ligar para [nome] no Q-Audion\"."
           }
         }
       }

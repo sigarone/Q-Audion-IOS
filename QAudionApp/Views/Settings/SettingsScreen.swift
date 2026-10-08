@@ -610,6 +610,9 @@ struct SettingsScreen: View {
     private var sviluppatoreSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("SVILUPPATORE")
+            // Bluetooth board and accessory diagnostics: compiled only with
+            // QAUDION_DEV_TOOLS (their screens are compiled out otherwise).
+            #if QAUDION_DEV_TOOLS
             NavigationLink {
                 LazyView { P3ControlScreen() }
             } label: {
@@ -632,6 +635,7 @@ struct SettingsScreen: View {
                             subtitle: "BLE · CRACEN · heap · PDM/TDM · Axon")
             }
             .buttonStyle(.plain)
+            #endif
 
             // W546+W547 — in-app feedback inbox + compose. Subtitle
             // dynamically reports the unread maintainer-reply count so

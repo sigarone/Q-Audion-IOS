@@ -1,3 +1,5 @@
+// Developer tool: compiled only when QAUDION_DEV_TOOLS is set.
+#if QAUDION_DEV_TOOLS
 import SwiftUI
 
 struct RadarMap3DScreen: View {
@@ -778,3 +780,4 @@ struct AnimatedBreathingWave: View {
         }
     }
 }
+#endif

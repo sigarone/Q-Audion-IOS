@@ -134,7 +134,7 @@ struct CallsSettingsScreen: View {
                     kvRow(label: "Preset audio",
                           value: "32 kbps CBR · Complexity 10",
                           mono: true)
-                    Text("Il bitrate è fisso a 32 kbps CBR su tutti i dispositivi (iOS, Android, firmware). Cambiarlo romperebbe la compatibilità cross-platform e la proprietà anti-fingerprinting (frame a dimensione costante).")
+                    Text("Il bitrate è fisso a 32 kbps CBR su tutti i dispositivi (iOS, Android). Cambiarlo romperebbe la compatibilità cross-platform e la proprietà anti-fingerprinting (frame a dimensione costante).")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14)
