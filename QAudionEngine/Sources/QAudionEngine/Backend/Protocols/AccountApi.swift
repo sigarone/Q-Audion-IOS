@@ -13,8 +13,7 @@ public protocol AccountApi {
     /// Login with PBX extension number + password + device name. Restricted
     /// server-side to Fast Setup accounts (accounts with no real phone
     /// number) — a manual-entry alternative to the QR scan/upload, for
-    /// reviewers (App Store, Google Play) or anyone else who cannot scan a
-    /// QR image. Matches `POST /api/v1/auth/login/extension`.
+    /// anyone who cannot scan a QR image. Matches `POST /api/v1/auth/login/extension`.
     func loginWithExtension(extension ext: Int64, password: String, deviceName: String) async throws -> AuthCredentials
     /// Refresh access token.
     func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair

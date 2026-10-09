@@ -277,7 +277,7 @@ before assuming what's testable vs. not). On-device live-call verification
 (two real iPhones, or one iPhone against the already-fixed Android build,
 through an actual re-key ~5 min in) is the same acknowledged-gap posture
 Android's fix shipped with — valuable, not a blocker, per that fix's final
-reviewer's own explicit judgment.
+explicit assessment.
 
 ## Out of scope
 

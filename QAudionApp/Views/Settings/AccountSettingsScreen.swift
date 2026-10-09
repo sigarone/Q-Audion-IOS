@@ -309,8 +309,8 @@ final class AccountSettingsContainer: ObservableObject {
     // MARK: - Audit P0 #2.12 — GDPR right-to-be-forgotten
     /// Fires DELETE /api/v1/account first; the local wipe follows only
     /// when the server confirmed the deletion (2xx) or reports the
-    /// account already gone (404). App Store readiness audit 2026-09-12
-    /// (FIX-18): the previous `try?` wiped locally on ANY error, so a
+    /// account already gone (404). Since 2026-09-12: the previous
+    /// `try?` wiped locally on ANY error, so a
     /// network blip or 5xx left the account alive server-side while the
     /// user believed it deleted — the opposite of 5.1.1(v). On failure
     /// the user sees an error and keeps the session, so they can retry.

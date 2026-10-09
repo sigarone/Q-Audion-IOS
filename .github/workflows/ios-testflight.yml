@@ -63,7 +63,7 @@
 #     App Store Connect version-string validation surprises) so the two
 #     kinds of build are never visually confused, and a loud `::warning::`
 #     plus a job-summary banner remind whoever is looking at the run that
-#     a dev_tools build must NEVER be submitted for App Store review.
+#     a dev_tools build must NEVER be submitted to the store.
 #
 # --- Build with VPN support (workflow_dispatch only) -----------------------
 # VPN support is a compile-time switch (QAUDION_VPN). The default build -- every
@@ -491,7 +491,7 @@ jobs:
 
           # And the SiriKit Intents extension — it was the one extension
           # left out, so every archive warned "CFBundleVersion of an app
-          # extension (1) must match ... (<build>)" (audit FIX-15).
+          # extension (1) must match ... (<build>)".
           INTENTS_PLIST="../QAudionIntents/Info.plist"
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$INTENTS_PLIST"
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$INTENTS_PLIST"
@@ -1070,7 +1070,7 @@ jobs:
           codesign --force --sign "$IDENTITY" --entitlements "$ENT_FILE" "Payload/QAudionApp.app"
 
           # ---- Store-readiness gates on the SHIPPED artifact -----------
-          # (App Store readiness audit 2026-09-12, FIX-01/FIX-06.) The
+          # (Added 2026-09-12.) The
           # privacy manifest was silently absent from every IPA up to
           # v1.0.1151 because of a project.yml exclude+re-add pattern; a
           # manifest that exists in git but not in the bundle is exactly
@@ -1221,12 +1221,12 @@ jobs:
           # Use Apple's altool directly instead of `app-store-connect
           # publish --testflight`. Reason: the codemagic CLI's publish
           # action tries to submit the build for EXTERNAL TestFlight
-          # beta review even when we only have an INTERNAL group. That
+          # beta distribution even when we only have an INTERNAL group. That
           # submission fails on "missing test info" and breaks the
           # workflow even though the upload + internal distribution
           # succeeded. altool upload is exactly what we need: the build
           # uploads, Apple processes it, internal testers see it
-          # automatically. No beta review involved.
+          # automatically. No external beta submission involved.
           #
           # Write the .p8 to a temp file (altool needs it on disk).
           KEY_DIR=~/.appstoreconnect/private_keys

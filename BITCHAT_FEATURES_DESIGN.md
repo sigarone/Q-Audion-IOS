@@ -180,8 +180,8 @@ is approved. Not defined yet in this pass.
 **iOS**
 - New entitlement/Info.plist keys: `NSBluetoothAlwaysUsageDescription`,
   plus `bluetooth-central`/`bluetooth-peripheral` background modes for
-  background mesh participation — both carry App Review and battery
-  scrutiny.
+  background mesh participation — both carry store-policy and battery
+  implications.
 - Per this repo's CLAUDE.md §16: any new Swift file interacting with app
   state must take primitives + `@MainActor` closures, never `AppState`
   directly.
@@ -202,7 +202,7 @@ is approved. Not defined yet in this pass.
 
 **Large** — a new subsystem on both platforms: BLE stack, mesh relay
 logic, outbox extension, a new `WIRE_SPEC.md` addendum with cross-platform
-KAT vectors, new permissions/entitlements with store-review implications,
+KAT vectors, new permissions/entitlements with store-policy implications,
 and dedicated battery testing. This should get its own multi-week plan
 doc (Android already has a `docs/superpowers/plans/` convention for this)
 before any code is written — **not** scoped as a quick add.

@@ -1,8 +1,8 @@
 # Aikido scanner ignore rules for qaudion-ios.
 #
 # Rules use gitignore-style syntax. Every rule is paired with a rationale so
-# a future reviewer (or an auditor asking why an Aikido finding was silenced)
-# can verify the decision without re-doing the triage.
+# anyone later asking why an Aikido finding was silenced can verify the
+# decision without re-doing the triage.
 #
 # Scope:
 #   * True positives are fixed in code, NOT silenced here.

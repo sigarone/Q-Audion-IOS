@@ -9,7 +9,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 - **Active workflow**: `.github/workflows/ios-testflight.yml`
 - **Trigger**: push of a tag matching `v*` (e.g. `git tag v1.0.420 && git push origin v1.0.420`) or manual `workflow_dispatch`
 - **Runner**: `macos-latest` with Xcode 26.x (auto-selected by the discovery step)
-- **Output**: signed IPA uploaded to TestFlight Internal group `Q-Audion testers` via `xcrun altool` (no beta-review submission)
+- **Output**: signed IPA uploaded to TestFlight Internal group `Q-Audion testers` via `xcrun altool` (no external beta submission)
 - **Repository secrets** (configure at github.com/sigarone/Q-Audion-IOS/settings/secrets/actions): `APP_STORE_CONNECT_KEY_IDENTIFIER`, `APP_STORE_CONNECT_ISSUER_ID`, `APP_STORE_CONNECT_PRIVATE_KEY`, `CERTIFICATE_PRIVATE_KEY`
 
 ### Things that look like Codemagic but are NOT
@@ -28,7 +28,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 | `.github/workflows/ios-ui-smoke.yml` | ACTIVE, manual-only (`workflow_dispatch`) — builds QAudionApp for iOS Simulator (no signing) + runs Maestro UI flows from `maestro/*.yaml` (top level only; flows in `maestro/needs-non-prod-backend/` register real PRODUCTION accounts and are refused by the workflow, 2026-09-30). Added 2026-08-06, GREEN as of run [31079859197](https://github.com/sigarone/Q-Audion-IOS/actions/runs/31079859197) (13m51s) after 3 fix iterations (xcodegen not installed; a device-only quiche.xcframework — since removed with the MASQUE/QUIC transport; the packet-tunnel extension/WireGuardKitGo are device-only too, and since they now live only in `project-vpn.yml` nothing is stripped any more — see the workflow file's own header for the full iteration log) | yes if it fails again — read the uploaded `build-sim-log`/`maestro-debug` artifacts first |
 | `.github/workflows/ios-wda-provision.yml` | ACTIVE, manual-only (`workflow_dispatch`, input `device_udid`) — registers a real test iPhone + builds/signs WebDriverAgentRunner (appium/WebDriverAgent v16.1.5, IOS_APP_DEVELOPMENT signing) for interactive UI debug from Windows via go-ios (see global CLAUDE.md "go-ios + WebDriverAgent"). Added 2026-08-06, UNVERIFIED — first Development-type signing in this repo's CI (everything else here is IOS_APP_STORE), see file header for the certificate-reuse caveat | yes if it fails — read `wda-build-log` artifact; check whether `WDA_CERTIFICATE_PRIVATE_KEY` secret needs setting after a first successful cert creation |
 | `XCODE_CLOUD_MIGRATION.md` | **HISTORICAL** — proposal for Xcode Cloud, never adopted | **do not follow its instructions** |
-| `ci_scripts/` | **REMOVED 2026-09-12** (App Store readiness audit FIX-24) — they were Xcode Cloud hooks never run by the GH Actions pipeline, and would have executed unreviewed if Xcode Cloud were ever switched on | do not recreate |
+| `ci_scripts/` | **REMOVED 2026-09-12** — they were Xcode Cloud hooks never run by the GH Actions pipeline, and would have executed unreviewed if Xcode Cloud were ever switched on | do not recreate |
 | `codemagic.yaml` | **REMOVED** 2026-05-06 — deleted from the repo when CI moved to GH Actions | n/a |
 
 ### If a CI run fails
@@ -506,7 +506,7 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 4. **AASIST deepfake detection** — onnxruntime 1.17.0 inference on iOS; currently patched frameworks may introduce subtle issues. Watch for crashes or weird spoofing scores on the first run.
 5. **Memory / battery profile** — post-quantum crypto is heavy; Instruments run overdue.
 6. **Group call (`GroupCallView`)** — added in commit `c3d5426`, never tested on TestFlight before.
-7. **Export compliance for External TestFlight / public App Store** — ML-KEM post-quantum is NOT standard "mass market" cryptography; consult legal before enabling External testers or submitting for App Store review.
+7. **Export compliance for External TestFlight / public App Store** — ML-KEM post-quantum is NOT standard "mass market" cryptography; consult legal before enabling External testers or submitting to the store.
 
 ## Reference files & commits
 

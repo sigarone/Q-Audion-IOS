@@ -129,7 +129,7 @@ public enum RuntimeIntegrity {
     private static func jailbreakURLSchemeOpenable() -> Bool {
         // `canOpenURL` for cydia:/sileo: requires the scheme in
         // LSApplicationQueriesSchemes to be reliable; we intentionally
-        // do NOT add it (avoids App Review questions). Instead probe
+        // do NOT add it (avoids declaring extra URL schemes). Instead probe
         // the on-disk handler indirectly via a known tweak path that
         // only exists if a package manager is installed. This keeps
         // the check UIKit-free and side-effect-free.

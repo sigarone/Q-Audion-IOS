@@ -366,7 +366,7 @@ public extension CallingApi {
     /// Default impl — fallback path for backends that don't yet
     /// support externally-chosen callIds. Calls the legacy
     /// sendCallOffer which mints its own UUID. Will produce the
-    /// "callId mismatch P0" bug the reviewer flagged when paired with
+    /// "callId mismatch P0" bug when paired with
     /// onAndroidCallSetupStarted; backends supporting Android interop
     /// MUST override.
     func sendCallOfferWithId(callId: String, recipientId: String, sdp: String) async throws {

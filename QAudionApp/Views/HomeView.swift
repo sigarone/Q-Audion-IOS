@@ -5,9 +5,9 @@ struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.qaudionScheme) private var scheme
     /// W55: switch tra `TabView` (compact, iPhone) e `NavigationSplitView`
-    /// (regular, iPad / iPhone Plus landscape) via size class. Apple
-    /// flagga full-screen-only apps in App Review come "non multitasking
-    /// ready"; questo soddisfa il requisito senza duplicare logica.
+    /// (regular, iPad / iPhone Plus landscape) via size class. Le app solo
+    /// full-screen risultano "non multitasking ready"; questo soddisfa il
+    /// requisito senza duplicare logica.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .chats
     @State private var presentingInCall: Bool = false

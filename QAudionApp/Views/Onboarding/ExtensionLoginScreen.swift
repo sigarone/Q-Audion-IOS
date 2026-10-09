@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// Manual-entry login for a Fast Setup account: PBX extension number +
-/// password, instead of scanning/uploading the QR image. Added so App
-/// Store / Google Play reviewers (and anyone else without the QR) can log
-/// into a Fast Setup account by typing two short values.
+/// password, instead of scanning/uploading the QR image. Lets anyone
+/// without the QR log into a Fast Setup account by typing two short values.
 ///
 /// Server-side restricted to Fast Setup accounts (`POST
 /// /api/v1/auth/login/extension`) — an ordinary phone-registered account

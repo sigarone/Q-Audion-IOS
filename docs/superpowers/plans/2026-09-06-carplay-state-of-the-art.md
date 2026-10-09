@@ -240,7 +240,7 @@ template reads from — no new data layer, only new presentation surfaces.
    plan, but the Intents Extension links against `QAudionEngine` products
    the same way `QAudionApp` does — verify no new circular/heavy dependency).
 4. `graphify update .` after every slice.
-5. Review by a fresh reviewer agent against the slice plan.
+5. Check the slice against the slice plan with a fresh pass.
 6. S1/S2: testable TODAY on a real iPhone via Xcode's "run Siri or Maps as
    the host app" debug flow — no CarPlay hardware or entitlement needed to
    verify the Intents Extension in isolation.
