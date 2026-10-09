@@ -258,7 +258,9 @@ public enum SleepAwareClock {
     private static let origin = ContinuousClock.now
 
     public static func seconds() -> TimeInterval {
-        let elapsed = ContinuousClock.now - origin
+        // `origin` first: its lazy initialisation must happen before `now` is read, never after it.
+        let start = origin
+        let elapsed = ContinuousClock.now - start
         return TimeInterval(elapsed.components.seconds) + TimeInterval(elapsed.components.attoseconds) / 1e18
     }
 }
