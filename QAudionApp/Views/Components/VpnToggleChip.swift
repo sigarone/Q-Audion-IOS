@@ -1,3 +1,4 @@
+#if QAUDION_VPN
 // VpnToggleChip.swift — Q-Audion iOS
 //
 // Compact VPN status chip for the app's top bar / toolbar.
@@ -318,3 +319,36 @@ private extension VpnNode {
     .environmentObject(AppState())
     .environmentObject(CapabilityGate.previewInstance())
 }
+#else
+
+import SwiftUI
+
+/// Inactive stand-in for the VPN chip in builds without VPN support
+/// (`QAUDION_VPN` not set). Same initializer as the full chip, so every call
+/// site is unchanged; it is greyed out and cannot be activated.
+struct VpnToggleChip: View {
+    @ObservedObject var vpnService: VpnService
+    let accessToken: String
+
+    var body: some View {
+        Button {} label: {
+            HStack(spacing: 5) {
+                Image(systemName: "lock.open")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("VPN")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.primary.opacity(0.06), in: Capsule())
+            .overlay(Capsule().stroke(Color.primary.opacity(0.15), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(true)
+        .opacity(0.5)
+        .accessibilityHint(Text("VPN non disponibile al momento"))
+    }
+}
+
+#endif // QAUDION_VPN

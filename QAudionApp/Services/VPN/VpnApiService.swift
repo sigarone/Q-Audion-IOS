@@ -1,3 +1,4 @@
+#if QAUDION_VPN
 // VpnApiService.swift — Q-Audion iOS
 //
 // REST client for the BCrypto VPN control-plane endpoints.
@@ -135,3 +136,4 @@ struct VpnApiService {
 
     private struct EmptyBody: Encodable {}
 }
+#endif // QAUDION_VPN

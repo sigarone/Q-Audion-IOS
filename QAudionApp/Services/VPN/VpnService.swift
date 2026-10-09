@@ -1,3 +1,4 @@
+#if QAUDION_VPN
 // VpnService.swift — Q-Audion iOS
 //
 // Manages the WireGuard VPN tunnel on iOS via NetworkExtension.
@@ -367,3 +368,21 @@ enum VpnError: LocalizedError {
         }
     }
 }
+#else
+
+import Combine
+import Foundation
+
+/// Placeholder for builds without VPN support (`QAUDION_VPN` not set).
+///
+/// Keeps the call sites (`AppState.vpnService`, `VpnToggleChip`) compiling
+/// unchanged. It holds no state and links no NetworkExtension code.
+@MainActor
+final class VpnService: ObservableObject {
+    init() {}
+
+    /// No-op: there is no tunnel to adjust.
+    func setCallMediaHost(_ host: String?) {}
+}
+
+#endif // QAUDION_VPN

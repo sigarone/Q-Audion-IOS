@@ -1,3 +1,4 @@
+#if QAUDION_VPN
 // VpnNodePicker.swift — Q-Audion iOS
 //
 // Port of Android NodePicker.kt so every client agrees on the same winner:
@@ -117,3 +118,4 @@ enum VpnNodePicker {
         return r * 2 * atan2(sqrt(a), sqrt(1 - a))
     }
 }
+#endif // QAUDION_VPN

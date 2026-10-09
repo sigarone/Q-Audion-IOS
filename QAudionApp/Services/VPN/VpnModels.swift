@@ -1,3 +1,4 @@
+#if QAUDION_VPN
 // VpnModels.swift — Q-Audion iOS
 //
 // Mirror of Android `VpnModels.kt`. All field names use the server's
@@ -144,3 +145,4 @@ enum WgProviderKey {
     static let dns              = "wg_dns"                // "1.1.1.1,9.9.9.9"
     static let serverCity       = "server_city"           // human-readable city name
 }
+#endif // QAUDION_VPN
