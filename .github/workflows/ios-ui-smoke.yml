@@ -26,6 +26,9 @@
 #     now-unused Go setup step, strip the QAudionPacketTunnel target embed
 #     from the same local project.yml copy (VPN tunnel isn't exercised by
 #     the onboarding screen; NetworkExtension.framework SDK linkage stays).
+#   Later: project.yml itself no longer contains the extension, WireGuardKit or
+#     NetworkExtension.framework (they live in project-vpn.yml, which only the
+#     VPN variant uses), so that strip step is gone.
 # Still unverified end-to-end as of this commit -- next run tests whether
 # the app's extensions (pure Swift, no native cross-compile; the
 # ReplayKit QAudionBroadcastExtension that this originally named was removed
@@ -107,37 +110,6 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
           restore-keys: |
             ${{ runner.os }}-spm-
-
-      # QAudionPacketTunnel is DEVICE-ONLY: run 31079254653 failed the
-      # Simulator link with "Undefined symbols ...
-      # _darwin_arm_init_mach_exception_handler" from libwg-go.a --
-      # WireGuardKitGo's `GOOS=ios` CGO cross-compile only ever targets
-      # real iOS DEVICE (Go's runtime has no simulator-ABI variant of its
-      # Darwin syscall shims out of the box), and the "Build WireGuard Go"
-      # script phase inside the QAudionPacketTunnel target has never had a
-      # reason to know about Simulator until this workflow. Real fix if
-      # ever needed beyond a smoke test: teach that Makefile/script a
-      # Simulator-target Go build (nontrivial CGO cross-compile work,
-      # can't iterate without a Mac). A UI smoke test needs none of this --
-      # the VPN tunnel extension isn't exercised by the onboarding screen,
-      # and NetworkExtension.framework (the SDK the main app's own VPN
-      # code links against) stays untouched -- only the extension TARGET
-      # embed is dropped, so it's never built for this lane. Stripped from
-      # a LOCAL copy of project.yml for this CI checkout only -- the
-      # committed file (and ios-testflight.yml's real, device-only build)
-      # is never touched.
-      - name: Strip QAudionPacketTunnel (Simulator lane only)
-        run: |
-          set -e
-          sed -i.bak \
-            -e '/- target: QAudionPacketTunnel/,+1d' \
-            QAudionApp/project.yml
-          rm QAudionApp/project.yml.bak
-          if grep -qE "target: QAudionPacketTunnel" QAudionApp/project.yml; then
-            echo "::error::sed failed to remove the PacketTunnel dependency lines"
-            exit 1
-          fi
-          echo "QAudionPacketTunnel dependency removed from this run's project.yml (committed file untouched)"
 
       - name: Install xcodegen
         run: |
