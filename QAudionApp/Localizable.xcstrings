@@ -15361,47 +15361,6 @@
         }
       }
     },
-    "Genera un report testuale con build, device, stato auth e summary di UserDefaults. **Non** include token, refresh-token, chiavi private né contenuti chat — solo metadata. Utile per allegare a bug-report TestFlight.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Genera un report testuale con build, device, stato auth e summary di UserDefaults. **Non** include token, refresh-token, chiavi private né contenuti chat — solo metadata. Utile per allegare a bug-report TestFlight."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Generates a text report with build, device, auth state, and a summary of UserDefaults. It **does not** include tokens, refresh tokens, or private keys, nor chat content — only metadata. Useful to attach to a TestFlight bug report."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Genera un reporte de texto con build, device, estado de auth y resumen de UserDefaults. **No** incluye token, refresh-token, claves privadas ni contenido de chats — solo metadata. Útil para adjuntar a un bug-report de TestFlight."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Génère un rapport textuel avec build, appareil, état auth et résumé des UserDefaults. **N'**inclut ni token, ni refresh-token, ni clés privées, ni contenu des discussions — seulement des métadonnées. Utile pour joindre à un bug-report TestFlight."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erstellt einen Textbericht mit Build, Gerät, Auth-Status und einer Zusammenfassung der UserDefaults. **Enthält keine** Token, Refresh-Token, privaten Schlüssel oder Chat-Inhalte — nur Metadaten. Nützlich als Anhang für TestFlight-Bug-Reports."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gera um relatório em texto com build, dispositivo, status de autenticação e resumo do UserDefaults. **Não** inclui token, refresh-token, chaves privadas nem conteúdo de conversas — só metadados. Útil para anexar em bug-reports do TestFlight."
-          }
-        }
-      }
-    },
     "Generazione QR fallita": {
       "extractionState": "manual",
       "localizations": {
@@ -19099,47 +19058,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "As denúncias são salvas localmente e enviadas ao servidor. A lista acima é o seu histórico local; as linhas mais antigas que o limite são removidas automaticamente."
-          }
-        }
-      }
-    },
-    "Lista delle ultime release TestFlight con i cambiamenti principali. Aggiornata manualmente a ogni tag — la versione canonica del changelog vive nel repository git su `feature/ios-android-parity`.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lista delle ultime release TestFlight con i cambiamenti principali. Aggiornata manualmente a ogni tag — la versione canonica del changelog vive nel repository git su `feature/ios-android-parity`."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "List of the latest TestFlight releases with the main changes. Updated manually on every tag — the canonical changelog lives in the git repository on `feature/ios-android-parity`."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lista de las últimas releases de TestFlight con los cambios principales. Se actualiza manualmente en cada tag — la versión canónica del changelog vive en el repositorio git en `feature/ios-android-parity`."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liste des dernières releases TestFlight avec les principaux changements. Mise à jour manuellement à chaque tag — la version canonique du changelog se trouve dans le dépôt git sur `feature/ios-android-parity`."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liste der letzten TestFlight-Releases mit den wichtigsten Änderungen. Wird bei jedem Tag manuell aktualisiert — die maßgebliche Version des Changelogs befindet sich im Git-Repository unter `feature/ios-android-parity`."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lista das últimas releases do TestFlight com as principais mudanças. Atualizada manualmente a cada tag — a versão canônica do changelog fica no repositório git em `feature/ios-android-parity`."
           }
         }
       }
@@ -33816,47 +33734,6 @@
         }
       }
     },
-    "Funzione non abilitata": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Funzione non abilitata"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Feature not enabled"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Función no habilitada"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fonctionnalité non activée"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Funktion nicht aktiviert"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recurso não habilitado"
-          }
-        }
-      }
-    },
     "error.feature_not_available_for_account": {
       "extractionState": "manual",
       "comment": "Shown when the server refuses a request because the account does not have the feature enabled.",
@@ -34056,7 +33933,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Halte das iPhone an das Android-Telefon mit Q-Audion."
+            "value": "Halten Sie das iPhone an das Android-Telefon mit Q-Audion."
           }
         },
         "pt-BR": {
@@ -34074,37 +33951,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Telefono Android"
+            "value": "il telefono Android"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Android phone"
+            "value": "the Android phone"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Teléfono Android"
+            "value": "el teléfono Android"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Téléphone Android"
+            "value": "le téléphone Android"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Android-Telefon"
+            "value": "dem Android-Telefon"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Telefone Android"
+            "value": "o telefone Android"
           }
         }
       }
@@ -34254,7 +34131,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "La clave de identidad del otro teléfono ha cambiado desde la última vinculación: operación cancelada (posible ataque)"
+            "value": "La clave de identidad del otro teléfono ha cambiado desde el último emparejamiento: operación cancelada (posible ataque)"
           }
         },
         "fr": {
@@ -34380,7 +34257,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Asociado con %@"
+            "value": "Emparejado con %@"
           }
         },
         "fr": {
@@ -34422,7 +34299,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Listo para asociar"
+            "value": "Listo para emparejar"
           }
         },
         "fr": {
@@ -34476,7 +34353,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Halte das iPhone an das Android-Telefon"
+            "value": "Halten Sie das iPhone an das Android-Telefon"
           }
         },
         "pt-BR": {
@@ -34560,7 +34437,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vergleiche diesen Code mit %@"
+            "value": "Vergleichen Sie diesen Code mit %@"
           }
         },
         "pt-BR": {
@@ -34590,7 +34467,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Asociado con %@"
+            "value": "Emparejado con %@"
           }
         },
         "fr": {
@@ -34686,7 +34563,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identität noch nicht eingerichtet: Schließe die Einrichtung ab, bevor du einen Schlüssel per NFC austauschst"
+            "value": "Identität noch nicht eingerichtet: Schließen Sie die Einrichtung ab, bevor Sie einen Schlüssel per NFC austauschen"
           }
         },
         "pt-BR": {
@@ -34715,7 +34592,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Asociación NFC"
+            "value": "Emparejamiento NFC"
           }
         },
         "fr": {
@@ -34850,7 +34727,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lies ihn laut vor und vergleiche ihn mit dem Bildschirm des anderen Geräts, bevor du bestätigst."
+            "value": "Lesen Sie ihn laut vor und vergleichen Sie ihn mit dem Bildschirm des anderen Geräts, bevor Sie bestätigen."
           }
         },
         "pt-BR": {
@@ -34879,7 +34756,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Iniciar asociación"
+            "value": "Iniciar emparejamiento"
           }
         },
         "fr": {
@@ -35002,7 +34879,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Asociar por NFC"
+            "value": "Emparejar por NFC"
           }
         },
         "fr": {
