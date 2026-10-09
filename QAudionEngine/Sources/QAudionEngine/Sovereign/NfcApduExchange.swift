@@ -370,7 +370,7 @@ public final class NfcApduExchange: NSObject {
 
     /// Name shown for the phone at the other end of the tap.
     private static var peerDeviceName: String {
-        String(localized: "nfc.peer_name", defaultValue: "Telefono Android", comment: "Name shown for the Android phone the iPhone was tapped against during NFC pairing.")
+        String(localized: "nfc.peer_name", defaultValue: "il telefono Android", comment: "Name shown for the Android phone the iPhone was tapped against during NFC pairing. Used mid-sentence after \"con\" / \"with\", so it carries its own article.")
     }
 
     fileprivate func handleSessionError(_ error: Error) {

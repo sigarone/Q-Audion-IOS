@@ -74,7 +74,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion verwendet NFC nur, wenn du einen Kontakt persönlich koppelst: Du hältst dein iPhone an sein Android-Telefon mit Q-Audion, und beide Telefone leiten gemeinsam einen gemeinsamen Schlüssel ab, den du anhand eines 6-stelligen Codes vergleichst."
+            "value": "Q-Audion verwendet NFC nur, wenn Sie einen Kontakt persönlich koppeln: Sie halten Ihr iPhone an sein Android-Telefon mit Q-Audion, und beide Telefone leiten gemeinsam einen gemeinsamen Schlüssel ab, den Sie anhand eines 6-stelligen Codes vergleichen."
           }
         },
         "pt-BR": {
@@ -255,42 +255,42 @@
     },
     "NSBluetoothAlwaysUsageDescription": {
       "extractionState": "manual",
-      "comment": "Bluetooth: in-person QR pairing key exchange + optional BLE mesh relay",
+      "comment": "Bluetooth: in-person QR pairing key exchange + BLE mesh relay (starts with the app; can be turned off in the mesh panel)",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion usa il Bluetooth per scambiare le chiavi di cifratura direttamente con il telefono di un contatto quando lo associ di persona con il codice QR e, solo quando attivi l'antenna mesh in una chat, per inoltrare messaggi cifrati ai dispositivi Q-Audion vicini quando non c'è rete disponibile."
+            "value": "Q-Audion usa il Bluetooth per scambiare le chiavi di cifratura con il telefono di un contatto quando lo associ di persona (un telefono mostra un codice QR, l'altro lo inquadra) e per la mesh Bluetooth, che inoltra messaggi cifrati ai dispositivi Q-Audion vicini quando manca la rete. La mesh si avvia con l'app e puoi spegnerla in qualsiasi momento dal pannello Mesh Bluetooth di una chat (Antenna > Spenta)."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion uses Bluetooth to exchange encryption keys directly with a contact's phone when you pair in person by QR code and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available."
+            "value": "Q-Audion uses Bluetooth to exchange encryption keys with a contact's phone when you pair in person (one phone shows a QR code, the other scans it), and for Bluetooth mesh, which relays encrypted messages to nearby Q-Audion devices when there is no network. The mesh starts with the app, and you can turn it off at any time from the Bluetooth mesh panel of a chat (Antenna control)."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion usa Bluetooth para intercambiar claves de cifrado directamente con el teléfono de un contacto cuando lo emparejas en persona con un código QR y, solo cuando activas la antena mesh en un chat, para retransmitir mensajes cifrados a dispositivos Q-Audion cercanos cuando no hay red disponible."
+            "value": "Q-Audion usa Bluetooth para intercambiar claves de cifrado con el teléfono de un contacto cuando lo emparejas en persona (un teléfono muestra un código QR y el otro lo escanea) y para la mesh Bluetooth, que retransmite mensajes cifrados a dispositivos Q-Audion cercanos cuando no hay red. La mesh se inicia con la app y puedes apagarla en cualquier momento desde el panel Mesh Bluetooth de un chat (control Antena)."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion utilise le Bluetooth pour échanger des clés de chiffrement directement avec le téléphone d'un contact lorsque vous l'associez en personne avec un code QR et, uniquement lorsque vous activez l'antenne mesh dans une discussion, pour relayer des messages chiffrés vers des appareils Q-Audion à proximité en l'absence de réseau."
+            "value": "Q-Audion utilise le Bluetooth pour échanger des clés de chiffrement avec le téléphone d'un contact lorsque vous l'associez en personne (un téléphone affiche un code QR, l'autre le scanne) et pour le mesh Bluetooth, qui relaie des messages chiffrés vers des appareils Q-Audion à proximité en l'absence de réseau. Le mesh démarre avec l'application et vous pouvez l'éteindre à tout moment depuis le panneau Mesh Bluetooth d'une discussion (commande Antenne)."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion verwendet Bluetooth, um Verschlüsselungsschlüssel direkt mit dem Telefon eines Kontakts auszutauschen, wenn du ihn persönlich per QR-Code koppelst, und – nur wenn du die Mesh-Antenne in einem Chat aktivierst – um verschlüsselte Nachrichten an nahegelegene Q-Audion-Geräte weiterzuleiten, wenn kein Netzwerk verfügbar ist."
+            "value": "Q-Audion verwendet Bluetooth, um Verschlüsselungsschlüssel mit dem Telefon eines Kontakts auszutauschen, wenn Sie ihn persönlich koppeln (ein Telefon zeigt einen QR-Code, das andere scannt ihn), und für das Bluetooth-Mesh, das verschlüsselte Nachrichten an nahegelegene Q-Audion-Geräte weiterleitet, wenn kein Netzwerk verfügbar ist. Das Mesh startet mit der App, und Sie können es jederzeit im Bluetooth-Mesh-Fenster eines Chats ausschalten (Bedienelement Antenne)."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O Q-Audion usa Bluetooth para trocar chaves de criptografia diretamente com o telefone de um contato quando você o pareia pessoalmente por código QR e, somente quando você ativa a antena mesh em uma conversa, para retransmitir mensagens criptografadas para dispositivos Q-Audion próximos quando não há rede disponível."
+            "value": "O Q-Audion usa Bluetooth para trocar chaves de criptografia com o telefone de um contato quando você o pareia pessoalmente (um telefone mostra um código QR e o outro o escaneia) e para a mesh Bluetooth, que retransmite mensagens criptografadas para dispositivos Q-Audion próximos quando não há rede. A mesh inicia com o app e você pode desativá-la a qualquer momento no painel Mesh Bluetooth de uma conversa (controle Antena)."
           }
         }
       }
