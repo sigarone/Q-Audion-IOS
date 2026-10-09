@@ -153,24 +153,32 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
         XCTAssertEqual(after.first?.tag, "teeprobe")
     }
 
+    /// Waits until `condition` holds. The wait is on the condition, not on a duration: the tee reads on a background
+    /// queue and hops to the main actor, so how long a line takes to reach the ring depends on the load of the host
+    /// (a starved CI runner took longer than the 10 s the test once allowed). The deadline is only a bound for a
+    /// condition that never comes true, and is far above any scheduling delay.
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(120)
+        while !condition() && Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
     /// A line the process prints on stderr is recorded once by the tee. (The space in front keeps the token XCTest
     /// glues to the line from forming a run of 24 or more word characters with the marker, which the redactor would
-    /// replace.)
+    /// replace.) The line is followed by a second one, the fence: the pipe is read in order by one serial queue and
+    /// its lines reach the ring in that order, so once the fence is in the ring everything written before it has been
+    /// processed and "recorded once" can be judged without waiting a fixed time.
     func test_aLinePrintedOnStderr_isRecordedOnceByTheTee() async throws {
         RuntimeLogSink.shared.attachStdoutTee()
         let marker = uniqueMarker()
+        let fence = uniqueMarker()
         fputs(" \(marker) printed by the process" + "\n", stderr)
-        var waited = 0
-        while entries(containing: marker).isEmpty && waited < 200 {
-            try await Task.sleep(nanoseconds: 50_000_000)
-            waited += 1
-        }
-        let first = entries(containing: marker).count
-        try await Task.sleep(nanoseconds: 2_000_000_000)
-        let after = entries(containing: marker)
-        XCTAssertEqual(first, 1, "captured")
-        XCTAssertEqual(after.count, 1, "captured once")
-        XCTAssertEqual(after.first?.tag, "stdout")
+        fputs(" \(fence) end of the burst" + "\n", stderr)
+        try await waitUntil { !entries(containing: fence).isEmpty && !entries(containing: marker).isEmpty }
+        let captured = entries(containing: marker)
+        XCTAssertEqual(captured.count, 1, "captured once")
+        XCTAssertEqual(captured.first?.tag, "stdout")
     }
 
     // MARK: - wiring
