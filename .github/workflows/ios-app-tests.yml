@@ -10,12 +10,18 @@
 # so none of those tests ever ran.
 #
 # Step 1 is the ios-ui-smoke.yml build recipe (Simulator, Debug, ad-hoc
-# signing, QAudionPacketTunnel embed stripped from a LOCAL project.yml copy).
+# signing) for the default spec, project.yml, which has no VPN support; the
+# scripts/ci/assert-no-vpn.sh gate then runs on the built app.
 # Step 2 regenerates the project from QAudionApp/project-apptests.yml, which
 # includes project.yml unchanged and adds an app-hosted unit-test bundle
 # restricted to an explicit list of test files (the rest of QAudionAppTests/
 # was written without a compiler and is not known to build). Extend both that
 # list and the -only-testing list below together.
+#
+# The second job (vpn-variant-build) compiles the variant WITH VPN support
+# (QAudionApp/project-vpn.yml: QAUDION_VPN, packet-tunnel extension,
+# WireGuardKit) for a device destination, unsigned, so that code does not rot
+# while the default build leaves it out.
 #
 # Runs on public-repo runners (free); no signing secrets, no network to any
 # real backend: the tests are pure.
@@ -30,6 +36,9 @@ on:
       - 'QAudionAppTests/**'
       - 'QAudionEngine/**'
       - 'QAudionIntents/**'
+      - 'QAudionPacketTunnel/**'
+      - 'scripts/ci/assert-no-vpn.sh'
+      - 'scripts/ci/test-assert-no-vpn.sh'
       - '.github/workflows/ios-app-tests.yml'
   workflow_dispatch:
 
@@ -75,22 +84,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
-      # QAudionPacketTunnel is DEVICE-ONLY (libwg-go.a has no Simulator
-      # slice) -- see ios-ui-smoke.yml for the full history. Stripped from a
-      # LOCAL copy of project.yml for this CI checkout only; the committed
-      # file and ios-testflight.yml's real device build are never touched.
-      - name: Strip QAudionPacketTunnel (Simulator lane only)
-        run: |
-          set -e
-          sed -i.bak \
-            -e '/- target: QAudionPacketTunnel/,+1d' \
-            QAudionApp/project.yml
-          rm QAudionApp/project.yml.bak
-          if grep -qE "target: QAudionPacketTunnel" QAudionApp/project.yml; then
-            echo "::error::sed failed to remove the PacketTunnel dependency lines"
-            exit 1
-          fi
-
       - name: Install xcodegen
         run: |
           if command -v xcodegen >/dev/null 2>&1; then
@@ -99,7 +92,7 @@ jobs:
             brew install xcodegen
           fi
 
-      - name: Generate Xcode project (release spec)
+      - name: Generate Xcode project (default spec, no VPN support)
         working-directory: QAudionApp
         run: |
           xcodegen generate
@@ -127,6 +120,19 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             2>&1 | tee build-sim.log \
           || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-sim.log ==="; tail -300 build-sim.log; exit 1)
+
+      # The gate's own self-test, then the gate on the app just built from the
+      # default spec (Simulator Debug, ad-hoc signed so the entitlements are
+      # embedded): no packet-tunnel extension, no Network Extension / vpn.api
+      # entitlement, no NetworkExtension.framework load command, no WireGuard.
+      - name: No VPN support in the default build
+        run: |
+          set -e
+          sh scripts/ci/test-assert-no-vpn.sh
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          test -d "$APP"
+          ls "$APP/PlugIns"
+          sh scripts/ci/assert-no-vpn.sh "$APP"
 
       - name: Generate Xcode project (with the app-test target)
         working-directory: QAudionApp
@@ -209,5 +215,117 @@ jobs:
             QAudionApp/build-sim.log
             QAudionApp/app-tests.log
             /tmp/app-test-cases.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The variant WITH VPN support. Device destination, unsigned: libwg-go.a (built
+  # by the QAudionPacketTunnel script phase, needs Go) has no Simulator slice.
+  vpn-variant-build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '26'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: |
+          set -e
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$MATCH" ]; then
+            echo "No Xcode matching '${PIN}*' found. Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
+          xcodebuild -version
+
+      - name: Cache SPM packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+          cache: false
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      # QAudionVPN.entitlements must stay equal to QAudion.entitlements plus the
+      # Network Extension key and the App Group shared with the extension.
+      - name: Entitlements variants agree
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          default = plistlib.load(open("QAudionApp/QAudion.entitlements", "rb"))
+          vpn = plistlib.load(open("QAudionApp/QAudionVPN.entitlements", "rb"))
+          ne = "com.apple.developer.networking.networkextension"
+          groups = "com.apple.security.application-groups"
+          vpn_group = "group.com.bcrypto.qaudion.vpn"
+          assert ne not in default, "default entitlements must not carry the Network Extension key"
+          assert vpn_group not in default.get(groups, []), "default entitlements must not carry the VPN App Group"
+          assert ne in vpn and vpn_group in vpn[groups], "VPN entitlements lack the Network Extension key or App Group"
+          rest = {k: v for k, v in vpn.items() if k != ne}
+          rest[groups] = [g for g in rest[groups] if g != vpn_group]
+          assert rest == default, "entitlements differ beyond the VPN additions: %r vs %r" % (rest, default)
+          print("entitlement variants agree")
+          PY
+
+      - name: Generate Xcode project (VPN spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-vpn.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build QAudionApp with VPN support (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-vpn \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-vpn.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-vpn.log ==="; tail -300 build-vpn.log; exit 1)
+
+      # The extension is embedded and the VPN code is really compiled in.
+      - name: Check the VPN variant contents
+        run: |
+          set -e
+          APP="/tmp/dd-ios-vpn/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP/PlugIns/QAudionPacketTunnel.appex"
+          ls "$APP/PlugIns"
+          test -n "$(grep -rlaF 'wg_private_key_b64' "$APP" | head -1)"
+
+      - name: Upload logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-vpn-variant-logs-${{ github.run_number }}
+          path: QAudionApp/build-vpn.log
           retention-days: 7
           if-no-files-found: ignore
