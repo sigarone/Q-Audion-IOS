@@ -25,7 +25,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 | `.github/workflows/engine-tests.yml` | ACTIVE — Swift package tests on every push | reference if engine tests fail |
 | `.github/workflows/kat-cross-platform.yml` | `workflow_dispatch` only since 2026-07-30 — its test (`WireV1CrossPlatformKatTests.swift`) is real and PASSES, but only via `engine-tests.yml`'s xcodebuild+simulator path; bare `swift test` here can't resolve the package's binary `WebRTC` xcframework (the failure was recorded as `no such module 'LiveKitWebRTC'` while LiveKit was still a dependency; group calls v2 removed LiveKit, the equivalent `WebRTC` failure is expected but not re-verified), so this standalone job can't work without duplicating engine-tests.yml's cost | reference `engine-tests.yml` instead for KAT status |
 | `.github/workflows/artifact-cleanup.yml` | ACTIVE — scheduled artifact retention | leave alone |
-| `.github/workflows/ios-ui-smoke.yml` | ACTIVE, manual-only (`workflow_dispatch`) — builds QAudionApp for iOS Simulator (no signing) + runs Maestro UI flows from `maestro/*.yaml` (top level only; flows in `maestro/needs-non-prod-backend/` register real PRODUCTION accounts and are refused by the workflow, 2026-09-30). Added 2026-08-06, GREEN as of run [31079859197](https://github.com/sigarone/Q-Audion-IOS/actions/runs/31079859197) (13m51s) after 3 fix iterations (xcodegen not installed; a device-only quiche.xcframework — since removed with the MASQUE/QUIC transport; QAudionPacketTunnel/WireGuardKitGo is device-only too and is still stripped from a local project.yml copy — see the workflow file's own header for the full iteration log) | yes if it fails again — read the uploaded `build-sim-log`/`maestro-debug` artifacts first |
+| `.github/workflows/ios-ui-smoke.yml` | ACTIVE, manual-only (`workflow_dispatch`) — builds QAudionApp for iOS Simulator (no signing) + runs Maestro UI flows from `maestro/*.yaml` (top level only; flows in `maestro/needs-non-prod-backend/` register real PRODUCTION accounts and are refused by the workflow, 2026-09-30). Added 2026-08-06, GREEN as of run [31079859197](https://github.com/sigarone/Q-Audion-IOS/actions/runs/31079859197) (13m51s) after 3 fix iterations (xcodegen not installed; a device-only quiche.xcframework — since removed with the MASQUE/QUIC transport; the packet-tunnel extension/WireGuardKitGo are device-only too, and since they now live only in `project-vpn.yml` nothing is stripped any more — see the workflow file's own header for the full iteration log) | yes if it fails again — read the uploaded `build-sim-log`/`maestro-debug` artifacts first |
 | `.github/workflows/ios-wda-provision.yml` | ACTIVE, manual-only (`workflow_dispatch`, input `device_udid`) — registers a real test iPhone + builds/signs WebDriverAgentRunner (appium/WebDriverAgent v16.1.5, IOS_APP_DEVELOPMENT signing) for interactive UI debug from Windows via go-ios (see global CLAUDE.md "go-ios + WebDriverAgent"). Added 2026-08-06, UNVERIFIED — first Development-type signing in this repo's CI (everything else here is IOS_APP_STORE), see file header for the certificate-reuse caveat | yes if it fails — read `wda-build-log` artifact; check whether `WDA_CERTIFICATE_PRIVATE_KEY` secret needs setting after a first successful cert creation |
 | `XCODE_CLOUD_MIGRATION.md` | **HISTORICAL** — proposal for Xcode Cloud, never adopted | **do not follow its instructions** |
 | `ci_scripts/` | **REMOVED 2026-09-12** (App Store readiness audit FIX-24) — they were Xcode Cloud hooks never run by the GH Actions pipeline, and would have executed unreviewed if Xcode Cloud were ever switched on | do not recreate |
@@ -288,7 +288,8 @@ with network shaping, or set `probeIntervalMs = 0` to drop it (the kill switch t
 
 ```
 QAudionApp/          # The iOS app (SwiftUI) — XcodeGen-generated project
-  project.yml        # XcodeGen spec; .xcodeproj is NOT committed
+  project.yml        # XcodeGen spec (no VPN support); .xcodeproj is NOT committed
+  project-vpn.yml    # same spec + VPN support (QAUDION_VPN), see "VPN support" below
   Info.plist
   QAudion.entitlements
   Assets.xcassets/   # icon_1024.png MUST be opaque (no alpha)
@@ -331,6 +332,21 @@ QAudionEngine/       # Swift package with crypto + audio C libs
    `onnxruntime.framework/Info.plist` and re-signs the bundle.
 7. Publishing uploads the IPA to App Store Connect; internal tester
    group **`Q-Audion testers`** gets the build automatically.
+
+### VPN support is a compile-time switch (QAUDION_VPN)
+
+The default build, generated from `QAudionApp/project.yml` (every tag push), has
+no VPN support: no `QAudionPacketTunnel` extension, no WireGuardKit, no
+`NetworkExtension.framework`, no Network Extension entitlement
+(`QAudion.entitlements`), and the VPN controls are shown greyed out and inactive
+(`#if QAUDION_VPN` in `Services/VPN/*`, `VpnToggleChip`, `TransportSettingsScreen`;
+`VpnService` is an empty stand-in). `QAudionApp/project-vpn.yml` includes
+`project.yml` and adds all of that, with `QAudionVPN.entitlements`; generate it with
+`xcodegen generate --spec project-vpn.yml` (needs Go and a device destination for
+`libwg-go.a`). `ios-testflight.yml`: tag push = default build, gated by
+`scripts/ci/assert-no-vpn.sh`; `workflow_dispatch` with `vpn=true` = build with VPN
+support (opposite gate). `ios-app-tests.yml` runs the gate on the default Simulator
+build and compiles the VPN variant (job `vpn-variant-build`).
 
 ### Trigger philosophy
 

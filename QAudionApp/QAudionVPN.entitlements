@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Entitlements for the default build (no VPN support). The variant with the Network
-	     Extension capability is QAudionVPN.entitlements, selected by project-vpn.yml. -->
+	<!-- Entitlements for builds with VPN support (project-vpn.yml sets CODE_SIGN_ENTITLEMENTS to
+	     this file). Keep the entries shared with QAudion.entitlements identical; this file only
+	     adds the Network Extension capability and the App Group shared with QAudionPacketTunnel. -->
 	<key>com.apple.developer.nfc.readersession.formats</key>
 	<array>
 		<string>TAG</string>
@@ -18,9 +19,11 @@
 	<true/>
 	<key>aps-environment</key>
 	<string>production</string>
-	<!-- App Groups: one entry per feature-scoped extension. -->
+	<!-- App Groups: one entry per feature-scoped extension.
+	     - group.com.bcrypto.qaudion.vpn: shared with QAudionPacketTunnel -->
 	<key>com.apple.security.application-groups</key>
 	<array>
+		<string>group.com.bcrypto.qaudion.vpn</string>
 		<!-- CarPlay/Siri state-of-the-art plan S2 — dedicated App Group for
 		     SiriMessageBridgeStore.swift (QAudionApp/Siri/), shared with
 		     QAudionIntents. Deliberately SEPARATE from the vpn group
@@ -28,6 +31,11 @@
 		     carries NO ratchet/session material — see that file's own
 		     security-design doc comment. -->
 		<string>group.com.bcrypto.qaudion.siri</string>
+	</array>
+	<!-- VPN: Network Extension capability (packet tunnel manager side) -->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>packet-tunnel-provider</string>
 	</array>
 	<!-- Universal Links — parity with the Android App Link intent-filter
 	     for the same host/path (email-verify-landing). Requires

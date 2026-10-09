@@ -12,7 +12,7 @@
 
   Verified against TN3183 (required-reason API codes) and TN3184 (data
   collection). Third-party dependencies (onnxruntime 1.24.2, GRDB, the
-  WebRTC fork, WireGuardKit, liboqs/COpus/SILK inside
+  WebRTC fork, liboqs/COpus/SILK inside
   QAudionEngine) ship their own manifest where Apple requires one; this
   file covers only first-party code.
 
