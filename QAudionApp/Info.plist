@@ -86,7 +86,7 @@
 	<!-- NSBluetoothPeripheralUsageDescription (deprecated since iOS 13) is
 	     intentionally absent: the Always key covers every supported iOS. -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Q-Audion uses Bluetooth to exchange encryption keys directly with a contact's phone when you pair in person by QR code and, only when you turn on the mesh antenna in a chat, to relay encrypted messages to nearby Q-Audion devices when no network is available.</string>
+	<string>Q-Audion uses Bluetooth to exchange encryption keys with a contact's phone when you pair in person (one phone shows a QR code, the other scans it), and for Bluetooth mesh, which relays encrypted messages to nearby Q-Audion devices when there is no network. The mesh starts with the app, and you can turn it off at any time from the Bluetooth mesh panel in a chat: set Antenna to "Spenta" (off).</string>
 	<!-- WebRTC gathers host ICE candidates, so a call between two devices on
 	     the same Wi-Fi can connect directly; iOS 14+ shows the local-network
 	     prompt for that and requires this string to be present. -->
