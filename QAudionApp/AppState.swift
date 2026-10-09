@@ -2812,10 +2812,12 @@ final class AppState: ObservableObject {
 
     /// Reads the pending phone-number transfers from the server and shows the result. Called
     /// when the socket authenticates, when the app returns to the foreground and on the
-    /// `account_notice` / `phone_transfer_pending` message.
-    func refreshPhoneTransferNotice() {
+    /// `account_notice` / `phone_transfer_pending` message. Requests never overlap; `throttled`
+    /// (foreground, reconnect) also waits `PhoneTransferNoticeModel.minRefreshInterval` after the
+    /// previous request, the notice and the first read after a launch do not.
+    func refreshPhoneTransferNotice(throttled: Bool = false) {
         Task { [weak self] in
-            await self?.phoneTransferNotice.refresh()
+            await self?.phoneTransferNotice.refresh(throttled: throttled)
         }
     }
 
@@ -4961,6 +4963,7 @@ final class AppState: ObservableObject {
                         // that gap without touching this site's existing
                         // currentUserId/isAuthenticated behavior.
                         self.capabilityGate.discard()
+                        self.phoneTransferNotice.reset()
                         self.isAuthenticated = false
                     } else {
                         // A transient failure (`BCryptoSessionRecoveryError`, network, 5xx)
@@ -6215,7 +6218,7 @@ final class AppState: ObservableObject {
                         }
                         // Pending phone-number transfers for this account: read once per
                         // (re)connect, the first read after a launch.
-                        self?.refreshPhoneTransferNotice()
+                        self?.refreshPhoneTransferNotice(throttled: true)
                     }
                     // W-MSGOUTBOX (2026-09-01) — same once-per-reconnect
                     // gate as the two blocks above: drain `.sending` rows
@@ -9610,6 +9613,7 @@ final class AppState: ObservableObject {
                 // Whole-phase-review finding I1 (2026-08-17) — same
                 // reasoning as the `remote_wipe` handler just above.
                 self?.capabilityGate.discard()
+                self?.phoneTransferNotice.reset()
                 self?.errorMessage = reason
             }
         }
@@ -9640,7 +9644,7 @@ final class AppState: ObservableObject {
         // holds the transfer id and its expiry, nothing else: the list is read from the server
         // before anything is shown. Other codes (`phone_transfer_done`, `phone_moved`) are ignored.
         ws.registerHandler(type: "account_notice") { [weak self] _, data in
-            guard (data["code"] as? String) == "phone_transfer_pending" else { return }
+            guard PhoneTransferNotice.isPending(data) else { return }
             DispatchQueue.main.async {
                 self?.refreshPhoneTransferNotice()
             }
@@ -17100,6 +17104,9 @@ final class AppState: ObservableObject {
     /// after every `LocalCryptoWipe.wipeAll()`.
     func resetAccountScopedRuntimeState() {
         recentCalls = []
+        // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
+        // account deletion).
+        phoneTransferNotice.reset()
         // `LocalCryptoWipe.wipeAll()` empties ContactsStore without posting
         // `.contactsDidChange`, so nothing refreshes the in-memory snapshot of the
         // account that left: its names would keep labelling incoming calls, chat

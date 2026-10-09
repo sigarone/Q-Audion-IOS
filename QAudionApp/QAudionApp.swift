@@ -283,6 +283,15 @@ struct QAudionApp: App {
             .onChange(of: scenePhase) { newPhase in
                 handleScenePhase(newPhase)
             }
+            // Pending phone-number transfer: the state is dropped when the app locks and read again
+            // from the server when it unlocks.
+            .onChange(of: lockService.isLocked) { locked in
+                if locked {
+                    appState.phoneTransferNotice.reset()
+                } else {
+                    appState.refreshPhoneTransferNotice()
+                }
+            }
             // W-EMAILVERIFYLINK — Universal Link entry point (parity with
             // Android's App Link intent-filter). associated-domains in
             // QAudion.entitlements is what makes the OS route the tapped
@@ -424,8 +433,9 @@ struct QAudionApp: App {
             // on cold launch, see AppState.initialize()'s own call).
             appState.drainSiriOutbox()
             appState.refreshSiriMessageCache()
-            // Pending phone-number transfers: read again on every return to the foreground.
-            appState.refreshPhoneTransferNotice()
+            // Pending phone-number transfers: read again on a return to the foreground (a locked
+            // app reads after the unlock, see the `isLocked` observer).
+            if !lockService.isLocked { appState.refreshPhoneTransferNotice(throttled: true) }
         default:
             break
         }

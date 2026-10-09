@@ -6,8 +6,9 @@ import QAudionEngine
 /// transfer. Without an action the number stops being a way into this account when the time is up.
 ///
 /// The state is `PhoneTransferNoticeModel`, fed from the server on every entry point; this view only
-/// draws it. Takes the model, never `AppState` (CLAUDE.md section 16). The hours left are computed from
-/// the server's expiry on a one-minute tick, and the banner disappears by itself when the time is up.
+/// draws it. Takes the model, never `AppState` (CLAUDE.md section 16). The hours left (rounded down,
+/// "less than 1 hour" below the first) are computed from the server's expiry on a one-minute tick. The
+/// banner stays until the server stops listing the transfer: the device clock never hides it.
 struct PhoneTransferBanner: View {
     @ObservedObject var model: PhoneTransferNoticeModel
 
@@ -17,7 +18,7 @@ struct PhoneTransferBanner: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            if let pending = model.current(at: context.date) {
+            if let pending = model.current {
                 card(hours: pending.hoursRemaining(at: context.date))
             }
         }
@@ -34,10 +35,13 @@ struct PhoneTransferBanner: View {
                     Text(Self.titleText)
                         .qaudionStyle(type.titleSmall)
                         .foregroundStyle(scheme.onSurface)
-                    Text(Self.expiryText(hours: hours))
+                    Text(hours < 1 ? Self.expirySoonText : Self.expiryText(hours: hours))
                         .qaudionStyle(type.labelLarge)
                         .foregroundStyle(scheme.onSurface)
                     Text(Self.infoText)
+                        .qaudionStyle(type.bodySmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                    Text(Self.cancelNoteText)
                         .qaudionStyle(type.bodySmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                 }
@@ -112,10 +116,22 @@ struct PhoneTransferBanner: View {
                comment: "Phone number transfer banner: time left before the transfer completes; %lld is the number of hours, h is the abbreviation for hours.")
     }
 
+    static var expirySoonText: String {
+        String(localized: "phone_transfer.expiry_soon",
+               defaultValue: "Scadenza tra meno di 1 ora",
+               comment: "Phone number transfer banner: less than one hour is left before the transfer completes.")
+    }
+
     static var infoText: String {
         String(localized: "phone_transfer.info",
                defaultValue: "Se non fai nulla, alla scadenza il numero non sarà più un accesso a questo account.",
                comment: "Phone number transfer banner: what happens if the holder does nothing.")
+    }
+
+    static var cancelNoteText: String {
+        String(localized: "phone_transfer.cancel_note",
+               defaultValue: "Se annulli, per 24 ore non verranno accettate nuove richieste di spostamento per questo numero.",
+               comment: "Phone number transfer banner: what cancelling does, new requests for the number are refused for 24 hours.")
     }
 
     static var cancelText: String {

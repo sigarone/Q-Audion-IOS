@@ -35443,6 +35443,90 @@
           }
         }
       }
+    },
+    "phone_transfer.expiry_soon": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: less than one hour is left before the transfer completes.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scadenza tra meno di 1 ora"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expires in less than 1 hour"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vence en menos de 1 hora"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expire dans moins d'1 heure"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Läuft in weniger als 1 Std. ab"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expira em menos de 1 hora"
+          }
+        }
+      }
+    },
+    "phone_transfer.cancel_note": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: what cancelling does, new requests for the number are refused for 24 hours.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se annulli, per 24 ore non verranno accettate nuove richieste di spostamento per questo numero."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you cancel, new requests to move this number will not be accepted for 24 hours."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si cancelas, durante 24 horas no se aceptarán nuevas solicitudes para mover este número."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si tu annules, les nouvelles demandes de déplacement de ce numéro ne seront pas acceptées pendant 24 heures."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn Sie abbrechen, werden 24 Stunden lang keine neuen Anfragen zur Übertragung dieser Nummer angenommen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se você cancelar, novas solicitações para transferir este número não serão aceitas por 24 horas."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
