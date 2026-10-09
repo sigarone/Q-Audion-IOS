@@ -455,6 +455,14 @@ public final class BCryptoRestClient {
             throw BCryptoError.httpError(retryStatus)
         }
 
+        // Registration endpoints in `registration_mode="invite"` answer 403 with
+        // a message that says whether the invite code is missing or wrong.
+        let isRegistrationEndpoint = pathOnly.hasSuffix("/auth/register/extension")
+            || pathOnly.hasSuffix("/auth/otp/verify")
+        if status == 403, isRegistrationEndpoint, let inviteError = BCryptoInviteCodeError(forbiddenBody: data) {
+            throw inviteError
+        }
+
         if status == 401 { throw BCryptoError.unauthorized }
         // W-B10PAYREQ (2026-09-02) — the primary chokepoint: a plain
         // non-2xx first attempt (not a 401/421 retry) is how the

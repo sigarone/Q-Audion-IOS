@@ -199,8 +199,8 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(OtpAuthResult.self, from: data)
     }
 
-    public func registerExtensionOnly(displayName: String?, email: String) async throws -> OtpAuthResult {
-        var dict: [String: Any] = ["email": email, "platform": "ios"]
+    public func registerExtensionOnly(displayName: String?, email: String, inviteCode: String) async throws -> OtpAuthResult {
+        var dict: [String: Any] = ["email": email, "platform": "ios", "invite_code": inviteCode]
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/register/extension", body: body)

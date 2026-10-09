@@ -4,7 +4,8 @@ import QAudionEngine
 /// Extension-only registration — no phone number at all. The server
 /// assigns a PBX extension as the account's identifier; email is REQUIRED
 /// here specifically because there is no phone number to fall back on for
-/// account recovery / support. Matches
+/// account recovery / support. The invite code is mandatory as well (the
+/// server runs in `registration_mode="invite"`). Matches
 /// `POST /api/v1/auth/register/extension`.
 ///
 /// 2026-07-29 — new screen; `WelcomeScreen` had no distinct entry point
@@ -22,6 +23,7 @@ struct ExtensionOnlyRegisterScreen: View {
 
     @State private var displayName: String = ""
     @State private var email: String = ""
+    @State private var inviteCode: String = ""
     @State private var isSubmitting = false
     @State private var errorText: String?
 
@@ -35,6 +37,13 @@ struct ExtensionOnlyRegisterScreen: View {
         let localPart = trimmed[trimmed.startIndex..<atIndex]
         let domainPart = trimmed[trimmed.index(after: atIndex)...]
         return !localPart.isEmpty && domainPart.contains(".") && !domainPart.hasPrefix(".") && !domainPart.hasSuffix(".")
+    }
+
+    /// The invite code is mandatory (server `registration_mode="invite"`):
+    /// the form is submittable only with a well-formed email AND a code whose
+    /// format and checksum pass the same local check the phone flow uses.
+    private var canSubmit: Bool {
+        isValidEmail && InviteCodeInput.isValid(inviteCode)
     }
 
     var body: some View {
@@ -94,6 +103,11 @@ struct ExtensionOnlyRegisterScreen: View {
 
                     Spacer().frame(height: 16)
 
+                    InviteCodeField(code: $inviteCode, isInvalid: InviteCodeInput.isCompleteButInvalid(inviteCode))
+                        .padding(.horizontal, 24)
+
+                    Spacer().frame(height: 16)
+
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Nome (opzionale)")
                             .font(.caption.weight(.medium))
@@ -124,11 +138,11 @@ struct ExtensionOnlyRegisterScreen: View {
                         Text(isSubmitting ? "Creazione account…" : "Crea account")
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 56)
-                            .foregroundStyle(isValidEmail ? .black : .white.opacity(0.4))
-                            .background(isValidEmail ? Color.white : Color.white.opacity(0.1))
+                            .foregroundStyle(canSubmit ? .black : .white.opacity(0.4))
+                            .background(canSubmit ? Color.white : Color.white.opacity(0.1))
                             .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
-                    .disabled(!isValidEmail || isSubmitting)
+                    .disabled(!canSubmit || isSubmitting)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 32)
                 }
@@ -137,7 +151,7 @@ struct ExtensionOnlyRegisterScreen: View {
     }
 
     private func submit() async {
-        guard isValidEmail else { return }
+        guard canSubmit, let wireInviteCode = InviteCodeInput.wireValue(inviteCode) else { return }
         isSubmitting = true
         errorText = nil
         defer { isSubmitting = false }
@@ -149,7 +163,8 @@ struct ExtensionOnlyRegisterScreen: View {
         do {
             let result = try await provider.accountApi.registerExtensionOnly(
                 displayName: trimmedName.isEmpty ? nil : trimmedName,
-                email: trimmedEmail
+                email: trimmedEmail,
+                inviteCode: wireInviteCode
             )
             appState.completeOtpAuth(result)
             onRegistered()
@@ -159,6 +174,9 @@ struct ExtensionOnlyRegisterScreen: View {
     }
 
     private func userFacingMessage(for error: Error) -> String {
+        if let inviteError = error as? BCryptoInviteCodeError {
+            return inviteError.userFacingMessage
+        }
         if let bcryptoError = error as? BCryptoError, case .httpError(let statusCode) = bcryptoError {
             switch statusCode {
             case 400: return "Email mancante o non valida."
