@@ -14,10 +14,14 @@ import Foundation
 ///    cancel) queues ONE new request that starts after the running one ends, because the running one may
 ///    have started before the transfer existed. A request left over from before a `reset()` is never
 ///    shared: whoever asks after the reset gets a read of their own;
-///  - `throttled` refreshes are skipped within `minRefreshInterval` (measured on a monotonic clock) of the
-///    last request that started; an answer thrown away by a `reset()` does not count as a read;
+///  - `throttled` refreshes are skipped within `minRefreshInterval` of the last request that started,
+///    measured on a clock that keeps counting while the device sleeps (`SleepAwareClock`), so the first
+///    return to the foreground after a night asleep always reads. A rejected session keeps that threshold;
+///    a `reset()` (another account, a lock, a wipe) clears it;
 ///  - nothing is read while the app is locked (`setLocked`), and the state is dropped when it locks;
-///  - a 404 on the list or on a cancel hides the entry, with no message;
+///  - a 404 on the list hides the entry, with no message; a 404 on a cancel hides it too and the read that
+///    follows decides whether it is still there; a cancel refused with another 4xx also reads the list
+///    again, and the entry keeps the error only if it is still listed;
 ///  - any other failure keeps the entry and raises a neutral `problem`, so the action can be retried;
 ///    a failed list refresh with nothing on screen stays silent, since there is nothing to retry;
 ///  - a rejected session (`BCryptoError.unauthorized`) clears the state silently;
@@ -39,7 +43,7 @@ public final class PhoneTransferNoticeModel: ObservableObject {
 
     private let api: PhoneTransferApi
     private let minRefreshInterval: TimeInterval
-    private let uptime: @Sendable () -> TimeInterval
+    private let clock: @Sendable () -> TimeInterval
     private var refreshGeneration = 0
     /// Bumped by `reset()` only: tells apart an answer that belongs to the account or session that left.
     private var epoch = 0
@@ -53,11 +57,11 @@ public final class PhoneTransferNoticeModel: ObservableObject {
     public init(
         api: PhoneTransferApi,
         minRefreshInterval: TimeInterval = 30,
-        uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        clock: @escaping @Sendable () -> TimeInterval = { SleepAwareClock.seconds() }
     ) {
         self.api = api
         self.minRefreshInterval = minRefreshInterval
-        self.uptime = uptime
+        self.clock = clock
     }
 
     /// The entry to show: the one that expires first.
@@ -75,7 +79,7 @@ public final class PhoneTransferNoticeModel: ObservableObject {
             await running.value
             return
         }
-        if throttled, let last = lastStartedAt, uptime() - last < minRefreshInterval { return }
+        if throttled, let last = lastStartedAt, clock() - last < minRefreshInterval { return }
         inFlightEpoch = epoch
         let task = Task { [weak self] in
             guard let self else { return }
@@ -95,7 +99,8 @@ public final class PhoneTransferNoticeModel: ObservableObject {
     }
 
     /// Cancels the entry on screen. On success (or a 404) the entry is hidden and the list is read
-    /// again; on any other failure the entry stays and `problem` is `.cancelFailed`.
+    /// again; on any other failure the entry stays and `problem` is `.cancelFailed` (after reading the
+    /// list again when the cancel was refused).
     public func cancel() async {
         guard let target = beginCancel() else { return }
         await finishCancel(target)
@@ -108,8 +113,14 @@ public final class PhoneTransferNoticeModel: ObservableObject {
         if value { reset() }
     }
 
-    /// Drops everything: sign-out, wipe, app lock, expired session, change of account.
+    /// Drops everything: sign-out, wipe, app lock, change of account. The next read is not held back.
     public func reset() {
+        dropState()
+        lastStartedAt = nil
+    }
+
+    /// Empties the state and disowns every request and cancel still running. Keeps the read threshold.
+    private func dropState() {
         epoch += 1
         refreshGeneration += 1
         transfers = []
@@ -117,7 +128,6 @@ public final class PhoneTransferNoticeModel: ObservableObject {
         isCancelling = false
         cancelledIds = []
         rerunRequested = false
-        lastStartedAt = nil
     }
 
     private func beginCancel() -> PhoneTransferPending? {
@@ -134,21 +144,31 @@ public final class PhoneTransferNoticeModel: ObservableObject {
         guard startedIn == epoch else { return }
         isCancelling = false
         switch outcome {
-        case .gone:
+        case .cancelled:
             forget(id: target.id)
             await refresh()
+        case .alreadyGone:
+            hide(id: target.id)
+            await refresh()
+        case .rejected:
+            await refresh()
+            if startedIn == epoch, isListed(target.id) { problem = .cancelFailed }
         case .failed:
-            if transfers.contains(where: { $0.id == target.id }) { problem = .cancelFailed }
+            if isListed(target.id) { problem = .cancelFailed }
         case .signedOut:
-            reset()
+            dropState()
         }
+    }
+
+    private func isListed(_ id: String) -> Bool {
+        transfers.contains { $0.id == id }
     }
 
     private func runRefreshes() async {
         repeat {
             rerunRequested = false
             inFlightEpoch = epoch
-            lastStartedAt = uptime()
+            lastStartedAt = clock()
             await loadOnce()
         } while rerunRequested
         inFlight = nil
@@ -168,7 +188,7 @@ public final class PhoneTransferNoticeModel: ObservableObject {
                 transfers = []
                 problem = nil
             } else if Self.isSignedOut(error) {
-                reset()
+                dropState()
             } else if !transfers.isEmpty {
                 problem = .refreshFailed
             }
@@ -176,7 +196,9 @@ public final class PhoneTransferNoticeModel: ObservableObject {
     }
 
     private enum CancelOutcome {
-        case gone
+        case cancelled
+        case alreadyGone
+        case rejected
         case failed
         case signedOut
     }
@@ -184,12 +206,20 @@ public final class PhoneTransferNoticeModel: ObservableObject {
     private func cancelOnServer(id: String) async -> CancelOutcome {
         do {
             try await api.cancel(id: id)
-            return .gone
+            return .cancelled
         } catch {
-            if Self.isNotFound(error) { return .gone }
+            if Self.isNotFound(error) { return .alreadyGone }
             if Self.isSignedOut(error) { return .signedOut }
+            if Self.isRefusal(error) { return .rejected }
             return .failed
         }
+    }
+
+    /// Takes `id` off the screen and invalidates any list request still in flight; the next read decides
+    /// whether it comes back.
+    private func hide(id: String) {
+        refreshGeneration += 1
+        transfers.removeAll { $0.id == id }
     }
 
     /// Hides `id` for good and invalidates any list request still in flight.
@@ -208,9 +238,27 @@ public final class PhoneTransferNoticeModel: ObservableObject {
         }
     }
 
+    /// A 4xx that says the request itself was refused (the transfer is no longer cancellable), as opposed
+    /// to a failure that may pass: not a rejected session, not 404, not a timeout or a rate limit.
+    private static func isRefusal(_ error: Error) -> Bool {
+        guard let rest = error as? BCryptoError, case .httpError(let status) = rest else { return false }
+        return (400..<500).contains(status) && ![401, 404, 408, 429].contains(status)
+    }
+
     private static func isSignedOut(_ error: Error) -> Bool {
         guard let rest = error as? BCryptoError else { return false }
         if case .unauthorized = rest { return true }
         return false
+    }
+}
+
+/// Seconds on a clock that keeps counting while the device sleeps (unlike `ProcessInfo.systemUptime`),
+/// so an interval measured with it also spans a night with the phone locked.
+public enum SleepAwareClock {
+    private static let origin = ContinuousClock.now
+
+    public static func seconds() -> TimeInterval {
+        let elapsed = ContinuousClock.now - origin
+        return TimeInterval(elapsed.components.seconds) + TimeInterval(elapsed.components.attoseconds) / 1e18
     }
 }

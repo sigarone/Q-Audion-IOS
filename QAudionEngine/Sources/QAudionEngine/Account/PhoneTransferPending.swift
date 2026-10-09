@@ -1,8 +1,8 @@
 import Foundation
 
 /// A request, made by someone else, to move the phone number that is a login identity of this
-/// account. The server lists it for the holder until it is completed (at `expiresAt`, or sooner when
-/// the holder is inactive) or cancelled. The listing carries neither the number nor the requester.
+/// account. The server lists it for the holder until it is no longer pending; `expiresAt` is when it
+/// is due. The listing carries neither the number nor the requester.
 public struct PhoneTransferPending: Equatable, Sendable, Identifiable {
     public let id: String
     public let expiresAt: Date
