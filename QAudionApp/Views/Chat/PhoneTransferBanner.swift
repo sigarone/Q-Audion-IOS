@@ -95,7 +95,7 @@ struct PhoneTransferBanner: View {
     }
 
     private func cancelTransfer() {
-        Task { await model.cancel() }
+        model.requestCancel()
     }
 
     private func retryRefresh() {
