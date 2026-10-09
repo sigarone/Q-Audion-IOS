@@ -23,6 +23,7 @@ import QAudionEngine
 /// duplicating it in this banner too would show it twice.
 struct QAudionBrandBanner: View {
     @Environment(\.qaudionScheme) private var scheme
+    @EnvironmentObject private var capabilityGate: CapabilityGate
 
     var body: some View {
         HStack {
@@ -31,11 +32,19 @@ struct QAudionBrandBanner: View {
                 .scaledToFit()
                 .frame(height: 32)
                 .accessibilityLabel("Q-Audion")
+            if planStatus != .base {
+                Spacer(minLength: 8).frame(maxWidth: 8)
+                ProBadge()
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 2)
         .background(scheme.background)
+    }
+
+    private var planStatus: PlanStatus {
+        derivePlanStatus(claims: capabilityGate.claims, nowSeconds: Int64(Date().timeIntervalSince1970))
     }
 }
