@@ -345,7 +345,10 @@ no VPN support: no `QAudionPacketTunnel` extension, no WireGuardKit, no
 `xcodegen generate --spec project-vpn.yml` (needs Go and a device destination for
 `libwg-go.a`). `ios-testflight.yml`: tag push = default build, gated by
 `scripts/ci/assert-no-vpn.sh`; `workflow_dispatch` with `vpn=true` = build with VPN
-support (opposite gate). The default build turns the Network Extensions and Personal VPN\ncapabilities OFF on the main App ID before it regenerates the App Store profile (the gate\nalso reads `embedded.mobileprovision`); a build with VPN support turns both back ON.\n`ios-app-tests.yml` runs the gate on the default Simulator
+support (opposite gate). The default build turns the Network Extensions and Personal VPN
+capabilities OFF on the main App ID before it regenerates the App Store profile (the gate
+also reads `embedded.mobileprovision`); a build with VPN support turns both back ON.
+`ios-app-tests.yml` runs the gate on the default Simulator
 build and compiles the VPN variant (job `vpn-variant-build`).
 
 ### Trigger philosophy
