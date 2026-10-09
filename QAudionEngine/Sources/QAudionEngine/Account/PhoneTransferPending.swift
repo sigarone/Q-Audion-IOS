@@ -12,15 +12,22 @@ public struct PhoneTransferPending: Equatable, Sendable, Identifiable {
         self.expiresAt = expiresAt
     }
 
-    public func isExpired(at now: Date) -> Bool {
-        expiresAt <= now
-    }
-
-    /// Whole hours left, rounded up, so the count never reads 0 while time remains. 0 once expired.
+    /// Whole hours left, rounded DOWN, so the screen never promises more time than there is. 0 means
+    /// "less than an hour" (also when the device clock is ahead of the expiry: the entry itself is never
+    /// dropped because of the local clock, only the server decides when it is gone).
     public func hoursRemaining(at now: Date) -> Int {
         let seconds = expiresAt.timeIntervalSince(now)
-        guard seconds > 0 else { return 0 }
-        return max(1, Int((seconds / 3600).rounded(.up)))
+        guard seconds >= 3600 else { return 0 }
+        return Int(seconds / 3600)
+    }
+}
+
+/// Reading of the WebSocket `account_notice` message.
+public enum PhoneTransferNotice {
+    /// True only for `{"code":"phone_transfer_pending"}`. Any other code (`phone_moved`,
+    /// `phone_transfer_done`, one not known yet) and any payload without a string `code` is ignored.
+    public static func isPending(_ data: [String: Any]) -> Bool {
+        (data["code"] as? String) == "phone_transfer_pending"
     }
 }
 
@@ -81,7 +88,7 @@ public final class BCryptoPhoneTransferApi: PhoneTransferApi, @unchecked Sendabl
         let transfers: [Item]?
     }
 
-    /// Reads `{"transfers":[{"id","created_at","expires_at","confirmed"}]}`. Only `id` and
+    /// Reads `{"transfers":[{"id","created_at","expires_at"}]}`. Only `id` and
     /// `expires_at` are used. An entry whose `expires_at` is not an RFC 3339 date is left out, since
     /// no time left can be computed for it.
     static func parseList(_ data: Data) throws -> [PhoneTransferPending] {

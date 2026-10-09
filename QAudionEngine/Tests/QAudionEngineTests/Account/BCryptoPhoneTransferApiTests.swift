@@ -23,10 +23,10 @@ final class BCryptoPhoneTransferApiTests: XCTestCase {
         return (response, Data(body.utf8))
     }
 
-    func test_fetchPending_readsIdAndExpiry_ignoringTheOtherFields() async throws {
+    func test_fetchPending_readsIdAndExpiry_ignoringCreatedAt() async throws {
         PhoneTransferStubProtocol.responseHandler = { request in
             Self.respond(request, status: 200, body: """
-            {"transfers":[{"id":"t-1","created_at":"2026-10-09T10:00:00Z","expires_at":"2026-10-11T10:00:00Z","confirmed":true}]}
+            {"transfers":[{"id":"t-1","created_at":"2026-10-09T10:00:00Z","expires_at":"2026-10-11T10:00:00Z"}]}
             """)
         }
         let list = try await makeApi().fetchPending()
@@ -35,6 +35,14 @@ final class BCryptoPhoneTransferApiTests: XCTestCase {
         XCTAssertEqual(list.first?.expiresAt, Date(timeIntervalSince1970: 1_791_712_800))
         XCTAssertEqual(PhoneTransferStubProtocol.recorded.first?.method, "GET")
         XCTAssertEqual(PhoneTransferStubProtocol.recorded.first?.path, "/api/v1/account/phone-transfers")
+    }
+
+    func test_fetchPending_keepsAnEntryWhoseExpiryIsInThePast() async throws {
+        PhoneTransferStubProtocol.responseHandler = { request in
+            Self.respond(request, status: 200, body: "{\"transfers\":[{\"id\":\"old\",\"expires_at\":\"2001-01-01T00:00:00Z\"}]}")
+        }
+        let list = try await makeApi().fetchPending()
+        XCTAssertEqual(list.map(\.id), ["old"], "only the server decides when a transfer is gone")
     }
 
     func test_fetchPending_emptyList() async throws {
