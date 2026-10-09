@@ -67,15 +67,13 @@ struct ChatMessage: Identifiable {
 @MainActor
 final class AppState: ObservableObject {
     // MARK: - Auth state
-    /// App Store readiness audit 2026-09-12 (FIX-09): the Siri
-    /// authorization prompt used to fire unconditionally from
-    /// `initialize()`, i.e. over the Welcome screen before any sign-in —
-    /// the first thing a reviewer saw was a system alert for a feature
-    /// they could not yet use. It now follows the session: requested on
-    /// the false->true transition (login, session restore, OTP activation
-    /// — every path funnels through this one property), and only while
-    /// the status is still `.notDetermined`, so it is a one-shot per
-    /// install exactly as before.
+    /// The Siri authorization prompt follows the session instead of
+    /// firing from `initialize()`: it would otherwise appear over the
+    /// Welcome screen, before any sign-in, for a feature the user cannot
+    /// use yet. It is requested on the false->true transition (login,
+    /// session restore, OTP activation — every path funnels through this
+    /// one property), and only while the status is still
+    /// `.notDetermined`, so it is a one-shot per install.
     @Published var isAuthenticated: Bool = false {
         didSet {
             if isAuthenticated && !oldValue {
@@ -2783,11 +2781,11 @@ final class AppState: ObservableObject {
         if let verifier = EntitlementPublicKey.makeVerifier() {
             return CapabilityGate(verifier: verifier, api: api)
         }
-        // App Store readiness audit 2026-09-12 (FIX-20): a missing/corrupt
-        // pinned-key asset IS a packaging bug — but crashing on the first
-        // `body` evaluation (this is forced from QAudionApp.swift's
-        // environment injection) turns a resource-copy regression into a
-        // launch crash in front of a reviewer. Degrade fail-CLOSED instead:
+        // A missing/corrupt pinned-key asset IS a packaging bug — but
+        // crashing on the first `body` evaluation (this is forced from
+        // QAudionApp.swift's environment injection) would turn a
+        // resource-copy regression into a crash at launch. Degrade
+        // fail-CLOSED instead:
         // bind the verifier to a throwaway key so every real token is
         // rejected (claims stay nil, server-side 402s still apply), log it
         // loudly, and let the app run. Ed25519 keys are always 32 raw
