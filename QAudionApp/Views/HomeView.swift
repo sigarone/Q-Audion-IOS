@@ -131,6 +131,12 @@ struct HomeView: View {
                 selectedTab = .chats
             }
         }
+        // A tap on the notice of a pending phone-number transfer: the Chat tab at its root, where the
+        // transfer banner is.
+        .onChange(of: appState.chatListOpenRequest) { _ in
+            selectedTab = .chats
+            chatsPath = NavigationPath()
+        }
         // W-MISSEDBADGE — the Calls tab is looked at (selected, app active): the missed calls on it are seen. Asked
         // when the shell appears, when the tab or the scene changes, and when a call is missed while it is already on
         // screen (the row is right there, so the number must not appear under the user's eyes).

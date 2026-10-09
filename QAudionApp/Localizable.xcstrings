@@ -853,6 +853,90 @@
         }
       }
     },
+    "phone_transfer.alert.title": {
+      "extractionState": "manual",
+      "comment": "Push notification title shown when a request to move the phone number linked to the account is waiting.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiesta di spostamento del numero"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Number transfer request"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solicitud de traslado del número"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demande de déplacement du numéro"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anfrage zur Übertragung der Nummer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solicitação de transferência do número"
+          }
+        }
+      }
+    },
+    "phone_transfer.alert.body": {
+      "extractionState": "manual",
+      "comment": "Push notification body for the same request; names neither the number nor who asked.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualcuno ha chiesto di spostare il numero collegato al tuo account. Apri l'app per annullare la richiesta."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Someone asked to move the number linked to your account. Open the app to cancel the request."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alguien ha pedido trasladar el número vinculado a tu cuenta. Abre la app para cancelar la solicitud."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quelqu'un a demandé de déplacer le numéro lié à ton compte. Ouvre l'app pour annuler la demande."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jemand hat darum gebeten, die mit Ihrem Konto verknüpfte Nummer zu übertragen. Öffnen Sie die App, um die Anfrage abzubrechen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alguém pediu para transferir o número vinculado à sua conta. Abra o app para cancelar a solicitação."
+          }
+        }
+      }
+    },
     "chat.send_error.psk_missing": {
       "extractionState": "manual",
       "comment": "Message-send failure banner — recipient's key isn't verified",

@@ -59,6 +59,14 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     /// wiring so the user's Answer/Decline tap is never lost.
     private var pendingIncomingAction: (CallAction, [String: String])?
 
+    /// Tap on the notice of a pending phone-number transfer (custom key `type` =
+    /// `phone_transfer_pending`): AppState shows the chat list and reads the transfer state again.
+    var onPhoneTransferPendingTap: (@MainActor () -> Void)?
+
+    /// Cold-start latch for that tap, like `pendingIncomingAction`: a tap that launches the app can
+    /// arrive before AppState sets the handler.
+    private var pendingPhoneTransferTap = false
+
     /// W-MISSEDQUIET (2026-10-04) — "the user has a call in flight" (in a call, ringing for one, or a CallKit call
     /// still open): the missed-call notification that arrives then is presented quietly
     /// (`MissedCallAlertPolicy`). A closure over primitives and not the AppState type (CLAUDE.md §16); AppState
@@ -297,6 +305,14 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         handler(pending.0, pending.1)
     }
 
+    /// Runs a phone-transfer notice tap that arrived before `onPhoneTransferPendingTap` was set.
+    /// Idempotent: no-op when nothing is latched or the handler still isn't set.
+    func flushPendingPhoneTransferTap() {
+        guard pendingPhoneTransferTap, let handler = onPhoneTransferPendingTap else { return }
+        pendingPhoneTransferTap = false
+        handler()
+    }
+
     /// W-NOCALLKIT — clear a posted incoming-call notification (answered/ended).
     func clearIncomingCall(callId: String) {
         let id = "incoming-call-\(callId)"
@@ -384,7 +400,15 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         let infoFinal = sendableInfo
         let actionFinal = actionId
         await MainActor.run {
-            if categoryFinal == .incomingCall {
+            if categoryFinal != .incomingCall,
+               actionFinal == UNNotificationDefaultActionIdentifier,
+               PhoneTransferNotice.isPendingPush(userInfo: infoFinal) {
+                if let handler = self.onPhoneTransferPendingTap {
+                    handler()
+                } else {
+                    self.pendingPhoneTransferTap = true
+                }
+            } else if categoryFinal == .incomingCall {
                 // W-NOCALLKIT — explicit buttons answer/decline; a plain tap on the
                 // notification body opens the in-app ring UI WITHOUT answering.
                 let action: CallAction

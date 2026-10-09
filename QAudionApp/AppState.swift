@@ -405,6 +405,12 @@ final class AppState: ObservableObject {
     /// `pendingVoipPushTokenHex`/`lastKnownVoipTokenKey` semantics.
     private var pendingApnsTokenHex: String?
     private static let lastKnownApnsTokenKey = "qaudion.push.lastApnsTokenHex"
+    /// Notice push (pending phone-number transfer), used when `callKitFreeMode` is OFF: the token the
+    /// system hands out once the user has allowed notifications, in flight to the server. Coalesces the
+    /// launch / login / foreground triggers, which can deliver the same token within seconds.
+    private var noticeApnsTokenInFlightHex: String?
+    /// A permission check for the notice push is running (it may be waiting on the system prompt).
+    private var noticePushCheckInFlight = false
     /// W-PUSHDEDUP: coalesce duplicate VoIP-token registrations. Several
     /// triggers fire on the SAME auth/foreground transition — launch
     /// auth-success (`reassertVoipPushTokenRegistration`), the foreground
@@ -2821,6 +2827,17 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Bumped when a notification tap asks for the chat list (the home screen shows the Chat tab at root).
+    @Published private(set) var chatListOpenRequest = 0
+
+    /// A tap on the notice of a pending phone-number transfer: show the chat list, where the banner is,
+    /// and read the transfer state again without waiting (a launch by the tap reads it once the socket
+    /// authenticates).
+    func openChatListForPhoneTransferNotice() {
+        chatListOpenRequest += 1
+        refreshPhoneTransferNotice()
+    }
+
     /// Set by the app scene: whether the app lock is up right now. Read at the moment a read of the
     /// pending transfers would start, so it cannot lag behind the lock the way an observer can.
     var isAppLocked: (@MainActor () -> Bool)?
@@ -3970,6 +3987,14 @@ final class AppState: ObservableObject {
         // this handler was wired (app-killed launch via Answer/Decline tap).
         NotificationCenterService.shared.flushPendingIncomingAction()
 
+        // Tap on the notice of a pending phone-number transfer: open the chat list (where the banner
+        // is) and read the transfer state again, as on a return to the foreground. A tap that launched
+        // the app is drained right after the handler is set.
+        NotificationCenterService.shared.onPhoneTransferPendingTap = { [weak self] in
+            self?.openChatListForPhoneTransferNotice()
+        }
+        NotificationCenterService.shared.flushPendingPhoneTransferTap()
+
         // W-MISSEDQUIET (2026-10-04) — "a call is in flight" for the missed-call notification: while one is, that
         // notification is shown without sound (`MissedCallAlertPolicy`). The app's own definition of a call in
         // flight (`noCallInFlight`: in a call, ringing, a CallKit call open, a live group call).
@@ -4093,7 +4118,7 @@ final class AppState: ObservableObject {
                 // the user opens the app — the natural recovery action, no re-login
                 // needed. Best-effort; the register path already retries on failure.
                 self.reassertVoipPushTokenRegistration()
-                self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+                self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (notice push check when flag OFF)
                 // FORCED-QR FIX (2026-06-24) / W-GRPWAKERACE (2026-08-04): the
                 // token-refresh + liveProvider-reconnect decision now runs
                 // through the SAME single-flight `ensureSocketFreshOnWake()`
@@ -4933,7 +4958,7 @@ final class AppState: ObservableObject {
                     // cleared on a dead push (410) is re-posted on every authenticated
                     // launch — not just the first. Calls survive app-killed state.
                     self.reassertVoipPushTokenRegistration()
-                    self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+                    self.reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (notice push check when flag OFF)
                 } catch {
                     // FORCED-QR FIX (2026-06-24): clear the session ONLY on a
                     // GENUINE hard auth rejection — i.e. `BCryptoError.unauthorized`.
@@ -5033,7 +5058,7 @@ final class AppState: ObservableObject {
             bindPresenceAfterAuth()
             // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
             reassertVoipPushTokenRegistration()
-            reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+            reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (notice push check when flag OFF)
             // 2026-07-17 — this interactive login path only ever set
             // currentUserId from the raw auth response, never fetching the
             // short PBX extension the cold-launch path (below) already
@@ -5103,7 +5128,7 @@ final class AppState: ObservableObject {
             bindPresenceAfterAuth()
             // W-PUSHHEAL: re-assert UNCONDITIONALLY (see launch path).
             reassertVoipPushTokenRegistration()
-            reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+            reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (notice push check when flag OFF)
             // 2026-07-17 — see the identical comment in `login(userId:credential:)`.
             refreshOwnDialExtension()
         } catch {
@@ -5187,7 +5212,7 @@ final class AppState: ObservableObject {
         connectPersistentSocket()
         bindPresenceAfterAuth()
         reassertVoipPushTokenRegistration()
-        reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (no-op when flag OFF)
+        reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (notice push check when flag OFF)
         refreshOwnDialExtension()
     }
 
@@ -6439,17 +6464,25 @@ final class AppState: ObservableObject {
     /// to today (VoIP/CallKit path untouched; the token is simply ignored).
     func handleApnsDeviceToken(hex: String) {
         guard CallsGate.callKitFreeMode else {
-            // Flag OFF — VoIP/PushKit owns incoming-call wakeups. Ignore.
+            // Flag OFF — VoIP/PushKit owns incoming-call wakeups. The token only goes to the server as
+            // the notice token, and only because the user allowed notifications (the system hands out
+            // a token only after `registerForRemoteNotifications`, which `ensureNoticePushRegistration`
+            // calls for a granted permission).
+            registerNoticeApnsToken(hex: hex)
             return
         }
         registerStandardApnsToken(hex: hex)
     }
 
     /// W-NOCALLKIT: re-assert the last-known standard APNs token (login /
-    /// foreground), so a server-side clear (dead push 410) heals. No-op when the
-    /// flag is OFF or no token has ever been delivered.
+    /// foreground), so a server-side clear (dead push 410) heals. No-op when no
+    /// token has ever been delivered. With the flag OFF it runs the notice push
+    /// check instead (`ensureNoticePushRegistration`).
     private func reassertStandardApnsTokenRegistration() {
-        guard CallsGate.callKitFreeMode else { return }
+        guard CallsGate.callKitFreeMode else {
+            ensureNoticePushRegistration()
+            return
+        }
         let stored = UserDefaults.standard.string(forKey: AppState.lastKnownApnsTokenKey)
         guard let hex = pendingApnsTokenHex ?? stored else { return }
         registerStandardApnsToken(hex: hex)
@@ -6462,8 +6495,7 @@ final class AppState: ObservableObject {
     /// Server endpoint (Phase 3): `POST /api/v1/account/apns-token` with body
     /// `{apns_token: "<64 hex>", bundle_id: "com.qaudion.app"}`.
     private func registerStandardApnsToken(hex: String) {
-        guard hex.count == 64,
-              hex.allSatisfy({ $0.isHexDigit }) else {
+        guard AccountApnsTokenRequest.isValid(hex: hex) else {
             print("[AppState] APNs token invalid (len=\(hex.count))")
             return
         }
@@ -6473,23 +6505,12 @@ final class AppState: ObservableObject {
             print("[AppState] APNs register deferred — not authenticated yet (cached for retry)")
             return
         }
-        guard var components = URLComponents(string: serverUrl) else { return }
-        var path = components.path
-        while path.hasSuffix("/") { path.removeLast() }
-        components.path = path + "/api/v1/account/apns-token"
-        guard let url = components.url else { return }
-
-        let bundleId = Bundle.main.bundleIdentifier ?? "com.qaudion.app"
-        let body: [String: Any] = [
-            "apns_token": hex,
-            "bundle_id": bundleId,
-        ]
-        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = bodyData
+        guard let req = AccountApnsTokenRequest.make(
+            serverUrl: serverUrl,
+            route: .callAlert,
+            hex: hex,
+            bundleId: Bundle.main.bundleIdentifier ?? "com.qaudion.app",
+            bearer: token) else { return }
         let session = voipPushSession
         Task { [weak self, hex, session] in
             do {
@@ -6504,6 +6525,77 @@ final class AppState: ObservableObject {
                 }
             } catch {
                 print("[AppState] APNs register error: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Notice push for a pending phone-number transfer
+
+    /// Default mode (`callKitFreeMode` OFF): once signed in, asks ONCE for the system notification
+    /// permission and, only if it is granted, registers for remote notifications; the token the system
+    /// hands back goes to `registerNoticeApnsToken`. A permission the user already decided on is not asked
+    /// again, and a denied one registers nothing. The decision is `NoticePushPolicy`. Calls and PushKit are
+    /// not touched.
+    private func ensureNoticePushRegistration() {
+        guard !CallsGate.callKitFreeMode, !noticePushCheckInFlight else { return }
+        guard authService.loadToken()?.isEmpty == false else { return }
+        noticePushCheckInFlight = true
+        Task { @MainActor [weak self] in
+            let center = NotificationCenterService.shared
+            await center.refreshAuthorizationState()
+            guard let self else { return }
+            defer { self.noticePushCheckInFlight = false }
+            let authorization: NoticePushAuthorization
+            switch center.authorization {
+            case .notDetermined: authorization = .notDetermined
+            case .denied: authorization = .denied
+            case .authorized, .provisional, .ephemeral: authorization = .granted
+            }
+            let step = NoticePushPolicy.step(
+                callKitFree: CallsGate.callKitFreeMode,
+                authenticated: true,  // a stored session token was checked above
+                authorization: authorization)
+            switch step {
+            case .none:
+                break
+            case .register:
+                UIApplication.shared.registerForRemoteNotifications()
+            case .askThenRegister:
+                // Registers for remote notifications itself when the answer is yes.
+                _ = await center.requestAuthorization()
+            }
+        }
+    }
+
+    /// Sends the token to `POST /api/v1/account/apns-notice-token`, same body as `apns-token`. Before
+    /// sign-in the token is not kept: the permission check after login registers again and the system
+    /// hands it back. A request already running for the same token is not repeated.
+    private func registerNoticeApnsToken(hex: String) {
+        guard AccountApnsTokenRequest.isValid(hex: hex) else {
+            print("[AppState] APNs notice token invalid (len=\(hex.count))")
+            return
+        }
+        guard let token = authService.loadToken(), !token.isEmpty else { return }
+        guard noticeApnsTokenInFlightHex != hex else { return }
+        guard let req = AccountApnsTokenRequest.make(
+            serverUrl: serverUrl,
+            route: .notice,
+            hex: hex,
+            bundleId: Bundle.main.bundleIdentifier ?? "com.qaudion.app",
+            bearer: token) else { return }
+        noticeApnsTokenInFlightHex = hex
+        let session = voipPushSession
+        Task { [weak self, hex, session] in
+            do {
+                let (_, resp) = try await session.data(for: req)
+                if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                    print("[AppState] APNs notice register HTTP \(http.statusCode)")
+                }
+            } catch {
+                print("[AppState] APNs notice register error: \(error.localizedDescription)")
+            }
+            await MainActor.run {
+                if self?.noticeApnsTokenInFlightHex == hex { self?.noticeApnsTokenInFlightHex = nil }
             }
         }
     }
