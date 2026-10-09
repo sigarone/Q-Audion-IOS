@@ -5,10 +5,9 @@ extension ReleaseNote {
     /// visibili all'utente. Niente codici interni, tool o dettagli di build.
     public static let releaseNotes: [ReleaseNote] = [
         .init(id: "v1.0.1214+", date: "2026-10-09",
-              title: "Messaggi e allegati",
+              title: "Messaggi",
               bullets: [
                 "Puoi rispondere a un messaggio specifico citandolo",
-                "Puoi inviare dalla chat foto, video e file di qualsiasi tipo",
               ]),
         .init(id: "v1.0.1196+", date: "2026-09-30",
               title: "Associazione di persona più chiara",
