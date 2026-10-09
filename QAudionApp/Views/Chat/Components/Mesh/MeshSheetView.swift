@@ -108,11 +108,16 @@ struct MeshSheetView: View {
 
     // MARK: - Antenna
 
+    /// Label of the "off" antenna mode, shared by the chip and the subtitle.
+    private var antennaOffLabel: String {
+        String(localized: "mesh_sheet.antenna_off", defaultValue: "Spenta", comment: "Bluetooth mesh sheet: antenna mode off (chip label and subtitle of the antenna row).")
+    }
+
     private var antennaSubtitle: String {
         switch runtime.antennaMode {
         case nil:
             if case .error = runtime.radioState { return "Bluetooth non disponibile" }
-            return "Spenta"
+            return antennaOffLabel
         case .visibleOnly:
             return "Visibile · raggiungibile dai vicini"
         case .fullMesh:
@@ -137,7 +142,7 @@ struct MeshSheetView: View {
                 Spacer()
             }
             HStack(spacing: 8) {
-                antennaModeChip(label: "Spenta", selected: runtime.antennaMode == nil) {
+                antennaModeChip(label: antennaOffLabel, selected: runtime.antennaMode == nil) {
                     handleAntennaSelect(nil)
                 }
                 antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {

@@ -35527,6 +35527,48 @@
           }
         }
       }
+    },
+    "mesh_sheet.antenna_off": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: antenna mode \"off\" (chip label and subtitle of the antenna row).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spenta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apagada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Éteinte"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aus"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desligada"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
