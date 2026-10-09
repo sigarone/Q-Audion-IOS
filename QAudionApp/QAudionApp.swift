@@ -338,6 +338,8 @@ struct QAudionApp: App {
                 // line is captured by the W417 telemetry. Fire-and-forget:
                 // never blocks launch, fails safe to the compiled defaults.
                 FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
+                let lock = lockService
+                appState.isAppLocked = { lock.isLocked }
                 appState.initialize()
                 // W-MK — register the MetricKit subscriber. MUST be after
                 // attachStdoutTee() so the per-payload prints are captured

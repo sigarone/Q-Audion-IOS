@@ -2816,10 +2816,16 @@ final class AppState: ObservableObject {
     /// (foreground, reconnect) also waits `PhoneTransferNoticeModel.minRefreshInterval` after the
     /// previous request, the notice and the first read after a launch do not.
     func refreshPhoneTransferNotice(throttled: Bool = false) {
+        // Nothing to ask without a signed-in, connected session, nor while the app is locked.
+        guard liveProvider != nil, !(isAppLocked?() ?? false) else { return }
         Task { [weak self] in
             await self?.phoneTransferNotice.refresh(throttled: throttled)
         }
     }
+
+    /// Set by the app scene: whether the app lock is up right now. Read at the moment a read of the
+    /// pending transfers would start, so it cannot lag behind the lock the way an observer can.
+    var isAppLocked: (@MainActor () -> Bool)?
 
     /// TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md) — Ed25519 verifier bound
     /// to the pinned, DEDICATED wipe-signing public key

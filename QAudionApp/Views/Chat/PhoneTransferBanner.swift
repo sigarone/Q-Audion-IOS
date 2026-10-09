@@ -6,9 +6,9 @@ import QAudionEngine
 /// transfer. Without an action the number stops being a way into this account when the time is up.
 ///
 /// The state is `PhoneTransferNoticeModel`, fed from the server on every entry point; this view only
-/// draws it. Takes the model, never `AppState` (CLAUDE.md section 16). The hours left (rounded down,
-/// "less than 1 hour" below the first) are computed from the server's expiry on a one-minute tick. The
-/// banner stays until the server stops listing the transfer: the device clock never hides it.
+/// draws it. The hours left (rounded down, "less than 1 hour" below the first) are computed from the
+/// server's expiry on a one-minute tick. The banner stays until the server stops listing the transfer:
+/// the device clock never hides it.
 struct PhoneTransferBanner: View {
     @ObservedObject var model: PhoneTransferNoticeModel
 
