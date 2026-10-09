@@ -11,6 +11,10 @@ final class AccountSettingsContainer: ObservableObject {
     @Published var errorMessage: String?
     @Published var draftDisplayName: String = ""
     @Published var draftStatusMessage: String = ""
+    /// Status message returned by the last successful profile read; `nil`
+    /// until one succeeds. Lets `saveProfile()` tell an emptied status apart
+    /// from one that was never loaded.
+    private var loadedStatusMessage: String?
     /// Local-only "public" phone number used as caller-id substitution
     /// on outbound calls. Pure digits — see `LocalCallerIdSettings`.
     /// Bound to a SwiftUI TextField; persisted to UserDefaults on save
@@ -173,6 +177,7 @@ final class AccountSettingsContainer: ObservableObject {
                     )
                     self.draftDisplayName = profile.displayName ?? ""
                     self.draftStatusMessage = profile.statusMessage ?? ""
+                    self.loadedStatusMessage = profile.statusMessage ?? ""
                     // W444: propagate dialExtension to AppState so SettingsScreen
                     // profileHandle and InCallContainer show the real short number.
                     self.appState?.currentUserDialExtension = extString
@@ -249,7 +254,10 @@ final class AccountSettingsContainer: ObservableObject {
         do {
             try await provider.accountApi.updateProfile(
                 displayName: draftDisplayName.isEmpty ? nil : draftDisplayName,
-                statusMessage: draftStatusMessage.isEmpty ? nil : draftStatusMessage,
+                statusMessage: ProfileStatusUpdate.statusToSend(
+                    loadedStatus: loadedStatusMessage,
+                    draftStatus: draftStatusMessage
+                ),
                 avatarUrl: nil
             )
             loadFromServer()
