@@ -63,12 +63,21 @@ struct PhoneEntryScreen: View {
         return "Ultimo tentativo: " + stamp
     }
 
+    /// Registration needs a complete invite code whose format and checksum pass
+    /// `InviteCodeInput` (the same check as the interno+email screen); login
+    /// never uses one. Blocking submit here avoids a round trip to find out.
+    static func inviteOk(mode: Mode, inviteCode: String) -> Bool {
+        mode != .register || InviteCodeInput.isValid(inviteCode)
+    }
+
+    /// The `invite_code` handed to the OTP step: the normalised dashed form for
+    /// `.register`, nil for `.login` or when the input is not a valid code.
+    static func inviteWireValue(mode: Mode, inviteCode: String) -> String? {
+        mode == .register ? InviteCodeInput.wireValue(inviteCode) : nil
+    }
+
     private var isValid: Bool {
-        // Server's registration_mode is "invite" — /auth/otp/verify 403s
-        // "invite_code required" without one. Block submit client-side
-        // for the register mode instead of round-tripping to find out.
-        let inviteOk = mode != .register || !inviteCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return PhoneHashHelper.isValid(raw) && inviteOk
+        PhoneHashHelper.isValid(raw) && Self.inviteOk(mode: mode, inviteCode: inviteCode)
     }
 
     var body: some View {
@@ -140,7 +149,7 @@ struct PhoneEntryScreen: View {
 
                 if mode == .register {
                     Spacer().frame(height: 16)
-                    InviteCodeField(code: $inviteCode)
+                    InviteCodeField(code: $inviteCode, isInvalid: InviteCodeInput.isCompleteButInvalid(inviteCode))
                     .padding(.horizontal, 24)
                 }
 
@@ -200,8 +209,7 @@ struct PhoneEntryScreen: View {
         do {
             let e164 = try PhoneHashHelper.normalizeE164(raw)
             let hash = PhoneHashHelper.sha256Hex(e164)
-            let trimmedInvite = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
-            let invite: String? = (mode == .register && !trimmedInvite.isEmpty) ? trimmedInvite : nil
+            let invite = Self.inviteWireValue(mode: mode, inviteCode: inviteCode)
             onContinue(hash, e164, invite)
         } catch {
             validationError = error.localizedDescription

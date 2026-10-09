@@ -196,6 +196,30 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
             XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .required))
         }
     }
+
+    func testVerifyOtp403InvalidThrowsInviteCodeInvalid() async {
+        StubURLProtocol.stubResponse = (403, Data(#"{"error":"invalid or expired invite code"}"#.utf8))
+        do {
+            _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
+                                              deviceName: "iPhone", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", displayName: nil)
+            XCTFail("expected BCryptoInviteCodeError")
+        } catch {
+            XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .invalid))
+        }
+    }
+
+    func testVerifyOtpUnrelated403StaysHttpError() async {
+        StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
+        do {
+            _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .login,
+                                              deviceName: "iPhone", inviteCode: nil, displayName: nil)
+            XCTFail("expected BCryptoError.httpError(403)")
+        } catch BCryptoError.httpError(let status) {
+            XCTAssertEqual(status, 403)
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
 }
 
 // MARK: - URLProtocol stub

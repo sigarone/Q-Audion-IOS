@@ -169,6 +169,7 @@ jobs:
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
+            -only-testing:QAudionAppTests/PhoneEntryScreenInviteTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -resultBundlePath /tmp/app-tests.xcresult \
