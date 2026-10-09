@@ -64,6 +64,24 @@
 #     kinds of build are never visually confused, and a loud `::warning::`
 #     plus a job-summary banner remind whoever is looking at the run that
 #     a dev_tools build must NEVER be submitted for App Store review.
+#
+# --- Build with VPN support (workflow_dispatch only) -----------------------
+# VPN support is a compile-time switch (QAUDION_VPN). The default build -- every
+# tag push, and any dispatch without `vpn` -- is generated from
+# QAudionApp/project.yml and contains no packet-tunnel extension, no
+# WireGuardKit, no NetworkExtension.framework and no Network Extension
+# entitlement; the VPN controls are greyed out. A dispatch with `vpn=true`
+# generates the project from QAudionApp/project-vpn.yml instead (see that
+# file's header). In that mode:
+#   - Go is set up (libwg-go.a is built by the extension's script phase);
+#   - the extension's App ID / profile are prepared, and Network Extensions is
+#     enabled on the main App ID; in the default mode it is DISABLED there
+#     and the main profile is regenerated, so the profile carries no
+#     Network Extension entitlement either;
+#   - the "no VPN in the artifact" gate (scripts/ci/assert-no-vpn.sh) is
+#     replaced by the opposite check (extension + its privacy manifest are in
+#     the IPA).
+#   gh workflow run ios-testflight.yml -f tag=vX -f vpn=true
 # ---------------------------------------------------------------------------
 
 name: TestFlight build
@@ -80,6 +98,11 @@ on:
         required: false
       download_dsyms:
         description: 'Recover dSYMs from App Store Connect (expired-artifact rescue). Does NOT build/upload -- runs the fastlane recovery step only.'
+        required: false
+        type: boolean
+        default: false
+      vpn:
+        description: 'Build WITH VPN support (compile condition QAUDION_VPN, spec QAudionApp/project-vpn.yml, packet-tunnel extension, Network Extension entitlement). Default build has none of it. Ignored on a tag push -- workflow_dispatch only.'
         required: false
         type: boolean
         default: false
@@ -130,6 +153,10 @@ jobs:
       # (setup-go@v5, upload-artifact@v7 ...) ship native Node 24 builds,
       # this env var can be removed.
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      # VPN support in this build (see the "Build with VPN support" note at the
+      # top). 'true' only for a workflow_dispatch with vpn=true; a tag push is
+      # always 'false'.
+      VPN_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.vpn == 'true' && 'true' || 'false' }}
       # WebRTC key-material logging gate (scripts/ci/assert-no-key-logging.sh, step
       # "Assert no WebRTC key-material logging in the IPA" below).
       #   '1' = ENFORCE (current): the step fails the job, BEFORE the TestFlight upload, if
@@ -269,7 +296,9 @@ jobs:
           pipx install --force codemagic-cli-tools 2>&1 | grep -v "WARNING: Skipping setuptools" || true
 
       # ----------------------------------------------------------
-      # 3b) Set up Go for WireGuard CGO cross-compilation.
+      # 3b) Set up Go for WireGuard CGO cross-compilation. Only needed
+      #     for a build with VPN support (VPN_BUILD=true); the default
+      #     build has no QAudionPacketTunnel target.
       #     The QAudionPacketTunnel preBuildScript calls the
       #     WireGuardKitGo Makefile, which compiles api-apple.go into
       #     libwg-go.a using `CGO_ENABLED=1 GOOS=ios go build`. That
@@ -277,6 +306,7 @@ jobs:
       #     Go 1.21+ is required for iOS cross-compilation support.
       # ----------------------------------------------------------
       - name: Set up Go
+        if: ${{ env.VPN_BUILD == 'true' }}
         uses: actions/setup-go@v6
         with:
           go-version: '1.22'
@@ -344,12 +374,18 @@ jobs:
           echo "::warning::DEV TOOLS BUILD -- QAUDION_DEV_TOOLS is compiled in (Settings SVILUPPATORE section + TestFlight-facing surfaces enabled). This build must NEVER be submitted for App Store review."
 
       # ----------------------------------------------------------
-      # 4) Generate the Xcode project from project.yml.
+      # 4) Generate the Xcode project from project.yml (default build,
+      #    no VPN support) or project-vpn.yml (VPN_BUILD=true).
       # ----------------------------------------------------------
       - name: Generate Xcode project
         working-directory: QAudionApp
         run: |
-          xcodegen generate
+          if [ "$VPN_BUILD" = "true" ]; then
+            echo "::warning::VPN BUILD -- generated from project-vpn.yml (QAUDION_VPN compiled in, packet-tunnel extension embedded)."
+            xcodegen generate --spec project-vpn.yml
+          else
+            xcodegen generate
+          fi
           echo "=== Schemes ==="
           xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
 
@@ -445,10 +481,13 @@ jobs:
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        Info.plist
 
           # Sync extension version with the host. Apple validation rejects
-          # archives where extension and host CFBundleVersion differ.
+          # archives where extension and host CFBundleVersion differ. The
+          # packet-tunnel extension is only part of a build with VPN support.
           EXT_PLIST="../QAudionPacketTunnel/Info.plist"
-          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$EXT_PLIST"
-          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$EXT_PLIST"
+          if [ "$VPN_BUILD" = "true" ]; then
+            plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$EXT_PLIST"
+            plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$EXT_PLIST"
+          fi
 
           # And the SiriKit Intents extension — it was the one extension
           # left out, so every archive warned "CFBundleVersion of an app
@@ -459,8 +498,10 @@ jobs:
 
           plutil -extract CFBundleShortVersionString raw -o - Info.plist
           plutil -extract CFBundleVersion             raw -o - Info.plist
-          echo "--- extension ---"
-          plutil -extract CFBundleVersion raw -o - "$EXT_PLIST"
+          if [ "$VPN_BUILD" = "true" ]; then
+            echo "--- extension ---"
+            plutil -extract CFBundleVersion raw -o - "$EXT_PLIST"
+          fi
 
           # Expose the resolved version + build number as step outputs so the
           # dSYM-archival step below can name its artifact by version
@@ -583,6 +624,27 @@ jobs:
               && echo "  SIRIKIT: done" \
               || echo "  SIRIKIT: WARN (may already be enabled)"
 
+            # Network Extensions on the main App ID follows the build kind:
+            # enabled for a build with VPN support (VPN_BUILD=true), DISABLED
+            # for the default build, so the main App Store profile that
+            # Phase 2/3 below regenerates carries no Network Extension
+            # entitlement. Both calls are idempotent. A failure only warns:
+            # the scripts/ci/assert-no-vpn.sh gate on the finished IPA is what
+            # decides whether the default build is clean.
+            if [ "$VPN_BUILD" = "true" ]; then
+              echo "Enabling Network Extensions on $MAIN_BID_RES (build with VPN support)..."
+              app-store-connect bundle-ids enable-capabilities \
+                "$MAIN_BID_RES" --capability "Network Extensions" 2>&1 \
+                && echo "  NETWORK_EXTENSIONS (main): done" \
+                || echo "  NETWORK_EXTENSIONS (main): WARN (may already be enabled)"
+            else
+              echo "Disabling Network Extensions on $MAIN_BID_RES (default build has no VPN support)..."
+              app-store-connect bundle-ids disable-capabilities \
+                "$MAIN_BID_RES" --capability "Network Extensions" 2>&1 \
+                && echo "  NETWORK_EXTENSIONS (main): disabled or not enabled" \
+                || echo "  NETWORK_EXTENSIONS (main): WARN (could not disable)"
+            fi
+
             # Phase 2: delete the stale profile (created before the
             # capability existed) so --create below makes a fresh one that
             # actually includes it. `bundle-ids profiles` (not `profiles
@@ -614,6 +676,12 @@ jobs:
           else
             echo "WARNING: could not resolve main app Bundle ID resource -- archive may still fail on Associated Domains."
           fi
+
+          # The packet-tunnel extension's App ID / profile are only needed for a
+          # build with VPN support (VPN_BUILD=true); the default build does not
+          # embed that extension. (The block below is not re-indented, to keep
+          # the diff small.)
+          if [ "$VPN_BUILD" = "true" ]; then
 
           # ?? VPN extension: App Groups + Network Extensions ???????????????????
           # QAudionPacketTunnel.entitlements requires both capabilities.
@@ -715,6 +783,10 @@ jobs:
               --strict-match-identifier
           else
             echo "WARNING: could not resolve Extension Bundle ID resource -- archive may fail."
+          fi
+
+          else
+            echo "Default build (no VPN support): skipping the packet-tunnel extension signing files."
           fi
 
           # ── Intents extension: App Groups (S2 added QAudionIntents.entitlements) ─
@@ -994,7 +1066,15 @@ jobs:
           # the failure only the artifact can prove. Same for TestFlight
           # wording: it must be compiled out of the store build.
           APP="Payload/QAudionApp.app"
-          for MANIFEST in "$APP/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy"                           "$APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"; do
+          # Privacy manifests that must be in the shipped bundle: the app and the
+          # Intents extension, plus the packet-tunnel extension only in a build
+          # with VPN support (the default build does not contain that extension).
+          MANIFESTS="$APP/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy"
+          if [ "$VPN_BUILD" = "true" ]; then
+            MANIFESTS="$MANIFESTS $APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"
+          fi
+          MANIFEST_COUNT=$(echo $MANIFESTS | wc -w | tr -d ' ')
+          for MANIFEST in $MANIFESTS; do
             if [ ! -f "$MANIFEST" ]; then
               echo "::error::privacy manifest missing from IPA: $MANIFEST"
               exit 1
@@ -1022,7 +1102,7 @@ jobs:
             echo "::error::repository URL (github.com/sigarone) found in the app binary"
             exit 1
           fi
-          echo "store-readiness gates: privacy manifests present (x3), no TestFlight strings in binary, no repository URL in binary"
+          echo "store-readiness gates: privacy manifests present (x$MANIFEST_COUNT), no TestFlight strings in binary, no repository URL in binary"
 
           rm -f "$GITHUB_WORKSPACE/$IPA_PATH"
           zip -qr "$GITHUB_WORKSPACE/$IPA_PATH" Payload
@@ -1065,6 +1145,52 @@ jobs:
           SCAN=$(mktemp -d)
           unzip -q "$GITHUB_WORKSPACE/$IPA_PATH" -d "$SCAN"
           sh scripts/ci/assert-no-key-logging.sh "$SCAN/Payload/QAudionApp.app"
+          rm -rf "$SCAN"
+
+      # ----------------------------------------------------------
+      # 8c) VPN gate on the SHIPPED IPA (the IPA re-zipped by step 8).
+      #     Default build (VPN_BUILD != true): scripts/ci/assert-no-vpn.sh fails
+      #     the job BEFORE the upload if the bundle contains the
+      #     QAudionPacketTunnel extension (or any Network Extension appex), the
+      #     Network Extension / vpn.api entitlements (signed binaries, the
+      #     codesign dump of the app and of every appex, embedded provisioning
+      #     profiles), a NetworkExtension.framework load command, or
+      #     WireGuard code. --require-entitlements also fails it when the
+      #     signature carries no readable entitlements at all (a scan that
+      #     cannot see them proves nothing).
+      #     Build with VPN support (VPN_BUILD=true): the opposite check, the
+      #     extension, its privacy manifest and the Network Extension
+      #     entitlement ARE in the IPA.
+      # ----------------------------------------------------------
+      - name: Assert VPN support state of the IPA
+        run: |
+          set -e
+          IPA_PATH=$(find QAudionApp/build/ios/ipa -name "*.ipa" | head -1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "::error::VPN gate: no IPA found under QAudionApp/build/ios/ipa - nothing scanned"
+            exit 1
+          fi
+          SCAN=$(mktemp -d)
+          unzip -q "$GITHUB_WORKSPACE/$IPA_PATH" -d "$SCAN"
+          APP="$SCAN/Payload/QAudionApp.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::VPN gate: QAudionApp.app not found in the IPA - nothing scanned"
+            exit 1
+          fi
+          if [ "$VPN_BUILD" = "true" ]; then
+            if [ ! -d "$APP/PlugIns/QAudionPacketTunnel.appex" ] || [ ! -f "$APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy" ]; then
+              echo "::error::VPN build: QAudionPacketTunnel.appex (or its privacy manifest) is missing from the IPA"
+              exit 1
+            fi
+            if ! codesign -d --entitlements :- "$APP" 2>/dev/null | grep -aq "com.apple.developer.networking.networkextension"; then
+              echo "::error::VPN build: the Network Extension entitlement is missing from the signed app"
+              exit 1
+            fi
+            echo "VPN build: packet-tunnel extension, its privacy manifest and the Network Extension entitlement are in the IPA"
+          else
+            test -f scripts/ci/assert-no-vpn.sh
+            sh scripts/ci/assert-no-vpn.sh --require-entitlements "$APP"
+          fi
           rm -rf "$SCAN"
 
       # ----------------------------------------------------------

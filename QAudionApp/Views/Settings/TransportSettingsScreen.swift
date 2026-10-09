@@ -8,6 +8,7 @@ final class TransportSettingsContainer: ObservableObject {
     @Published var draftMode: TransportSettingsViewModel.Mode
     @Published var draftPreferredUrlString: String
 
+    #if QAUDION_VPN
     // VPN exit-node picker. Reuses the same VpnService + access token the
     // HomeView VpnToggleChip uses, and the SAME `vpn.preferredNodeId`
     // UserDefaults key, so a choice made here and one made via the chip's
@@ -17,6 +18,7 @@ final class TransportSettingsContainer: ObservableObject {
     @Published var vpnNodesLoading = false
     private let vpnService: VpnService
     private let vpnTokenProvider: () -> String
+    #endif
 
     init(state: AppState) {
         let stored = SettingsStore().loadTransport()
@@ -24,10 +26,13 @@ final class TransportSettingsContainer: ObservableObject {
         self.diagnostics = TransportDiagnostics(appState: state)
         self.draftMode = stored.mode
         self.draftPreferredUrlString = stored.preferredTurnServerUrl?.absoluteString ?? ""
+        #if QAUDION_VPN
         self.vpnService = state.vpnService
         self.vpnTokenProvider = { state.currentAccessToken ?? "" }
+        #endif
     }
 
+    #if QAUDION_VPN
     /// Fetch the live exit-node list (Helsinki, Milano, …) for the picker.
     /// Best-effort: a failure leaves the list empty (the row still shows
     /// "Auto"); never throws to the UI.
@@ -38,6 +43,7 @@ final class TransportSettingsContainer: ObservableObject {
         defer { vpnNodesLoading = false }
         vpnNodes = (try? await vpnService.fetchNodes(accessToken: token)) ?? []
     }
+    #endif
 
     func runDiagnostics() async {
         await diagnostics.checkServer()
@@ -108,9 +114,11 @@ struct TransportSettingsScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
+    #if QAUDION_VPN
     /// Manual VPN exit choice. '' = Auto (NodePicker best). SAME UserDefaults
     /// key as the HomeView VpnToggleChip long-press picker, so both stay in sync.
     @AppStorage("vpn.preferredNodeId") private var preferredVpnNodeId: String = ""
+    #endif
 
     init(state: AppState) {
         _container = StateObject(wrappedValue: TransportSettingsContainer(state: state))
@@ -176,7 +184,9 @@ struct TransportSettingsScreen: View {
             }
         }
         .navigationTitle("Trasporto")
+        #if QAUDION_VPN
         .task { await container.loadVpnNodes() }
+        #endif
     }
 
     // MARK: - Mode picker
@@ -197,6 +207,7 @@ struct TransportSettingsScreen: View {
 
     // MARK: - VPN exit node
 
+    #if QAUDION_VPN
     @ViewBuilder
     private var vpnNodeSection: some View {
         VStack(spacing: 8) {
@@ -249,6 +260,36 @@ struct TransportSettingsScreen: View {
         }
         .buttonStyle(.plain)
     }
+    #else
+    /// Greyed-out, inactive exit-node row for builds without VPN support
+    /// (`QAUDION_VPN` not set).
+    @ViewBuilder
+    private var vpnNodeSection: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Auto")
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.onSurface)
+                Text("Nodo migliore · latenza + carico")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(scheme.surfaceVariant.opacity(0.4))
+        )
+        .opacity(0.45)
+        .accessibilityElement(children: .combine)
+        Text("VPN non disponibile al momento")
+            .qaudionStyle(type.labelSmall)
+            .foregroundStyle(scheme.onSurfaceVariant)
+            .padding(.horizontal, 14).padding(.top, 6)
+    }
+    #endif
 
     // MARK: - TURN URL input
 

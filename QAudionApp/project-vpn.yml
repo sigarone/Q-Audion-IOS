@@ -1,0 +1,189 @@
+# XcodeGen spec for the build WITH VPN support (QAUDION_VPN).
+#
+# QAudionApp/project.yml is the default spec: no VPN support (no packet-tunnel
+# extension, no WireGuardKit, no NetworkExtension.framework, no Network
+# Extension entitlement; the VPN controls are greyed out and inactive). This
+# file includes it unchanged and adds, on top:
+#   - the QAUDION_VPN compilation condition on the QAudionApp target
+#     (OTHER_SWIFT_FLAGS rather than SWIFT_ACTIVE_COMPILATION_CONDITIONS, so it
+#     cannot clobber a condition injected into project.yml by the workflow);
+#   - NetworkExtension.framework and the embedded QAudionPacketTunnel extension
+#     (sources stay in ../QAudionPacketTunnel; the extension is defined below);
+#   - the WireGuardKit package, linked only to QAudionPacketTunnel;
+#   - QAudionVPN.entitlements instead of QAudion.entitlements (adds the
+#     Network Extension capability and the App Group shared with the extension).
+#
+# Generate with:  cd QAudionApp && xcodegen generate --spec project-vpn.yml
+# The extension's script phase builds libwg-go.a, which needs Go on PATH and a
+# device destination (it has no Simulator slice).
+#
+# To ship a build with VPN support (needs an account that can use Network
+# Extension VPN capabilities):
+#   1. Generate the project from this spec instead of project.yml
+#      (ios-testflight.yml: dispatch with vpn=true, or make that the default).
+#   2. Apple Developer portal: enable Network Extensions on com.qaudion.app and
+#      on com.qaudion.app.packet-tunnel (plus App Groups on both, with
+#      group.com.bcrypto.qaudion.vpn), then regenerate both App Store
+#      provisioning profiles; the workflow's signing step does that when vpn
+#      is on.
+#   3. ios-testflight.yml: with vpn on, the "no VPN in the artifact" gate
+#      (scripts/ci/assert-no-vpn.sh) is replaced by the check that the
+#      extension and its privacy manifest ARE in the IPA; invert it for a
+#      permanent switch.
+#   4. Keep QAudionVPN.entitlements in step with QAudion.entitlements (the
+#      ios-app-tests.yml VPN lane compares them).
+
+include:
+  - project.yml
+
+packages:
+  # WireGuard official iOS library — linked only to QAudionPacketTunnel.
+  # Provides WireGuardAdapter + TunnelConfiguration used in PacketTunnelProvider.
+  # NOTE: pinned to sigarone/wireguard-apple fork (tag 1.0.16-27-xcode26) because
+  # upstream WireGuard/wireguard-apple Package.swift declares swift-tools-version:5.3
+  # but uses .macOS(.v12)/.iOS(.v15) (requires 5.5+). Xcode 26 enforces this
+  # strictly, causing "Invalid manifest" package resolution failures.
+  # The fork bumps swift-tools-version to 5.5 — no other changes.
+  WireGuardKit:
+    url: https://github.com/sigarone/wireguard-apple
+    from: "1.0.18"
+
+targets:
+  QAudionApp:
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: QAudionVPN.entitlements
+        OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_VPN
+    dependencies:
+      # VPN: NETunnelProviderManager — main app side of the packet tunnel.
+      - sdk: NetworkExtension.framework
+      # VPN: embed the packet tunnel extension into the app bundle.
+      - target: QAudionPacketTunnel
+        embed: true
+
+  # ------------------------------------------------------------------ #
+  # QAudionPacketTunnel — Network Extension (packet tunnel provider)    #
+  # Separate OS-launched process; uses WireGuardKit to manage the       #
+  # WireGuard tunnel. Bundle: com.bcrypto.qaudion.packet-tunnel         #
+  # ------------------------------------------------------------------ #
+  QAudionPacketTunnel:
+    type: app-extension
+    platform: iOS
+    # WireGuardKit 1.x requires iOS 15+. Set to 16.0 to match the main app
+    # so the extension runs on every device the app supports.
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../QAudionPacketTunnel
+    settings:
+      base:
+        INFOPLIST_FILE: ../QAudionPacketTunnel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../QAudionPacketTunnel/QAudionPacketTunnel.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.packet-tunnel
+        PRODUCT_NAME: QAudionPacketTunnel
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: 5G22P9239N
+        CODE_SIGN_STYLE: Automatic
+        # Extension-only: suppress "main" entry point and standard library
+        # linking that the OS handles for extensions.
+        SKIP_INSTALL: YES
+    dependencies:
+      # WireGuardKit — the only import in PacketTunnelProvider.swift besides
+      # NetworkExtension and os.log (both are Apple system frameworks).
+      - package: WireGuardKit
+        product: WireGuardKit
+    preBuildScripts:
+      # Build WireGuard Go runtime library (libwg-go.a) from the SPM checkout
+      # BEFORE the link phase runs.
+      #
+      # Why needed: WireGuardKitGo's Package.swift has
+      #   linkerSettings: [.linkedLibrary("wg-go")]
+      # so the linker passes -lwg-go and expects libwg-go.a in
+      # $CONFIGURATION_BUILD_DIR. The library is NOT in git — it is compiled
+      # from Sources/WireGuardKitGo/api-apple.go via the Makefile using Go
+      # CGO cross-compilation (GOOS=ios).
+      #
+      # Environment variables PLATFORM_NAME, ARCHS, SDKROOT, and
+      # CONFIGURATION_BUILD_DIR are set automatically by Xcode in every Run
+      # Script phase — the Makefile reads them directly.
+      - name: Build WireGuard Go (libwg-go.a)
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(CONFIGURATION_BUILD_DIR)/libwg-go.a
+        script: |
+          #!/bin/sh
+          set -eu
+
+          # Locate WireGuardKitGo inside DerivedData SourcePackages.
+          #
+          # BUILD_DIR during `xcodebuild build`  = .../DerivedData/<n>/Build/Products
+          # BUILD_DIR during `xcodebuild archive` = .../DerivedData/<n>/Build/
+          #   Intermediates.noindex/ArchiveIntermediates/Products/Release-iphoneos
+          #   (several levels deeper than the regular build)
+          #
+          # Complication: xcodebuild archive also creates its own
+          # ArchiveIntermediates/SourcePackages/ for package resolution, so a
+          # naive walk-up stops there first — before reaching the top-level
+          # DerivedData SourcePackages/ where the actual checkouts live.
+          #
+          # Strategy:
+          #   1. Walk up from BUILD_DIR, collecting every ancestor that has
+          #      SourcePackages/. Stop when WireGuardKitGo is found inside one.
+          #   2. Within each SourcePackages use `find -name WireGuardKitGo` so
+          #      we tolerate checkout directories with version/hash suffixes
+          #      (e.g. wireguard-apple-1.0.18 instead of wireguard-apple).
+          #   3. Last resort: search ~/Library/Developer/Xcode/DerivedData
+          #      for the project folder directly.
+          WG_GO_SRC=""
+          SEARCH_ROOT="$BUILD_DIR"
+          while [ "$SEARCH_ROOT" != "/" ]; do
+            SEARCH_ROOT=$(dirname "$SEARCH_ROOT")
+            if [ -d "$SEARCH_ROOT/SourcePackages/checkouts" ]; then
+              CANDIDATE=$(find "$SEARCH_ROOT/SourcePackages/checkouts" \
+                -maxdepth 4 -type d -name "WireGuardKitGo" 2>/dev/null | head -1 || echo "")
+              if [ -n "$CANDIDATE" ]; then
+                WG_GO_SRC="$CANDIDATE"
+                break
+              fi
+            fi
+          done
+
+          # Last-resort: scan the whole project DerivedData folder
+          if [ -z "$WG_GO_SRC" ]; then
+            DD_PROJ=$(find ~/Library/Developer/Xcode/DerivedData \
+              -maxdepth 1 -type d -name "QAudionApp-*" 2>/dev/null | head -1 || echo "")
+            if [ -n "$DD_PROJ" ]; then
+              WG_GO_SRC=$(find "$DD_PROJ" -type d -name "WireGuardKitGo" \
+                2>/dev/null | head -1 || echo "")
+            fi
+          fi
+
+          if [ -z "$WG_GO_SRC" ] || [ ! -d "$WG_GO_SRC" ]; then
+            echo "error: WireGuardKitGo source not found anywhere under DerivedData"
+            echo "note:  BUILD_DIR=$BUILD_DIR"
+            echo "note:  Resolve the wireguard-apple SPM package first."
+            exit 1
+          fi
+
+          echo "Building libwg-go.a"
+          echo "  Source:                 $WG_GO_SRC"
+          echo "  PLATFORM_NAME:          ${PLATFORM_NAME}"
+          echo "  ARCHS:                  ${ARCHS}"
+          echo "  SDKROOT:                ${SDKROOT}"
+          echo "  CONFIGURATION_BUILD_DIR:${CONFIGURATION_BUILD_DIR}"
+
+          # Ensure Go is in PATH. setup-go installs to /usr/local/go/bin on
+          # GitHub Actions runners; Homebrew uses /opt/homebrew/bin on Apple Silicon.
+          for GO_DIR in /usr/local/go/bin /opt/homebrew/bin /usr/bin; do
+            if [ -x "$GO_DIR/go" ]; then
+              export PATH="$GO_DIR:$PATH"
+              break
+            fi
+          done
+
+          if ! command -v go > /dev/null 2>&1; then
+            echo "error: 'go' not found in PATH. Add a setup-go step in the CI workflow."
+            exit 1
+          fi
+          echo "  Go: $(go version)"
+
+          make -C "$WG_GO_SRC" build
