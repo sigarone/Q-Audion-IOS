@@ -28,7 +28,8 @@ import Foundation
 ///  - a cancelled entry never comes back, even if a list request started before the cancel answers later;
 ///  - an answer that arrives after `reset()` (a list or a cancel) changes nothing, and a failed cancel can
 ///    only raise `.cancelFailed` for the entry still on screen; every successful read clears the problem;
-///  - the cancel flag is set at the first tap (`requestCancel()` is synchronous), so a second tap is ignored;
+///  - the cancel flag is set at the first tap (`requestCancel()` is synchronous) and stays up until the read
+///    that follows the cancel has ended, so a second tap is ignored throughout;
 ///  - no error text, URL or transfer id is logged or kept: `problem` is a plain case.
 @MainActor
 public final class PhoneTransferNoticeModel: ObservableObject {
@@ -142,7 +143,7 @@ public final class PhoneTransferNoticeModel: ObservableObject {
         let outcome = await cancelOnServer(id: target.id)
         // The account or session that asked is gone: its answer changes nothing.
         guard startedIn == epoch else { return }
-        isCancelling = false
+        // `isCancelling` stays up through the read that follows: a second tap would send a second cancel.
         switch outcome {
         case .cancelled:
             forget(id: target.id)
@@ -158,6 +159,8 @@ public final class PhoneTransferNoticeModel: ObservableObject {
         case .signedOut:
             dropState()
         }
+        // A reset during the read already cleared the flag, and may have let a new session start its own.
+        if startedIn == epoch { isCancelling = false }
     }
 
     private func isListed(_ id: String) -> Bool {

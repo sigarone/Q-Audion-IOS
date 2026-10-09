@@ -24,8 +24,8 @@ public struct PhoneTransferPending: Equatable, Sendable, Identifiable {
 
 /// Reading of the WebSocket `account_notice` message.
 public enum PhoneTransferNotice {
-    /// True only for `{"code":"phone_transfer_pending"}`. Any other code (`phone_moved`,
-    /// `phone_transfer_done`, one not known yet) and any payload without a string `code` is ignored.
+    /// True only for `{"code":"phone_transfer_pending"}`. Any other code and any payload without a
+    /// string `code` is ignored.
     public static func isPending(_ data: [String: Any]) -> Bool {
         (data["code"] as? String) == "phone_transfer_pending"
     }
@@ -88,7 +88,7 @@ public final class BCryptoPhoneTransferApi: PhoneTransferApi, @unchecked Sendabl
         let transfers: [Item]?
     }
 
-    /// Reads `{"transfers":[{"id","created_at","expires_at"}]}`. Only `id` and
+    /// Reads `{"transfers":[{"id","expires_at"}]}`; other fields are ignored. Only `id` and
     /// `expires_at` are used. An entry whose `expires_at` is not an RFC 3339 date is left out, since
     /// no time left can be computed for it.
     static func parseList(_ data: Data) throws -> [PhoneTransferPending] {

@@ -686,6 +686,59 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
         XCTAssertFalse(model.isCancelling)
     }
 
+    func test_theCancelButtonStaysDisabledUntilTheReReadEnds() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+
+        // The cancel is refused, the entry is still listed, and the read that follows is slow.
+        api.cancelResult = .failure(BCryptoError.httpError(409))
+        api.hold(true)
+        model.requestCancel()
+        await waitUntil { api.waitingCount == 1 }
+        XCTAssertTrue(model.isCancelling, "still disabled while the read runs")
+        model.requestCancel()
+        model.requestCancel()
+        await settle()
+        api.hold(false)
+        api.release()
+        await waitUntil { !model.isCancelling }
+        XCTAssertEqual(api.cancelledIds, ["a"], "a second tap during the read sent nothing")
+        XCTAssertEqual(model.problem, .cancelFailed)
+        XCTAssertEqual(model.current?.id, "a")
+    }
+
+    func test_timeoutAndRateLimitOnCancel_doNotReadAgain() async {
+        for status in [408, 429] {
+            let api = FakePhoneTransferApi()
+            api.listResult = .success([transfer("a", hoursLeft: 10)])
+            let model = makeModel(api)
+            await model.refresh()
+
+            api.cancelResult = .failure(BCryptoError.httpError(status))
+            await model.cancel()
+            XCTAssertEqual(api.fetchCount, 1, "status \(status): a failure that may pass is retried by the user")
+            XCTAssertEqual(model.problem, .cancelFailed)
+            XCTAssertEqual(model.current?.id, "a")
+        }
+    }
+
+    func test_aRefusedCancelWhoseReReadFails_keepsTheEntryAndTheCancelError() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+
+        api.cancelResult = .failure(BCryptoError.httpError(409))
+        api.listResult = .failure(URLError(.notConnectedToInternet))
+        await model.cancel()
+        XCTAssertEqual(api.fetchCount, 2)
+        XCTAssertEqual(model.current?.id, "a")
+        XCTAssertEqual(model.problem, .cancelFailed, "the user's last action failed, not the background read")
+        XCTAssertFalse(model.isCancelling)
+    }
+
     // MARK: - Hours left
 
     func test_hoursRemaining_roundsDown_andZeroMeansLessThanAnHour() {
@@ -714,8 +767,8 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
     }
 
     func test_notice_otherCodesAreIgnored() {
-        XCTAssertFalse(PhoneTransferNotice.isPending(["code": "phone_moved"]))
-        XCTAssertFalse(PhoneTransferNotice.isPending(["code": "phone_transfer_done"]))
+        XCTAssertFalse(PhoneTransferNotice.isPending(["code": "other_code"]))
+        XCTAssertFalse(PhoneTransferNotice.isPending(["code": "phone_transfer"]))
         XCTAssertFalse(PhoneTransferNotice.isPending(["code": "something_new"]))
         XCTAssertFalse(PhoneTransferNotice.isPending(["code": ""]))
         XCTAssertFalse(PhoneTransferNotice.isPending(["code": "PHONE_TRANSFER_PENDING"]))

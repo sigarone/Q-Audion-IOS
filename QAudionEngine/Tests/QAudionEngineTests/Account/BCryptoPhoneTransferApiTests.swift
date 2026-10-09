@@ -23,10 +23,10 @@ final class BCryptoPhoneTransferApiTests: XCTestCase {
         return (response, Data(body.utf8))
     }
 
-    func test_fetchPending_readsIdAndExpiry_ignoringCreatedAt() async throws {
+    func test_fetchPending_readsIdAndExpiry_ignoringOtherFields() async throws {
         PhoneTransferStubProtocol.responseHandler = { request in
             Self.respond(request, status: 200, body: """
-            {"transfers":[{"id":"t-1","created_at":"2026-10-09T10:00:00Z","expires_at":"2026-10-11T10:00:00Z"}]}
+            {"transfers":[{"id":"t-1","extra":"x","expires_at":"2026-10-11T10:00:00Z"}]}
             """)
         }
         let list = try await makeApi().fetchPending()

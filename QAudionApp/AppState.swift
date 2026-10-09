@@ -9648,7 +9648,7 @@ final class AppState: ObservableObject {
 
         // `account_notice` carries a `code`; only `phone_transfer_pending` has a screen. The message
         // holds the transfer id and its expiry, nothing else: the list is read from the server
-        // before anything is shown. Other codes (`phone_transfer_done`, `phone_moved`) are ignored.
+        // before anything is shown. Other codes and unknown payloads are ignored.
         ws.registerHandler(type: "account_notice") { [weak self] _, data in
             guard PhoneTransferNotice.isPending(data) else { return }
             DispatchQueue.main.async {
