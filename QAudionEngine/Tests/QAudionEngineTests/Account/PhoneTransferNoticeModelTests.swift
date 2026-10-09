@@ -11,6 +11,8 @@ private final class FakePhoneTransferApi: PhoneTransferApi, @unchecked Sendable 
     private var _cancelledIds: [String] = []
     private var _hold = false
     private var _waiting: [CheckedContinuation<Void, Never>] = []
+    private var _holdCancel = false
+    private var _cancelWaiting: [CheckedContinuation<Void, Never>] = []
 
     var listResult: Result<[PhoneTransferPending], Error> {
         get { lock.withLock { _listResult } }
@@ -23,6 +25,19 @@ private final class FakePhoneTransferApi: PhoneTransferApi, @unchecked Sendable 
     var fetchCount: Int { lock.withLock { _fetchCount } }
     var maxRunning: Int { lock.withLock { _maxRunning } }
     var cancelledIds: [String] { lock.withLock { _cancelledIds } }
+
+    /// While true, `cancel` suspends until `releaseCancel()`.
+    func holdCancel(_ value: Bool) { lock.withLock { _holdCancel = value } }
+    var cancelWaitingCount: Int { lock.withLock { _cancelWaiting.count } }
+
+    func releaseCancel() {
+        let waiting = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            let list = _cancelWaiting
+            _cancelWaiting = []
+            return list
+        }
+        waiting.forEach { $0.resume() }
+    }
 
     /// While true, `fetchPending` suspends until `release()`.
     func hold(_ value: Bool) { lock.withLock { _hold = value } }
@@ -57,20 +72,27 @@ private final class FakePhoneTransferApi: PhoneTransferApi, @unchecked Sendable 
     }
 
     func cancel(id: String) async throws {
-        lock.withLock { _cancelledIds.append(id) }
-        try cancelResult.get()
+        let (shouldHold, result) = lock.withLock { () -> (Bool, Result<Void, Error>) in
+            _cancelledIds.append(id)
+            return (_holdCancel, _cancelResult)
+        }
+        if shouldHold {
+            await withCheckedContinuation { continuation in
+                lock.withLock { _cancelWaiting.append(continuation) }
+            }
+        }
+        try result.get()
     }
 }
 
+/// A monotonic clock (seconds of uptime) the test moves by hand.
 private final class FakeClock: @unchecked Sendable {
     private let lock = NSLock()
-    private var _date: Date
+    private var _seconds: TimeInterval = 1000
 
-    init(_ date: Date) { _date = date }
-
-    var date: Date {
-        get { lock.withLock { _date } }
-        set { lock.withLock { _date = newValue } }
+    var seconds: TimeInterval {
+        get { lock.withLock { _seconds } }
+        set { lock.withLock { _seconds = newValue } }
     }
 }
 
@@ -83,8 +105,8 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
     }
 
     private func makeModel(_ api: FakePhoneTransferApi, clock: FakeClock? = nil) -> PhoneTransferNoticeModel {
-        let source = clock ?? FakeClock(t0)
-        return PhoneTransferNoticeModel(api: api, minRefreshInterval: 30, now: { source.date })
+        let source = clock ?? FakeClock()
+        return PhoneTransferNoticeModel(api: api, minRefreshInterval: 30, uptime: { source.seconds })
     }
 
     private func waitUntil(_ condition: () -> Bool) async {
@@ -115,10 +137,10 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
         // The server lists it, so it is live, whatever this device thinks the time is.
         let api = FakePhoneTransferApi()
         api.listResult = .success([transfer("ahead", hoursLeft: -3)])
-        let clock = FakeClock(t0.addingTimeInterval(10 * 86_400))
-        let model = makeModel(api, clock: clock)
+        let model = makeModel(api)
         await model.refresh()
         XCTAssertEqual(model.current?.id, "ahead")
+        XCTAssertEqual(model.current?.hoursRemaining(at: t0.addingTimeInterval(10 * 86_400)), 0)
     }
 
     func test_anEntryWithAPastExpiryCanStillBeCancelled() async {
@@ -265,21 +287,22 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
 
     func test_throttledRefresh_isSkippedWithinTheMinimumInterval() async {
         let api = FakePhoneTransferApi()
-        let clock = FakeClock(t0)
+        let clock = FakeClock()
         let model = makeModel(api, clock: clock)
+        let start = clock.seconds
 
         await model.refresh(throttled: true)
         XCTAssertEqual(api.fetchCount, 1, "the first one always goes")
 
-        clock.date = t0.addingTimeInterval(10)
+        clock.seconds = start + 10
         await model.refresh(throttled: true)
         XCTAssertEqual(api.fetchCount, 1)
 
-        clock.date = t0.addingTimeInterval(29.9)
+        clock.seconds = start + 29.9
         await model.refresh(throttled: true)
         XCTAssertEqual(api.fetchCount, 1)
 
-        clock.date = t0.addingTimeInterval(30)
+        clock.seconds = start + 30
         await model.refresh(throttled: true)
         XCTAssertEqual(api.fetchCount, 2)
     }
@@ -293,16 +316,6 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
         XCTAssertEqual(api.fetchCount, 3, "launch, notice, retry and the read after a cancel are never throttled")
     }
 
-    func test_throttledRefresh_afterTheClockWentBack_isNotStuck() async {
-        let api = FakePhoneTransferApi()
-        let clock = FakeClock(t0)
-        let model = makeModel(api, clock: clock)
-        await model.refresh(throttled: true)
-        clock.date = t0.addingTimeInterval(-3600)
-        await model.refresh(throttled: true)
-        XCTAssertEqual(api.fetchCount, 2)
-    }
-
     func test_reset_clearsTheMinimumInterval() async {
         let api = FakePhoneTransferApi()
         let model = makeModel(api)
@@ -310,6 +323,60 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
         model.reset()
         await model.refresh(throttled: true)
         XCTAssertEqual(api.fetchCount, 2, "a new account reads at once")
+    }
+
+    func test_anAnswerThrownAwayByAReset_doesNotCountAsARead() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        api.hold(true)
+        let model = makeModel(api)
+        let old = Task { await model.refresh(throttled: true) }
+        await waitUntil { api.waitingCount == 1 }
+        model.reset()
+        // Same instant on the monotonic clock, so a throttled ask would normally be skipped or shared.
+        let next = Task { await model.refresh(throttled: true) }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        api.hold(false)
+        api.release()
+        await old.value
+        await next.value
+        XCTAssertEqual(api.fetchCount, 2, "the new session gets a read of its own")
+        XCTAssertEqual(api.maxRunning, 1)
+        XCTAssertEqual(model.current?.id, "a")
+    }
+
+    func test_locked_nothingIsReadAndTheStateIsDropped() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+        XCTAssertNotNil(model.current)
+
+        model.setLocked(true)
+        XCTAssertNil(model.current, "locking drops the state")
+        await model.refresh()
+        await model.refresh(throttled: true)
+        XCTAssertEqual(api.fetchCount, 1, "no request while locked")
+        XCTAssertNil(model.current)
+
+        model.setLocked(false)
+        await model.refresh()
+        XCTAssertEqual(api.fetchCount, 2)
+        XCTAssertEqual(model.current?.id, "a", "read again after the unlock")
+    }
+
+    func test_lockingDuringARequest_dropsItsAnswer() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        api.hold(true)
+        let model = makeModel(api)
+        let running = Task { await model.refresh() }
+        await waitUntil { api.waitingCount == 1 }
+        model.setLocked(true)
+        api.hold(false)
+        api.release()
+        await running.value
+        XCTAssertNil(model.current)
     }
 
     // MARK: - Cancel
@@ -388,6 +455,113 @@ final class PhoneTransferNoticeModelTests: XCTestCase {
         let model = makeModel(api)
         await model.cancel()
         XCTAssertTrue(api.cancelledIds.isEmpty)
+    }
+
+    func test_aFailedCancelAfterAReset_setsNoError() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+
+        api.cancelResult = .failure(URLError(.timedOut))
+        api.holdCancel(true)
+        let cancelling = Task { await model.cancel() }
+        await waitUntil { api.cancelWaitingCount == 1 }
+        model.reset()
+        api.holdCancel(false)
+        api.releaseCancel()
+        await cancelling.value
+        XCTAssertNil(model.problem, "the failure belongs to the session that left")
+        XCTAssertFalse(model.isCancelling)
+    }
+
+    func test_aFailedCancelForAnEntryThatIsGone_setsNoError() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+
+        api.cancelResult = .failure(URLError(.timedOut))
+        api.holdCancel(true)
+        let cancelling = Task { await model.cancel() }
+        await waitUntil { api.cancelWaitingCount == 1 }
+        // The server completed the transfer meanwhile: a read no longer lists it.
+        api.listResult = .success([])
+        await model.refresh()
+        api.holdCancel(false)
+        api.releaseCancel()
+        await cancelling.value
+        XCTAssertNil(model.current)
+        XCTAssertNil(model.problem)
+    }
+
+    func test_theCancelErrorIsClearedByTheNextSuccessfulRead() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+
+        api.cancelResult = .failure(URLError(.timedOut))
+        await model.cancel()
+        XCTAssertEqual(model.problem, .cancelFailed)
+
+        await model.refresh()
+        XCTAssertNil(model.problem)
+        XCTAssertEqual(model.current?.id, "a")
+    }
+
+    func test_theCancelErrorIsClearedByANewAttempt() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+
+        api.cancelResult = .failure(URLError(.timedOut))
+        await model.cancel()
+        XCTAssertEqual(model.problem, .cancelFailed)
+
+        api.cancelResult = .success(())
+        api.listResult = .success([transfer("b", hoursLeft: 20)])
+        await model.cancel()
+        XCTAssertNil(model.problem)
+        XCTAssertEqual(model.current?.id, "b")
+    }
+
+    func test_aSecondTapIsIgnored_theFlagIsSetAtTheFirst() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+
+        api.listResult = .success([])
+        api.holdCancel(true)
+        model.requestCancel()
+        XCTAssertTrue(model.isCancelling, "set before anything is awaited")
+        model.requestCancel()
+        model.requestCancel()
+        await waitUntil { api.cancelWaitingCount == 1 }
+        api.holdCancel(false)
+        api.releaseCancel()
+        await waitUntil { !model.isCancelling }
+        XCTAssertEqual(api.cancelledIds, ["a"], "one request, however many taps")
+        XCTAssertNil(model.current)
+    }
+
+    func test_resetDuringACancel_enablesTheButtonForTheNextSession() async {
+        let api = FakePhoneTransferApi()
+        api.listResult = .success([transfer("a", hoursLeft: 10)])
+        let model = makeModel(api)
+        await model.refresh()
+        api.holdCancel(true)
+        model.requestCancel()
+        await waitUntil { api.cancelWaitingCount == 1 }
+        XCTAssertTrue(model.isCancelling)
+        model.reset()
+        XCTAssertFalse(model.isCancelling)
+        api.holdCancel(false)
+        api.releaseCancel()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(model.isCancelling)
     }
 
     // MARK: - Hours left
