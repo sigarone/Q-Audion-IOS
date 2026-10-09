@@ -81,6 +81,34 @@ final class NoticePushTests: XCTestCase {
         XCTAssertTrue(AccountApnsTokenRequest.isValid(hex: String(repeating: "AB", count: 32)))
     }
 
+    // MARK: - one request per token, per account
+
+    func testTheSameTokenIsNotSentTwiceAtOnce() {
+        var inFlight = AccountApnsTokenInFlight()
+        XCTAssertNotNil(inFlight.begin(hex: hex))
+        XCTAssertNil(inFlight.begin(hex: hex), "launch, login and foreground can deliver the same token together")
+        XCTAssertNotNil(inFlight.begin(hex: String(repeating: "cd", count: 32)), "another token is a new request")
+    }
+
+    func testAFinishedRequestLetsTheTokenBeSentAgain() throws {
+        var inFlight = AccountApnsTokenInFlight()
+        let ticket = try XCTUnwrap(inFlight.begin(hex: hex))
+        inFlight.finish(ticket: ticket)
+        XCTAssertNotNil(inFlight.begin(hex: hex), "a later foreground re-sends the token, so a server-side clear heals")
+    }
+
+    func testLogoutThenAnotherAccountOnTheSameTokenRegistersAgain() throws {
+        var inFlight = AccountApnsTokenInFlight()
+        let first = try XCTUnwrap(inFlight.begin(hex: hex))   // account A, request still running
+        inFlight.reset()                                      // logout / account change
+        let second = try XCTUnwrap(inFlight.begin(hex: hex), "account B must register the same token")
+        XCTAssertNotEqual(first, second)
+        inFlight.finish(ticket: first)                        // the late answer for account A
+        XCTAssertNil(inFlight.begin(hex: hex), "it must not clear account B's request")
+        inFlight.finish(ticket: second)
+        XCTAssertNotNil(inFlight.begin(hex: hex))
+    }
+
     // MARK: - the tap
 
     func testOnlyThePendingTransferTypeIsRouted() {

@@ -407,8 +407,10 @@ final class AppState: ObservableObject {
     private static let lastKnownApnsTokenKey = "qaudion.push.lastApnsTokenHex"
     /// Notice push (pending phone-number transfer), used when `callKitFreeMode` is OFF: the token the
     /// system hands out once the user has allowed notifications, in flight to the server. Coalesces the
-    /// launch / login / foreground triggers, which can deliver the same token within seconds.
-    private var noticeApnsTokenInFlightHex: String?
+    /// launch / login / foreground triggers, which can deliver the same token within seconds. Emptied when
+    /// the account changes (`resetAccountScopedRuntimeState`), so the next account registers the token
+    /// again even if the previous account's request was still running.
+    private var noticeTokenInFlight = AccountApnsTokenInFlight()
     /// A permission check for the notice push is running (it may be waiting on the system prompt).
     private var noticePushCheckInFlight = false
     /// W-PUSHDEDUP: coalesce duplicate VoIP-token registrations. Several
@@ -6576,16 +6578,15 @@ final class AppState: ObservableObject {
             return
         }
         guard let token = authService.loadToken(), !token.isEmpty else { return }
-        guard noticeApnsTokenInFlightHex != hex else { return }
         guard let req = AccountApnsTokenRequest.make(
             serverUrl: serverUrl,
             route: .notice,
             hex: hex,
             bundleId: Bundle.main.bundleIdentifier ?? "com.qaudion.app",
             bearer: token) else { return }
-        noticeApnsTokenInFlightHex = hex
+        guard let ticket = noticeTokenInFlight.begin(hex: hex) else { return }
         let session = voipPushSession
-        Task { [weak self, hex, session] in
+        Task { [weak self, session] in
             do {
                 let (_, resp) = try await session.data(for: req)
                 if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -6595,7 +6596,7 @@ final class AppState: ObservableObject {
                 print("[AppState] APNs notice register error: \(error.localizedDescription)")
             }
             await MainActor.run {
-                if self?.noticeApnsTokenInFlightHex == hex { self?.noticeApnsTokenInFlightHex = nil }
+                self?.noticeTokenInFlight.finish(ticket: ticket)
             }
         }
     }
@@ -17200,6 +17201,9 @@ final class AppState: ObservableObject {
     /// after every `LocalCryptoWipe.wipeAll()`.
     func resetAccountScopedRuntimeState() {
         recentCalls = []
+        // The notice push token request of the account that left must not stand in for the next
+        // account's: after the next sign-in the same token is registered again.
+        noticeTokenInFlight.reset()
         // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
         // account deletion).
         phoneTransferNotice.reset()

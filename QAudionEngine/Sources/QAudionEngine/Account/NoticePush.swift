@@ -88,6 +88,37 @@ public enum AccountApnsTokenRequest {
     }
 }
 
+/// The token request that is running, so the launch / login / foreground triggers do not send the same
+/// token twice at once. Per account: `reset()` (logout, wipe, change of account) forgets the running
+/// request, so the next account registers the token again, and the late answer of the old request cannot
+/// clear the new one.
+public struct AccountApnsTokenInFlight: Sendable {
+    private var hex: String?
+    private var generation = 0
+
+    public init() {}
+
+    /// A ticket when `hex` is not already running (the caller sends the request and later calls
+    /// `finish(ticket:)`); nil when the same token is already in flight.
+    public mutating func begin(hex: String) -> Int? {
+        guard self.hex != hex else { return nil }
+        generation += 1
+        self.hex = hex
+        return generation
+    }
+
+    /// The request ended (any outcome). Only the latest ticket clears the state.
+    public mutating func finish(ticket: Int) {
+        if ticket == generation { hex = nil }
+    }
+
+    /// The account changed: forget the running request.
+    public mutating func reset() {
+        hex = nil
+        generation += 1
+    }
+}
+
 extension PhoneTransferNotice {
     /// True only for a notification whose custom key `type` is `phone_transfer_pending`. `userInfo` is the
     /// payload flattened to strings. A missing or different `type`, or an empty payload, is ignored.

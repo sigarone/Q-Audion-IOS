@@ -89,6 +89,18 @@ final class NoticePushWiringTests: XCTestCase {
         XCTAssertTrue(alert.contains("route: .callAlert"))
     }
 
+    func testAnAccountChangeForgetsTheRunningNoticeTokenRequest() throws {
+        let text = try slice(
+            try appState(), from: "func resetAccountScopedRuntimeState() {", to: "phoneTransferNotice.reset()")
+        XCTAssertTrue(text.contains("noticeTokenInFlight.reset()"),
+                      "logout, remote wipe and account deletion run this function; the next account registers again")
+        let notice = try slice(
+            try appState(), from: "private func registerNoticeApnsToken(hex: String) {",
+            to: "func scheduleWsKeepalive() {")
+        XCTAssertTrue(notice.contains("noticeTokenInFlight.begin(hex: hex)"))
+        XCTAssertTrue(notice.contains("noticeTokenInFlight.finish(ticket: ticket)"))
+    }
+
     func testTheAlertCallPermissionRequestIsStillOnlyForTheAlertCallPath() throws {
         XCTAssertTrue(try appState().contains(
             "if CallsGate.callKitFreeMode { Task { @MainActor in _ = await NotificationCenterService.shared.requestAuthorization() } }"))
