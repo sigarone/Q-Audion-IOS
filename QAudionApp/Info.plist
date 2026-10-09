@@ -96,7 +96,7 @@
 	     the app calls INPreferences.requestSiriAuthorization (AppState.
 	     initialize()); the system shows this exact string in the
 	     authorization alert. Apple's own doc: "This key is a requirement" —
-	     missing it is a hard App Review blocker, not just a style nit. -->
+	     missing it is a hard blocker, not just a style nit. -->
 	<key>NSSiriUsageDescription</key>
 	<string>Q-Audion shares your contact names with Siri so you can start an encrypted call by saying "Call [name] on Q-Audion".</string>
 	<!-- CarPlay/Siri state-of-the-art plan S1 (docs/superpowers/plans/
@@ -146,7 +146,7 @@
 	<!--
 	  Export Compliance - required by Apple to skip the manual
 	  "Provide Export Compliance Information" prompt on every upload.
-	  Position (2026-09-12, App Store readiness audit, pending counsel
+	  Position (2026-09-12, pending counsel
 	  confirmation before the store submission is sent): the app uses
 	  only standard, published algorithms - AES-256-GCM, ChaCha20-
 	  Poly1305 (WireGuard), X25519, Ed25519, SHA-2/HKDF, and ML-KEM-1024

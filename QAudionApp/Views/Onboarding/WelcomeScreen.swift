@@ -35,8 +35,7 @@ struct WelcomeScreen: View {
     let onStartLogin: () -> Void
     /// 2026-08-20 — manual-entry login (extension + password) for Fast
     /// Setup accounts, as an alternative to scanning/uploading the QR.
-    /// Added for App Store / Google Play reviewers who cannot present a
-    /// QR image.
+    /// For users who cannot present a QR image.
     let onStartExtensionLogin: () -> Void
     /// 2026-07-29 — extension-only registration (no phone number, email
     /// required). Previously there was no distinct CTA for this path.

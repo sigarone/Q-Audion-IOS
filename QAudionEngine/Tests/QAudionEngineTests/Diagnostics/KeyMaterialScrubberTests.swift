@@ -345,7 +345,7 @@ final class KeyMaterialScrubberTests: XCTestCase {
         XCTAssertEqual(scrubLines(twoKeyRows), "derived_key \(marker)\nsecret \(marker) len 3\n")
     }
 
-    /// The regression the reviewers found: `ReportCrypto.buildDiagSummary` runs the redactor on the
+    /// Regression case: `ReportCrypto.buildDiagSummary` runs the redactor on the
     /// whole 2-minute `recentLogsAsString` blob, every row of which was already scrubbed at ring
     /// entry. The blob must come back unchanged and its last rows must still be there.
     func test_aBlobOfScrubbedRowsIsAFixedPointOfScrubLines() {

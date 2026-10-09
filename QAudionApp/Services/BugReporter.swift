@@ -289,7 +289,7 @@ public final class BugReporter: ObservableObject {
         // capture instant. Debug-only escape hatch; will be revisited
         // before production per the user's own note that this won't stay
         // permanent.
-        // App Store readiness audit 2026-09-12 (FIX-22): the bypass is
+        // 2026-09-12: the bypass is
         // dev/TestFlight-only. A store build captures without unlocking —
         // a blank image on a screenshot-locked screen is the correct
         // behaviour for a product marketed on screenshot protection.
@@ -327,7 +327,7 @@ public final class BugReporter: ObservableObject {
     }
 
     private func triggerAuto(tag: String) {
-        // App Store readiness audit 2026-09-12 (FIX-11): the automatic
+        // 2026-09-12: the automatic
         // report is diagnostic egress the user never asked for, so it is
         // gated on the same diagnostics opt-in (default OFF) the privacy
         // manifest and both privacy policies describe. The manual shake /

@@ -16,7 +16,7 @@
   QAudionEngine) ship their own manifest where Apple requires one; this
   file covers only first-party code.
 
-  Rebuilt 2026-09-12 (App Store readiness audit, FIX-02/FIX-03).
+  Rebuilt 2026-09-12.
 -->
 <plist version="1.0">
 <dict>

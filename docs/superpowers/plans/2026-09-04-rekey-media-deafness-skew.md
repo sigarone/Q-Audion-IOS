@@ -358,4 +358,4 @@ git -c commit.gpgsign=false commit -m "feat(rekey): gate sender switch on peer r
 
 - [ ] **Step 1: Update `WIRE_SPEC.md` §8.7** to the same v1.2 content Android's copy has (`qaudion-android-new/WIRE_SPEC.md`, already updated 2026-09-04) — copy its language, this is meant to be identical across repos.
 - [ ] **Step 2: Commit** the doc update separately.
-- [ ] **Step 3: On-device verification** (two real iPhones, or one iPhone against the Android build through a real call past ~5 min) — same acknowledged-gap posture as Android's fix: valuable, not a blocker, per that fix's final reviewer's own judgment. Note in your report whether this was attempted or deferred, and why.
+- [ ] **Step 3: On-device verification** (two real iPhones, or one iPhone against the Android build through a real call past ~5 min) — same acknowledged-gap posture as Android's fix: valuable, not a blocker, per that fix's final assessment. Note in your report whether this was attempted or deferred, and why.
