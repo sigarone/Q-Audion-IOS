@@ -424,6 +424,8 @@ struct QAudionApp: App {
             // on cold launch, see AppState.initialize()'s own call).
             appState.drainSiriOutbox()
             appState.refreshSiriMessageCache()
+            // Pending phone-number transfers: read again on every return to the foreground.
+            appState.refreshPhoneTransferNotice()
         default:
             break
         }

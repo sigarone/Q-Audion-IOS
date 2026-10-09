@@ -105,7 +105,10 @@ final class AppState: ObservableObject {
     /// verify) and idempotent, so firing on every assignment — including a
     /// same-value re-assignment — is intentionally not special-cased away.
     @Published var currentUserId: String? {
-        didSet { capabilityGate.loadCached() }
+        didSet {
+            capabilityGate.loadCached()
+            if currentUserId != oldValue { phoneTransferNotice.reset() }
+        }
     }
     /// W444: server-assigned short PBX extension for the logged-in user (e.g. "103").
     /// Persisted to UserDefaults key "currentUserDialExtension" so the SettingsScreen
@@ -2797,6 +2800,24 @@ final class AppState: ObservableObject {
         }
         return CapabilityGate(verifier: rejectAll, api: api)
     }()
+
+    /// Banner state for a pending transfer of this account's phone number (see
+    /// `PhoneTransferNoticeModel`). The REST client is read at call time, like
+    /// `capabilityGate`'s, because `liveProvider` can be nil or replaced.
+    lazy var phoneTransferNotice: PhoneTransferNoticeModel = {
+        let api = BCryptoPhoneTransferApi()
+        api.getRestClient = { [weak self] in self?.liveProvider?.getRestClient() }
+        return PhoneTransferNoticeModel(api: api)
+    }()
+
+    /// Reads the pending phone-number transfers from the server and shows the result. Called
+    /// when the socket authenticates, when the app returns to the foreground and on the
+    /// `account_notice` / `phone_transfer_pending` message.
+    func refreshPhoneTransferNotice() {
+        Task { [weak self] in
+            await self?.phoneTransferNotice.refresh()
+        }
+    }
 
     /// TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md) — Ed25519 verifier bound
     /// to the pinned, DEDICATED wipe-signing public key
@@ -6192,6 +6213,9 @@ final class AppState: ObservableObject {
                         Task { [weak self] in
                             await self?.capabilityGate.refresh()
                         }
+                        // Pending phone-number transfers for this account: read once per
+                        // (re)connect, the first read after a launch.
+                        self?.refreshPhoneTransferNotice()
                     }
                     // W-MSGOUTBOX (2026-09-01) — same once-per-reconnect
                     // gate as the two blocks above: drain `.sending` rows
@@ -9609,6 +9633,16 @@ final class AppState: ObservableObject {
                 Task { [weak self] in
                     await self?.capabilityGate.refresh()
                 }
+            }
+        }
+
+        // `account_notice` carries a `code`; only `phone_transfer_pending` has a screen. The message
+        // holds the transfer id and its expiry, nothing else: the list is read from the server
+        // before anything is shown. Other codes (`phone_transfer_done`, `phone_moved`) are ignored.
+        ws.registerHandler(type: "account_notice") { [weak self] _, data in
+            guard (data["code"] as? String) == "phone_transfer_pending" else { return }
+            DispatchQueue.main.async {
+                self?.refreshPhoneTransferNotice()
             }
         }
 

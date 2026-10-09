@@ -35149,6 +35149,300 @@
           }
         }
       }
+    },
+    "phone_transfer.title": {
+      "extractionState": "manual",
+      "comment": "Banner shown to the account holder while someone else's request to move the phone number linked to the account is waiting.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qualcuno sta spostando il numero di telefono collegato a questo account"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Someone is moving the phone number linked to this account"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alguien está moviendo el número de teléfono vinculado a esta cuenta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quelqu'un est en train de déplacer le numéro de téléphone lié à ce compte"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jemand überträgt die mit diesem Konto verknüpfte Telefonnummer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alguém está transferindo o número de telefone vinculado a esta conta"
+          }
+        }
+      }
+    },
+    "phone_transfer.expiry": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: time left before the transfer completes; %lld is the number of hours, h is the abbreviation for hours.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scadenza tra circa %lld h"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expires in about %lld h"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vence en unas %lld h"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expire dans environ %lld h"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Läuft in etwa %lld Std. ab"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expira em cerca de %lld h"
+          }
+        }
+      }
+    },
+    "phone_transfer.info": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: what happens if the holder does nothing.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se non fai nulla, alla scadenza il numero non sarà più un accesso a questo account."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you do nothing, once the time is up the number will no longer be a way to sign in to this account."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si no haces nada, al vencer el plazo el número dejará de ser un acceso a esta cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si tu ne fais rien, à l'expiration le numéro ne permettra plus d'accéder à ce compte."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn Sie nichts tun, ist die Nummer nach Ablauf kein Zugang mehr zu diesem Konto."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se você não fizer nada, ao expirar o número deixará de ser um acesso a esta conta."
+          }
+        }
+      }
+    },
+    "phone_transfer.cancel": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: button that cancels the transfer.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annulla il trasferimento"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel the transfer"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar la transferencia"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annuler le transfert"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Übertragung abbrechen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar a transferência"
+          }
+        }
+      }
+    },
+    "phone_transfer.retry": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: button that reads the transfer status again after a failure.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riprova"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try again"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reintentar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réessayer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut versuchen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentar novamente"
+          }
+        }
+      }
+    },
+    "phone_transfer.error.cancel": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: the cancel request failed (network or server error); the button stays available.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile annullare il trasferimento. Controlla la connessione e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transfer could not be cancelled. Check your connection and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo cancelar la transferencia. Comprueba la conexión e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'annuler le transfert. Vérifie ta connexion et réessaie."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Übertragung konnte nicht abgebrochen werden. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível cancelar a transferência. Verifique a conexão e tente novamente."
+          }
+        }
+      }
+    },
+    "phone_transfer.error.refresh": {
+      "extractionState": "manual",
+      "comment": "Phone number transfer banner: the status could not be read (network or server error).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile aggiornare lo stato del trasferimento. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transfer status could not be updated. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo actualizar el estado de la transferencia. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de mettre à jour l'état du transfert. Réessaie."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Status der Übertragung konnte nicht aktualisiert werden. Versuchen Sie es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível atualizar o status da transferência. Tente novamente."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -353,6 +353,9 @@ struct ChatListScreen: View {
                         .padding(.bottom, 8)
                         .transition(.opacity)
                 }
+                // Pending transfer of this account's phone number: draws nothing unless the
+                // server lists one (see `PhoneTransferNoticeModel`).
+                PhoneTransferBanner(model: appState.phoneTransferNotice)
                 searchField
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
