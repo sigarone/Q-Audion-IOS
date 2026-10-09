@@ -624,25 +624,36 @@ jobs:
               && echo "  SIRIKIT: done" \
               || echo "  SIRIKIT: WARN (may already be enabled)"
 
-            # Network Extensions on the main App ID follows the build kind:
-            # enabled for a build with VPN support (VPN_BUILD=true), DISABLED
-            # for the default build, so the main App Store profile that
-            # Phase 2/3 below regenerates carries no Network Extension
-            # entitlement. Both calls are idempotent. A failure only warns:
-            # the scripts/ci/assert-no-vpn.sh gate on the finished IPA is what
-            # decides whether the default build is clean.
+            # Network Extensions and Personal VPN on the main App ID follow
+            # the build kind: enabled for a build with VPN support
+            # (VPN_BUILD=true), DISABLED for the default build, so the main
+            # App Store profile that Phase 2/3 below regenerates carries no
+            # com.apple.developer.networking.networkextension or
+            # com.apple.developer.networking.vpn.api entitlement. All calls
+            # are idempotent. A failure only warns: the
+            # scripts/ci/assert-no-vpn.sh gate on the finished IPA (which
+            # also reads embedded.mobileprovision) is what decides whether
+            # the default build is clean.
+            # The capability argument is tried by display name first and then
+            # by API name, so a CLI that only knows one spelling still works.
+            set_vpn_capability() {
+              # $1 = enable|disable, $2 = display name, $3 = API name, $4 = log label
+              local action="$1" display="$2" api="$3" label="$4"
+              app-store-connect bundle-ids "${action}-capabilities" \
+                "$MAIN_BID_RES" --capability "$display" 2>&1 \
+                || app-store-connect bundle-ids "${action}-capabilities" \
+                  "$MAIN_BID_RES" --capability "$api" 2>&1 \
+                || { echo "  ${label} (main): WARN (could not ${action})"; return 0; }
+              echo "  ${label} (main): ${action} done"
+            }
             if [ "$VPN_BUILD" = "true" ]; then
-              echo "Enabling Network Extensions on $MAIN_BID_RES (build with VPN support)..."
-              app-store-connect bundle-ids enable-capabilities \
-                "$MAIN_BID_RES" --capability "Network Extensions" 2>&1 \
-                && echo "  NETWORK_EXTENSIONS (main): done" \
-                || echo "  NETWORK_EXTENSIONS (main): WARN (may already be enabled)"
+              echo "Enabling Network Extensions and Personal VPN on $MAIN_BID_RES (build with VPN support)..."
+              set_vpn_capability enable "Network Extensions" NETWORK_EXTENSIONS NETWORK_EXTENSIONS
+              set_vpn_capability enable "Personal VPN" PERSONAL_VPN PERSONAL_VPN
             else
-              echo "Disabling Network Extensions on $MAIN_BID_RES (default build has no VPN support)..."
-              app-store-connect bundle-ids disable-capabilities \
-                "$MAIN_BID_RES" --capability "Network Extensions" 2>&1 \
-                && echo "  NETWORK_EXTENSIONS (main): disabled or not enabled" \
-                || echo "  NETWORK_EXTENSIONS (main): WARN (could not disable)"
+              echo "Disabling Network Extensions and Personal VPN on $MAIN_BID_RES (default build has no VPN support)..."
+              set_vpn_capability disable "Network Extensions" NETWORK_EXTENSIONS NETWORK_EXTENSIONS
+              set_vpn_capability disable "Personal VPN" PERSONAL_VPN PERSONAL_VPN
             fi
 
             # Phase 2: delete the stale profile (created before the

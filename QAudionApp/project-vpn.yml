@@ -21,8 +21,8 @@
 # Extension VPN capabilities):
 #   1. Generate the project from this spec instead of project.yml
 #      (ios-testflight.yml: dispatch with vpn=true, or make that the default).
-#   2. Apple Developer portal: enable Network Extensions on com.qaudion.app and
-#      on com.qaudion.app.packet-tunnel (plus App Groups on both, with
+#   2. Apple Developer portal: enable Network Extensions and Personal VPN on
+#      com.qaudion.app, Network Extensions on com.qaudion.app.packet-tunnel (plus App Groups on both, with
 #      group.com.bcrypto.qaudion.vpn), then regenerate both App Store
 #      provisioning profiles; the workflow's signing step does that when vpn
 #      is on.
