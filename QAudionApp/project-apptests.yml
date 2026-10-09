@@ -42,6 +42,7 @@ targets:
           - FileV2ImageCleanerTests.swift
           - MissedCallsBadgeTests.swift
           - PersistentCallRecordStoreTests.swift
+          - PhoneEntryScreenInviteTests.swift
           - RuntimeLogSinkTeeTests.swift
           - TrustEvaluationModelTests.swift
     settings:
