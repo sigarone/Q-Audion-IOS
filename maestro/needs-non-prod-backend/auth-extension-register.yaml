@@ -28,6 +28,11 @@ appId: com.qaudion.app
 - tapOn:
     id: "register-email-field"
 - inputRandomEmail
+# Invite code is mandatory; pass a valid one with `maestro test -e INVITE_CODE=...`.
+- tapOn:
+    id: "register-invite-code-field"
+- inputText: ${INVITE_CODE}
+- hideKeyboard
 - tapOn: "Crea account"
 
 # --- Recovery phrase: read the 12 words off screen ---

@@ -98,9 +98,12 @@ public protocol AccountApi {
 
     /// Extension-only registration — no phone number at all, just a PBX
     /// extension the server assigns. Email is REQUIRED (no phone means no
-    /// other recovery/support channel for the account). Matches
+    /// other recovery/support channel for the account). `inviteCode` is
+    /// REQUIRED too (the server runs in `registration_mode="invite"`): the
+    /// normalised dashed form, see ``InviteCodeInput/wireValue(_:)``. A 403
+    /// about the code surfaces as ``BCryptoInviteCodeError``. Matches
     /// `POST /api/v1/auth/register/extension`.
-    func registerExtensionOnly(displayName: String?, email: String) async throws -> OtpAuthResult
+    func registerExtensionOnly(displayName: String?, email: String, inviteCode: String) async throws -> OtpAuthResult
 
     /// Authenticated — request a verification link/token for the email on
     /// the current account. Matches `POST /api/v1/auth/email/verify-request`.

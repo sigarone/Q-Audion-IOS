@@ -140,24 +140,7 @@ struct PhoneEntryScreen: View {
 
                 if mode == .register {
                     Spacer().frame(height: 16)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Codice invito")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.7))
-                        TextField("Codice invito", text: $inviteCode)
-                            .textInputAutocapitalization(.characters)
-                            .autocorrectionDisabled()
-                            .onChange(of: inviteCode) { newValue in
-                                let formatted = liveFormatActivationCodeInput(newValue)
-                                if formatted != inviteCode { inviteCode = formatted }
-                            }
-                            .foregroundStyle(.white)
-                            .padding(14)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(.white.opacity(0.3), lineWidth: 1.2)
-                            )
-                    }
+                    InviteCodeField(code: $inviteCode)
                     .padding(.horizontal, 24)
                 }
 

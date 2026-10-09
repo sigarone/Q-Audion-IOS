@@ -235,6 +235,9 @@ struct OtpVerificationScreen: View {
     /// contextual Italian copy; everything else falls back to
     /// `error.localizedDescription`.
     private func userFacingMessage(for error: Error) -> String {
+        if let inviteError = error as? BCryptoInviteCodeError {
+            return inviteError.userFacingMessage
+        }
         if let bcryptoError = error as? BCryptoError, case .httpError(let statusCode) = bcryptoError {
             switch statusCode {
             case 404:

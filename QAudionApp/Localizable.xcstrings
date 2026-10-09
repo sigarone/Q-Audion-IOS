@@ -35024,6 +35024,131 @@
           }
         }
       }
+    },
+    "Il codice invito ti viene dato da chi gestisce Q-Audion o dalla tua organizzazione.": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il codice invito ti viene dato da chi gestisce Q-Audion o dalla tua organizzazione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The invite code is given to you by whoever manages Q-Audion or by your organization."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El código de invitación te lo da quien gestiona Q-Audion o tu organización."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le code d'invitation t'est remis par les gestionnaires de Q-Audion ou par ton organisation."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den Einladungscode erhalten Sie von den Betreibern von Q-Audion oder von Ihrer Organisation."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O código de convite é fornecido por quem gerencia o Q-Audion ou pela sua organização."
+          }
+        }
+      }
+    },
+    "error.invite_code_required": {
+      "extractionState": "manual",
+      "comment": "Registration refused by the server because no invite code was sent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serve un codice invito"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An invite code is required"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se necesita un código de invitación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un code d'invitation est requis"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Einladungscode ist erforderlich"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "É necessário um código de convite"
+          }
+        }
+      }
+    },
+    "error.invite_code_invalid": {
+      "extractionState": "manual",
+      "comment": "Registration refused by the server because the invite code is invalid, expired, revoked or already used.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice invito non valido o scaduto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invite code invalid or expired"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de invitación no válido o caducado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code d'invitation invalide ou expiré"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einladungscode ungültig oder abgelaufen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de convite inválido ou expirado"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
