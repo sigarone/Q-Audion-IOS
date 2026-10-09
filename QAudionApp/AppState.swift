@@ -105,7 +105,10 @@ final class AppState: ObservableObject {
     /// verify) and idempotent, so firing on every assignment — including a
     /// same-value re-assignment — is intentionally not special-cased away.
     @Published var currentUserId: String? {
-        didSet { capabilityGate.loadCached() }
+        didSet {
+            capabilityGate.loadCached()
+            if currentUserId != oldValue { phoneTransferNotice.reset() }
+        }
     }
     /// W444: server-assigned short PBX extension for the logged-in user (e.g. "103").
     /// Persisted to UserDefaults key "currentUserDialExtension" so the SettingsScreen
@@ -2798,6 +2801,32 @@ final class AppState: ObservableObject {
         return CapabilityGate(verifier: rejectAll, api: api)
     }()
 
+    /// Banner state for a pending transfer of this account's phone number (see
+    /// `PhoneTransferNoticeModel`). The REST client is read at call time, like
+    /// `capabilityGate`'s, because `liveProvider` can be nil or replaced.
+    lazy var phoneTransferNotice: PhoneTransferNoticeModel = {
+        let api = BCryptoPhoneTransferApi()
+        api.getRestClient = { [weak self] in self?.liveProvider?.getRestClient() }
+        return PhoneTransferNoticeModel(api: api)
+    }()
+
+    /// Reads the pending phone-number transfers from the server and shows the result. Called
+    /// when the socket authenticates, when the app returns to the foreground and on the
+    /// `account_notice` / `phone_transfer_pending` message. Requests never overlap; `throttled`
+    /// (foreground, reconnect) also waits `PhoneTransferNoticeModel.minRefreshInterval` after the
+    /// previous request, the notice and the first read after a launch do not.
+    func refreshPhoneTransferNotice(throttled: Bool = false) {
+        // Nothing to ask without a signed-in, connected session, nor while the app is locked.
+        guard liveProvider != nil, !(isAppLocked?() ?? false) else { return }
+        Task { [weak self] in
+            await self?.phoneTransferNotice.refresh(throttled: throttled)
+        }
+    }
+
+    /// Set by the app scene: whether the app lock is up right now. Read at the moment a read of the
+    /// pending transfers would start, so it cannot lag behind the lock the way an observer can.
+    var isAppLocked: (@MainActor () -> Bool)?
+
     /// TRUST-2 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md) — Ed25519 verifier bound
     /// to the pinned, DEDICATED wipe-signing public key
     /// (`WipeSigningPublicKey`, a SEPARATE asset from the entitlement key
@@ -4940,6 +4969,7 @@ final class AppState: ObservableObject {
                         // that gap without touching this site's existing
                         // currentUserId/isAuthenticated behavior.
                         self.capabilityGate.discard()
+                        self.phoneTransferNotice.reset()
                         self.isAuthenticated = false
                     } else {
                         // A transient failure (`BCryptoSessionRecoveryError`, network, 5xx)
@@ -6192,6 +6222,9 @@ final class AppState: ObservableObject {
                         Task { [weak self] in
                             await self?.capabilityGate.refresh()
                         }
+                        // Pending phone-number transfers for this account: read once per
+                        // (re)connect, the first read after a launch.
+                        self?.refreshPhoneTransferNotice(throttled: true)
                     }
                     // W-MSGOUTBOX (2026-09-01) — same once-per-reconnect
                     // gate as the two blocks above: drain `.sending` rows
@@ -9586,6 +9619,7 @@ final class AppState: ObservableObject {
                 // Whole-phase-review finding I1 (2026-08-17) — same
                 // reasoning as the `remote_wipe` handler just above.
                 self?.capabilityGate.discard()
+                self?.phoneTransferNotice.reset()
                 self?.errorMessage = reason
             }
         }
@@ -9609,6 +9643,16 @@ final class AppState: ObservableObject {
                 Task { [weak self] in
                     await self?.capabilityGate.refresh()
                 }
+            }
+        }
+
+        // `account_notice` carries a `code`; only `phone_transfer_pending` has a screen. The message
+        // holds the transfer id and its expiry, nothing else: the list is read from the server
+        // before anything is shown. Other codes and unknown payloads are ignored.
+        ws.registerHandler(type: "account_notice") { [weak self] _, data in
+            guard PhoneTransferNotice.isPending(data) else { return }
+            DispatchQueue.main.async {
+                self?.refreshPhoneTransferNotice()
             }
         }
 
@@ -17066,6 +17110,9 @@ final class AppState: ObservableObject {
     /// after every `LocalCryptoWipe.wipeAll()`.
     func resetAccountScopedRuntimeState() {
         recentCalls = []
+        // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
+        // account deletion).
+        phoneTransferNotice.reset()
         // `LocalCryptoWipe.wipeAll()` empties ContactsStore without posting
         // `.contactsDidChange`, so nothing refreshes the in-memory snapshot of the
         // account that left: its names would keep labelling incoming calls, chat

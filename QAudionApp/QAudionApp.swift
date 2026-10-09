@@ -283,6 +283,12 @@ struct QAudionApp: App {
             .onChange(of: scenePhase) { newPhase in
                 handleScenePhase(newPhase)
             }
+            // Pending phone-number transfer: the state is dropped when the app locks, nothing is read
+            // while it is locked, and the list is read again from the server when it unlocks.
+            .onChange(of: lockService.isLocked) { locked in
+                appState.phoneTransferNotice.setLocked(locked)
+                if !locked { appState.refreshPhoneTransferNotice() }
+            }
             // W-EMAILVERIFYLINK — Universal Link entry point (parity with
             // Android's App Link intent-filter). associated-domains in
             // QAudion.entitlements is what makes the OS route the tapped
@@ -332,6 +338,8 @@ struct QAudionApp: App {
                 // line is captured by the W417 telemetry. Fire-and-forget:
                 // never blocks launch, fails safe to the compiled defaults.
                 FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
+                let lock = lockService
+                appState.isAppLocked = { lock.isLocked }
                 appState.initialize()
                 // W-MK — register the MetricKit subscriber. MUST be after
                 // attachStdoutTee() so the per-payload prints are captured
@@ -424,6 +432,9 @@ struct QAudionApp: App {
             // on cold launch, see AppState.initialize()'s own call).
             appState.drainSiriOutbox()
             appState.refreshSiriMessageCache()
+            // Pending phone-number transfers: read again on a return to the foreground (a locked
+            // app reads after the unlock, see the `isLocked` observer).
+            if !lockService.isLocked { appState.refreshPhoneTransferNotice(throttled: true) }
         default:
             break
         }
