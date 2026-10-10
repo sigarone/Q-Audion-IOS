@@ -31,6 +31,7 @@ targets:
       - path: ../QAudionAppTests
         includes:
           - AppStateFilesServerUrlTests.swift
+          - AvatarAnnounceReductionTests.swift
           - BugReportFreezeTests.swift
           - BugReporterRetryQueueTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift

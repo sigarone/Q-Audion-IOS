@@ -233,7 +233,7 @@ final class AppState: ObservableObject {
     /// independent of how the state got there. This is that, in Combine.
     /// The two existing call sites are left in place: they are now
     /// redundant rather than wrong, and the coordinator's per-peer
-    /// serialisation plus the 2-minute call cooldown collapse a duplicate
+    /// serialisation plus the content check of `AvatarAnnouncePolicy` collapse a duplicate
     /// into a single send.
     private lazy var callConnectAvatarObserver: AnyCancellable =
         $callState
@@ -243,11 +243,14 @@ final class AppState: ObservableObject {
                 // whose id was not bound yet (the latch then falls back to
                 // the peer id) would dedupe every LATER call to that same
                 // peer for the rest of the process lifetime.
+                let callIsActive = newState == .active || newState == .encrypted
+                // The avatar policy keeps the first seconds of a call free of avatar traffic.
+                self.avatarAnnounceCoordinator.noteCall(active: callIsActive)
                 if newState == .idle || newState == .ended {
                     self.avatarExchangeFiredForCall = nil
                     return
                 }
-                guard newState == .active || newState == .encrypted else { return }
+                guard callIsActive else { return }
                 // W-AVATARSILENT (2026-08-13) — `maybeExchangeAvatarOnCallConnect()`
                 // logs every branch of ITS OWN body (W-AVATARCALLEE), but this sink
                 // is what decides whether that function is ever reached at all, and
@@ -12775,8 +12778,10 @@ final class AppState: ObservableObject {
     // device state carries over unchanged). The ceiling itself was the bug:
     // one flat 3-DAY interval for every trigger, which Android measured to
     // be a guaranteed no-op for both peers of any call inside a normal
-    // usage session. It is now per-trigger — 1 h for a background
-    // chat-decrypt, 2 min for a real call or a completed key exchange.
+    // usage session. The periodic re-send is gone altogether: the triggers
+    // are moments at which `AvatarAnnouncePolicy` checks whether the contact
+    // needs the picture (changed content, new contact device), they no
+    // longer send by repeating.
 
     /// Current self-avatar version. 0 = no avatar ever set (never
     /// bumped) — `maybeAnnounceAvatarTo` treats that as "nothing to
@@ -12884,10 +12889,9 @@ final class AppState: ObservableObject {
     /// Android's class of the same name — see its doc for why each of those
     /// is load-bearing and which of them iOS was missing).
     ///
-    /// `trigger` is what decides the re-announce cooldown, so it must
-    /// reflect the REAL cause: a call is rare and explicit and gets a
-    /// 2-minute floor, while the chat-decrypt path can fire many times a
-    /// minute and keeps 1 hour.
+    /// `trigger` says what caused the check; only `.avatarChanged` (the user
+    /// picked a new photo) always sends, the others send only when
+    /// `AvatarAnnouncePolicy` finds the contact needs the picture.
     private func maybeAnnounceAvatarTo(
         _ peerId: String,
         trigger: AvatarAnnounceCoordinator.Trigger = .chatDecrypt
@@ -13644,9 +13648,9 @@ final class AppState: ObservableObject {
             case .keyExchangeOffer(let pub):
                 Task { [weak self] in
                     await cke.handleOffer(senderId: senderId, peerPubKey: pub)
-                    // Trigger `.keyExchange` — as rare and as explicit as a
-                    // call, so it gets the SHORT re-announce cooldown, not
-                    // the background chat-decrypt one.
+                    // Trigger `.keyExchange` — a moment at which the avatar
+                    // state is checked (nothing is sent when the content and
+                    // the pair key are those of the last send).
                     // E2EE avatar transport (2026-07-30) — the moment a
                     // pairwise PSK becomes available for this peer (for
                     // ANY reason: a call just triggered this exchange, a
