@@ -6,6 +6,10 @@ vocabulary gate (scripts/ship-ios-logs.py) VERBATIM, under the "call" tag: they 
 work paused in the background" (bg=1) from "ran and measured zero" in a call's log. Keep in sync with
 DisplayWorkMarker and BackgroundDisplayWorkTests.
 
+The same gate covers the check-period lines of the contact-voice check (ContactVoiceVerifier.cadenceLine, printed
+through the stdout tee, tag "stdout"): they say which period is active ("[Voice] bg=1 every=10"). Keep in sync with
+ContactVoiceVerifier.cadenceLine and BackgroundCadenceTests.
+
 Run:  python scripts/test_ship_ios_display_vocab.py [path/to/ship-ios-logs.py]
 Exit 0 = every line ships verbatim; 1 = at least one was dropped or altered.
 """
@@ -40,13 +44,21 @@ def shipped(line, tag="call"):
 
 LINES = ["display bg=1", "display bg=0"]
 
+# Same text as ContactVoiceVerifier.cadenceLine (whole seconds), shipped under the stdout tee's tag.
+CADENCE_LINES = ["[Voice] bg=1 every=10", "[Voice] bg=0 every=3", "[Voice] bg=1 every=12", "[Voice] bg=1 every=9"]
+
 failures = []
 for text in LINES:
     got = shipped(text)
     if got != text:
         failures.append("%r -> %r" % (text, got))
+for text in CADENCE_LINES:
+    for tag in ("stdout", "call"):
+        got = shipped(text, tag)
+        if got != text:
+            failures.append("[%s] %r -> %r" % (tag, text, got))
 
-print("checks: %d, failures: %d" % (len(LINES), len(failures)))
+print("checks: %d, failures: %d" % (len(LINES) + 2 * len(CADENCE_LINES), len(failures)))
 for f in failures:
     print("FAIL", f)
 sys.exit(1 if failures else 0)
