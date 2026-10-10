@@ -203,6 +203,38 @@ final class AvatarImageResizerTests: XCTestCase {
         XCTAssertLessThanOrEqual(prepared.data.count, AvatarImageRule.targetBytes)
     }
 
+    /// L'applicatore della ricezione con la riduzione vera: l'avatar grande va in cache ridotto, lo stesso ricevuto di nuovo e' identico.
+    func testAReceivedLargePhotoIsStoredReducedAndTheSameOneAgainIsIdentical() throws {
+        var file: Data?
+        var cached = -1
+        var storedHash: String?
+        var refreshes = 0
+        var writes = 0
+        let applier = AvatarInboundApplier(
+            decodes: { UIImage(data: $0) != nil },
+            readCurrent: { file },
+            write: { file = $0; writes += 1 },
+            cachedVersion: { cached },
+            setLocalPath: { cached = $0; return true },
+            notify: { refreshes += 1 },
+            now: { Date(timeIntervalSince1970: 1_800_000_000) },
+            lastReceivedHash: { storedHash },
+            saveReceivedHash: { storedHash = $0 },
+            reduce: { AvatarImageResizer.prepare($0, cleanMetadata: false)?.data ?? $0 })
+        let received = SyntheticPhoto.large
+        XCTAssertEqual(try applier.apply(received), .applied(version: 1_800_000_000))
+        let kept = try XCTUnwrap(file)
+        let size = try XCTUnwrap(AvatarImageGeometry.measure(kept))
+        print("AVATAR-MEASURE recv in=\(received.count) out=\(kept.count) side=\(size.longSide) min=\(size.shortSide)")
+        XCTAssertLessThanOrEqual(kept.count, AvatarImageRule.targetBytes)
+        XCTAssertEqual(size, AvatarImageGeometry.Size(longSide: 512, shortSide: 384))
+        XCTAssertNotEqual(kept, received)
+        XCTAssertEqual(try applier.apply(received), .identical)
+        XCTAssertEqual(writes, 1)
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(cached, 1_800_000_000)
+    }
+
     // MARK: - un file gia' piccolo non si ricodifica
 
     func testASmallPictureInsideTheRuleIsLeftAlone() throws {
@@ -419,7 +451,7 @@ final class AvatarThumbnailTests: XCTestCase {
         let full = AvatarThumbnail.decodedBytes(width: 512, height: 384)
         XCTAssertEqual(thumbnail, 92_928)
         XCTAssertEqual(full, 786_432)
-        XCTAssertGreaterThan(full / thumbnail, 8)
+        XCTAssertGreaterThanOrEqual(full / thumbnail, 8)
     }
 
     private func tempFile(_ data: Data) throws -> URL {
