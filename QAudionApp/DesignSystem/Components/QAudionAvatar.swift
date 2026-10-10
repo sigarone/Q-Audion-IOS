@@ -25,6 +25,7 @@ import UIKit
 struct QAudionAvatar: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
+    @Environment(\.displayScale) private var displayScale
 
     /// E2EE avatar transport (2026-07-30) — `imageURL` for a peer/self
     /// avatar is now a LOCAL `file://` path to a decrypted image
@@ -145,7 +146,14 @@ struct QAudionAvatar: View {
         .task(id: url) {
             localImage = nil
             let resolvedURL = QAudionAvatar.resolveIfStale(url)
+            let pointSize = size
+            let scale = displayScale
             let loaded = await Task.detached(priority: .utility) { () -> UIImage? in
+                // Decoded at the size the circle is drawn (`AvatarThumbnail`), not at full resolution; the full load is the
+                // fallback for a file ImageIO does not read.
+                if let thumbnail = AvatarThumbnail.load(url: resolvedURL, pointSize: pointSize, scale: scale) {
+                    return thumbnail
+                }
                 guard let data = try? Data(contentsOf: resolvedURL) else { return nil }
                 return UIImage(data: data)
             }.value

@@ -25,7 +25,9 @@ CallResourceLoggerTests.
 And the avatar lines that say why a picture was or was not sent or applied (tag "avatar", AvatarAnnounceCoordinator.logSent,
 logSkip and logInbound): "send ok=1 ... why=1|2|3 bytes=N side=L min=S" (why: 1 content changed, 2 new contact device, 3 asked for,
 reserved; bytes and pixels of the file sent), "skip same ... code=4" (same content already sent), "skip call ... code=5" (inside the
-first seconds of a call), "skip brake ... code=5" (right after an attempt: anti-burst brake), and the receive lines "recv applied=0 code=8 kind=1|2 bytes=N" (image cut short), "code=9 bytes=N"
+first seconds of a call), "skip brake ... code=5" (right after an attempt: anti-burst brake), "resize bytes=N out=K side=L min=S" (a local file above the avatar rule was resized once for sending), and the receive lines
+"recv applied=1 bytes=N out=K side=L min=S" (a picture applied: bytes received, bytes kept in the cache after the reduction),
+"recv applied=0 code=8 kind=1|2 bytes=N" (image cut short), "code=9 bytes=N"
 (same picture as the one kept). Numbers only, words already admitted. A shipped line may carry at most two long numbers or
 hex ids: that is why the send line has no "version", and why the width/height keys are "side" and "min" (a key like "w" or
 "width" drops the whole line). The lines that carry a sender id with the key "from" are not here because the shipper redacts that
@@ -114,6 +116,13 @@ AVATAR_LINES = [
     "skip call to=8bc24df8 code=5 trig=3 age=89",
     "skip brake to=8bc24df8 code=5 trig=1 age=0",
     "skip brake to=8bc24df8 code=5 trig=2 age=119",
+    "resize bytes=4194304 out=35000 side=512 min=384",
+    "resize bytes=8388608 out=102400 side=512 min=1",
+    "resize bytes=123456 out=99999 side=512 min=512",
+    "recv applied=1 bytes=4194304 out=35000 side=512 min=384",
+    "recv applied=1 bytes=8388608 out=102400 side=512 min=1",
+    "recv applied=1 bytes=64000 out=64000 side=512 min=512",
+    "recv applied=1 bytes=1 out=1 side=1 min=1",
     "recv applied=0 code=8 kind=1 bytes=64000",
     "recv applied=0 code=8 kind=2 bytes=8388608",
     "recv applied=0 code=8 kind=1 bytes=0",
