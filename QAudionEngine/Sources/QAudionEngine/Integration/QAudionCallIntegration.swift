@@ -387,11 +387,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `guardianMode.processFrame` — no extra dispatch, no Task per frame
     /// (2026-07-04 never-block rules).
     private let spectrumExtractor = SpectrumExtractor()
+    /// Background state read by the display-only work in `analyze` (voice
+    /// ribbon analysis, spectrum). Defaults to the process-wide flag the app
+    /// layer keeps current.
+    var backgroundFlag: AppBackgroundFlag = .shared
     /// Monotonic uptime (ns) of the last spectrum compute — 66 ms source
     /// throttle so `onVoiceSpectrum` fires at ≤15 Hz regardless of the
     /// ~50 fps RX frame rate. Touched only on the RX processing thread
     /// (same single-thread contract as the extractor itself).
-    private var lastSpectrumUptimeNs: UInt64 = 0
+    private var spectrumGate = DisplayWorkGate(minIntervalNs: 66_000_000)
     /// Feature B ("voce verificata") — the in-flight per-contact
     /// call-time voice-learning session, if the user tapped "Avvia
     /// apprendimento voce" for THIS call. nil most of the time. Fed inside
@@ -4227,6 +4231,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
+    /// Blocks until the RX analysis queue has run everything queued so far.
+    /// Test use only.
+    internal func drainAnalysisForTesting() {
+        rxAnalysisQueue.sync {}
+    }
+
     /// The former body of `processIncomingAudio`, now off the audio path.
     private func analyze(_ pcm: Data) {
         guardianMode.processFrame(pcm)
@@ -4262,14 +4272,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // gauges are explicitly about the INTERLOCUTOR — Android has always
         // analyzed the decoded RX path (CallAudioBridge → feedVoiceAnalysis).
         // The engine self-throttles (analysisRate) and runs synchronously.
-        voiceAnalysis.processFrame(pcm)
+        //
+        // Display-only: its results reach the Guardian ribbon gauges and a
+        // diagnostic counter, and nothing that scores or decides (the
+        // guardian, the per-contact verifier and voice learning run on their
+        // own instances above). Skipped while the app is in the background,
+        // where no ribbon is on screen.
+        let inBackground = backgroundFlag.isInBackground
+        if !inBackground {
+            voiceAnalysis.processFrame(pcm)
+        }
         // Unified call UI — REAL remote-voice spectrum, ≤15 Hz (66 ms
         // monotonic throttle). Skipped entirely while nothing is wired to
-        // consume it.
+        // consume it, and while the app is in the background (its only
+        // consumer is the on-screen spectrum bars).
         if let spectrumSink = onVoiceSpectrum {
             let nowNs = DispatchTime.now().uptimeNanoseconds
-            if nowNs &- lastSpectrumUptimeNs >= 66_000_000 {
-                lastSpectrumUptimeNs = nowNs
+            if spectrumGate.shouldRun(nowNs: nowNs, isInBackground: inBackground) {
                 // Little-endian Int16 PCM @ 48 kHz — the same layout + rate
                 // the sibling analysis DSP assumes (see PitchExtractor).
                 let samples: [Int16] = pcm.withUnsafeBytes { raw in

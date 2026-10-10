@@ -4032,6 +4032,8 @@ final class AppState: ObservableObject {
             object: nil,
             queue: .main
         ) { _ in
+            // Background flag read by display-only call work on any queue.
+            AppBackgroundFlag.shared.set(isInBackground: false)
             // The notification closure is `@Sendable` per the iOS 18+
             // signature; mutating main-actor-isolated state must hop
             // back through `Task { @MainActor in ... }`. We only capture
@@ -4119,10 +4121,15 @@ final class AppState: ObservableObject {
             object: nil,
             queue: .main
         ) { _ in
+            AppBackgroundFlag.shared.set(isInBackground: true)
             Task { @MainActor [weak self] in
                 self?.handleDidEnterBackground()
             }
         }
+        // A process started in the background (e.g. woken for an incoming
+        // call) never receives didEnterBackground: take the real state once,
+        // here on the main thread, where reading it is allowed.
+        AppBackgroundFlag.shared.set(isInBackground: UIApplication.shared.applicationState == .background)
         #endif
 
         // W-BGK: BGAppRefreshTask handler routing.
@@ -20547,6 +20554,11 @@ extension AppState {
     private func startVoiceConfidenceWaveSampler() {
         voiceWaveTimer?.invalidate()
         let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            // Display-only tick (the wave and the conf_poll log line): nothing
+            // is on screen while the app is in the background, so the tick
+            // does nothing and resumes at the same cadence on return. It reads
+            // the guardian's history; it never feeds it.
+            if AppBackgroundFlag.shared.isInBackground { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let integration = self.callService.callIntegration ?? self.responderCallIntegration
