@@ -24,8 +24,23 @@ public final class AppBackgroundFlag: @unchecked Sendable {
         return background
     }
 
-    public func set(isInBackground value: Bool) {
-        lock.lock(); background = value; lock.unlock()
+    /// Returns true when the value actually changed (a repeated notification returns false).
+    @discardableResult
+    public func set(isInBackground value: Bool) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let changed = background != value
+        background = value
+        return changed
+    }
+}
+
+/// The log line that tells "display-only call work paused because the app went to the background" (bg=1) from
+/// "ran and measured zero" (the voice-analysis counters, `va_sample`, `va_results`, `conf_poll` stop or read 0
+/// while paused). One line when the work pauses, one when it resumes. The shape was checked against the phone-log
+/// shipper's vocabulary gate (`scripts/test_ship_ios_display_vocab.py`): keep both in sync.
+public enum DisplayWorkMarker {
+    public static func line(background: Bool) -> String {
+        "display bg=\(background ? 1 : 0)"
     }
 }
 

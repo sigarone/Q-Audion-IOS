@@ -148,7 +148,7 @@ public final class GuardianMode: @unchecked Sendable {
     }
 
     /// Loads the Tier 1 model on the inference queue (low QoS) so the first window finds it ready. Call it once
-    /// the call is established, not while it rings; calling it again is a no-op, and the first inference loads
+    /// the call is established, not when the integration is built; calling it again is a no-op, and the first inference loads
     /// the model by itself if this was never called. Does not block the caller.
     public func warmUp() {
         guard scorerAvailable, let warm = warmUpScorer else { return }

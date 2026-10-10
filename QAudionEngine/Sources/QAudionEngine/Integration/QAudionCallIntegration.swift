@@ -4092,8 +4092,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// already active). See `deactivateContactVoiceVerification` for the
     /// call-end counterpart.
     public func activateContactVoiceVerification(contactId: String) {
-        // The call is established: start loading the Tier 1 model on a low-QoS
-        // queue, ahead of its first window (a no-op after the first call).
+        // The call is established (not when the integration is built, which for
+        // an outgoing call is already at dial time): start loading the Tier 1
+        // model on a low-QoS queue, ahead of its first window (a no-op after
+        // the first call).
         guardianMode.warmUp()
         contactVoiceVerifier.setActiveContact(contactId)
     }

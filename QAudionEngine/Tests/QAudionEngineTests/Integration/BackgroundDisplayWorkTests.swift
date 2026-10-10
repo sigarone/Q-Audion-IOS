@@ -46,6 +46,31 @@ final class BackgroundDisplayWorkTests: XCTestCase {
         wait(for: [seen], timeout: 5)
     }
 
+    func testSetReportsWhetherTheValueChanged() {
+        let flag = AppBackgroundFlag()
+        XCTAssertFalse(flag.set(isInBackground: false), "already foreground")
+        XCTAssertTrue(flag.set(isInBackground: true))
+        XCTAssertFalse(flag.set(isInBackground: true), "a repeated notification is not a transition")
+        XCTAssertTrue(flag.set(isInBackground: false))
+    }
+
+    // MARK: - pause / resume marker
+
+    func testMarkerLinesDistinguishPausedFromRanAtZero() {
+        XCTAssertEqual(DisplayWorkMarker.line(background: true), "display bg=1")
+        XCTAssertEqual(DisplayWorkMarker.line(background: false), "display bg=0")
+    }
+
+    func testAMarkerIsDueOnlyOnATransitionOfTheFlag() {
+        // Same rule the app applies: one line per real change, none for a repeated notification.
+        let flag = AppBackgroundFlag()
+        var lines: [String] = []
+        for value in [true, true, false, false, true, false] {
+            if flag.set(isInBackground: value) { lines.append(DisplayWorkMarker.line(background: value)) }
+        }
+        XCTAssertEqual(lines, ["display bg=1", "display bg=0", "display bg=1", "display bg=0"])
+    }
+
     // MARK: - DisplayWorkGate (fake clock)
 
     func testGateRunsAtItsNormalCadenceInTheForeground() {
@@ -154,6 +179,24 @@ final class BackgroundDisplayWorkTests: XCTestCase {
         XCTAssertEqual(bg, 1, "didEnterBackground must set the flag")
         XCTAssertTrue(src.contains("UIApplication.shared.applicationState == .background"),
                       "the start-up value is read once, on the main thread")
+    }
+
+    func testTheAppLogsTheMarkerOnTransitionsInACallAndWhenACallStartsInTheBackground() throws {
+        let src = try repoSource("QAudionApp/AppState.swift")
+        XCTAssertEqual(src.components(separatedBy: "noteDisplayWorkTransition(changed: flagChanged, background: true)").count - 1, 1)
+        XCTAssertEqual(src.components(separatedBy: "noteDisplayWorkTransition(changed: flagChanged, background: false)").count - 1, 1)
+        guard let fn = src.range(of: "private func noteDisplayWorkTransition(changed: Bool, background: Bool)") else {
+            return XCTFail("transition helper not found")
+        }
+        let body = String(src[fn.lowerBound...].prefix(300))
+        XCTAssertTrue(body.contains("guard changed, isInCall else { return }"), "only on a real change, only in a call")
+        XCTAssertTrue(body.contains("DisplayWorkMarker.line(background: background)"))
+        guard let sampler = src.range(of: "private func startVoiceConfidenceWaveSampler()") else {
+            return XCTFail("sampler not found")
+        }
+        let head = String(src[sampler.lowerBound...].prefix(500))
+        XCTAssertTrue(head.contains("DisplayWorkMarker.line(background: true)"),
+                      "a call that starts in the background says so once")
     }
 
     func testTheConfidenceWaveSamplerSkipsItsTickInTheBackgroundBeforeHoppingToTheMainActor() throws {

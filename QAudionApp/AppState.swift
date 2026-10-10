@@ -4033,7 +4033,10 @@ final class AppState: ObservableObject {
             queue: .main
         ) { _ in
             // Background flag read by display-only call work on any queue.
-            AppBackgroundFlag.shared.set(isInBackground: false)
+            let flagChanged = AppBackgroundFlag.shared.set(isInBackground: false)
+            Task { @MainActor [weak self] in
+                self?.noteDisplayWorkTransition(changed: flagChanged, background: false)
+            }
             // The notification closure is `@Sendable` per the iOS 18+
             // signature; mutating main-actor-isolated state must hop
             // back through `Task { @MainActor in ... }`. We only capture
@@ -4121,14 +4124,16 @@ final class AppState: ObservableObject {
             object: nil,
             queue: .main
         ) { _ in
-            AppBackgroundFlag.shared.set(isInBackground: true)
+            let flagChanged = AppBackgroundFlag.shared.set(isInBackground: true)
             Task { @MainActor [weak self] in
+                self?.noteDisplayWorkTransition(changed: flagChanged, background: true)
                 self?.handleDidEnterBackground()
             }
         }
         // A process started in the background (e.g. woken for an incoming
         // call) never receives didEnterBackground: take the real state once,
-        // here on the main thread, where reading it is allowed.
+        // in initialize() (not at call start), on the main thread, where
+        // reading it is allowed.
         AppBackgroundFlag.shared.set(isInBackground: UIApplication.shared.applicationState == .background)
         #endif
 
@@ -20553,6 +20558,11 @@ extension AppState {
     /// the audio-processing hot path.
     private func startVoiceConfidenceWaveSampler() {
         voiceWaveTimer?.invalidate()
+        // A call that begins while the app is already in the background never
+        // sees a transition: say so once, so its zero counters read as "paused".
+        if AppBackgroundFlag.shared.isInBackground {
+            RTLog.info("call", DisplayWorkMarker.line(background: true))
+        }
         let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
             // Display-only tick (the wave and the conf_poll log line): nothing
             // is on screen while the app is in the background, so the tick
@@ -20586,6 +20596,13 @@ extension AppState {
         }
         RunLoop.main.add(timer, forMode: .common)
         voiceWaveTimer = timer
+    }
+
+    /// One marker line per pause/resume of the display-only call work, only
+    /// while a call is up and only on a real change of the flag.
+    private func noteDisplayWorkTransition(changed: Bool, background: Bool) {
+        guard changed, isInCall else { return }
+        RTLog.info("call", DisplayWorkMarker.line(background: background))
     }
 
     /// Stop the wave sampler and clear its readout. Called from `endCall()`
