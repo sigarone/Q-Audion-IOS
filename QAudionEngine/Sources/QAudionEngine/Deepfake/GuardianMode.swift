@@ -36,6 +36,8 @@ public final class GuardianMode: @unchecked Sendable {
         var windowsSkipped = 0
         /// Discarded because an inference was still in flight (or a chunk completed several eligible windows).
         var windowsDropped = 0
+        /// Held back by the background CPU governor (the window is not scored; the next one asks again).
+        var windowsHeld = 0
         var inferences = 0
         var nilScores = 0
         var inferenceInFlight = false
@@ -53,6 +55,8 @@ public final class GuardianMode: @unchecked Sendable {
     /// Loads the scorer's model ahead of the first window; nil = nothing to warm up.
     private let warmUpScorer: (@Sendable () -> Void)?
     private let executor: Executor
+    /// Holds a window's inference back, in the background only, while the process uses too much CPU. nil = never.
+    private let governor: BackgroundCpuGovernor?
     private let nowMs: @Sendable () -> Int64
     private let confidence = ConfidenceIndex()
     private let lock = NSLock()
@@ -89,7 +93,8 @@ public final class GuardianMode: @unchecked Sendable {
             scorerStillUsable: { analyzer.canScore },
             warmUpScorer: { analyzer.warmUp() },
             executor: { job in queue.async { job() } },
-            nowMs: { Int64(Date().timeIntervalSince1970 * 1000) }
+            nowMs: { Int64(Date().timeIntervalSince1970 * 1000) },
+            governor: BackgroundCpuGovernor(flag: .shared)
         )
     }
 
@@ -100,13 +105,15 @@ public final class GuardianMode: @unchecked Sendable {
         warmUpScorer: (@Sendable () -> Void)? = nil,
         executor: @escaping Executor,
         nowMs: @escaping @Sendable () -> Int64,
-        windowSamples: Int = GuardianWindowAccumulator.defaultWindowSamples
+        windowSamples: Int = GuardianWindowAccumulator.defaultWindowSamples,
+        governor: BackgroundCpuGovernor? = nil
     ) {
         self.scorer = scorer
         self.scorerAvailable = scorerAvailable
         self.scorerStillUsable = scorerStillUsable
         self.warmUpScorer = warmUpScorer
         self.executor = executor
+        self.governor = governor
         self.nowMs = nowMs
         self.windowSamples = windowSamples
         self.accumulator = GuardianWindowAccumulator(windowSamples: windowSamples)
@@ -139,9 +146,25 @@ public final class GuardianMode: @unchecked Sendable {
             lock.unlock()
             return
         }
+        // CPU governor (background only, see `BackgroundCpuGovernor`), asked only when a window is about to be
+        // scored. A window held back is not scored and changes nothing else: the confidence index, the red
+        // streak and the alert cooldown stay as they were, and `lastScoredWindowEnd` is not advanced, so the
+        // next window is eligible again at once (the floor of the governor bounds how long that can go on).
+        var summaryToLog: BackgroundCpuGovernor.Summary?
+        if let governor {
+            let decision = governor.decide()
+            summaryToLog = decision.summary
+            if !decision.run {
+                stats.windowsHeld += 1
+                lock.unlock()
+                if let summaryToLog { print(summaryToLog.logLine(label: "Guardian")) }
+                return
+            }
+        }
         lastScoredWindowEnd = pick.end
         stats.inferenceInFlight = true
         lock.unlock()
+        if let summaryToLog { print(summaryToLog.logLine(label: "Guardian")) }
 
         let newest = pick.window
         executor { [weak self] in self?.runInference(on: newest) }

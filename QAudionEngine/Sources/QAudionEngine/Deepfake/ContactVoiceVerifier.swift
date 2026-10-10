@@ -109,6 +109,8 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private let foregroundIntervalSeconds: Double
     private let backgroundIntervalSeconds: Double
     private let armTimer: BackgroundAwareTimer.Arm
+    /// Holds whole ticks back, in the background only, while the process uses too much CPU. nil = never.
+    private let governor: BackgroundCpuGovernor?
 
     /// Guards against a slow tick (ONNX inference stall) overlapping the
     /// next timer fire — ticks are skipped, never queued, matching this
@@ -204,7 +206,8 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
             backgroundFlag: .shared,
             foregroundIntervalSeconds: ContactVoiceVerifier.scoreIntervalSeconds,
             backgroundIntervalSeconds: ContactVoiceVerifier.backgroundScoreIntervalSeconds,
-            armTimer: BackgroundAwareTimer.dispatchArm
+            armTimer: BackgroundAwareTimer.dispatchArm,
+            governor: BackgroundCpuGovernor(flag: .shared)
         )
     }
 
@@ -217,7 +220,8 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         backgroundFlag: AppBackgroundFlag,
         foregroundIntervalSeconds: Double,
         backgroundIntervalSeconds: Double,
-        armTimer: @escaping BackgroundAwareTimer.Arm
+        armTimer: @escaping BackgroundAwareTimer.Arm,
+        governor: BackgroundCpuGovernor? = nil
     ) {
         self.verifier = SpeakerVerifier(embedder: embedder, cohortNormalizer: cohortNormalizer)
         self.store = store
@@ -225,6 +229,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         self.foregroundIntervalSeconds = foregroundIntervalSeconds
         self.backgroundIntervalSeconds = backgroundIntervalSeconds
         self.armTimer = armTimer
+        self.governor = governor
         speakerChange.onVerdictChanged = { [weak self] verdict in
             self?.onSpeakerChanged?(verdict)
         }
@@ -320,6 +325,21 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         scoreTimer = nil
     }
 
+    /// The period in force right now, for the log.
+    private var currentIntervalSeconds: Double {
+        backgroundFlag.isInBackground ? backgroundIntervalSeconds : foregroundIntervalSeconds
+    }
+
+    /// Blocks until everything queued on the scoring queue has run. Test use only.
+    internal func drainForTesting() {
+        scoreQueue.sync {}
+    }
+
+    /// One scoring pass, run on the scoring queue like a timer fire. Test use only.
+    internal func runTickForTesting() {
+        scoreQueue.sync { runTick() }
+    }
+
     /// The log line for the check's active period: "[Voice] bg=1 every=10". Whole seconds only, built from words
     /// the phone-log shipper already admits (checked against `scripts/ship-ios-logs.py`; see
     /// `scripts/test_ship_ios_display_vocab.py`, keep both in sync).
@@ -357,6 +377,21 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private func runTick() {
         lock.lock()
         guard !tickInFlight else { lock.unlock(); return }
+        lock.unlock()
+
+        // CPU governor (background only, see `BackgroundCpuGovernor`). A tick held back ends here, before it
+        // touches anything: the voiceprint gate, the speaker-change monitor and the callbacks are not fed, so the
+        // last score stays what it was and no run of results is cut or advanced. `scoreQueue` is serial, so
+        // nothing else can set `tickInFlight` between the check above and the line below.
+        if let governor {
+            let decision = governor.decide()
+            if let summary = decision.summary {
+                print(summary.logLine(label: "Voice", everySeconds: currentIntervalSeconds))
+            }
+            guard decision.run else { return }
+        }
+
+        lock.lock()
         tickInFlight = true
         let window = snapshotRingLocked()
         lock.unlock()
