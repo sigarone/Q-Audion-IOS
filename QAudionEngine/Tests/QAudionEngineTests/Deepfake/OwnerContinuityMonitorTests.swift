@@ -57,7 +57,6 @@ final class OwnerContinuityMonitorTests: XCTestCase {
 
         let verified = OwnerContinuityMonitor.State.scored(score: 0.8, level: .verified)
         monitor.applyStateForTesting(verified)
-        monitor.applyStateForTesting(verified)
         XCTAssertEqual(recorder.states, [.inactive, verified])
         XCTAssertEqual(monitor.currentState(), verified)
 
@@ -67,6 +66,36 @@ final class OwnerContinuityMonitorTests: XCTestCase {
         monitor.applyStateForTesting(.inactive)
         XCTAssertEqual(recorder.states, [.inactive, verified, uncertain, .inactive])
         XCTAssertEqual(monitor.currentState(), .inactive)
+    }
+
+    /// A scored state is delivered once per evaluated window even when two windows give the very same state: the
+    /// consumer reads an external value at delivery time (the app sends `.mismatch` to the peer only once
+    /// `shouldAlert()` is true, i.e. from the third consecutive mismatch window), so dropping the third
+    /// identical `.scored(mismatch)` would leave the peer at `.uncertain`. Only `.inactive` is de-duplicated.
+    func testIdenticalScoredWindowsAreDeliveredEveryTime() {
+        let (monitor, recorder) = makeMonitor(registered: false)
+        monitor.start()
+        monitor.drainForTesting()
+        let mismatch = OwnerContinuityMonitor.State.scored(score: 0.31, level: .mismatch)
+        for _ in 0..<3 { monitor.applyStateForTesting(mismatch) }
+        XCTAssertEqual(recorder.states, [mismatch, mismatch, mismatch], "one callback per evaluated window")
+
+        let verified = OwnerContinuityMonitor.State.scored(score: 0.8, level: .verified)
+        monitor.applyStateForTesting(verified)
+        monitor.applyStateForTesting(verified)
+        XCTAssertEqual(recorder.states.count, 5)
+    }
+
+    func testRepeatedInactiveIsDeliveredOnceButAgainAfterAScoredState() {
+        let (monitor, recorder) = makeMonitor(registered: false)
+        monitor.start()
+        monitor.drainForTesting()
+        for _ in 0..<4 { monitor.applyStateForTesting(.inactive) }
+        XCTAssertEqual(recorder.states, [.inactive])
+        monitor.applyStateForTesting(.scored(score: 0.7, level: .verified))
+        monitor.applyStateForTesting(.inactive)
+        monitor.applyStateForTesting(.inactive)
+        XCTAssertEqual(recorder.states.count, 3)
     }
 
     func testRegisteredMonitorQueuesEveryChunkAndScoresAfterWindow() {

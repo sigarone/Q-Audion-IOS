@@ -103,8 +103,8 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     private var enrolledCached = false
     /// Last state actually handed to `onStateChanged` since the latest
     /// `start()`. `nil` right after `start()`, so the first state produced
-    /// after a (re)start is always delivered once; afterwards a state equal
-    /// to this one is not delivered again.
+    /// after a (re)start is always delivered once; afterwards only a repeated
+    /// `.inactive` is suppressed (see `setState`).
     private var lastNotified: State?
 
     // MARK: - Lock-guarded state (read from `shouldAlert()`/`currentState()`
@@ -293,15 +293,20 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         setState(.scored(score: smoothed, level: level))
     }
 
-    /// Stores the state and notifies the observer only when it differs from
-    /// the last one delivered since `start()`. A repeated state (notably the
-    /// `.inactive` of an unregistered monitor) neither calls `onStateChanged`
+    /// Stores the state and notifies the observer, except that a repeated
+    /// `.inactive` (the unregistered monitor, up to 100 per second) is delivered
+    /// only once since `start()`: it neither calls `onStateChanged`
     /// nor causes any downstream UI publish.
     private func setState(_ newState: State) {
         lock.lock()
         _state = newState
         lock.unlock()
-        guard lastNotified != newState else { return }
+        // Only the repeated "not registered" state is suppressed. A scored state
+        // is delivered for EVERY evaluated window, even when it equals the
+        // previous one: the consumer reads `shouldAlert()` (the mismatch streak)
+        // at delivery time, so the third identical mismatch window must still
+        // reach it.
+        if newState == State.inactive, lastNotified == State.inactive { return }
         lastNotified = newState
         onStateChanged?(newState)
     }
