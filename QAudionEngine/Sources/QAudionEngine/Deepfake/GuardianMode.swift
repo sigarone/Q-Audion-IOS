@@ -43,10 +43,15 @@ public final class GuardianMode: @unchecked Sendable {
     }
 
     private let scorer: Scorer
-    /// False when the scorer can never produce a score (model not loaded: always on the Simulator). Decided once
-    /// at construction — the model loads synchronously in `VoiceprintAnalyzer.init` — so `processFrame` reads a
-    /// constant and does no per-chunk work at all, as the pre-W-GUARDIAN1CONTIG path did.
+    /// False when the scorer can never produce a score (no ONNX Runtime: always on the Simulator). A constant, so
+    /// `processFrame` does no per-chunk work at all, as the pre-W-GUARDIAN1CONTIG path did. The model itself now
+    /// loads lazily (`VoiceprintAnalyzer`): a load that FAILS is reported through `scorerStillUsable`.
     private let scorerAvailable: Bool
+    /// False once the scorer's one-time load has failed: from then on `processFrame` does no per-chunk work, as
+    /// it does when `scorerAvailable` is false. Must be cheap and non-blocking (asked on every chunk).
+    private let scorerStillUsable: @Sendable () -> Bool
+    /// Loads the scorer's model ahead of the first window; nil = nothing to warm up.
+    private let warmUpScorer: (@Sendable () -> Void)?
     private let executor: Executor
     private let nowMs: @Sendable () -> Int64
     private let confidence = ConfidenceIndex()
@@ -80,7 +85,9 @@ public final class GuardianMode: @unchecked Sendable {
         let queue = DispatchQueue(label: "qaudion.guardian.tier1", qos: .utility)
         self.init(
             scorer: { analyzer.score(window48k: $0) },
-            scorerAvailable: analyzer.isModelLoaded,
+            scorerAvailable: VoiceprintAnalyzer.runtimeAvailable,
+            scorerStillUsable: { analyzer.canScore },
+            warmUpScorer: { analyzer.warmUp() },
             executor: { job in queue.async { job() } },
             nowMs: { Int64(Date().timeIntervalSince1970 * 1000) }
         )
@@ -89,12 +96,16 @@ public final class GuardianMode: @unchecked Sendable {
     init(
         scorer: @escaping Scorer,
         scorerAvailable: Bool = true,
+        scorerStillUsable: @escaping @Sendable () -> Bool = { true },
+        warmUpScorer: (@Sendable () -> Void)? = nil,
         executor: @escaping Executor,
         nowMs: @escaping @Sendable () -> Int64,
         windowSamples: Int = GuardianWindowAccumulator.defaultWindowSamples
     ) {
         self.scorer = scorer
         self.scorerAvailable = scorerAvailable
+        self.scorerStillUsable = scorerStillUsable
+        self.warmUpScorer = warmUpScorer
         self.executor = executor
         self.nowMs = nowMs
         self.windowSamples = windowSamples
@@ -104,7 +115,7 @@ public final class GuardianMode: @unchecked Sendable {
     /// One decoded RX chunk (little-endian Int16 mono 48 kHz, any length). Cheap: VAD + copy, and at most one
     /// hand-off to the inference queue per `minVoicedMsBetweenInferences` of voiced audio.
     public func processFrame(_ pcmFrame: Data) {
-        guard scorerAvailable else { return }
+        guard scorerAvailable, scorerStillUsable() else { return }
         lock.lock()
         guard enabled else { lock.unlock(); return }
         let windows = accumulator.append(int16LE: pcmFrame)
@@ -134,6 +145,14 @@ public final class GuardianMode: @unchecked Sendable {
 
         let newest = pick.window
         executor { [weak self] in self?.runInference(on: newest) }
+    }
+
+    /// Loads the Tier 1 model on the inference queue (low QoS) so the first window finds it ready. Call it once
+    /// the call is established, not while it rings; calling it again is a no-op, and the first inference loads
+    /// the model by itself if this was never called. Does not block the caller.
+    public func warmUp() {
+        guard scorerAvailable, let warm = warmUpScorer else { return }
+        executor { warm() }
     }
 
     private func runInference(on window: [Float]) {

@@ -12,8 +12,24 @@ import Foundation
 /// call to `score` moved off the RX analysis queue onto `GuardianMode`'s own inference queue (one job in
 /// flight). This class only scores. It is used from that one serial queue, never concurrently, which is what
 /// the `@unchecked Sendable` relies on.
+///
+/// Lazy model load: constructing an analyzer costs nothing. The ONNX Runtime session (with the CoreML provider)
+/// is created at the first `warmUp()` or the first `score`, whichever comes first, exactly once, under
+/// `loadLock` (concurrent callers wait for the one load instead of starting another). Both run on the Tier 1
+/// inference queue (a low-QoS warm-up job or the first window), never on the thread that builds the
+/// integration and never on the RX analysis queue.
 public final class VoiceprintAnalyzer: @unchecked Sendable {
-    private let modelManager = ModelManager()
+    private let modelManager: ModelManager
+    private let loadModel: () -> Bool
+
+    /// Serialises the one load. Held for the whole load, so nothing latency-sensitive may take it: the per-chunk
+    /// check (`canScore`) reads `stateLock` instead.
+    private let loadLock = NSLock()
+    private var loadAttempted = false
+    /// Guards the two flags below only; never held across a load.
+    private let stateLock = NSLock()
+    private var loadSucceeded = false
+    private var loadFailed = false
 
     private static let downsampleFactor = 48_000 / ModelManager.modelSampleRate // 3
 
@@ -25,20 +41,69 @@ public final class VoiceprintAnalyzer: @unchecked Sendable {
     private static let genuineFloor: Float = 0.20
     private static let displayFloor: Float = 0.95
 
-    public init() {
-        _ = modelManager.loadModel()
+    public convenience init() {
+        let manager = ModelManager()
+        self.init(modelManager: manager, loadModel: { manager.loadModel() })
     }
 
-    /// Whether `score` can ever return a value. Fixed once `init` returns: the model loads synchronously there
-    /// and is never unloaded by this class (never on the Simulator, which has no ONNX Runtime).
-    public var isModelLoaded: Bool { modelManager.isLoaded() }
+    /// `loadModel` is the one-time load; tests inject a counting one.
+    init(modelManager: ModelManager, loadModel: @escaping () -> Bool) {
+        self.modelManager = modelManager
+        self.loadModel = loadModel
+    }
+
+    /// False where `score` can never return a value because the runtime is not there (the Simulator has no ONNX
+    /// Runtime). A constant, so callers can decide once, without loading anything.
+    public static var runtimeAvailable: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return true
+        #endif
+    }
+
+    /// Whether the model has been loaded successfully (false before the first load).
+    public var isModelLoaded: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return loadSucceeded
+    }
+
+    /// True until a load attempt has failed. Cheap and never blocked by a load in progress, so it can be asked on
+    /// every audio chunk.
+    public var canScore: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return !loadFailed
+    }
+
+    /// Loads the model now if it has not been loaded yet. Meant for a low-QoS job started once the call is
+    /// established, so the first `score` finds the session ready; calling it again, or concurrently with
+    /// `score`, never loads a second time.
+    public func warmUp() {
+        _ = ensureLoaded()
+    }
+
+    /// The one load. Returns whether the model is loaded.
+    private func ensureLoaded() -> Bool {
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        if !loadAttempted {
+            loadAttempted = true
+            let ok = loadModel()
+            stateLock.lock()
+            loadSucceeded = ok
+            loadFailed = !ok
+            stateLock.unlock()
+            return ok
+        }
+        return isModelLoaded
+    }
 
     /// Confidence [0.0 = fake, 1.0 = genuine] for one 48 kHz window, or `nil` when there is no real score:
     /// model not loaded (always the case on the Simulator) or an inference error. Never a fabricated
     /// placeholder — `GuardianMode` skips the EMA update on `nil` (2026-08-21: a placeholder 0.5 used to anchor
     /// the EMA near 0.5 for genuine voice).
     public func score(window48k: [Float]) -> Float? {
-        guard modelManager.isLoaded() else { return nil }
+        guard ensureLoaded() else { return nil }
 
         let factor = Self.downsampleFactor
         let inputLength = ModelManager.modelInputLength
