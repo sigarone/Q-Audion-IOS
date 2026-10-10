@@ -111,9 +111,11 @@ final class AvatarUploader {
         // goes through AvatarAnnounceSender/ChatMessageSendService,
         // which resolve their own auth).
         _ = token
-        // Resize to 512x512 max + JPEG-encode at 0.85 quality.
-        let resized = try Self.resize(image, to: CGSize(width: 512, height: 512))
-        guard let jpegData = resized.jpegData(compressionQuality: 0.85) else {
+        // Resize to 512 px on the long side (orientation applied, no metadata: the picture is redrawn) and JPEG-encode at 0.80,
+        // going down in quality only if the result is above the byte target: `AvatarImageRule`.
+        let side = CGFloat(AvatarImageRule.maxSide)
+        let resized = try Self.resize(image, to: CGSize(width: side, height: side))
+        guard let jpegData = AvatarImageResizer.smallestJPEG(encode: { resized.jpegData(compressionQuality: $0) }) else {
             throw Error.imageEncodingFailed
         }
 

@@ -165,6 +165,10 @@ jobs:
             -only-testing:QAudionAppTests/AvatarImageGeometryTests \
             -only-testing:QAudionAppTests/AvatarImageIntegrityTests \
             -only-testing:QAudionAppTests/AvatarInboundApplierTests \
+            -only-testing:QAudionAppTests/AvatarReceivedLedgerTests \
+            -only-testing:QAudionAppTests/AvatarImageResizerTests \
+            -only-testing:QAudionAppTests/AvatarSendCopyTests \
+            -only-testing:QAudionAppTests/AvatarThumbnailTests \
             -only-testing:QAudionAppTests/BugReportFreezeTests \
             -only-testing:QAudionAppTests/BugReporterRetryQueueTests \
             -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \

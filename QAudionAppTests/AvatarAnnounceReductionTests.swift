@@ -673,6 +673,10 @@ final class AvatarInboundApplierTests: XCTestCase {
         var decodable = true
         var persisted = true
         var failWrite = false
+        /// What the cache reduction keeps of a received picture (the same bytes unless a test sets it).
+        var reduced: ((Data) -> Data)?
+        var receivedHash: String?
+        private(set) var savedHashes: [String] = []
         private(set) var writes: [Data] = []
         private(set) var versionsRegistered: [Int] = []
         private(set) var refreshes = 0
@@ -699,7 +703,13 @@ final class AvatarInboundApplierTests: XCTestCase {
                     return self.persisted
                 },
                 notify: { [unowned self] in self.refreshes += 1 },
-                now: { [unowned self] in self.now })
+                now: { [unowned self] in self.now },
+                lastReceivedHash: { [unowned self] in self.receivedHash },
+                saveReceivedHash: { [unowned self] hash in
+                    self.savedHashes.append(hash)
+                    self.receivedHash = hash
+                },
+                reduce: { [unowned self] data in self.reduced?(data) ?? data })
         }
     }
 
@@ -819,6 +829,79 @@ final class AvatarInboundApplierTests: XCTestCase {
         XCTAssertEqual(rig.cached, 9)
     }
 
+    // MARK: - avatar grande: copia ridotta in cache
+
+    /// Un avatar ricevuto molto piu' grande della regola si mostra, ma in cache va la copia ridotta (altri byte), con la sua versione.
+    func testALargeAvatarIsKeptAsItsReducedCopy() throws {
+        let rig = Rig(file: nil, cached: -1)
+        let received = jpeg(9)
+        let kept = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0xFF, 0xD9])
+        rig.reduced = { _ in kept }
+        let outcome = try rig.makeApplier().apply(received)
+        XCTAssertEqual(outcome, .applied(version: Int(rig.now.timeIntervalSince1970)))
+        XCTAssertEqual(rig.writes, [kept])
+        XCTAssertEqual(rig.file, kept)
+        XCTAssertEqual(rig.savedHashes, [AvatarContentHash.hex(of: received)])
+    }
+
+    /// Lo stesso avatar grande ricevuto di nuovo non si riscrive: il file in cache ha altri byte, ma l'impronta dei byte ricevuti e' la stessa.
+    func testTheSameLargeAvatarAgainIsIdenticalEvenThoughTheCachedFileIsTheReducedCopy() throws {
+        let rig = Rig(file: nil, cached: -1)
+        let received = jpeg(9)
+        let kept = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0xFF, 0xD9])
+        rig.reduced = { _ in kept }
+        let applier = rig.makeApplier()
+        _ = try applier.apply(received)
+        let writesAfterFirst = rig.writes.count
+        let versionAfterFirst = rig.cached
+        let refreshesAfterFirst = rig.refreshes
+        XCTAssertEqual(try applier.apply(received), .identical)
+        XCTAssertEqual(rig.writes.count, writesAfterFirst)
+        XCTAssertEqual(rig.cached, versionAfterFirst)
+        XCTAssertEqual(rig.refreshes, refreshesAfterFirst)
+    }
+
+    func testADifferentLargeAvatarAfterTheFirstIsApplied() throws {
+        let rig = Rig(file: nil, cached: -1)
+        rig.reduced = { _ in Data([0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0xFF, 0xD9]) }
+        let applier = rig.makeApplier()
+        _ = try applier.apply(jpeg(9))
+        rig.now = rig.now.addingTimeInterval(60)
+        XCTAssertEqual(try applier.apply(jpeg(10)), .applied(version: Int(rig.now.timeIntervalSince1970)))
+        XCTAssertEqual(rig.savedHashes, [AvatarContentHash.hex(of: jpeg(9)), AvatarContentHash.hex(of: jpeg(10))])
+    }
+
+    /// A, poi B, poi di nuovo A: A non e' "identico", e' diverso dall'ultimo ricevuto.
+    func testBackToAnEarlierAvatarIsApplied() throws {
+        let rig = Rig(file: nil, cached: -1)
+        let applier = rig.makeApplier()
+        _ = try applier.apply(jpeg(1))
+        rig.now = rig.now.addingTimeInterval(60)
+        _ = try applier.apply(jpeg(2))
+        rig.now = rig.now.addingTimeInterval(60)
+        XCTAssertEqual(try applier.apply(jpeg(1)), .applied(version: Int(rig.now.timeIntervalSince1970)))
+        XCTAssertEqual(rig.writes, [jpeg(1), jpeg(2), jpeg(1)])
+    }
+
+    func testTheReceivedHashIsNotSavedWhenTheContactRefusesTheVersion() throws {
+        let rig = Rig(file: jpeg(1), cached: 9)
+        rig.persisted = false
+        _ = try rig.makeApplier().apply(jpeg(2))
+        XCTAssertTrue(rig.savedHashes.isEmpty)
+    }
+
+    func testAHashWithoutAnAppliedVersionDoesNotMakeItIdentical() throws {
+        let rig = Rig(file: jpeg(1), cached: -1)
+        rig.receivedHash = AvatarContentHash.hex(of: jpeg(2))
+        XCTAssertEqual(try rig.makeApplier().apply(jpeg(2)), .applied(version: Int(rig.now.timeIntervalSince1970)))
+    }
+
+    func testAHashWithNoFileOnDiskDoesNotMakeItIdentical() throws {
+        let rig = Rig(file: nil, cached: 5)
+        rig.receivedHash = AvatarContentHash.hex(of: jpeg(2))
+        XCTAssertEqual(try rig.makeApplier().apply(jpeg(2)), .applied(version: Int(rig.now.timeIntervalSince1970)))
+    }
+
     func testAWriteFailureThrowsAndNothingIsRegistered() {
         let rig = Rig(file: jpeg(1), cached: 9)
         rig.failWrite = true
@@ -850,5 +933,23 @@ final class AvatarImageGeometryTests: XCTestCase {
     func testNotAPictureHasNoSize() {
         XCTAssertNil(AvatarImageGeometry.measure(Data([1, 2, 3, 4])))
         XCTAssertNil(AvatarImageGeometry.measure(Data()))
+    }
+}
+
+final class AvatarReceivedLedgerTests: XCTestCase {
+
+    func testRecordsTheLastHashPerSender() throws {
+        let suite = "avatar-recv-ledger-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let ledger = AvatarReceivedLedger(defaults: defaults)
+        XCTAssertNil(ledger.hash(fromPeer: "p"))
+        ledger.save("H1", fromPeer: "p")
+        ledger.save("H2", fromPeer: "q")
+        XCTAssertEqual(ledger.hash(fromPeer: "p"), "H1")
+        XCTAssertEqual(ledger.hash(fromPeer: "q"), "H2")
+        ledger.save("H3", fromPeer: "p")
+        XCTAssertEqual(ledger.hash(fromPeer: "p"), "H3")
+        XCTAssertEqual(ledger.hash(fromPeer: "q"), "H2")
     }
 }
