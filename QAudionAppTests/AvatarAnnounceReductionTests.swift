@@ -134,7 +134,7 @@ final class AvatarAnnouncePolicyTests: XCTestCase {
 
     func testPeerRequestSendsOutsideTheGuardOnly() {
         XCTAssertEqual(decide(.chatDecrypt, requested: true), .send(.requested))
-        XCTAssertEqual(decide(.chatDecrypt, requested: true, callAge: 10), .skip(.callGuard))
+        XCTAssertEqual(decide(.chatDecrypt, callAge: 10, requested: true), .skip(.callGuard))
         XCTAssertEqual(decide(.chatDecrypt, requested: false), .skip(.same))
     }
 
