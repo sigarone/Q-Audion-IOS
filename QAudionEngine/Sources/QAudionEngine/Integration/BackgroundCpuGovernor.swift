@@ -33,6 +33,11 @@ enum ProcessCpu {
 /// - A floor: even while holding back, a check is let through when `floorSeconds` have passed since the last
 ///   one that ran. The check is thinned, never turned off.
 ///
+/// What it costs: while holding back, a check runs at most once per `floorSeconds`, and what the check reports
+/// needs several consecutive results (a suspect voice after about 2 samples, a changed one after about 4, a
+/// reference learnt over 16: `SpeakerChangeDetector`) takes that many floors: of the order of 1 min, 2 min and
+/// 8 min at the standard 30 s floor, against 6 s, 12 s and 48 s in the foreground.
+///
 /// What it does NOT do: it holds back whole checks only. It does not change what a check computes, the models,
 /// the thresholds or the verdicts, and a held check delivers nothing, so the caller's last score and any run of
 /// consecutive results stay exactly as they were. It does not look at which part of the process is using the CPU.
