@@ -16,6 +16,8 @@ public final class AppBackgroundFlag: @unchecked Sendable {
 
     private let lock = NSLock()
     private var background = false
+    private var entries = 0
+    private var observers: [UUID: @Sendable (Bool) -> Void] = [:]
 
     public init() {}
 
@@ -24,13 +26,43 @@ public final class AppBackgroundFlag: @unchecked Sendable {
         return background
     }
 
+    /// How many times the app has gone to the background since the process started (a real change to
+    /// background, not a repeated notification). Lets a reader tell "the same background stretch" from "a new one"
+    /// even when it was not looking in between.
+    public var backgroundEntryCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return entries
+    }
+
     /// Returns true when the value actually changed (a repeated notification returns false).
+    /// Observers are told after the lock is released, on the caller's thread, and only on a real change.
     @discardableResult
     public func set(isInBackground value: Bool) -> Bool {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         let changed = background != value
         background = value
+        if changed && value { entries += 1 }
+        let toNotify = changed ? Array(observers.values) : []
+        lock.unlock()
+        for observer in toNotify { observer(value) }
         return changed
+    }
+
+    /// Registers a handler called on every real change of the flag, on the thread that sets it (the main
+    /// thread in the app): keep it cheap and never block in it. Returns the id for `removeChangeObserver`.
+    /// The flag is process-wide, so whoever registers must remove the handler when it stops needing it.
+    public func addChangeObserver(_ handler: @escaping @Sendable (Bool) -> Void) -> UUID {
+        let id = UUID()
+        lock.lock()
+        observers[id] = handler
+        lock.unlock()
+        return id
+    }
+
+    public func removeChangeObserver(_ id: UUID) {
+        lock.lock()
+        observers.removeValue(forKey: id)
+        lock.unlock()
     }
 }
 

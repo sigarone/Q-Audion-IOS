@@ -46,7 +46,19 @@ import Foundation
 /// `SCORE_INTERVAL_MS` says caused real speech loss at a tighter interval
 /// on a live call. No reason to assume iOS's ONNX/CoreML path is cheaper.
 public final class ContactVoiceVerifier: @unchecked Sendable {
-    private static let scoreIntervalSeconds: Double = 3.0
+    static let scoreIntervalSeconds: Double = 3.0
+    /// Score period while the app is NOT in the foreground. The check keeps running, less often: a tick is the
+    /// heaviest recurring work of a call (CAM++ embedding plus the deepfake model), and a long run of it in the
+    /// background is what the system's CPU budget for background apps counts.
+    ///
+    /// Cost: every result that needs several consecutive ticks arrives later in proportion, not by one period.
+    /// The speaker-change detector counts samples (`SpeakerChangeDetector.defaultConfirmSamples`,
+    /// `baselineWindow`: it reports a suspect voice after about 2 samples and a changed one after about 4, and
+    /// learns its reference over 16), and the 3-band level of `ContactVoiceContinuityGate` is a moving average
+    /// over samples too. At 10 s per tick instead of 3 s that is roughly 20 s instead of 6 s for the first,
+    /// 40 s instead of 12 s for the second, and 160 s instead of 48 s to learn the reference. Back in the
+    /// foreground the period is 3 s again from that moment (`BackgroundAwareTimer` re-arms on the flag's change).
+    static let backgroundScoreIntervalSeconds: Double = 10.0
 
     /// Deepfake-classifier rolling window — the model wants ~4.04s
     /// (`DeepfakeClassifier.modelInputLength` samples @ 16kHz); shorter
@@ -98,7 +110,13 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private let scoreQueue = DispatchQueue(label: "com.bcrypto.qaudion.contactVoiceScore", qos: .utility)
     private let lock = NSLock()
     private var loadedContactId: String?
-    private var scoreTimer: DispatchSourceTimer?
+    private var scoreTimer: BackgroundAwareTimer?
+    private let backgroundFlag: AppBackgroundFlag
+    private let foregroundIntervalSeconds: Double
+    private let backgroundIntervalSeconds: Double
+    private let armTimer: BackgroundAwareTimer.Arm
+    /// Holds whole ticks back, in the background only, while the process uses too much CPU. nil = never.
+    private let governor: BackgroundCpuGovernor?
 
     /// Guards against a slow tick (ONNX inference stall) overlapping the
     /// next timer fire — ticks are skipped, never queued, matching this
@@ -182,13 +200,42 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     ///   AS-Norm scoring (mirrors Android's `VoicePrintBridgeImpl`-only
     ///   wiring — Tier 1's manual-enrollment-only verifiers stay on the
     ///   `nil` default).
-    public init(
+    public convenience init(
         embedder: CamPlusSpeakerEmbedder = .shared,
         store: VoiceprintStore = VoiceprintStore(),
         cohortNormalizer: SpeakerCohortNormalizer = .shared
     ) {
+        self.init(
+            embedder: embedder,
+            store: store,
+            cohortNormalizer: cohortNormalizer,
+            backgroundFlag: .shared,
+            foregroundIntervalSeconds: ContactVoiceVerifier.scoreIntervalSeconds,
+            backgroundIntervalSeconds: ContactVoiceVerifier.backgroundScoreIntervalSeconds,
+            armTimer: BackgroundAwareTimer.dispatchArm,
+            governor: BackgroundCpuGovernor(flag: .shared)
+        )
+    }
+
+    /// Same as the public initializer with the background state, both periods and the timer injected (tests).
+    /// The embedder is typed as the protocol so a test can pass a stand-in: the production path is the one above.
+    init(
+        embedder: any SpeakerEmbedding,
+        store: VoiceprintStore,
+        cohortNormalizer: SpeakerCohortNormalizer?,
+        backgroundFlag: AppBackgroundFlag,
+        foregroundIntervalSeconds: Double,
+        backgroundIntervalSeconds: Double,
+        armTimer: @escaping BackgroundAwareTimer.Arm,
+        governor: BackgroundCpuGovernor? = nil
+    ) {
         self.verifier = SpeakerVerifier(embedder: embedder, cohortNormalizer: cohortNormalizer)
         self.store = store
+        self.backgroundFlag = backgroundFlag
+        self.foregroundIntervalSeconds = foregroundIntervalSeconds
+        self.backgroundIntervalSeconds = backgroundIntervalSeconds
+        self.armTimer = armTimer
+        self.governor = governor
         speakerChange.onVerdictChanged = { [weak self] verdict in
             self?.onSpeakerChanged?(verdict)
         }
@@ -263,18 +310,47 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
 
     private func startTimerLocked() {
         guard loadedContactId != nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: scoreQueue)
-        timer.schedule(deadline: .now() + Self.scoreIntervalSeconds, repeating: Self.scoreIntervalSeconds)
-        timer.setEventHandler { [weak self] in
-            self?.runTick()
-        }
-        timer.resume()
+        let timer = BackgroundAwareTimer(
+            queue: scoreQueue,
+            flag: backgroundFlag,
+            foregroundSeconds: foregroundIntervalSeconds,
+            backgroundSeconds: backgroundIntervalSeconds,
+            arm: armTimer,
+            onCadence: { background, every in
+                // Printed through the stdout tee; the shape is pinned in scripts/test_ship_ios_display_vocab.py.
+                print(Self.cadenceLine(background: background, everySeconds: every))
+            },
+            handler: { [weak self] in self?.runTick() }
+        )
         scoreTimer = timer
+        timer.start()
     }
 
     private func stopTimerLocked() {
-        scoreTimer?.cancel()
+        scoreTimer?.stop()
         scoreTimer = nil
+    }
+
+    /// The period in force right now, for the log.
+    private var currentIntervalSeconds: Double {
+        backgroundFlag.isInBackground ? backgroundIntervalSeconds : foregroundIntervalSeconds
+    }
+
+    /// Blocks until everything queued on the scoring queue has run. Test use only.
+    internal func drainForTesting() {
+        scoreQueue.sync {}
+    }
+
+    /// One scoring pass, run on the scoring queue like a timer fire. Test use only.
+    internal func runTickForTesting() {
+        scoreQueue.sync { runTick() }
+    }
+
+    /// The log line for the check's active period: "[Voice] bg=1 every=10". Whole seconds only, built from words
+    /// the phone-log shipper already admits (checked against `scripts/ship-ios-logs.py`; see
+    /// `scripts/test_ship_ios_display_vocab.py`, keep both in sync).
+    static func cadenceLine(background: Bool, everySeconds: Double) -> String {
+        "[Voice] bg=\(background ? 1 : 0) every=\(Int(everySeconds.rounded()))"
     }
 
     private func resetRingLocked() {
@@ -307,6 +383,21 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private func runTick() {
         lock.lock()
         guard !tickInFlight else { lock.unlock(); return }
+        lock.unlock()
+
+        // CPU governor (background only, see `BackgroundCpuGovernor`). A tick held back ends here, before it
+        // touches anything: the voiceprint gate, the speaker-change monitor and the callbacks are not fed, so the
+        // last score stays what it was and no run of results is cut or advanced. `scoreQueue` is serial, so
+        // nothing else can set `tickInFlight` between the check above and the line below.
+        if let governor {
+            let decision = governor.decide()
+            if let summary = decision.summary {
+                print(summary.logLine(label: "Voice", everySeconds: currentIntervalSeconds))
+            }
+            guard decision.run else { return }
+        }
+
+        lock.lock()
         tickInFlight = true
         let window = snapshotRingLocked()
         lock.unlock()
