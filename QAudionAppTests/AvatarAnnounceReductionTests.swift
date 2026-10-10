@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 @testable import QAudionApp
 
-/// Ridurre traffico e riapplicazioni dell'avatar: la decisione di rinvio (`AvatarAnnouncePolicy`), il registro di cio' che e' stato
+/// Ridurre traffico e riapplicazioni dell'avatar: la decisione di invio (`AvatarAnnouncePolicy`), il registro di cio' che e' stato
 /// inviato (`AvatarSentLedger`), il controllo di completezza dei byte ricevuti (`AvatarImageIntegrity`) e l'applicazione di un avatar
 /// ricevuto (`AvatarInboundApplier`). Tutto puro: nessun Keychain, nessuna rete, nessun file vero; l'orologio e' un argomento e il
 /// registro usa un dominio `UserDefaults` privato.
@@ -11,113 +11,148 @@ import UIKit
 /// `.github/workflows/ios-app-tests.yml`.
 final class AvatarAnnouncePolicyTests: XCTestCase {
 
-    private let t0 = Date(timeIntervalSince1970: 3_000_000)
-    private let hour: TimeInterval = 3_600
+    private typealias Trigger = AvatarAnnounceCoordinator.Trigger
+    private let allChecks: [Trigger] = [.chatDecrypt, .callConnect, .keyExchange]
 
     private func decide(
-        _ trigger: AvatarAnnounceCoordinator.Trigger,
-        version: Int = 5,
-        priorVersion: Int = 5,
-        sentAgo: TimeInterval? = 60,
-        priorKey: String? = "AAAA",
-        key: String = "AAAA"
+        _ trigger: Trigger,
+        hash: String = "H1",
+        key: String = "AAAA",
+        prior: AvatarAnnouncePolicy.SentState? = AvatarAnnouncePolicy.SentState(contentHash: "H1", pairKey: "AAAA"),
+        callAge: TimeInterval? = nil,
+        requested: Bool = false
     ) -> AvatarAnnouncePolicy.Verdict {
-        let sentAt: Date? = sentAgo.map { t0.addingTimeInterval(-$0) }
-        return AvatarAnnouncePolicy.decide(
-            trigger: trigger, version: version, priorVersion: priorVersion, priorSentAt: sentAt,
-            priorPairKey: priorKey, currentPairKey: key, now: t0)
+        AvatarAnnouncePolicy.decide(
+            trigger: trigger, currentHash: hash, currentPairKey: key, prior: prior, callAgeSec: callAge, peerRequested: requested)
     }
 
-    // MARK: - lo scambio chiavi
+    // MARK: - non si invia per ripetizione
 
-    /// Il caso tipico: stessa versione, stessa chiave, il contatto ha gia' ricevuto l'avatar. Non si rimanda, qualunque
-    /// sia l'eta' dell'ultimo invio (il rinvio di auto-guarigione e' a carico degli altri trigger).
-    func testKeyExchangeWithSameVersionAndSameKeySendsNothing() {
-        XCTAssertEqual(decide(.keyExchange, sentAgo: 21), .skip(.pairKeyUnchanged))
-        XCTAssertEqual(decide(.keyExchange, sentAgo: 30 * 24 * hour), .skip(.pairKeyUnchanged))
+    /// Il caso tipico: stesso contenuto, stessa chiave, il contatto ha gia' l'avatar. Nessun momento di controllo (messaggio,
+    /// chiamata, scambio chiavi) invia, comunque si ripeta.
+    func testSameContentAndSameKeySendsNothingAtAnyCheck() {
+        for trigger in allChecks {
+            XCTAssertEqual(decide(trigger), .skip(.same), "\(trigger)")
+        }
     }
 
-    func testKeyExchangeWithChangedKeySendsEvenInsideTheCooldown() {
-        XCTAssertEqual(decide(.keyExchange, sentAgo: 21, key: "BBBB"), .send(.pairKeyChanged))
+    func testRepeatedChecksStaySilent() {
+        for _ in 0..<10 {
+            for trigger in allChecks { XCTAssertEqual(decide(trigger), .skip(.same)) }
+        }
     }
 
-    func testKeyExchangeAfterTheKeyDisappearedAndCameBackDifferentSends() {
-        XCTAssertEqual(decide(.keyExchange, priorKey: AvatarSentLedger.noPairKey, key: "BBBB"), .send(.pairKeyChanged))
-        XCTAssertEqual(decide(.keyExchange, priorKey: "AAAA", key: AvatarSentLedger.noPairKey), .send(.pairKeyChanged))
+    // MARK: - si invia quando serve
+
+    func testChangedContentSendsAtAnyCheck() {
+        for trigger in allChecks {
+            XCTAssertEqual(decide(trigger, hash: "H2"), .send(.changed), "\(trigger)")
+        }
     }
 
-    func testKeyExchangeWithNewerVersionSendsEvenWithSameKey() {
-        XCTAssertEqual(decide(.keyExchange, version: 6, priorVersion: 5), .send(.versionAhead))
+    func testNeverSentToThisContactSends() {
+        for trigger in allChecks {
+            XCTAssertEqual(decide(trigger, prior: nil), .send(.newPeerDevice), "\(trigger)")
+            XCTAssertEqual(decide(trigger, prior: AvatarAnnouncePolicy.SentState()), .send(.newPeerDevice), "\(trigger)")
+        }
     }
 
-    func testKeyExchangeToAContactThatNeverGotTheAvatarSends() {
-        XCTAssertEqual(decide(.keyExchange, priorVersion: -1, sentAgo: nil, priorKey: nil), .send(.versionAhead))
+    /// Un contatto che reinstalla rifa' lo scambio chiavi: la chiave a coppia cambia e l'avatar va rimandato anche se il contenuto e' lo stesso.
+    func testChangedPairKeySendsEvenWithSameContent() {
+        for trigger in allChecks {
+            XCTAssertEqual(decide(trigger, key: "BBBB"), .send(.newPeerDevice), "\(trigger)")
+        }
     }
 
-    /// Un invio fatto prima che si registrasse la chiave non si riconosce come "invariato": decide solo il cooldown, cosi'
-    /// all'aggiornamento non parte un rinvio a tutti i contatti.
-    func testKeyExchangeWithNoRecordedKeyFallsBackToTheCooldown() {
-        XCTAssertEqual(decide(.keyExchange, sentAgo: hour, priorKey: nil), .skip(.withinCooldown))
-        XCTAssertEqual(decide(.keyExchange, sentAgo: 6 * hour, priorKey: nil), .send(.cooldownElapsed))
+    /// Senza una chiave dello scambio chiavi (contatto raggiunto solo con la chiave di una chiamata) la chiave non e' un segnale.
+    func testMissingPairKeyIsNotASignal() {
+        let none = AvatarSentLedger.noPairKey
+        XCTAssertEqual(decide(.keyExchange, key: "BBBB", prior: AvatarAnnouncePolicy.SentState(contentHash: "H1", pairKey: none)), .skip(.same))
+        XCTAssertEqual(decide(.keyExchange, key: none, prior: AvatarAnnouncePolicy.SentState(contentHash: "H1", pairKey: "AAAA")), .skip(.same))
+        XCTAssertEqual(decide(.keyExchange, key: "BBBB", prior: AvatarAnnouncePolicy.SentState(contentHash: "H1", pairKey: nil)), .skip(.same))
+        XCTAssertEqual(decide(.keyExchange, key: none, prior: AvatarAnnouncePolicy.SentState(contentHash: "H1", pairKey: none)), .skip(.same))
     }
 
-    // MARK: - il cooldown
-
-    func testCooldownValues() {
-        XCTAssertEqual(AvatarAnnouncePolicy.cooldownSec(for: .callConnect), 6 * hour)
-        XCTAssertEqual(AvatarAnnouncePolicy.cooldownSec(for: .keyExchange), 6 * hour)
-        XCTAssertEqual(AvatarAnnouncePolicy.cooldownSec(for: .chatDecrypt), hour)
-        XCTAssertEqual(AvatarAnnouncePolicy.cooldownSec(for: .avatarChanged), 0)
-    }
-
-    func testCallConnectRespectsTheNewCooldownAtItsEdges() {
-        XCTAssertEqual(decide(.callConnect, sentAgo: 120), .skip(.withinCooldown))
-        XCTAssertEqual(decide(.callConnect, sentAgo: 6 * hour - 1), .skip(.withinCooldown))
-        XCTAssertEqual(decide(.callConnect, sentAgo: 6 * hour), .send(.cooldownElapsed))
-        XCTAssertEqual(decide(.callConnect, sentAgo: 7 * hour), .send(.cooldownElapsed))
-    }
-
-    func testCallConnectWithChangedKeySendsInsideTheCooldown() {
-        XCTAssertEqual(decide(.callConnect, sentAgo: 120, key: "BBBB"), .send(.pairKeyChanged))
-    }
-
-    func testCallConnectToAContactWithNoSendTimeSends() {
-        XCTAssertEqual(decide(.callConnect, sentAgo: nil), .send(.cooldownElapsed))
-    }
-
-    func testChatDecryptKeepsItsOwnHourlyCooldown() {
-        XCTAssertEqual(decide(.chatDecrypt, sentAgo: hour - 1), .skip(.withinCooldown))
-        XCTAssertEqual(decide(.chatDecrypt, sentAgo: hour), .send(.cooldownElapsed))
-    }
-
+    /// Azione esplicita: la foto cambiata invia sempre, anche con gli stessi byte (la foto scelta di nuovo) e nei primi secondi di una chiamata.
     func testAvatarChangedAlwaysSends() {
-        XCTAssertEqual(decide(.avatarChanged, sentAgo: 1), .send(.noCooldown))
-        XCTAssertEqual(decide(.avatarChanged, version: 6, priorVersion: 5, sentAgo: 1), .send(.versionAhead))
+        XCTAssertEqual(decide(.avatarChanged), .send(.changed))
+        XCTAssertEqual(decide(.avatarChanged, callAge: 5), .send(.changed))
+        XCTAssertEqual(decide(.avatarChanged, prior: nil), .send(.changed))
     }
 
-    /// Il ciclo di una chiamata, come lo guida il coordinatore: registro e orologio iniettato. Alla connessione si invia; allo
-    /// scambio chiavi 21 s dopo la fine non si rimanda; alla chiamata dopo (un'ora dopo) non si rimanda; sei ore dopo si'.
-    func testACallCycleSendsOnceThenWaitsForTheCooldown() throws {
+    // MARK: - guardia dell'inizio chiamata
+
+    func testNothingIsSentInTheFirstSecondsOfACall() {
+        for trigger in allChecks {
+            XCTAssertEqual(decide(trigger, hash: "H2", callAge: 0), .skip(.callGuard), "\(trigger)")
+            XCTAssertEqual(decide(trigger, prior: nil, callAge: 25), .skip(.callGuard), "\(trigger)")
+            XCTAssertEqual(decide(trigger, key: "BBBB", callAge: 89.9), .skip(.callGuard), "\(trigger)")
+        }
+    }
+
+    func testTheGuardEndsAtItsLimit() {
+        XCTAssertEqual(AvatarAnnouncePolicy.callGuardSec, 90)
+        XCTAssertEqual(decide(.callConnect, hash: "H2", callAge: 90), .send(.changed))
+        XCTAssertEqual(decide(.callConnect, hash: "H2", callAge: 3_600), .send(.changed))
+        XCTAssertEqual(decide(.callConnect, callAge: 90), .skip(.same))
+    }
+
+    func testTheGuardAppliesEvenWhenNothingWouldBeSent() {
+        XCTAssertEqual(decide(.callConnect, callAge: 10), .skip(.callGuard))
+    }
+
+    // MARK: - punto d'ingresso del segnale "all'altro manca"
+
+    func testPeerRequestSendsOutsideTheGuardOnly() {
+        XCTAssertEqual(decide(.chatDecrypt, requested: true), .send(.requested))
+        XCTAssertEqual(decide(.chatDecrypt, requested: true, callAge: 10), .skip(.callGuard))
+        XCTAssertEqual(decide(.chatDecrypt, requested: false), .skip(.same))
+    }
+
+    // MARK: - codici del log
+
+    func testCodesMatchTheLogVocabulary() {
+        XCTAssertEqual(AvatarAnnouncePolicy.SendCause.changed.rawValue, 1)
+        XCTAssertEqual(AvatarAnnouncePolicy.SendCause.newPeerDevice.rawValue, 2)
+        XCTAssertEqual(AvatarAnnouncePolicy.SendCause.requested.rawValue, 3)
+        XCTAssertEqual(AvatarAnnouncePolicy.SkipCause.same.rawValue, 4)
+        XCTAssertEqual(AvatarAnnouncePolicy.SkipCause.callGuard.rawValue, 5)
+    }
+
+    // MARK: - una sequenza di chiamate, come la guida il coordinatore
+
+    /// Registro vero (dominio privato) e stessa sequenza del coordinatore: la prima volta si invia, poi sei chiamate (con i loro due
+    /// controlli ciascuna) non inviano; contenuto nuovo e chiave nuova inviano.
+    func testManyCallsSendOnce() throws {
         let suite = "avatar-reduction-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
         let ledger = AvatarSentLedger(defaults: defaults)
         let peer = "11111111-2222-3333-4444-555555555555"
+        let avatarA = Data([1, 2, 3])
+        let avatarB = Data([4, 5, 6])
 
-        func verdict(_ trigger: AvatarAnnounceCoordinator.Trigger, at now: Date, key: String = "AAAA") -> AvatarAnnouncePolicy.Verdict {
-            AvatarAnnouncePolicy.decide(
-                trigger: trigger, version: 5, priorVersion: ledger.lastVersionSent(toPeer: peer),
-                priorSentAt: ledger.lastSentAt(toPeer: peer), priorPairKey: ledger.lastPairKey(toPeer: peer),
-                currentPairKey: key, now: now)
+        func check(_ trigger: Trigger, _ bytes: Data, key: String = "AAAA") -> AvatarAnnouncePolicy.Verdict {
+            let hash = AvatarContentHash.hex(of: bytes)
+            let verdict = AvatarAnnouncePolicy.decide(
+                trigger: trigger, currentHash: hash, currentPairKey: key, prior: ledger.sentState(toPeer: peer), callAgeSec: nil)
+            if case .send = verdict {
+                ledger.markSent(version: 1, contentHash: hash, pairKey: key, toPeer: peer, at: Date(timeIntervalSince1970: 1))
+            }
+            return verdict
         }
 
-        XCTAssertEqual(verdict(.callConnect, at: t0), .send(.versionAhead))
-        ledger.markSent(version: 5, pairKey: "AAAA", toPeer: peer, at: t0)
-
-        XCTAssertEqual(verdict(.keyExchange, at: t0.addingTimeInterval(21 + 600)), .skip(.pairKeyUnchanged))
-        XCTAssertEqual(verdict(.callConnect, at: t0.addingTimeInterval(hour)), .skip(.withinCooldown))
-        XCTAssertEqual(verdict(.callConnect, at: t0.addingTimeInterval(6 * hour)), .send(.cooldownElapsed))
-        XCTAssertEqual(verdict(.keyExchange, at: t0.addingTimeInterval(hour), key: "BBBB"), .send(.pairKeyChanged))
+        XCTAssertEqual(check(.callConnect, avatarA), .send(.newPeerDevice))
+        var sends = 0
+        for _ in 0..<6 {
+            for trigger in [Trigger.callConnect, .keyExchange] {
+                if case .send = check(trigger, avatarA) { sends += 1 }
+            }
+        }
+        XCTAssertEqual(sends, 0)
+        XCTAssertEqual(check(.chatDecrypt, avatarB), .send(.changed))
+        XCTAssertEqual(check(.keyExchange, avatarB), .skip(.same))
+        XCTAssertEqual(check(.keyExchange, avatarB, key: "BBBB"), .send(.newPeerDevice))
     }
 }
 
@@ -134,36 +169,52 @@ final class AvatarSentLedgerTests: XCTestCase {
         let (ledger, _) = try makeLedger()
         XCTAssertEqual(ledger.lastVersionSent(toPeer: "p"), -1)
         XCTAssertNil(ledger.lastSentAt(toPeer: "p"))
-        XCTAssertNil(ledger.lastPairKey(toPeer: "p"))
+        XCTAssertEqual(ledger.sentState(toPeer: "p"), AvatarAnnouncePolicy.SentState())
     }
 
-    func testMarkSentRecordsVersionTimeAndKeyPerPeer() throws {
+    func testMarkSentRecordsHashKeyVersionAndTimePerPeer() throws {
         let (ledger, _) = try makeLedger()
         let at = Date(timeIntervalSince1970: 4_000_000)
-        ledger.markSent(version: 7, pairKey: "AAAA", toPeer: "p", at: at)
-        ledger.markSent(version: 3, pairKey: "BBBB", toPeer: "q", at: at.addingTimeInterval(10))
+        ledger.markSent(version: 7, contentHash: "H1", pairKey: "AAAA", toPeer: "p", at: at)
+        ledger.markSent(version: 3, contentHash: "H2", pairKey: "BBBB", toPeer: "q", at: at.addingTimeInterval(10))
         XCTAssertEqual(ledger.lastVersionSent(toPeer: "p"), 7)
         XCTAssertEqual(ledger.lastSentAt(toPeer: "p"), at)
-        XCTAssertEqual(ledger.lastPairKey(toPeer: "p"), "AAAA")
-        XCTAssertEqual(ledger.lastVersionSent(toPeer: "q"), 3)
-        XCTAssertEqual(ledger.lastPairKey(toPeer: "q"), "BBBB")
+        XCTAssertEqual(ledger.sentState(toPeer: "p"), .init(contentHash: "H1", pairKey: "AAAA"))
+        XCTAssertEqual(ledger.sentState(toPeer: "q"), .init(contentHash: "H2", pairKey: "BBBB"))
     }
 
-    /// Lo stato scritto prima di questa modifica (solo versione e ora, con le stesse chiavi) resta valido e non ha una chiave.
-    func testStateWrittenBeforeTheKeyWasRecordedIsStillRead() throws {
+    func testMarkSentOverwritesHashAndKey() throws {
+        let (ledger, _) = try makeLedger()
+        ledger.markSent(version: 7, contentHash: "H1", pairKey: "AAAA", toPeer: "p", at: Date(timeIntervalSince1970: 1))
+        ledger.markSent(version: 8, contentHash: "H2", pairKey: "BBBB", toPeer: "p", at: Date(timeIntervalSince1970: 2))
+        XCTAssertEqual(ledger.sentState(toPeer: "p"), .init(contentHash: "H2", pairKey: "BBBB"))
+    }
+
+    /// Lo stato scritto prima di questa modifica (solo versione e ora, con le stesse chiavi) resta leggibile e non ha impronta.
+    func testStateWrittenBeforeTheHashWasRecordedIsStillRead() throws {
         let (ledger, defaults) = try makeLedger()
         defaults.set(["p": 4], forKey: AvatarSentLedger.versionsKey)
         defaults.set(["p": 5_000_000.0], forKey: AvatarSentLedger.sentAtKey)
         XCTAssertEqual(ledger.lastVersionSent(toPeer: "p"), 4)
         XCTAssertEqual(ledger.lastSentAt(toPeer: "p"), Date(timeIntervalSince1970: 5_000_000))
-        XCTAssertNil(ledger.lastPairKey(toPeer: "p"))
+        XCTAssertEqual(ledger.sentState(toPeer: "p"), AvatarAnnouncePolicy.SentState())
     }
 
-    func testMarkSentOverwritesTheKey() throws {
+    func testAdoptBaselineKeepsVersionAndTime() throws {
+        let (ledger, defaults) = try makeLedger()
+        defaults.set(["p": 4], forKey: AvatarSentLedger.versionsKey)
+        defaults.set(["p": 5_000_000.0], forKey: AvatarSentLedger.sentAtKey)
+        ledger.adoptBaseline(contentHash: "H1", pairKey: "AAAA", toPeer: "p")
+        XCTAssertEqual(ledger.sentState(toPeer: "p"), .init(contentHash: "H1", pairKey: "AAAA"))
+        XCTAssertEqual(ledger.lastVersionSent(toPeer: "p"), 4)
+        XCTAssertEqual(ledger.lastSentAt(toPeer: "p"), Date(timeIntervalSince1970: 5_000_000))
+    }
+
+    func testRecordPairKeyLeavesTheHashAlone() throws {
         let (ledger, _) = try makeLedger()
-        ledger.markSent(version: 7, pairKey: "AAAA", toPeer: "p", at: Date(timeIntervalSince1970: 1))
-        ledger.markSent(version: 7, pairKey: "BBBB", toPeer: "p", at: Date(timeIntervalSince1970: 2))
-        XCTAssertEqual(ledger.lastPairKey(toPeer: "p"), "BBBB")
+        ledger.markSent(version: 7, contentHash: "H1", pairKey: AvatarSentLedger.noPairKey, toPeer: "p", at: Date(timeIntervalSince1970: 1))
+        ledger.recordPairKey("AAAA", toPeer: "p")
+        XCTAssertEqual(ledger.sentState(toPeer: "p"), .init(contentHash: "H1", pairKey: "AAAA"))
     }
 
     func testPairKeyIdIsAShortPrefixOfTheFingerprint() {
@@ -183,6 +234,21 @@ final class AvatarSentLedgerTests: XCTestCase {
     func testPairKeyIdOfNoEntryIsTheNoKeyMarker() {
         XCTAssertEqual(AvatarSentLedger.pairKeyId(fingerprint: nil), AvatarSentLedger.noPairKey)
         XCTAssertEqual(AvatarSentLedger.pairKeyId(fingerprint: ""), AvatarSentLedger.noPairKey)
+    }
+}
+
+final class AvatarContentHashTests: XCTestCase {
+
+    func testKnownSha256Vector() {
+        XCTAssertEqual(
+            AvatarContentHash.hex(of: Data("abc".utf8)),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
+    func testDifferentBytesGiveDifferentHashes() {
+        XCTAssertNotEqual(AvatarContentHash.hex(of: Data([1, 2, 3])), AvatarContentHash.hex(of: Data([1, 2, 4])))
+        XCTAssertEqual(AvatarContentHash.hex(of: Data([1, 2, 3])), AvatarContentHash.hex(of: Data([1, 2, 3])))
+        XCTAssertEqual(AvatarContentHash.hex(of: Data()).count, 64)
     }
 }
 
@@ -454,5 +520,29 @@ final class AvatarInboundApplierTests: XCTestCase {
         XCTAssertTrue(rig.versionsRegistered.isEmpty)
         XCTAssertEqual(rig.refreshes, 0)
         XCTAssertEqual(rig.cached, 9)
+    }
+}
+
+final class AvatarImageGeometryTests: XCTestCase {
+
+    private func jpeg(width: CGFloat, height: CGFloat) throws -> Data {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return try XCTUnwrap(image.jpegData(compressionQuality: 0.8))
+    }
+
+    func testLongAndShortSidesOfALandscapeAndAPortraitPicture() throws {
+        XCTAssertEqual(AvatarImageGeometry.measure(try jpeg(width: 64, height: 32)), AvatarImageGeometry.Size(longSide: 64, shortSide: 32))
+        XCTAssertEqual(AvatarImageGeometry.measure(try jpeg(width: 32, height: 64)), AvatarImageGeometry.Size(longSide: 64, shortSide: 32))
+        XCTAssertEqual(AvatarImageGeometry.measure(try jpeg(width: 40, height: 40)), AvatarImageGeometry.Size(longSide: 40, shortSide: 40))
+    }
+
+    func testNotAPictureHasNoSize() {
+        XCTAssertNil(AvatarImageGeometry.measure(Data([1, 2, 3, 4])))
+        XCTAssertNil(AvatarImageGeometry.measure(Data()))
     }
 }
