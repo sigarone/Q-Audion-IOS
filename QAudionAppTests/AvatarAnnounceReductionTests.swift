@@ -20,10 +20,12 @@ final class AvatarAnnouncePolicyTests: XCTestCase {
         key: String = "AAAA",
         prior: AvatarAnnouncePolicy.SentState? = AvatarAnnouncePolicy.SentState(contentHash: "H1", pairKey: "AAAA"),
         callAge: TimeInterval? = nil,
+        lastAttempt: TimeInterval? = nil,
         requested: Bool = false
     ) -> AvatarAnnouncePolicy.Verdict {
         AvatarAnnouncePolicy.decide(
-            trigger: trigger, currentHash: hash, currentPairKey: key, prior: prior, callAgeSec: callAge, peerRequested: requested)
+            trigger: trigger, currentHash: hash, currentPairKey: key, prior: prior, callAgeSec: callAge,
+            lastAttemptAgeSec: lastAttempt, peerRequested: requested)
     }
 
     // MARK: - non si invia per ripetizione
@@ -101,6 +103,33 @@ final class AvatarAnnouncePolicyTests: XCTestCase {
         XCTAssertEqual(decide(.callConnect, callAge: 10), .skip(.callGuard))
     }
 
+    // MARK: - freno anti-raffica
+
+    func testASendIsHeldBackRightAfterAnAttempt() {
+        for trigger in allChecks {
+            XCTAssertEqual(decide(trigger, hash: "H2", lastAttempt: 0), .skip(.brake), "\(trigger)")
+            XCTAssertEqual(decide(trigger, prior: nil, lastAttempt: 119.9), .skip(.brake), "\(trigger)")
+            XCTAssertEqual(decide(trigger, key: "BBBB", lastAttempt: 60), .skip(.brake), "\(trigger)")
+        }
+    }
+
+    func testTheBrakeEndsAtItsLimit() {
+        XCTAssertEqual(AvatarAnnouncePolicy.attemptBrakeSec, 120)
+        XCTAssertEqual(decide(.chatDecrypt, hash: "H2", lastAttempt: 120), .send(.changed))
+        XCTAssertEqual(decide(.chatDecrypt, hash: "H2", lastAttempt: nil), .send(.changed))
+    }
+
+    /// Il freno non e' un criterio: se non c'e' nulla da inviare il motivo resta "uguale", e un avatar uguale non parte mai.
+    func testTheBrakeNeverMakesSomethingSendThatWasNotNeeded() {
+        XCTAssertEqual(decide(.chatDecrypt, lastAttempt: 0), .skip(.same))
+        XCTAssertEqual(decide(.chatDecrypt, lastAttempt: 100_000), .skip(.same))
+    }
+
+    func testThePickedPhotoIgnoresTheBrakeAndTheGuardWinsOverIt() {
+        XCTAssertEqual(decide(.avatarChanged, lastAttempt: 1), .send(.changed))
+        XCTAssertEqual(decide(.callConnect, hash: "H2", callAge: 10, lastAttempt: 5), .skip(.callGuard))
+    }
+
     // MARK: - punto d'ingresso del segnale "all'altro manca"
 
     func testPeerRequestSendsOutsideTheGuardOnly() {
@@ -115,8 +144,9 @@ final class AvatarAnnouncePolicyTests: XCTestCase {
         XCTAssertEqual(AvatarAnnouncePolicy.SendCause.changed.rawValue, 1)
         XCTAssertEqual(AvatarAnnouncePolicy.SendCause.newPeerDevice.rawValue, 2)
         XCTAssertEqual(AvatarAnnouncePolicy.SendCause.requested.rawValue, 3)
-        XCTAssertEqual(AvatarAnnouncePolicy.SkipCause.same.rawValue, 4)
-        XCTAssertEqual(AvatarAnnouncePolicy.SkipCause.callGuard.rawValue, 5)
+        XCTAssertEqual(AvatarAnnouncePolicy.SkipCause.same.code, 4)
+        XCTAssertEqual(AvatarAnnouncePolicy.SkipCause.callGuard.code, 5)
+        XCTAssertEqual(AvatarAnnouncePolicy.SkipCause.brake.code, 5)
     }
 
     // MARK: - una sequenza di chiamate, come la guida il coordinatore
@@ -249,6 +279,282 @@ final class AvatarContentHashTests: XCTestCase {
         XCTAssertNotEqual(AvatarContentHash.hex(of: Data([1, 2, 3])), AvatarContentHash.hex(of: Data([1, 2, 4])))
         XCTAssertEqual(AvatarContentHash.hex(of: Data([1, 2, 3])), AvatarContentHash.hex(of: Data([1, 2, 3])))
         XCTAssertEqual(AvatarContentHash.hex(of: Data()).count, 64)
+    }
+}
+
+/// Il coordinatore con orologio, chiave a coppia, file dell'avatar e invio finti: i casi della politica visti dal punto in cui si
+/// decide (registro vero su un dominio `UserDefaults` privato, nessuna rete, nessun Keychain).
+@MainActor
+final class AvatarAnnounceCoordinatorTests: XCTestCase {
+
+    private let peer = "11111111-2222-3333-4444-555555555555"
+
+    @MainActor
+    private final class Rig {
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        var version = 1_700_000_000
+        var pairKey = "AAAA"
+        var outcome: FileV2AvatarSender.Outcome = .sent
+        var onSleep: (() -> Void)?
+        private(set) var sent: [URL] = []
+        private(set) var slept: [TimeInterval] = []
+        let directory: URL
+        let defaults: UserDefaults
+        let suite: String
+        var coordinator: AvatarAnnounceCoordinator!
+
+        init() throws {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("avatar-coordinator-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let suiteName = "avatar-coordinator-tests-\(UUID().uuidString)"
+            directory = folder
+            suite = suiteName
+            defaults = UserDefaults(suiteName: suiteName) ?? .standard
+            coordinator = AvatarAnnounceCoordinator(
+                appState: nil,
+                selfAvatarVersion: { [unowned self] in self.version },
+                selfAvatarFile: { [unowned self] in
+                    let url = self.directory.appendingPathComponent("self.jpg")
+                    return FileManager.default.fileExists(atPath: url.path) ? url : nil
+                },
+                sendAvatar: { [unowned self] url, _ in
+                    self.sent.append(url)
+                    return self.outcome
+                },
+                sleep: { [unowned self] seconds in
+                    self.slept.append(seconds)
+                    self.clock = self.clock.addingTimeInterval(seconds)
+                    self.onSleep?()
+                },
+                ledger: AvatarSentLedger(defaults: defaults),
+                now: { [unowned self] in self.clock },
+                pairKeyId: { [unowned self] _ in self.pairKey })
+        }
+
+        var ledger: AvatarSentLedger { AvatarSentLedger(defaults: defaults) }
+
+        func setAvatar(_ bytes: Data) throws {
+            try bytes.write(to: directory.appendingPathComponent("self.jpg"))
+        }
+
+        func advance(_ seconds: TimeInterval) { clock = clock.addingTimeInterval(seconds) }
+
+        func tearDown() {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: suite)
+        }
+    }
+
+    private func makeRig() throws -> Rig {
+        let rig = try Rig()
+        addTeardownBlock { rig.tearDown() }
+        return rig
+    }
+
+    private let avatarA = Data([1, 2, 3, 4])
+    private let avatarB = Data([5, 6, 7, 8])
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<60 where !condition() { try await Task.sleep(nanoseconds: 50_000_000) }
+    }
+
+    // MARK: - primo invio, invariato, cambiato
+
+    func testFirstSendNeverDeliveredBeforeSendsAndRecordsTheContent() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        XCTAssertEqual(rig.sent.count, 1)
+        XCTAssertEqual(rig.ledger.sentState(toPeer: peer), .init(contentHash: AvatarContentHash.hex(of: avatarA), pairKey: "AAAA"))
+    }
+
+    func testAnUnchangedAvatarIsNotSentAgainAtAnyCheck() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        for trigger in [AvatarAnnounceCoordinator.Trigger.keyExchange, .chatDecrypt, .callConnect, .keyExchange] {
+            rig.advance(3_600)
+            await rig.coordinator.announce(to: peer, trigger: trigger)
+        }
+        XCTAssertEqual(rig.sent.count, 1)
+    }
+
+    func testAChangedAvatarIsSent() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        try rig.setAvatar(avatarB)
+        rig.advance(300)
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        XCTAssertEqual(rig.sent.count, 2)
+        XCTAssertEqual(rig.ledger.sentState(toPeer: peer).contentHash, AvatarContentHash.hex(of: avatarB))
+    }
+
+    func testTheUserPickingAPhotoAlwaysSends() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        await rig.coordinator.announce(to: peer, trigger: .avatarChanged)
+        XCTAssertEqual(rig.sent.count, 2)
+    }
+
+    // MARK: - scambio chiavi
+
+    /// Il contatto ha reinstallato: la chiave a coppia e' un'altra, e l'avatar torna a partire anche se il contenuto e' lo stesso.
+    func testAKeyExchangeThatChangedThePairKeyResends() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        rig.pairKey = "BBBB"
+        rig.advance(300)
+        await rig.coordinator.announce(to: peer, trigger: .keyExchange)
+        XCTAssertEqual(rig.sent.count, 2)
+        XCTAssertEqual(rig.ledger.sentState(toPeer: peer).pairKey, "BBBB")
+    }
+
+    /// Lo scambio di fine chiamata rigenera la stessa chiave: non azzera nulla.
+    func testAKeyExchangeWithTheSamePairKeyDoesNotResend() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        rig.advance(300)
+        await rig.coordinator.announce(to: peer, trigger: .keyExchange)
+        XCTAssertEqual(rig.sent.count, 1)
+    }
+
+    // MARK: - fallimenti e freno
+
+    func testAFailedSendIsNotRecordedAndTheBrakeStopsABurst() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.outcome = .failed(code: "announce_not_sent")
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        XCTAssertEqual(rig.sent.count, 1)
+        XCTAssertNil(rig.ledger.sentState(toPeer: peer).contentHash, "a send that did not go out is not recorded")
+        for _ in 0..<5 {
+            rig.advance(10)
+            await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        }
+        XCTAssertEqual(rig.sent.count, 1, "no burst while the brake is on")
+        rig.advance(AvatarAnnouncePolicy.attemptBrakeSec)
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        XCTAssertEqual(rig.sent.count, 2, "tried again once the brake is over")
+        rig.outcome = .sent
+        rig.advance(AvatarAnnouncePolicy.attemptBrakeSec)
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        XCTAssertEqual(rig.sent.count, 3)
+        XCTAssertEqual(rig.ledger.sentState(toPeer: peer).contentHash, AvatarContentHash.hex(of: avatarA))
+        rig.advance(AvatarAnnouncePolicy.attemptBrakeSec)
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        XCTAssertEqual(rig.sent.count, 3, "recorded now: nothing more to send")
+    }
+
+    func testNoChannelIsNotRecordedEither() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.outcome = .noChannel
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        XCTAssertNil(rig.ledger.sentState(toPeer: peer).contentHash)
+        XCTAssertEqual(rig.ledger.lastVersionSent(toPeer: peer), -1)
+        rig.outcome = .sent
+        rig.advance(AvatarAnnouncePolicy.attemptBrakeSec)
+        await rig.coordinator.announce(to: peer, trigger: .keyExchange)
+        XCTAssertEqual(rig.sent.count, 2)
+        XCTAssertNotNil(rig.ledger.sentState(toPeer: peer).contentHash)
+    }
+
+    func testTheBrakeDoesNotHoldBackThePhotoTheUserJustPicked() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.outcome = .failed(code: "x")
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        rig.advance(5)
+        await rig.coordinator.announce(to: peer, trigger: .avatarChanged)
+        XCTAssertEqual(rig.sent.count, 2)
+    }
+
+    // MARK: - niente da inviare
+
+    func testNothingIsSentWithoutASelfAvatar() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.version = 0
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        XCTAssertTrue(rig.sent.isEmpty)
+    }
+
+    func testNothingIsSentWhenTheLocalFileIsMissing() async throws {
+        let rig = try makeRig()
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        XCTAssertTrue(rig.sent.isEmpty)
+    }
+
+    /// Stato scritto prima che si registrasse l'impronta (solo versione e ora): stesso avatar, non si rimanda a tutti all'aggiornamento.
+    func testStateFromBeforeTheHashWasRecordedIsAdoptedWithoutSending() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.defaults.set([peer: rig.version], forKey: AvatarSentLedger.versionsKey)
+        rig.defaults.set([peer: 1_799_000_000.0], forKey: AvatarSentLedger.sentAtKey)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        XCTAssertTrue(rig.sent.isEmpty)
+        XCTAssertEqual(rig.ledger.sentState(toPeer: peer), .init(contentHash: AvatarContentHash.hex(of: avatarA), pairKey: "AAAA"))
+        // And a later change is still seen.
+        try rig.setAvatar(avatarB)
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        XCTAssertEqual(rig.sent.count, 1)
+    }
+
+    func testTwoContactsAreIndependent() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        await rig.coordinator.announce(to: "99999999-2222-3333-4444-555555555555", trigger: .callConnect)
+        XCTAssertEqual(rig.sent.count, 2)
+    }
+
+    // MARK: - guardia dell'inizio chiamata
+
+    func testNothingGoesOutInTheFirstSecondsOfACallAndIsCheckedAgainAtTheEndOfTheGuard() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.coordinator.noteCall(active: true)
+        rig.advance(25)
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        XCTAssertTrue(rig.sent.isEmpty, "inside the guard")
+        try await waitUntil { !rig.sent.isEmpty }
+        XCTAssertEqual(rig.sent.count, 1, "sent when the guard ended, the call being still on")
+        XCTAssertEqual(rig.slept, [AvatarAnnouncePolicy.callGuardSec - 25 + 1])
+    }
+
+    func testTheCheckAtTheEndOfTheGuardIsDroppedIfTheCallIsOver() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.coordinator.noteCall(active: true)
+        rig.advance(25)
+        rig.onSleep = { [unowned rig] in rig.coordinator.noteCall(active: false) }
+        await rig.coordinator.announce(to: peer, trigger: .callConnect)
+        try await waitUntil { !rig.slept.isEmpty }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(rig.sent.isEmpty, "the key exchange that follows a call checks again, not this")
+    }
+
+    func testThePickedPhotoGoesOutEvenInTheFirstSecondsOfACall() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.coordinator.noteCall(active: true)
+        await rig.coordinator.announce(to: peer, trigger: .avatarChanged)
+        XCTAssertEqual(rig.sent.count, 1)
+    }
+
+    func testTheGuardKeepsTheStartOfTheCallAcrossStateChangesThatAreStillActive() async throws {
+        let rig = try makeRig()
+        try rig.setAvatar(avatarA)
+        rig.coordinator.noteCall(active: true)
+        rig.advance(60)
+        rig.coordinator.noteCall(active: true)
+        rig.advance(40)
+        await rig.coordinator.announce(to: peer, trigger: .chatDecrypt)
+        XCTAssertEqual(rig.sent.count, 1, "100 s since the first active state, not 40")
     }
 }
 

@@ -83,7 +83,16 @@ final class AvatarAnnounceCoordinator {
         }
     }
 
-    private unowned let appState: AppState
+    /// Only the receive side and the default send closure need the app; the send side works on the closures below, so it can be
+    /// driven without one.
+    private weak var appState: AppState?
+    private let selfAvatarVersion: () -> Int
+    private let selfAvatarFile: () -> URL?
+    private let sendAvatar: (URL, String) async -> FileV2AvatarSender.Outcome
+    /// Waits `seconds` (the real one sleeps; a test advances its clock instead).
+    private let sleep: (TimeInterval) async -> Void
+    /// When the last send attempt to each contact ended, successful or not: the brake against bursts.
+    private var lastAttemptAt: [String: Date] = [:]
     /// What already left the device, per contact (content hash, pair key, version, time).
     private let ledger: AvatarSentLedger
     /// Injectable clock and pair-key reader, so the decision is testable.
@@ -100,13 +109,33 @@ final class AvatarAnnounceCoordinator {
     private var sendChain: [String: Task<Void, Never>] = [:]
     private var receiveChain: [String: Task<Void, Never>] = [:]
 
+    convenience init(appState: AppState) {
+        self.init(
+            appState: appState,
+            selfAvatarVersion: { [unowned appState] in appState.selfAvatarVersion },
+            selfAvatarFile: { AvatarUploader.selfAvatarCacheURL },
+            sendAvatar: { [unowned appState] url, peerId in
+                await FileV2AvatarSender.send(avatarFile: url, to: peerId, appState: appState)
+            })
+    }
+
     init(
-        appState: AppState,
+        appState: AppState?,
+        selfAvatarVersion: @escaping () -> Int,
+        selfAvatarFile: @escaping () -> URL?,
+        sendAvatar: @escaping (URL, String) async -> FileV2AvatarSender.Outcome,
+        sleep: @escaping (TimeInterval) async -> Void = { seconds in
+            _ = try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        },
         ledger: AvatarSentLedger = AvatarSentLedger(),
         now: @escaping () -> Date = { Date() },
         pairKeyId: @escaping (String) -> String = { AvatarSentLedger.vaultPairKeyId(peerId: $0) }
     ) {
         self.appState = appState
+        self.selfAvatarVersion = selfAvatarVersion
+        self.selfAvatarFile = selfAvatarFile
+        self.sendAvatar = sendAvatar
+        self.sleep = sleep
         self.ledger = ledger
         self.now = now
         self.pairKeyId = pairKeyId
@@ -160,7 +189,7 @@ final class AvatarAnnounceCoordinator {
     private func performAnnounce(to peerId: String, trigger: Trigger) async {
         let peer8 = String(peerId.prefix(8))
         let trigCode = trigger.code
-        let version = appState.selfAvatarVersion
+        let version = selfAvatarVersion()
         // W-AVATARSHIP2 (2026-08-02): these two skip lines were `.debug`, and
         // the device→Loki pipeline ships zero DEBUG records in practice (104
         // records across a full call: 103 INFO, 1 WARN). So the decisive
@@ -172,7 +201,7 @@ final class AvatarAnnounceCoordinator {
             RTLog.info("avatar", "skip no-self-avatar to=\(peer8) code=1 trig=\(trigCode) selfver=0")
             return
         }
-        guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
+        guard let cacheURL = selfAvatarFile(),
               let avatarBytes = try? Data(contentsOf: cacheURL), !avatarBytes.isEmpty else {
             // Reachable state, not a corner case: a photo chosen in a build
             // that predates the E2EE transport left a server avatar_url and
@@ -191,15 +220,18 @@ final class AvatarAnnounceCoordinator {
             prior = ledger.sentState(toPeer: peerId)
         }
         let verdict = AvatarAnnouncePolicy.decide(
-            trigger: trigger, currentHash: contentHash, currentPairKey: pairKey, prior: prior, callAgeSec: callAgeSec())
+            trigger: trigger, currentHash: contentHash, currentPairKey: pairKey, prior: prior, callAgeSec: callAgeSec(),
+            lastAttemptAgeSec: lastAttemptAt[peerId].map { max(0, now().timeIntervalSince($0)) })
         switch verdict {
         case .skip(let cause):
             if cause == .same, prior.pairKey != pairKey, prior.pairKey == nil || prior.pairKey == AvatarSentLedger.noPairKey {
                 // Nothing to send, but now there is a pair key to compare against from here on.
                 ledger.recordPairKey(pairKey, toPeer: peerId)
             }
-            Self.logSkip(cause, peer8: peer8, trigCode: trigCode, bytes: avatarBytes.count,
-                         callAgeSec: Int(callAgeSec() ?? 0))
+            let ageForLog: Int = cause == .brake
+                ? Int(lastAttemptAt[peerId].map { max(0, now().timeIntervalSince($0)) } ?? 0)
+                : Int(callAgeSec() ?? 0)
+            Self.logSkip(cause, peer8: peer8, trigCode: trigCode, bytes: avatarBytes.count, callAgeSec: ageForLog)
             if cause == .callGuard, trigger != .avatarChanged {
                 scheduleGuardRecheck(for: peerId, trigger: trigger)
             }
@@ -218,7 +250,7 @@ final class AvatarAnnounceCoordinator {
         guardRecheckPending.insert(peerId)
         let wait = max(1, AvatarAnnouncePolicy.callGuardSec - (callAgeSec() ?? 0) + 1)
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            await self?.sleep(wait)
             guard let self else { return }
             self.guardRecheckPending.remove(peerId)
             guard self.callActiveSince != nil else { return }
@@ -241,7 +273,8 @@ final class AvatarAnnounceCoordinator {
         pairKey: String,
         why: Int
     ) async {
-        let outcome = await FileV2AvatarSender.send(avatarFile: avatarFile, to: peerId, appState: appState)
+        let outcome = await sendAvatar(avatarFile, peerId)
+        lastAttemptAt[peerId] = now()
         switch outcome {
         case .sent:
             ledger.markSent(version: version, contentHash: contentHash, pairKey: pairKey, toPeer: peerId, at: now())
@@ -316,6 +349,7 @@ final class AvatarAnnounceCoordinator {
 
     private func performInboundFileV2(body: String, senderId: String) async {
         let peer8 = String(senderId.prefix(8))
+        guard let appState else { return }
         guard let descriptor = FileV2ChatBody.descriptor(ofBody: body), descriptor.kind == .avatar,
               FileV2AutoDownloadPolicy.isAutomatic(kind: .avatar, size: descriptor.size) else {
             RTLog.warn("avatar", "recv applied=0 code=6 from=\(peer8)")
@@ -433,6 +467,7 @@ final class AvatarAnnounceCoordinator {
         version: Int,
         isRetry: Bool
     ) async {
+        guard let appState else { return }
         do {
             let plaintext = try await AvatarAnnounceReceiver(appState: appState)
                 .downloadAndDecrypt(envelope: envelope, senderId: senderId)
@@ -512,7 +547,8 @@ final class AvatarAnnounceCoordinator {
         RTLog.info("avatar", head + body)
     }
 
-    /// Skip: code 4 same picture already sent to that contact, code 5 inside the first seconds of a call (`age` is the call age).
+    /// Skip: code 4 same picture already sent to that contact; code 5 a guard: `skip call` inside the first seconds of a call, or
+    /// `skip brake` right after a send attempt to that contact (`age` is the seconds since the call began, or since the attempt).
     private static func logSkip(
         _ cause: AvatarAnnouncePolicy.SkipCause,
         peer8: String,
@@ -522,10 +558,13 @@ final class AvatarAnnounceCoordinator {
     ) {
         switch cause {
         case .same:
-            let line: String = "skip same to=" + peer8 + " code=\(cause.rawValue) trig=\(trigCode) bytes=\(bytes)"
+            let line: String = "skip same to=" + peer8 + " code=\(cause.code) trig=\(trigCode) bytes=\(bytes)"
             RTLog.info("avatar", line)
         case .callGuard:
-            let line: String = "skip call to=" + peer8 + " code=\(cause.rawValue) trig=\(trigCode) age=\(callAgeSec)"
+            let line: String = "skip call to=" + peer8 + " code=\(cause.code) trig=\(trigCode) age=\(callAgeSec)"
+            RTLog.info("avatar", line)
+        case .brake:
+            let line: String = "skip brake to=" + peer8 + " code=\(cause.code) trig=\(trigCode) age=\(callAgeSec)"
             RTLog.info("avatar", line)
         }
     }

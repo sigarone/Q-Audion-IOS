@@ -160,6 +160,7 @@ jobs:
             -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
             -only-testing:QAudionAppTests/AvatarAnnouncePolicyTests \
             -only-testing:QAudionAppTests/AvatarSentLedgerTests \
+            -only-testing:QAudionAppTests/AvatarAnnounceCoordinatorTests \
             -only-testing:QAudionAppTests/AvatarContentHashTests \
             -only-testing:QAudionAppTests/AvatarImageGeometryTests \
             -only-testing:QAudionAppTests/AvatarImageIntegrityTests \

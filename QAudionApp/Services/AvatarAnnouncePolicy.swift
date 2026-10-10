@@ -18,7 +18,9 @@ import QAudionEngine
 ///  3. a quel contatto non si e' mai inviato, o la chiave a coppia e' cambiata da allora, cioe' ha un'installazione o un
 ///     dispositivo nuovo (`why=2`);
 ///  4. in futuro, se il contatto segnala che gli manca (`why=3`): vedi `peerRequested`, non collegato.
-/// Non si invia nei primi `callGuardSec` secondi di una chiamata.
+/// Non si invia nei primi `callGuardSec` secondi di una chiamata. Dopo un tentativo verso un contatto, riuscito o no, non se ne fa un
+/// altro prima di `attemptBrakeSec`: e' un freno contro le raffiche (per esempio un invio che fallisce a ogni messaggio ricevuto
+/// mentre la rete e' giu'), non un criterio per rimandare lo stesso avatar.
 ///
 /// Dispositivo del contatto. L'invio e' indirizzato all'utente (`ChatMessageSendService.sendEncrypted`, `recipientId`), non a un
 /// suo dispositivo, e l'identificativo di dispositivo del contatto lo conosce l'app solo dall'ultima chiamata in arrivo
@@ -26,15 +28,33 @@ import QAudionEngine
 /// a coppia dello scambio chiavi, che una reinstallazione cambia (nuova identita', nuovo scambio). Se non c'e' (contatto raggiunto
 /// solo con la chiave derivata da una chiamata) la chiave non e' un segnale e decide solo il contenuto.
 ///
+/// Perche' la chiave a coppia e non "ogni scambio chiavi". `ContactKeyExchange.deriveAndStore` (ContactKeyExchange.swift:166-227)
+/// deriva la chiave in modo deterministico dalle due identita' e, se l'impronta e' uguale a quella gia' nel Keychain, esce senza
+/// scrivere ne' chiamare `onKeyExchanged` (righe 220-223): lo scambio che `endCall` fa a ogni chiamata (`triggerKeyExchange`, AppState.swift:21350) non
+/// cambia nulla e non puo' essere preso come "chiave nuova". Cambia l'impronta, e quindi scatta l'evento (righe 226-227), solo se
+/// cambia una delle due identita' (reinstallazione, telefono nuovo). Piuttosto che agganciarsi all'evento (che non sopravvive a un
+/// riavvio e si perde se l'app e' chiusa) si confronta l'impronta ricordata all'ultimo invio con quella di adesso, che il Keychain
+/// tiene come etichetta della voce: lo stesso segnale, ricostruibile in ogni momento. Il passaggio da "nessuna chiave" a "chiave
+/// presente" non conta come cambio: il contatto aveva gia' ricevuto l'avatar con la chiave derivata dalla chiamata.
+///
 /// Inviato ma non arrivato. Il marcatore (`AvatarSentLedger.markSent`) si scrive quando il server ha accettato il messaggio col
 /// descrittore, non quando il contatto l'ha ricevuto: per l'avatar non c'e' una ricevuta di consegna (chi lo riceve non ne manda).
 /// Si accetta il compromesso, e non si reintroduce un invio ripetuto a tempo: un contatto che ha perso l'avatar lo riavra' quando
 /// cambia il contenuto, la chiave a coppia, o quando ci sara' il segnale del punto 4. Un invio che fallisce prima di quel punto
-/// non viene marcato e si riprova al momento successivo.
+/// (rete assente, nessun canale, caricamento fallito) non viene marcato e si riprova al primo momento utile dopo il freno.
+///
+/// Ricevuta di consegna. Esiste: `msg_delivered` (`AppState.handleDeliveryReceipts`), che cerca la riga della conversazione per
+/// identificativo del server. Il messaggio dell'avatar non scrive una riga in `ConversationStore`, quindi la ricevuta risulta
+/// "unmatched" e non conferma nulla. Si potrebbe collegare (`sendEncrypted` restituisce l'identificativo del server, oggi
+/// scartato da `FileV2AvatarSender`), ma farne la condizione per marcare reintrodurrebbe l'invio ripetuto: la ricevuta arriva solo
+/// quando il dispositivo del contatto svuota la sua coda, e un contatto spento la farebbe aspettare a lungo. Per questo il
+/// marcatore e' l'accettazione del messaggio da parte del server.
 enum AvatarAnnouncePolicy {
 
     /// Nei primi secondi di una chiamata non si invia (la chiamata ha altro da fare); a chiamata aperta da piu' tempo si'.
     static let callGuardSec: TimeInterval = 90
+    /// Tempo minimo tra due tentativi di invio allo stesso contatto (solo freno: l'avatar uguale non si rimanda in nessun caso).
+    static let attemptBrakeSec: TimeInterval = 120
 
     /// Perche' si invia. Il numero e' quello del log (`why=`).
     enum SendCause: Int, Equatable {
@@ -47,11 +67,20 @@ enum AvatarAnnouncePolicy {
     }
 
     /// Perche' non si invia. Il numero e' quello del log (`code=`).
-    enum SkipCause: Int, Equatable {
+    enum SkipCause: Equatable {
         /// Stesso contenuto, stessa chiave a coppia: il contatto ce l'ha gia'.
-        case same = 4
+        case same
         /// Nei primi secondi di una chiamata.
-        case callGuard = 5
+        case callGuard
+        /// Un tentativo verso questo contatto e' appena finito (riuscito o no): freno anti-raffica.
+        case brake
+
+        var code: Int {
+            switch self {
+            case .same: return 4
+            case .callGuard, .brake: return 5
+            }
+        }
     }
 
     enum Verdict: Equatable {
@@ -74,6 +103,8 @@ enum AvatarAnnouncePolicy {
     ///   - currentPairKey: chiave a coppia di adesso (`AvatarSentLedger.noPairKey` se non ce n'e' una).
     ///   - prior: `nil` o con impronta `nil` se a quel contatto non si e' mai inviato.
     ///   - callAgeSec: secondi dall'inizio della chiamata in corso, `nil` se non ce n'e' una.
+    ///   - lastAttemptAgeSec: secondi dalla fine dell'ultimo tentativo di invio a questo contatto, `nil` se non ce ne sono stati
+    ///     da quando l'app e' partita. Frena un nuovo invio, mai la foto cambiata dall'utente.
     ///   - peerRequested: punto d'ingresso del segnale "al contatto manca l'avatar" (punto 4 sopra). Nessun chiamante lo imposta
     ///     ancora: serve prima un segnale sul filo, da decidere a parte.
     static func decide(
@@ -82,10 +113,19 @@ enum AvatarAnnouncePolicy {
         currentPairKey: String,
         prior: SentState?,
         callAgeSec: TimeInterval?,
+        lastAttemptAgeSec: TimeInterval? = nil,
         peerRequested: Bool = false
     ) -> Verdict {
         if trigger == .avatarChanged { return .send(.changed) }
         if let callAgeSec, callAgeSec < callGuardSec { return .skip(.callGuard) }
+        let needed = need(currentHash: currentHash, currentPairKey: currentPairKey, prior: prior, peerRequested: peerRequested)
+        if case .send = needed, let lastAttemptAgeSec, lastAttemptAgeSec < attemptBrakeSec { return .skip(.brake) }
+        return needed
+    }
+
+    private static func need(
+        currentHash: String, currentPairKey: String, prior: SentState?, peerRequested: Bool
+    ) -> Verdict {
         if peerRequested { return .send(.requested) }
         guard let priorHash = prior?.contentHash else { return .send(.newPeerDevice) }
         if let priorKey = prior?.pairKey, priorKey != AvatarSentLedger.noPairKey,
