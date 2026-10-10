@@ -233,7 +233,7 @@ final class AppState: ObservableObject {
     /// independent of how the state got there. This is that, in Combine.
     /// The two existing call sites are left in place: they are now
     /// redundant rather than wrong, and the coordinator's per-peer
-    /// serialisation plus the 2-minute call cooldown collapse a duplicate
+    /// serialisation plus the call cooldown (`AvatarAnnouncePolicy`) collapse a duplicate
     /// into a single send.
     private lazy var callConnectAvatarObserver: AnyCancellable =
         $callState
@@ -12776,7 +12776,9 @@ final class AppState: ObservableObject {
     // one flat 3-DAY interval for every trigger, which Android measured to
     // be a guaranteed no-op for both peers of any call inside a normal
     // usage session. It is now per-trigger — 1 h for a background
-    // chat-decrypt, 2 min for a real call or a completed key exchange.
+    // chat-decrypt, hours for a real call or a completed key exchange
+    // (`AvatarAnnouncePolicy`), and none for a key exchange that left the
+    // version and the pair key unchanged.
 
     /// Current self-avatar version. 0 = no avatar ever set (never
     /// bumped) — `maybeAnnounceAvatarTo` treats that as "nothing to
@@ -12885,8 +12887,8 @@ final class AppState: ObservableObject {
     /// is load-bearing and which of them iOS was missing).
     ///
     /// `trigger` is what decides the re-announce cooldown, so it must
-    /// reflect the REAL cause: a call is rare and explicit and gets a
-    /// 2-minute floor, while the chat-decrypt path can fire many times a
+    /// reflect the REAL cause: a call is rare and explicit and gets the
+    /// long call floor (`AvatarAnnouncePolicy.callResendIntervalSec`), while the chat-decrypt path can fire many times a
     /// minute and keeps 1 hour.
     private func maybeAnnounceAvatarTo(
         _ peerId: String,
@@ -13645,8 +13647,9 @@ final class AppState: ObservableObject {
                 Task { [weak self] in
                     await cke.handleOffer(senderId: senderId, peerPubKey: pub)
                     // Trigger `.keyExchange` — as rare and as explicit as a
-                    // call, so it gets the SHORT re-announce cooldown, not
-                    // the background chat-decrypt one.
+                    // call, so it gets the call re-announce cooldown, not
+                    // the background chat-decrypt one (and nothing at all
+                    // when version and pair key are unchanged).
                     // E2EE avatar transport (2026-07-30) — the moment a
                     // pairwise PSK becomes available for this peer (for
                     // ANY reason: a call just triggered this exchange, a

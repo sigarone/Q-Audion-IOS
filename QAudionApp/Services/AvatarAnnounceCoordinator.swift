@@ -24,9 +24,15 @@ import QAudionEngine
 ///     session: a cooldown only bounds a silent failure if it can expire
 ///     while the user is still using the app. A real CALL is rare,
 ///     explicit, and exactly the moment the peer's avatar is on screen, so
-///     it gets a 2-minute floor (kept non-zero only to collapse duplicates
+///     it got a 2-minute floor (kept non-zero only to collapse duplicates
 ///     across back-to-back reconnects of the same conversation); the
-///     background chat-decrypt trigger keeps 1 hour.
+///     background chat-decrypt trigger keeps 1 hour. That 2-minute floor sent
+///     the same picture again at every call, so at the same version the
+///     call / key-exchange floor is now `AvatarAnnouncePolicy
+///     .callResendIntervalSec` (hours), and a key exchange that left the pair
+///     key and the version unchanged sends nothing: see `AvatarAnnouncePolicy`
+///     for what that costs and what still heals a contact that lost the
+///     picture.
 ///  2. **Per-peer serialisation.** Both the send and the receive side run
 ///     one peer's work at a time (Android: a `Mutex` map on each side).
 ///     Without it, two triggers for the SAME peer that overlap — a call
@@ -61,7 +67,8 @@ final class AvatarAnnounceCoordinator {
         case callConnect
         /// A `ContactKeyExchange` OFFER/ACCEPT just completed, so a PSK
         /// exists where a moment ago there was none. As rare and as
-        /// explicit as a call — same short cooldown.
+        /// explicit as a call — same call cooldown, and no re-send at all
+        /// when the version and the pair key are those of the last send.
         case keyExchange
         /// The user just picked a new photo; `broadcastAvatarToKnownPeers`
         /// is fanning it out. `version` has just been bumped, so the
@@ -86,17 +93,12 @@ final class AvatarAnnounceCoordinator {
         }
     }
 
-    /// Background trigger ceiling — see the class doc, point 1.
-    private static let chatResendIntervalSec: TimeInterval = 60 * 60
-    /// Call / key-exchange trigger ceiling — see the class doc, point 1.
-    private static let callResendIntervalSec: TimeInterval = 2 * 60
-
-    // W-AVATARSTUCK (2026-07-31) — `.v2` keys; the pre-tus-fix entries under
-    // the old names are deliberately orphaned, never migrated.
-    private static let sentVersionsKey = "qaudion.avatarSentVersions.v2"
-    private static let sentAtKey = "qaudion.avatarSentAt.v2"
-
     private unowned let appState: AppState
+    /// What already left the device, per contact (version, time, pair key).
+    private let ledger: AvatarSentLedger
+    /// Injectable clock and pair-key reader, so the decision is testable.
+    private let now: () -> Date
+    private let pairKeyId: (String) -> String
 
     /// Tail of the per-peer serialisation chain. A new unit of work awaits
     /// the previous one for the SAME peer before running, so check-then-act
@@ -104,17 +106,16 @@ final class AvatarAnnounceCoordinator {
     private var sendChain: [String: Task<Void, Never>] = [:]
     private var receiveChain: [String: Task<Void, Never>] = [:]
 
-    init(appState: AppState) {
+    init(
+        appState: AppState,
+        ledger: AvatarSentLedger = AvatarSentLedger(),
+        now: @escaping () -> Date = { Date() },
+        pairKeyId: @escaping (String) -> String = { AvatarSentLedger.vaultPairKeyId(peerId: $0) }
+    ) {
         self.appState = appState
-    }
-
-    private static func cooldownSec(for trigger: Trigger) -> TimeInterval {
-        switch trigger {
-        case .chatDecrypt:  return chatResendIntervalSec
-        case .callConnect:  return callResendIntervalSec
-        case .keyExchange:  return callResendIntervalSec
-        case .avatarChanged: return 0
-        }
+        self.ledger = ledger
+        self.now = now
+        self.pairKeyId = pairKeyId
     }
 
     // MARK: - Send
@@ -162,17 +163,18 @@ final class AvatarAnnounceCoordinator {
             RTLog.info("avatar", "skip no-self-avatar to=\(peer8) code=1 trig=\(trigCode) selfver=0")
             return
         }
-        let priorSent = Self.lastVersionSent(toPeer: peerId)
-        let priorSentAt = Self.lastSentAt(toPeer: peerId)
-        let cooldown = Self.cooldownSec(for: trigger)
-        let staleEnoughToRetry = priorSentAt.map {
-            Date().timeIntervalSince($0) >= cooldown
-        } ?? true
-        if priorSent >= version && !staleEnoughToRetry {
-            let ageSec: Int = priorSentAt.map { Int(Date().timeIntervalSince($0)) } ?? -1
-            Self.logSkipAlreadySent(
-                peer8: peer8, trigCode: trigCode, priorSent: priorSent,
-                version: version, ageSec: ageSec, cooldownSec: Int(cooldown))
+        let priorSent = ledger.lastVersionSent(toPeer: peerId)
+        let priorSentAt = ledger.lastSentAt(toPeer: peerId)
+        let pairKey = pairKeyId(peerId)
+        let decidedAt = now()
+        let verdict = AvatarAnnouncePolicy.decide(
+            trigger: trigger, version: version, priorVersion: priorSent, priorSentAt: priorSentAt,
+            priorPairKey: ledger.lastPairKey(toPeer: peerId), currentPairKey: pairKey, now: decidedAt)
+        if case .skip(let cause) = verdict {
+            let ageSec: Int = priorSentAt.map { Int(decidedAt.timeIntervalSince($0)) } ?? -1
+            Self.logSkip(
+                cause, peer8: peer8, trigCode: trigCode, priorSent: priorSent, version: version, ageSec: ageSec,
+                cooldownSec: Int(AvatarAnnouncePolicy.cooldownSec(for: trigger)))
             return
         }
         guard let cacheURL = AvatarUploader.selfAvatarCacheURL,
@@ -185,7 +187,7 @@ final class AvatarAnnounceCoordinator {
             return
         }
         await sendEnvelope(to: peerId, peer8: peer8, trigCode: trigCode,
-                           avatarFile: cacheURL, version: version)
+                           avatarFile: cacheURL, version: version, pairKey: pairKey)
     }
 
     /// The avatar goes to the contact as a file transfer v2 file of kind `avatar` (`FileV2AvatarSender`): uploaded with a key of its
@@ -197,12 +199,13 @@ final class AvatarAnnounceCoordinator {
         peer8: String,
         trigCode: Int,
         avatarFile: URL,
-        version: Int
+        version: Int,
+        pairKey: String
     ) async {
         let outcome = await FileV2AvatarSender.send(avatarFile: avatarFile, to: peerId, appState: appState)
         switch outcome {
         case .sent:
-            Self.markSent(version: version, toPeer: peerId)
+            ledger.markSent(version: version, pairKey: pairKey, toPeer: peerId, at: now())
             RTLog.info("avatar", "send ok=1 del=0 to=\(peer8) version=\(version) trig=\(trigCode)")
         case .noChannel:
             // Fail-closed, like Android's send path: nothing to seal under yet. The caller that owns the relationship (the
@@ -288,29 +291,50 @@ final class AvatarAnnounceCoordinator {
             let server = FileV2AppServices.makeServer(appState: appState)
             try await FileV2Receiver(server: server).download(descriptor, to: downloaded)
             let data = try Data(contentsOf: downloaded)
-            guard UIImage(data: data) != nil else {
-                RTLog.warn("avatar", "recv applied=0 code=7 from=\(peer8)")
-                return
-            }
             let fileURL = try Self.peerAvatarFileURL(senderId: senderId)
-            try data.write(to: fileURL, options: [.atomic])
-            let cached = ContactsStore().load().first(where: { $0.userId == senderId })?.avatarVersion ?? -1
-            let version = max(cached + 1, Int(Date().timeIntervalSince1970))
-            let applied = ContactsStore().setAvatarLocalPath(userId: senderId, path: fileURL, version: version)
-            guard applied else {
-                RTLog.info("avatar", "recv applied=0 code=3 from=\(peer8) version=\(version)")
-                return
-            }
-            RTLog.info("avatar", "recv applied=1 from=\(peer8) version=\(version) v2=1")
-            NotificationCenter.default.post(
-                name: AppState.chatRefreshNotification,
-                object: nil,
-                userInfo: ["peerUserId": senderId]
-            )
+            let outcome = try makeInboundApplier(senderId: senderId, fileURL: fileURL).apply(data)
+            Self.logInbound(outcome, peer8: peer8)
         } catch let failure as FileV2Failure {
             RTLog.warn("avatar", "recv applied=0 code=5 from=\(peer8) v2=\(failure.code)")
         } catch {
             RTLog.warn("avatar", "recv applied=0 code=5 from=\(peer8) v2=io")
+        }
+    }
+
+    /// The applier wired to the real file, contact store and view refresh of one sender.
+    private func makeInboundApplier(senderId: String, fileURL: URL) -> AvatarInboundApplier {
+        return AvatarInboundApplier(
+            decodes: { UIImage(data: $0) != nil },
+            readCurrent: { try? Data(contentsOf: fileURL) },
+            write: { try $0.write(to: fileURL, options: [.atomic]) },
+            cachedVersion: { ContactsStore().load().first(where: { $0.userId == senderId })?.avatarVersion ?? -1 },
+            setLocalPath: { ContactsStore().setAvatarLocalPath(userId: senderId, path: fileURL, version: $0) },
+            notify: { Self.postChatRefresh(senderId: senderId) },
+            now: now)
+    }
+
+    private static func postChatRefresh(senderId: String) {
+        NotificationCenter.default.post(
+            name: AppState.chatRefreshNotification,
+            object: nil,
+            userInfo: ["peerUserId": senderId]
+        )
+    }
+
+    /// Numeric tails only, in the vocabulary the log shipper lets through verbatim (`scripts/test_ship_ios_display_vocab.py`).
+    /// code=7 not an image, code=8 image cut short (kind 1 JPEG, 2 PNG), code=9 same picture as the one already kept.
+    private static func logInbound(_ outcome: AvatarInboundApplier.Outcome, peer8: String) {
+        switch outcome {
+        case .applied(let version):
+            RTLog.info("avatar", "recv applied=1 from=\(peer8) version=\(version) v2=1")
+        case .identical:
+            RTLog.info("avatar", "recv applied=0 code=9")
+        case .incomplete(let kind):
+            RTLog.warn("avatar", "recv applied=0 code=8 kind=\(kind)")
+        case .undecodable:
+            RTLog.warn("avatar", "recv applied=0 code=7 from=\(peer8)")
+        case .notPersisted(let version):
+            RTLog.info("avatar", "recv applied=0 code=3 from=\(peer8) version=\(version)")
         }
     }
 
@@ -435,39 +459,15 @@ final class AvatarAnnounceCoordinator {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    // MARK: - Sent-version bookkeeping
-    //
-    // Same UserDefaults keys and same semantics as Android's
-    // `AvatarFileStore` sent-version prefs: the pair records that a send
-    // LEFT the device at a given version and time — never that the
-    // recipient decrypted it, which is why the cooldown above exists.
-
-    private static func lastVersionSent(toPeer peerId: String) -> Int {
-        let dict = UserDefaults.standard.dictionary(forKey: sentVersionsKey) as? [String: Int] ?? [:]
-        return dict[peerId] ?? -1
-    }
-
-    private static func lastSentAt(toPeer peerId: String) -> Date? {
-        let dict = UserDefaults.standard.dictionary(forKey: sentAtKey) as? [String: Double] ?? [:]
-        guard let ts = dict[peerId] else { return nil }
-        return Date(timeIntervalSince1970: ts)
-    }
-
-    private static func markSent(version: Int, toPeer peerId: String, at: Date = Date()) {
-        var dict = UserDefaults.standard.dictionary(forKey: sentVersionsKey) as? [String: Int] ?? [:]
-        dict[peerId] = version
-        UserDefaults.standard.set(dict, forKey: sentVersionsKey)
-        var atDict = UserDefaults.standard.dictionary(forKey: sentAtKey) as? [String: Double] ?? [:]
-        atDict[peerId] = at.timeIntervalSince1970
-        UserDefaults.standard.set(atDict, forKey: sentAtKey)
-    }
-
     /// Extracted so the skip line is built at statement level rather than
     /// as a six-segment interpolation inside a closure (SWIFT6_PATTERNS.md
     /// rule 1). Logged because this is the exact state that cost days of
     /// investigation on Android: "ran and skipped" must never be
-    /// indistinguishable from "never ran" in a log pull.
-    private static func logSkipAlreadySent(
+    /// indistinguishable from "never ran" in a log pull. code=2: same
+    /// version, cooldown still running; code=4: key exchange with the same
+    /// version and the same pair key as the last send.
+    private static func logSkip(
+        _ cause: AvatarAnnouncePolicy.SkipCause,
         peer8: String,
         trigCode: Int,
         priorSent: Int,
@@ -475,8 +475,17 @@ final class AvatarAnnounceCoordinator {
         ageSec: Int,
         cooldownSec: Int
     ) {
-        let head: String = "skip already-sent to=" + peer8 + " code=2"
-        let body: String = " trig=\(trigCode) priorsent=\(priorSent) version=\(version)"
+        let word: String
+        let code: Int
+        switch cause {
+        case .withinCooldown:   word = "already sent"; code = 2
+        case .pairKeyUnchanged: word = "same"; code = 4
+        }
+        let head: String = "skip " + word + " to=" + peer8 + " code=\(code)"
+        // `priorsent` only when it differs from `version` (it is never below it here): versions are epoch seconds, and the
+        // shipper lets at most two long numbers through per line, so printing it every time got it redacted.
+        let prior: String = priorSent == version ? "" : " priorsent=\(priorSent)"
+        let body: String = " trig=\(trigCode) version=\(version)" + prior
         let tail: String = " age=\(ageSec) cd=\(cooldownSec)"
         RTLog.info("avatar", head + body + tail)
     }

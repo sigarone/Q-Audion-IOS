@@ -158,6 +158,10 @@ jobs:
             -derivedDataPath /tmp/dd-ios-app \
             -parallel-testing-enabled NO \
             -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
+            -only-testing:QAudionAppTests/AvatarAnnouncePolicyTests \
+            -only-testing:QAudionAppTests/AvatarSentLedgerTests \
+            -only-testing:QAudionAppTests/AvatarImageIntegrityTests \
+            -only-testing:QAudionAppTests/AvatarInboundApplierTests \
             -only-testing:QAudionAppTests/BugReportFreezeTests \
             -only-testing:QAudionAppTests/BugReporterRetryQueueTests \
             -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \

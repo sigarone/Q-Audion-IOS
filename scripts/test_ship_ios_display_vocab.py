@@ -22,6 +22,12 @@ Power Mode is on ("[Call] cpu=42 st=0 lock=0 therm=0 low=0"), and, once per answ
 "[Call] answer st=0 lock=0". Whole numbers only, words already admitted. Keep in sync with CallResourceLine and
 CallResourceLoggerTests.
 
+And the avatar lines that say why a picture was or was not sent or applied (tag "avatar", AvatarAnnounceCoordinator.logSkip
+and logInbound): the skip lines ("skip same ... code=4" key exchange with unchanged version and pair key, "skip already sent ...
+code=2" cooldown running), and the receive refusals ("recv applied=0 code=8 kind=1|2" image cut short, "code=9" same picture as the
+one kept). Numbers only, words already admitted; the lines that carry a sender id with the key "from" are not here because the
+shipper redacts that key by design. Keep in sync with AvatarAnnounceCoordinator and AvatarAnnounceReductionTests.
+
 Run:  python scripts/test_ship_ios_display_vocab.py [path/to/ship-ios-logs.py]
 Exit 0 = every line ships verbatim; 1 = at least one was dropped or altered.
 """
@@ -88,7 +94,23 @@ CALL_RESOURCE_LINES = [
     "[Call] answer st=2 lock=1",
 ]
 
+# Same text as AvatarAnnounceCoordinator.logSkip / logInbound (versions are epoch seconds; "to=" carries the 8-hex contact prefix).
+AVATAR_LINES = [
+    "skip already sent to=8bc24df8 code=2 trig=2 version=1760000000 age=30 cd=21600",
+    "skip already sent to=8bc24df8 code=2 trig=1 version=1760000000 age=1800 cd=3600",
+    "skip same to=8bc24df8 code=4 trig=3 version=1760000000 age=21 cd=21600",
+    "skip same to=8bc24df8 code=4 trig=3 version=7 age=1234567 cd=21600",
+    "skip same to=8bc24df8 code=4 trig=3 version=1760000000 age=-1 cd=21600",
+    "recv applied=0 code=8 kind=1",
+    "recv applied=0 code=8 kind=2",
+    "recv applied=0 code=9",
+]
+
 failures = []
+for text in AVATAR_LINES:
+    got = shipped(text, "avatar")
+    if got != text:
+        failures.append("[avatar] %r -> %r" % (text, got))
 for text in LINES:
     got = shipped(text)
     if got != text:
@@ -99,7 +121,7 @@ for text in CADENCE_LINES + GOVERNOR_LINES + CALL_RESOURCE_LINES:
         if got != text:
             failures.append("[%s] %r -> %r" % (tag, text, got))
 
-print("checks: %d, failures: %d" % (len(LINES) + 2 * len(CADENCE_LINES + GOVERNOR_LINES + CALL_RESOURCE_LINES), len(failures)))
+print("checks: %d, failures: %d" % (len(AVATAR_LINES) + len(LINES) + 2 * len(CADENCE_LINES + GOVERNOR_LINES + CALL_RESOURCE_LINES), len(failures)))
 for f in failures:
     print("FAIL", f)
 sys.exit(1 if failures else 0)
