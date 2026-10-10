@@ -16,6 +16,7 @@ public final class AppBackgroundFlag: @unchecked Sendable {
 
     private let lock = NSLock()
     private var background = false
+    private var entries = 0
     private var observers: [UUID: @Sendable (Bool) -> Void] = [:]
 
     public init() {}
@@ -25,6 +26,14 @@ public final class AppBackgroundFlag: @unchecked Sendable {
         return background
     }
 
+    /// How many times the app has gone to the background since the process started (a real change to
+    /// background, not a repeated notification). Lets a reader tell "the same background stretch" from "a new one"
+    /// even when it was not looking in between.
+    public var backgroundEntryCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return entries
+    }
+
     /// Returns true when the value actually changed (a repeated notification returns false).
     /// Observers are told after the lock is released, on the caller's thread, and only on a real change.
     @discardableResult
@@ -32,6 +41,7 @@ public final class AppBackgroundFlag: @unchecked Sendable {
         lock.lock()
         let changed = background != value
         background = value
+        if changed && value { entries += 1 }
         let toNotify = changed ? Array(observers.values) : []
         lock.unlock()
         for observer in toNotify { observer(value) }
