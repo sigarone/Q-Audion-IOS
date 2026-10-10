@@ -49,9 +49,15 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     static let scoreIntervalSeconds: Double = 3.0
     /// Score period while the app is NOT in the foreground. The check keeps running, less often: a tick is the
     /// heaviest recurring work of a call (CAM++ embedding plus the deepfake model), and a long run of it in the
-    /// background is what the system's CPU budget for background apps counts. Cost: a suspicious voice can be
-    /// reported up to 7 s later than in the foreground (10 s instead of 3 s per tick). Back in the foreground
-    /// the period is 3 s again from that moment (`BackgroundAwareTimer` re-arms on the flag's change).
+    /// background is what the system's CPU budget for background apps counts.
+    ///
+    /// Cost: every result that needs several consecutive ticks arrives later in proportion, not by one period.
+    /// The speaker-change detector counts samples (`SpeakerChangeDetector.defaultConfirmSamples`,
+    /// `baselineWindow`: it reports a suspect voice after about 2 samples and a changed one after about 4, and
+    /// learns its reference over 16), and the 3-band level of `ContactVoiceContinuityGate` is a moving average
+    /// over samples too. At 10 s per tick instead of 3 s that is roughly 20 s instead of 6 s for the first,
+    /// 40 s instead of 12 s for the second, and 160 s instead of 48 s to learn the reference. Back in the
+    /// foreground the period is 3 s again from that moment (`BackgroundAwareTimer` re-arms on the flag's change).
     static let backgroundScoreIntervalSeconds: Double = 10.0
 
     /// Deepfake-classifier rolling window — the model wants ~4.04s
