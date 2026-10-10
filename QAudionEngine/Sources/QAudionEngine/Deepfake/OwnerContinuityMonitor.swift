@@ -101,11 +101,24 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     private var targetBytes = 0
     private var ema: Float?
     private var enrolledCached = false
+    /// Last state actually handed to `onStateChanged` since the latest
+    /// `start()`. `nil` right after `start()`, so the first state produced
+    /// after a (re)start is always delivered once; afterwards only a repeated
+    /// `.inactive` is suppressed (see `setState`).
+    private var lastNotified: State?
 
     // MARK: - Lock-guarded state (read from `shouldAlert()`/`currentState()`
     // on an arbitrary caller thread, written from `queue` inside `setState`)
     private var _mismatchStreak = 0
     private var _state: State = .inactive
+    /// Mirror of `enrolledCached` readable from the capture thread, so `feed`
+    /// can decide WITHOUT enqueueing whether a chunk can matter at all.
+    private var _enrolled = false
+    /// True once the (single) "not registered" state has been queued since the
+    /// latest `start()` — see `feed`.
+    private var _inactiveQueued = false
+    /// Number of chunks `feed` actually enqueued (test observability only).
+    private var _enqueuedChunks = 0
 
     /// Fires on `queue` (NOT the caller's thread) whenever `state` changes —
     /// a deliberate difference from `GuardianMode`/`VoiceLearningSession`'s
@@ -128,14 +141,29 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// mid-call (a separate UI-driven flow), so re-checking it on every fed
     /// chunk would be pure waste, not correctness.
     public func start(nativeSampleRateHz: Int = 48_000) {
+        // Decided here, not on the queue, so `feed` (capture thread) never sees
+        // a stale value between this call and the queued block below.
+        let enrolledNow = verifier.getState() == .ready
+        lock.lock()
+        _enrolled = enrolledNow
+        _inactiveQueued = false
+        lock.unlock()
         queue.async { [weak self] in
             guard let self else { return }
             self.buffer.removeAll(keepingCapacity: true)
             self.targetBytes = Int(Double(nativeSampleRateHz) * Self.targetWindowSeconds) * MemoryLayout<Int16>.size
             self.ema = nil
-            self.enrolledCached = self.verifier.getState() == .ready
-            self.lock.lock(); self._mismatchStreak = 0; self.lock.unlock()
-            self.setState(.inactive)
+            self.enrolledCached = enrolledNow
+            self.lastNotified = nil
+            self.lock.lock()
+            self._mismatchStreak = 0
+            let wasInactive = self._state == .inactive
+            self.lock.unlock()
+            // A reset from a scored state is a real change and is announced
+            // right away. From `.inactive` there is nothing to announce here:
+            // the first state produced after the start is delivered by
+            // `setState` (lastNotified is nil), as before.
+            if !wasInactive { self.setState(.inactive) }
         }
     }
 
@@ -153,7 +181,34 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// accumulated.
     public func feed(pcmFrame: Data) {
         guard !pcmFrame.isEmpty else { return }
+        // Not registered (no Voice-as-Key template): the state can only be
+        // `.inactive` and no chunk will ever be scored, so only the FIRST chunk
+        // after a start is queued (to deliver that state once); every later
+        // chunk returns here without queueing anything (up to 100 per second).
+        lock.lock()
+        if !_enrolled {
+            if _inactiveQueued { lock.unlock(); return }
+            _inactiveQueued = true
+        }
+        _enqueuedChunks += 1
+        lock.unlock()
         queue.async { [weak self] in self?.process(pcmFrame) }
+    }
+
+    /// Chunks that `feed` actually enqueued. Test observability only.
+    internal var enqueuedChunkCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _enqueuedChunks
+    }
+
+    /// Blocks until everything queued so far has run. Test use only.
+    internal func drainForTesting() {
+        queue.sync {}
+    }
+
+    /// Runs `setState` on the monitor's queue. Test use only.
+    internal func applyStateForTesting(_ state: State) {
+        queue.sync { setState(state) }
     }
 
     public func currentState() -> State {
@@ -238,10 +293,21 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         setState(.scored(score: smoothed, level: level))
     }
 
+    /// Stores the state and notifies the observer, except that a repeated
+    /// `.inactive` (the unregistered monitor, up to 100 per second) is delivered
+    /// only once since `start()`: it neither calls `onStateChanged`
+    /// nor causes any downstream UI publish.
     private func setState(_ newState: State) {
         lock.lock()
         _state = newState
         lock.unlock()
+        // Only the repeated "not registered" state is suppressed. A scored state
+        // is delivered for EVERY evaluated window, even when it equals the
+        // previous one: the consumer reads `shouldAlert()` (the mismatch streak)
+        // at delivery time, so the third identical mismatch window must still
+        // reach it.
+        if newState == State.inactive, lastNotified == State.inactive { return }
+        lastNotified = newState
         onStateChanged?(newState)
     }
 }
