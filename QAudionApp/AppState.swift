@@ -534,6 +534,28 @@ final class AppState: ObservableObject {
         }
     }
     @Published var isVideoCall: Bool = false { didSet { noteVideoLaneChanged() } }
+    /// Numeric diagnostics of a call: one line ("[Call] cpu=42 st=0 lock=0 therm=0 low=0") when a call becomes
+    /// active, every 15 s while it lasts and when it ends. It reads and logs, nothing more. Driven from
+    /// `callState`'s didSet below, the one place every call path passes through.
+    private let callResourceLogger = CallResourceLogger(readDevice: AppState.readCallResourceDevice)
+
+    /// The device values for `callResourceLogger`. `applicationState` and `isProtectedDataAvailable` are read on
+    /// the main actor; the hop is asynchronous on purpose (a synchronous one deadlocks when already on main) and
+    /// the answer is delivered from there.
+    nonisolated private static func readCallResourceDevice(
+        _ deliver: @escaping @Sendable (CallResourceLine.Device) -> Void
+    ) {
+        Task { @MainActor in
+            let app = UIApplication.shared
+            let info = ProcessInfo.processInfo
+            deliver(CallResourceLine.Device(
+                applicationState: app.applicationState.rawValue,
+                locked: !app.isProtectedDataAvailable,
+                thermalState: info.thermalState.rawValue,
+                lowPowerMode: info.isLowPowerModeEnabled))
+        }
+    }
+
     /// W-EARTOUCH (2026-07-27) — every callState transition re-evaluates
     /// proximity monitoring (see `updateProximityMonitoring()`), the same
     /// "one flag every call path already flips" choke point `isInCall`'s own
@@ -542,6 +564,7 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != callState else { return }
             updateProximityMonitoring()
+            callResourceLogger.update(callActive: callState == .active || callState == .encrypted)
             // W-ACCEPTLATCH — an early `call_answer` held while the caller was
             // still `.connecting` is re-applied once the call has moved on (async:
             // the replay may itself change `callState`).
@@ -20030,6 +20053,11 @@ extension AppState {
             return true
         }
         self.answeredCallKitId = uuid
+        // Numeric diagnostics of a call: once per answered incoming 1:1 call (every accept path converges here, the
+        // refused and duplicate answers have already returned above). Read now, on the main actor, no hop.
+        let answerApp = UIApplication.shared
+        print(CallResourceLine.answerLine(
+            applicationState: answerApp.applicationState.rawValue, locked: !answerApp.isProtectedDataAvailable))
         // W-GHOSTCALL — backstop behind the guard above: an answered call must
         // have a peer within 3 s, or it is ended.
         self.armAnsweredWithoutCallWatchdog(uuid: uuid)
