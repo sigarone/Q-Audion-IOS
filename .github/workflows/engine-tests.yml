@@ -5,6 +5,13 @@ on:
   pull_request:
     branches: [main]
 
+# A newer push to a pull request replaces the run in progress (the superseded
+# run is for a head that is no longer the one to merge). Pushes to main and
+# develop are never cancelled.
+concurrency:
+  group: engine-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   # Same discovery pattern as ios-testflight.yml's "Select Xcode" step —
