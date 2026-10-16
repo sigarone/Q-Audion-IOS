@@ -54,8 +54,13 @@ enum AvatarImageIntegrity {
 /// closure veri.
 ///
 /// Ridurre le riapplicazioni. Un avatar identico a quello gia' presente non cambia nulla: niente riscrittura del file, niente nuova
-/// versione, niente aggiornamento delle viste. Il descrittore del file non porta un'impronta, quindi il file si scarica
-/// comunque; il confronto e' sul contenuto decifrato.
+/// versione, niente aggiornamento delle viste. Il descrittore del file non porta un'impronta del contenuto (solo la dimensione e,
+/// opzionale, le misure in pixel: non bastano a riconoscere lo stesso avatar), quindi il file si scarica comunque; il confronto e' sul
+/// contenuto decifrato (SHA-256 dei byte ricevuti, ricordata per mittente).
+///
+/// Ridurre lo spazio. Un avatar ricevuto molto piu' grande della regola (`AvatarImageRule`) si mostra comunque, ma in cache se ne
+/// tiene una copia ridimensionata (`reduce`): non si tengono megabyte per contatto. Per questo il confronto non e' solo col file in
+/// cache, che dopo la riduzione ha altri byte, ma con l'impronta dei byte ricevuti.
 struct AvatarInboundApplier {
 
     enum Outcome: Equatable {
@@ -85,6 +90,11 @@ struct AvatarInboundApplier {
     /// Avvisa le viste.
     let notify: () -> Void
     let now: () -> Date
+    /// Impronta (SHA-256 esadecimale) dei byte dell'ultimo avatar applicato per questo mittente, prima della riduzione.
+    var lastReceivedHash: () -> String? = { nil }
+    var saveReceivedHash: (String) -> Void = { _ in }
+    /// La copia da tenere in cache dei byte ricevuti (ridimensionata se serve); gli stessi byte se non cambia nulla o non si riesce.
+    var reduce: (Data) -> Data = { $0 }
 
     func apply(_ data: Data) throws -> Outcome {
         guard decodes(data) else { return .undecodable }
@@ -92,15 +102,40 @@ struct AvatarInboundApplier {
             return .incomplete(kind: kind)
         }
         let cached = cachedVersion()
-        if cached >= 0, let current = readCurrent(), current == data {
+        let receivedHash = AvatarContentHash.hex(of: data)
+        if cached >= 0, let current = readCurrent(), current == data || lastReceivedHash() == receivedHash {
             return .identical
         }
-        try write(data)
+        try write(reduce(data))
         // Il descrittore non porta una versione: l'avatar si applica come il piu' recente annunciato, con l'ora di arrivo come
         // versione, mai sotto l'ultima.
         let version = max(cached + 1, Int(now().timeIntervalSince1970))
         guard setLocalPath(version) else { return .notPersisted(version: version) }
+        saveReceivedHash(receivedHash)
         notify()
         return .applied(version: version)
+    }
+}
+
+/// Impronta dell'ultimo avatar ricevuto da ogni mittente (prima della riduzione), per riconoscere lo stesso avatar anche quando il file
+/// in cache ha altri byte perche' e' stato ridimensionato. Resta sul dispositivo.
+struct AvatarReceivedLedger {
+
+    static let key = "qaudion.avatarRecvHash.v1"
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func hash(fromPeer peerId: String) -> String? {
+        (defaults.dictionary(forKey: Self.key) as? [String: String])?[peerId]
+    }
+
+    func save(_ hash: String, fromPeer peerId: String) {
+        var dict = defaults.dictionary(forKey: Self.key) as? [String: String] ?? [:]
+        dict[peerId] = hash
+        defaults.set(dict, forKey: Self.key)
     }
 }

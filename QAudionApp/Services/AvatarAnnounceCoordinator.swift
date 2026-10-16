@@ -95,6 +95,8 @@ final class AvatarAnnounceCoordinator {
     private var lastAttemptAt: [String: Date] = [:]
     /// What already left the device, per contact (content hash, pair key, version, time).
     private let ledger: AvatarSentLedger
+    /// Hash of the last avatar applied from each sender (before the cache reduction).
+    private let receivedLedger: AvatarReceivedLedger
     /// Injectable clock and pair-key reader, so the decision is testable.
     private let now: () -> Date
     private let pairKeyId: (String) -> String
@@ -128,6 +130,7 @@ final class AvatarAnnounceCoordinator {
             _ = try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         },
         ledger: AvatarSentLedger = AvatarSentLedger(),
+        receivedLedger: AvatarReceivedLedger = AvatarReceivedLedger(),
         now: @escaping () -> Date = { Date() },
         pairKeyId: @escaping (String) -> String = { AvatarSentLedger.vaultPairKeyId(peerId: $0) }
     ) {
@@ -137,6 +140,7 @@ final class AvatarAnnounceCoordinator {
         self.sendAvatar = sendAvatar
         self.sleep = sleep
         self.ledger = ledger
+        self.receivedLedger = receivedLedger
         self.now = now
         self.pairKeyId = pairKeyId
     }
@@ -210,7 +214,13 @@ final class AvatarAnnounceCoordinator {
             RTLog.warn("avatar", "skip self-file-missing to=\(peer8) code=3 trig=\(trigCode) selfver=\(version)")
             return
         }
-        let contentHash = AvatarContentHash.hex(of: avatarBytes)
+        // Safety net: a local file above the avatar rule (or with orientation or metadata) is sent as a resized copy, made once and
+        // reused; the file the user picked through `AvatarUploader` is already inside the rule and goes as it is.
+        let outgoing = AvatarSendCopy.prepare(source: cacheURL, data: avatarBytes)
+        if outgoing.generated {
+            Self.logResized(from: avatarBytes.count, to: outgoing.data.count, long: outgoing.longSide, short: outgoing.shortSide)
+        }
+        let contentHash = AvatarContentHash.hex(of: outgoing.data)
         let pairKey = pairKeyId(peerId)
         var prior = ledger.sentState(toPeer: peerId)
         if prior.contentHash == nil, ledger.lastVersionSent(toPeer: peerId) >= version {
@@ -231,13 +241,13 @@ final class AvatarAnnounceCoordinator {
             let ageForLog: Int = cause == .brake
                 ? Int(lastAttemptAt[peerId].map { max(0, now().timeIntervalSince($0)) } ?? 0)
                 : Int(callAgeSec() ?? 0)
-            Self.logSkip(cause, peer8: peer8, trigCode: trigCode, bytes: avatarBytes.count, callAgeSec: ageForLog)
+            Self.logSkip(cause, peer8: peer8, trigCode: trigCode, bytes: outgoing.data.count, callAgeSec: ageForLog)
             if cause == .callGuard, trigger != .avatarChanged {
                 scheduleGuardRecheck(for: peerId, trigger: trigger)
             }
         case .send(let cause):
-            await sendEnvelope(to: peerId, peer8: peer8, trigCode: trigCode, avatarBytes: avatarBytes,
-                               avatarFile: cacheURL, version: version, contentHash: contentHash, pairKey: pairKey,
+            await sendEnvelope(to: peerId, peer8: peer8, trigCode: trigCode, avatarBytes: outgoing.data,
+                               avatarFile: outgoing.url, version: version, contentHash: contentHash, pairKey: pairKey,
                                why: cause.rawValue)
         }
     }
@@ -366,7 +376,7 @@ final class AvatarAnnounceCoordinator {
             let data = try Data(contentsOf: downloaded)
             let fileURL = try Self.peerAvatarFileURL(senderId: senderId)
             let outcome = try makeInboundApplier(senderId: senderId, fileURL: fileURL).apply(data)
-            Self.logInbound(outcome, peer8: peer8, bytes: data.count)
+            Self.logInbound(outcome, peer8: peer8, bytes: data.count, storedFile: fileURL)
         } catch let failure as FileV2Failure {
             RTLog.warn("avatar", "recv applied=0 code=5 from=\(peer8) v2=\(failure.code)")
         } catch {
@@ -383,7 +393,10 @@ final class AvatarAnnounceCoordinator {
             cachedVersion: { ContactsStore().load().first(where: { $0.userId == senderId })?.avatarVersion ?? -1 },
             setLocalPath: { ContactsStore().setAvatarLocalPath(userId: senderId, path: fileURL, version: $0) },
             notify: { Self.postChatRefresh(senderId: senderId) },
-            now: now)
+            now: now,
+            lastReceivedHash: { [receivedLedger] in receivedLedger.hash(fromPeer: senderId) },
+            saveReceivedHash: { [receivedLedger] in receivedLedger.save($0, fromPeer: senderId) },
+            reduce: { AvatarImageResizer.prepare($0, cleanMetadata: false)?.data ?? $0 })
     }
 
     private static func postChatRefresh(senderId: String) {
@@ -395,11 +408,16 @@ final class AvatarAnnounceCoordinator {
     }
 
     /// Numeric tails only, in the vocabulary the log shipper lets through verbatim (`scripts/test_ship_ios_display_vocab.py`).
-    /// code=7 not an image, code=8 image cut short (kind 1 JPEG, 2 PNG), code=9 same picture as the one already kept.
-    private static func logInbound(_ outcome: AvatarInboundApplier.Outcome, peer8: String, bytes: Int) {
+    /// code=7 not an image, code=8 image cut short (kind 1 JPEG, 2 PNG), code=9 same picture as the one already kept. When a
+    /// picture is applied: `bytes` received, `out` bytes kept in the cache after the reduction, `side` and `min` pixels of that copy.
+    private static func logInbound(_ outcome: AvatarInboundApplier.Outcome, peer8: String, bytes: Int, storedFile: URL) {
         switch outcome {
-        case .applied(let version):
-            RTLog.info("avatar", "recv applied=1 from=\(peer8) version=\(version) v2=1 bytes=\(bytes)")
+        case .applied:
+            let kept = (try? Data(contentsOf: storedFile)) ?? Data()
+            let size = AvatarImageGeometry.measure(kept)
+            let head: String = "recv applied=1 bytes=\(bytes) out=\(kept.count)"
+            let tail: String = " side=\(size?.longSide ?? 0) min=\(size?.shortSide ?? 0)"
+            RTLog.info("avatar", head + tail)
         case .identical:
             RTLog.info("avatar", "recv applied=0 code=9 bytes=\(bytes)")
         case .incomplete(let kind):
@@ -545,6 +563,12 @@ final class AvatarAnnounceCoordinator {
         let head: String = "send ok=1 del=0 to=" + peer8 + " trig=\(trigCode) why=\(why)"
         let body: String = " bytes=\(bytes.count) side=\(size?.longSide ?? 0) min=\(size?.shortSide ?? 0)"
         RTLog.info("avatar", head + body)
+    }
+
+    /// The local file was above the avatar rule and a resized copy was made: bytes before and after, pixels after.
+    private static func logResized(from original: Int, to resized: Int, long: Int, short: Int) {
+        let line: String = "resize bytes=\(original) out=\(resized) side=\(long) min=\(short)"
+        RTLog.info("avatar", line)
     }
 
     /// Skip: code 4 same picture already sent to that contact; code 5 a guard: `skip call` inside the first seconds of a call, or
