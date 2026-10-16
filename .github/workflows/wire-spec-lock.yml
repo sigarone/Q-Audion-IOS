@@ -28,6 +28,12 @@ on:
     paths: ['WIRE_SPEC.md', '.github/workflows/wire-spec-lock.yml']
   workflow_dispatch:
 
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# the only job here checks the repository out and reads it (actions/checkout),
+# so no other GITHUB_TOKEN scope is needed.
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest

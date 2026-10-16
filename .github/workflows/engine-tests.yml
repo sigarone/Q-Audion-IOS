@@ -5,6 +5,12 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# every job here only checks the repository out and reads it. Caches and artifacts
+# use the runner's own token, not GITHUB_TOKEN, so no other scope is needed.
+permissions:
+  contents: read
+
 # A newer push to a pull request replaces the run in progress (the superseded
 # run is for a head that is no longer the one to merge). Pushes to main and
 # develop are never cancelled.

@@ -112,6 +112,13 @@ on:
         type: boolean
         default: false
 
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# the build job only checks the repository out (actions/checkout, contents: read).
+# The ASC credentials are repository secrets, and cache / artifact upload use the
+# runner's own token, so nothing here needs GITHUB_TOKEN write access.
+permissions:
+  contents: read
+
 # Serialize the whole job across EVERY trigger (tag push AND workflow_dispatch,
 # dev_tools or not) -- a single static group, not per-ref/per-tag. Reason: the
 # "Bump version" step reads "latest TestFlight build number" from App Store
@@ -505,7 +512,7 @@ jobs:
 
           # Expose the resolved version + build number as step outputs so the
           # dSYM-archival step below can name its artifact by version
-          # (dsyms-<MARKETING_VERSION>) for later `gh run download` lookup.
+          # (dsyms-<MARKETING_VERSION>) so the artifact can be looked up by name later.
           # Additive only -- reads values already written to Info.plist above.
           echo "marketing_version=$MARKETING_VERSION" >> "$GITHUB_OUTPUT"
           echo "build_number=$NEW_BUILD"             >> "$GITHUB_OUTPUT"

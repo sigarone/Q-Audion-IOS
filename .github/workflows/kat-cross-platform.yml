@@ -38,6 +38,12 @@ name: KAT cross-platform
 on:
   workflow_dispatch:
 
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# the only job here checks the repository out and reads it (actions/checkout); the
+# artifact upload uses the runner's own token, so no other scope is needed.
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   # Same discovery pattern as ios-testflight.yml's "Select Xcode" step —

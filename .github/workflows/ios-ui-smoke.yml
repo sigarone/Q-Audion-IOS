@@ -66,6 +66,12 @@ on:
         required: false
         default: 'iPhone 17'
 
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# every job here only checks the repository out and reads it. Caches and artifacts
+# use the runner's own token, not GITHUB_TOKEN, so no other scope is needed.
+permissions:
+  contents: read
+
 jobs:
   ui-smoke:
     runs-on: macos-latest
