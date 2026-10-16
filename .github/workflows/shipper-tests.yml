@@ -55,6 +55,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Il job non scrive sul repository: niente credenziali salvate.
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
