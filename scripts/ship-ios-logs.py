@@ -685,6 +685,29 @@ MAX_UNKNOWN_WORDS = 2     # per body: words that are neither TELEMETRY_VOCAB nor
 UNKNOWN_MAX_LEN = 9       # an unknown word longer than this is not a plausible word
 MAX_IDLIKE_TOKENS = 2     # per body: hex id prefixes (4-8 hex) + numbers of 6+ digits
 MAX_NUM_RUN = 3           # consecutive bare number tokens
+# W-NAMEGATE (hardening: names and short numbers). A given name or a short code is
+# a plausible word or a small number, so the cap on unknown words alone does not
+# stop it: two unknown words per body are enough for "dial <name> ok". Three more
+# rules, all fail-closed (the body falls back to the attribute summary):
+#   * MAX_UNKNOWN_BARE_WORDS: words OUTSIDE key=value that are not vocabulary. 0 =
+#     every free word of a body must be known. The keys of key=value tokens (app
+#     identifiers) stay under MAX_UNKNOWN_WORDS; a "word:" token counts as a free
+#     word (COLON_KEY_IS_BARE); a label such as audio0 / W417 is the exception
+#     (MAX_LABEL_TOKENS, _is_label_token).
+#   * the alphabetic VALUE of a key=value must be made only of vocabulary words (a
+#     closed list), never a word we have not seen (state=<name>). Under a key that
+#     names an identity (_KV_DENY_WORDS: name, label, caller, ...) the value can
+#     only be a boolean, a number of at most IDENT_KEY_MAX_DIGITS digits or a hex
+#     id prefix (_gate_kv_ok).
+#   * a number of more than BARE_NUM_PLAIN_DIGITS digits, without a unit, is a
+#     measurement only in a context: after "key:" / "key=", after a quantity word
+#     (_NUM_CTX_PREV), before a unit word (_NUM_UNIT_NEXT), or as the value of a
+#     known or measurement-like key (_short_num_key_ok). A number right after a
+#     verb ("dial 4421 ok") is not.
+MAX_UNKNOWN_BARE_WORDS = 0
+MAX_LABEL_TOKENS = 2      # per body: free tokens like audio0 / W417 (_is_label_token)
+BARE_NUM_PLAIN_DIGITS = 2
+IDENT_KEY_MAX_DIGITS = 3  # digits of a number under an identity key (peer=3)
 
 APP_VOCAB = frozenset("""
     abs accept accepted activated activation active add aead aec aes agc age
@@ -729,7 +752,7 @@ APP_VOCAB = frozenset("""
     turn txdc txfall type udp un unc uncertain undec unknown unseal
     untracked updating upgrade upload upok us user usev4 uvk va vad value vbind
     vbwcap vbwcaprx vcap verified version vidcap video voice voiced voip vol
-    vpio vpn vpostneg vspostneg w-callawake w-deactown w-gateowner
+    vpio vpn vpostneg vspostneg w-callawake w-deactown w-gateowner w-selfactid w-p2pprobe
     w-nudgeown wait
     watchdog wdstart wdstop webrtc why wifi wire writable ws wss
     wsunavailable x xw yet
@@ -759,7 +782,47 @@ APP_VOCAB = frozenset("""
     audiosrtpfb engage recover admreset wedges latch split
 
     audioroute suspect duck silent hear
+
+    senderid receiverid applyconfig janus cryattach muteapply recon piggy
+    restart mm thread delay cont owner requests cryptex rxinject enter
+    selfactid guardian size buffer from pprobe swiftui read display metadata
+    backlog adm rate dylib dyld change vp inputs outputs chunk
+    terminal response rekey running finalized busy tap n push far status scorex100
+    block_b late windows frozen waiting cancel ipv4
+
+    apply busytone callready delivered download edit engine filev2 group ignored
+    inappring mismatch nocallid nosealer note outgoing persist promote provider
+    quad reg ring sealer setspeaker sibling store the thumbnail tombstone
+    unpaused upsert vidinvite vidpause
+
+    output duration networks setsink category processor heartbeat consumed
+    detector analyzer factory timer stack context
+
+    assigned chatsend connect draining encrypt gatt notify prekeys sendbinary
+    vpnservice
 """.split())
+# W-NAMEGATE (2026-10-10) -- with MAX_UNKNOWN_BARE_WORDS = 0 every free word of a
+# line must be vocabulary, and so must the alphabetic value of a key=value. The
+# four blocks of words that close this set (senderid ... ipv4, apply ... vidpause,
+# output ... context, assigned ... vpnservice) are technical words that lines
+# already shipped used and that were not vocabulary yet:
+#   * senderid ... ipv4: seen in the lines shipped over the last 8 days -- RTLog
+#     line prefixes (cryattach, muteapply, recon, rxinject), key labels (senderId:
+#     receiverId:), values (reason=rekey, state=running) and words of the native
+#     engine's own messages ("Remote peer requests ICE restart", "Message to ...
+#     took 9ms", ".mm" file names);
+#   * apply ... vidpause: the fixed words of the RTLog messages in the app sources
+#     (QAudionApp, QAudionEngine) whose line used to ship verbatim (vidpause,
+#     vidinvite, busytone, nosealer, ...);
+#   * output ... context: engine words used as colon labels ("Count of networks:",
+#     "output: 0", "duration: 5 sec", "context: in_call=1"), which are judged as
+#     free words too;
+#   * assigned ... vpnservice: the fixed words of the stdout lines (print) of the app
+#     sources, e.g. "[ChatSend] WS send failed: <n>", "prekeys: upload failed: <n>".
+# Every one is a literal of the app or a common English word of the engine logs,
+# never a value typed by a person. Words seen once or twice, and the ones that are
+# also given names, are left out on purpose: fail closed, a new line shape is
+# summarised until its words are added here and pinned in a test_ship_ios_*_vocab.py.
 # CALL-METRICS (2026-10-04) -- the 5 words on the line right above ("audioroute suspect duck silent hear") are for the new
 # "call"-tagged RTLog lines of CallService's call-monitoring package (docs/TELEMETRY_CALL_METRICS.md):
 #   audioroute why=<reason> old=<code> out=<code> in=<code> profile=<0-3> sr=<Hz> out_ch=<n> in_ch=<n> vol=<0-100>
@@ -865,7 +928,7 @@ CALL_FORMAT_VOCAB = frozenset("""
 
     ringsig put take wipe release ring pc op
 
-    dstage
+    dstage hsfatal
 """.split())
 
 # Real RTLog "call"-tagged line shapes CALL_FORMAT_VOCAB's words belong to,
@@ -950,8 +1013,11 @@ _RE_DCMUX_WEDGE_FULL = re.compile(
 # "dstage" is NOT "dtls": the 1:1 heartbeat already prints "dtls=<state>". The
 # key must be vocabulary or the line spends 3 unknown words ("hsfatal", "r",
 # "dstage") and is dropped, so it is scoped to exactly this full line (one digit
-# each, nothing else): "hsfatal r=1" without a stage already ships unchanged.
-_RE_HSFATAL_DSTAGE_FULL = re.compile(r"^hsfatal r=[1-3] dstage=[1-9]$")
+# each, nothing else). W-NAMEGATE: "hsfatal" is a bare word, and bare words must be
+# vocabulary, so the two shorter lines of the same family ("hsfatal r=1", "hsfatal
+# stale=1") are scoped here too, with "hsfatal" in CALL_FORMAT_VOCAB.
+_RE_HSFATAL_DSTAGE_FULL = re.compile(
+    r"^hsfatal (?:r=[1-3](?: dstage=[1-9])?|stale=1)$")
 
 
 def _is_call_format_body(tag, norm_body):
@@ -1040,6 +1106,21 @@ _KV_VAL_STRIP = "()[]{}<>,;:.!?\"'`/\\*"
 _NUM_UNITS = frozenset(
     "ms us ns s sec secs min mins h hz khz mhz kbps mbps gbps bps fps kb mb gb "
     "b db dbfs dbm px x k m g kib mib pkts pps %".split())
+
+# W-NAMEGATE: context that makes a bare number of more than BARE_NUM_PLAIN_DIGITS
+# digits a measurement. Before it: a word that names a quantity. After it: a unit
+# written as a separate word ("timeout to 500 ms"). A verb or a preposition is
+# NOT a context ("dial 4421 ok", "call to 4421"): a short code looks the same.
+_NUM_CTX_PREV = frozenset(
+    "block delta number resolution size len length total timestamp ssrc port "
+    "rtt seq sequence bitrate bitrates min max x http decoded encoded + - -> => \u2192".split())
+_NUM_UNIT_NEXT = frozenset(
+    "ms us ns s sec secs seconds min mins hz khz mhz kbps mbps bps fps kb mb "
+    "bytes byte frames packets pkts px db dbfs samples".split())
+# a "word:" token is a prose label as much as an identifier ("<name>: ok"): its
+# unknown words are judged as free words (MAX_UNKNOWN_BARE_WORDS), not as app
+# identifiers.
+COLON_KEY_IS_BARE = True
 
 
 def _word_known(low):
@@ -1149,6 +1230,36 @@ def _ident_ok(tok):
     return True, unknown
 
 
+_RE_LABEL_SPLIT = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _is_label_token(tok):
+    """W-NAMEGATE: a free token that is an app LABEL, not a word: pieces split on
+    non-alphanumerics; every piece is a vocabulary word or a vocabulary word (or
+    one letter) glued to a short number (audio0, janus1, v5, W417, PQC_DIAG_V5);
+    at least one piece carries the number. Such a token carries a handful of
+    bits, so it is exempt from MAX_UNKNOWN_BARE_WORDS but still costs one of the
+    MAX_UNKNOWN_WORDS and at most MAX_LABEL_TOKENS fit in a body."""
+    pieces = [p for p in _RE_LABEL_SPLIT.split(tok) if p]
+    if not pieces or len(pieces) > 4:
+        return False
+    mixed = False
+    for p in pieces:
+        if p.isalpha():
+            if not _word_known(p.lower()):
+                return False
+            continue
+        runs = _RE_ALNUM_RUNS.findall(p)
+        if len(runs) != 2 or not runs[0].isalpha() or not runs[1].isdigit():
+            return False
+        if not (len(runs[0]) == 1 or _word_known(runs[0].lower())):
+            return False
+        if len(runs[1]) > (3 if len(runs[0]) == 1 else 2):
+            return False
+        mixed = True
+    return mixed
+
+
 def _is_bignum(tok):
     """A number token of 6+ digits (an "id-like" value: budgeted per body)."""
     return _RE_BIGNUM.search(tok) is not None
@@ -1166,29 +1277,61 @@ def _num_token_ok(tok):
     return not unit or unit.lower() in _NUM_UNITS
 
 
+def _hex_id_prefix(v):
+    """A hex id prefix (4-8 hex digits) that is not a plain word: at least one
+    decimal digit. A 4-8 letter token made of a-f only (face, dead, decade) reads
+    as a word -- or a name -- not as a random id prefix (W-NAMEGATE)."""
+    return _RE_HEX_PREFIX.match(v) is not None and any(c.isdigit() for c in v)
+
+
 def _gate_kv_ok(tok):
     """Judge an UNPROTECTED key=value / key:value gate token (the old gate
-    trusted everything after the separator). Returns (ok, is_idlike, n_unknown_words):
-    is_idlike = the value is a hex id prefix or a number of 6+ digits. The key must read like an identifier; the value must be
-    empty, a [REDACTED:*] placeholder, a number (+ known unit), a short hex id
-    prefix, or identifier-like."""
+    trusted everything after the separator). Returns (ok, is_idlike,
+    n_unknown_words, colon_key): is_idlike = the value is a hex id prefix or a
+    number of 6+ digits; n_unknown_words = key words that are not vocabulary;
+    colon_key = the separator is ':' (the key may be a prose label, judged as a
+    bare word by the caller).
+
+    The key must read like an identifier. The value must be empty, a
+    [REDACTED:*] placeholder, a number (+ known unit), a hex id prefix with a
+    digit, or an alphabetic value made ONLY of vocabulary words (W-NAMEGATE: a
+    closed list, never "a word we have not seen yet"; state=<a name> is not benign).
+    Under a key that names an identity or key material (_KV_DENY_WORDS: name, label,
+    caller, ...) the value can only be a boolean, a number of at most
+    IDENT_KEY_MAX_DIGITS digits, or a hex id prefix: never a word."""
     m = _RE_KV_GATE.match(tok)
     if not m:
-        return False, False, 0
-    ok, unknown = _ident_ok(m.group(1))
+        return False, False, 0, False
+    key = m.group(1)
+    colon_key = tok[len(key)] == ":"
+    ok, unknown = _ident_ok(key)
     if not ok:
-        return False, False, 0
+        return False, False, 0, False
     v = _RE_PH_INSIDE.sub("", m.group(2)).strip(_KV_VAL_STRIP)
     if not v:
-        return True, False, unknown
-    if _num_token_ok(v):
-        return True, _is_bignum(v), unknown
-    if _RE_HEX_PREFIX.match(v):
-        return True, True, unknown
+        return True, False, unknown, colon_key
+    is_num = _num_token_ok(v)
+    if _kv_key_denied(key, is_num) and not (
+            not _kv_key_person_bearing(key) and _ident_ok(v) == (True, 0)):
+        if v.lower() in _KV_BOOLS:
+            return True, False, unknown, colon_key
+        if is_num:
+            if len(re.sub(r"\D", "", v)) > IDENT_KEY_MAX_DIGITS:
+                return False, False, 0, False
+            return True, False, unknown, colon_key
+        if _hex_id_prefix(v):
+            return True, True, unknown, colon_key
+        return False, False, 0, False
+    if is_num:
+        if not _short_num_key_ok(key, v, unknown):
+            return False, False, 0, False
+        return True, _is_bignum(v), unknown, colon_key
+    if _hex_id_prefix(v):
+        return True, True, unknown, colon_key
     ok, n = _ident_ok(v)
-    if not ok:
-        return False, False, 0
-    return True, False, unknown + n
+    if not ok or n:
+        return False, False, 0, False
+    return True, False, unknown, colon_key
 
 
 # 1f. hard length cap.
@@ -1263,6 +1406,8 @@ nonce iv tag sig signature hash digest fp fingerprint cid id uid uuid guid
 serial imei imsi udid ssid bssid mac device model cred creds credential auth
 cookie ticket cert pubkey privkey ufrag pwd verify verification confirm
 confirmation activation sms unlock passcode challenge invite
+subject topic group room member participant party partner buddy friend
+receiver who whom dest destination surname initials
 """.split())
 # A numeric value under a key whose LAST word is a measurement (peerReadyAgeMs,
 # userCount, retryAttempts) is a measurement, not an identity: the ROLE words of
@@ -1274,13 +1419,27 @@ ratio attempts retries total idx index seq score rtt ttl pct percent
 """.split())
 _KV_MEASURE_WAIVE = frozenset("""
 peer user caller callee from to sender recipient owner account acct contact
-host activation
+host activation group room member participant party partner receiver dest
+destination
 """.split())
 # ... and concatenated spellings the word splitter cannot see.
 _KV_DENY_SUBSTR = ("passw", "secret", "token", "cred", "fingerprint",
                    "username", "nickname", "devicename", "hostname", "phone",
                    "email", "psk", "privkey", "pubkey", "keyfp", "ufrag",
-                   "mnemonic", "otp", "callid", "userid", "peerid", "deviceid")
+                   "mnemonic", "otp", "callid", "userid", "peerid", "deviceid",
+                   # spellings the word splitter cannot see (W-NAMEGATE)
+                   "firstname", "lastname", "fullname", "surname", "givenname",
+                   "displayname", "contactname", "callername", "calleename",
+                   "peername", "groupname", "roomname", "ownername")
+# W-NAMEGATE: of the deny words above, the ones that name a thing a person typed or
+# that identifies a person (name, label, caller, peer, ...). Under such a key the
+# gate admits only a boolean, a short number or a hex id prefix -- never a word,
+# not even a vocabulary word (a contact can be called Max). Under the other deny
+# keys (id, key, url, path, host, ...) a value made only of vocabulary words is
+# fine: it cannot carry content.
+_KV_TECH_DENY_WORDS = frozenset("""
+url uri path file filename host hostname
+""".split())
 # `code` is fine for error/status codes, not for verification-style codes.
 _KV_CODE_CONTEXT = frozenset("""
 verify verification sms otp pair pairing invite confirm activation login reset
@@ -1340,6 +1499,9 @@ KV_FIXED_VOCAB = frozenset([
     # W-NATIVESRTPDIAG (this task) -- RTCAudioSession.category, read back
     # exactly as CallKitProvider.setCategory(.playAndRecord, ...) sets it.
     "playAndRecord", "AVAudioSessionCategoryPlayAndRecord",
+    # W-NAMEGATE -- DTLS record versions (tlsv=FEFC): hex letters only, so the
+    # gate's id-prefix rule (it wants a digit) no longer admits them by shape.
+    "FEFC", "FEFD", "FEFF",
 ])
 
 
@@ -1389,6 +1551,39 @@ def _kv_enum_key(key):
     return bool(words) and words[-1] in _KV_ENUM_KEY_WORDS
 
 
+def _kv_key_denied(key, numeric=False):
+    """True if the key names an identity / key material / free-content field.
+    W-KVPRECISION-2 (red-team finding 4): the identity words (id, name, email,
+    phone, ip, number, ...) are NEVER waived. Only the ROLE words in
+    _KV_MEASURE_WAIVE (peer, user, caller, ...) are, and only for a numeric
+    value under a measurement key (peerReadyAgeMs, userCount): the old code
+    waived EVERY deny word there, so peerSessionIdMs=1234567 shipped."""
+    words = _kv_key_words(key)
+    low = key.lower()
+    measurement = numeric and bool(words) and words[-1] in _KV_MEASURE_SUFFIX
+    for w in words:
+        if w in _KV_DENY_WORDS and not (measurement and w in _KV_MEASURE_WAIVE):
+            return True
+    if any(s in low for s in _KV_DENY_SUBSTR):
+        return True
+    if "code" in words and _KV_CODE_CONTEXT.intersection(words):
+        return True
+    return False
+
+
+def _kv_key_person_bearing(key):
+    """True unless every reason the key is denied is a technical word (url, path,
+    host, ...): see _KV_TECH_DENY_WORDS. Call only for a key _kv_key_denied()
+    refuses."""
+    words = _kv_key_words(key)
+    if any(w in _KV_DENY_WORDS and w not in _KV_TECH_DENY_WORDS for w in words):
+        return True
+    low = key.lower()
+    if any(x in low and x != "hostname" for x in _KV_DENY_SUBSTR):
+        return True
+    return "code" in words and bool(_KV_CODE_CONTEXT.intersection(words))
+
+
 def _kv_key_ok(key, numeric=False):
     """Key half of the grammar: word-like parts, no identity/secret word.
     Returns the number of key words that are not app vocabulary (>= 0) when the
@@ -1405,25 +1600,29 @@ def _kv_key_ok(key, numeric=False):
                 continue
             if _RE_CONSONANT_RUN.search(cw):
                 return -1
-    words = _kv_key_words(key)
-    low = key.lower()
-    # W-KVPRECISION-2 (red-team finding 4): the identity words (id, name, email,
-    # phone, ip, number, ...) are NEVER waived. Only the ROLE words in
-    # _KV_MEASURE_WAIVE (peer, user, caller, ...) are, and only for a numeric
-    # value under a measurement key (peerReadyAgeMs, userCount): the old code
-    # waived EVERY deny word there, so peerSessionIdMs=1234567 shipped.
-    measurement = numeric and bool(words) and words[-1] in _KV_MEASURE_SUFFIX
-    for w in words:
-        if w in _KV_DENY_WORDS and not (measurement and w in _KV_MEASURE_WAIVE):
-            return -1
-    if any(s in low for s in _KV_DENY_SUBSTR):
-        return -1
-    if "code" in words and _KV_CODE_CONTEXT.intersection(words):
+    if _kv_key_denied(key, numeric):
         return -1
     # W-FREEWORD: the key is free text too (`qzkmxvplwtrnh=1`): it must read like
     # an identifier -- known words, or word-like ones.
     ok, n_unknown = _ident_ok(key)
     return n_unknown if ok else -1
+
+
+def _short_num_key_ok(key, val, n_key_unknown):
+    """W-NAMEGATE: a number of more than BARE_NUM_PLAIN_DIGITS digits under a key
+    is a measurement only if the key is KNOWN (every word of it is vocabulary:
+    count, bytes, rtt, idx, ...), or it ends like a measurement (elapsedMs,
+    window_ms, pushCount: _KV_MEASURE_SUFFIX), or the value carries a unit. A
+    key we have never seen next to a 3-5 digit number is how a short code rides
+    along; it is summarised until the key is added to the vocabulary."""
+    if n_key_unknown == 0 or "." in val:
+        return True                      # known key, or a decimal (a score, a ratio)
+    if len(re.sub(r"\D", "", val)) <= BARE_NUM_PLAIN_DIGITS:
+        return True
+    if not val[-1:].isdigit():
+        return True                      # 35ms, 64kbps, 12%
+    low = key.lower()
+    return any(low.endswith(x) for x in _KV_MEASURE_SUFFIX if len(x) >= 2)
 
 
 @functools.lru_cache(maxsize=16384)
@@ -1478,13 +1677,15 @@ def _kv_classify(key, val):
         if _kv_enum_key(key) and all(
                 _kv_plausible_word(p, 12, 3) for p in val.split("_")):
             ok, n_val = _ident_ok(val)
-            if ok:
+            # W-NAMEGATE: the value is a KNOWN word (vocabulary), not a word we
+            # have not seen: reason=<a name> is not an enum value.
+            if ok and not n_val:
                 kind = "enum"
     elif RE_KV_LCAMEL.match(val):
         if _kv_enum_key(key) and all(
                 _kv_plausible_word(p, 12, 0) for p in _KV_WORD_SPLIT.findall(val)):
             ok, n_val = _word_ok(val)
-            if ok:
+            if ok and not n_val:
                 kind = "lcamel"
     if kind is None:
         return None, 0
@@ -1499,6 +1700,8 @@ def _kv_classify(key, val):
         return ("bool", n_key) if ok else (None, 0)
     n_key = _kv_key_ok(key, numeric=(kind == "num"))
     if n_key < 0:
+        return None, 0
+    if kind == "num" and not _short_num_key_ok(key, val, n_key):
         return None, 0
     return kind, n_key + n_val
 
@@ -1628,6 +1831,22 @@ def _has_residual_secret(body):
     return False
 
 
+def _num_has_context(toks, i):
+    """True if the bare number token toks[i] sits in a measurement context: it
+    follows a "key:" / "key=" token or a quantity word (_NUM_CTX_PREV), or it
+    precedes a separate unit word (_NUM_UNIT_NEXT)."""
+    if i > 0:
+        prev = toks[i - 1]
+        if prev.endswith((":", "=")) and len(prev) > 1:
+            return True
+        if prev.strip(_GATE_WRAP + "*").lower() in _NUM_CTX_PREV:
+            return True
+    if i + 1 < len(toks):
+        if toks[i + 1].strip(_GATE_WRAP + "*").lower() in _NUM_UNIT_NEXT:
+            return True
+    return False
+
+
 def _passes_structured_gate(scrubbed, unknown_used=0, idlike_used=0):
     """POSITIVE allow-list. A body ships ONLY if it is recognizably structured
     telemetry. THREE conditions, ALL required (fail-closed):
@@ -1655,11 +1874,14 @@ def _passes_structured_gate(scrubbed, unknown_used=0, idlike_used=0):
     structural = 0
     unknown = unknown_used   # (C) words that are neither TELEMETRY_VOCAB nor APP_VOCAB
                              # (already spent by the protected key=value tokens)
+    bare_unknown = 0   # (C) of those, the ones OUTSIDE key=value (W-NAMEGATE)
+    labels = 0         # (C) free label tokens (audio0, W417): see _is_label_token
     idlike = idlike_used   # (C) hex id prefixes / 6+ digit numbers (kv values too)
     numrun = 0      # (C) consecutive bare number tokens
     # each protected benign key=value sentinel (1g) becomes its own token, so a
     # neighbouring word or punctuation is judged on its own merits.
-    for tok in RE_KVSENT.sub(lambda m: " %s " % m.group(0), scrubbed).split():
+    toks = RE_KVSENT.sub(lambda m: " %s " % m.group(0), scrubbed).split()
+    for ti, tok in enumerate(toks):
         if RE_PLACEHOLDER_TOKEN.match(tok):
             run = 0
             numrun = 0
@@ -1674,7 +1896,7 @@ def _passes_structured_gate(scrubbed, unknown_used=0, idlike_used=0):
         if RE_KV_TOKEN.match(tok):
             # W-FREEWORD: an unprotected key=value token used to be structural
             # whatever followed the separator; key and value are judged now.
-            ok, is_idlike, n_unk = _gate_kv_ok(tok)
+            ok, is_idlike, n_unk, colon_key = _gate_kv_ok(tok)
             if not ok:
                 return False
             if is_idlike:
@@ -1684,11 +1906,24 @@ def _passes_structured_gate(scrubbed, unknown_used=0, idlike_used=0):
             unknown += n_unk
             if unknown > MAX_UNKNOWN_WORDS:
                 return False
+            if colon_key and COLON_KEY_IS_BARE and n_unk:
+                if _is_label_token(_RE_KV_GATE.match(tok).group(1)):
+                    labels += 1
+                    if labels > MAX_LABEL_TOKENS:
+                        return False
+                else:
+                    bare_unknown += n_unk
+                    if bare_unknown > MAX_UNKNOWN_BARE_WORDS:
+                        return False
             run = 0
             numrun = 0
             structural += 1
             continue
         if RE_NUM_TOKEN.match(tok) and _num_token_ok(tok):
+            if (len(re.sub(r"\D", "", tok)) > BARE_NUM_PLAIN_DIGITS
+                    and not tok[-1:].isalpha() and tok[-1:] != "%"
+                    and not _num_has_context(toks, ti)):
+                return False      # a short code after a verb, not a measurement
             numrun += 1
             if numrun > MAX_NUM_RUN:
                 return False
@@ -1728,7 +1963,9 @@ def _passes_structured_gate(scrubbed, unknown_used=0, idlike_used=0):
             # "at"). This is what catches plaintext prose.
             if eff.isalpha() and not _word_known(eff.lower()):
                 unknown += 1
-                if unknown > MAX_UNKNOWN_WORDS:
+                bare_unknown += 1
+                if (unknown > MAX_UNKNOWN_WORDS
+                        or bare_unknown > MAX_UNKNOWN_BARE_WORDS):
                     return False
             continue
         # a free word (RE_FREEWORD) or an unknown token shape: conservative ->
@@ -1742,7 +1979,14 @@ def _passes_structured_gate(scrubbed, unknown_used=0, idlike_used=0):
             if not ok:
                 return False
             unknown += n_unk
-            if unknown > MAX_UNKNOWN_WORDS:
+            if n_unk and _is_label_token(eff):
+                labels += 1
+                if labels > MAX_LABEL_TOKENS:
+                    return False
+            else:
+                bare_unknown += n_unk
+            if (unknown > MAX_UNKNOWN_WORDS
+                    or bare_unknown > MAX_UNKNOWN_BARE_WORDS):
                 return False
     # (B) -- if there are free words, require positive structure AND that the
     # free words do not dominate. Pure structure (free==0) always passes.
