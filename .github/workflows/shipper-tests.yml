@@ -1,0 +1,83 @@
+# Test del filtro dei log
+#
+# Esegue i test Python del filtro dei log (scripts/ship-ios-logs.py): ogni
+# scripts/test_ship_ios_*.py e il fuzz scripts/test_ship_redactor_fuzz.py.
+# Il filtro lascia passare solo le righe di un vocabolario noto e scarta il
+# resto senza alcun errore, quindi una modifica puo' far sparire righe valide
+# (o lasciarne passare di troppo) senza che nessun altro controllo se ne
+# accorga: questi test sono l'unico controllo, e fino ad ora nessun workflow
+# li eseguiva.
+#
+# Un workflow a parte, su ubuntu, e non un job di ios-app-tests.yml: quello
+# gira su macOS, costa di piu' e parte solo se cambiano i sorgenti dell'app,
+# mentre qui basta Python e bastano pochi secondi.
+#
+# Nessuna dipendenza da installare: i test caricano il filtro con un modulo
+# "paramiko" finto quando la libreria manca, e usano solo la libreria
+# standard. Si lanciano con `python -I` (modalita' isolata: niente variabili
+# d'ambiente PYTHON*, niente cartella dello script in sys.path). Il test
+# test_ship_ios_dtlswait_vocab.py legge anche
+# QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift,
+# per questo e' tra i percorsi che fanno partire il workflow.
+#
+# Nessun segreto, nessuna rete; sola lettura del repository.
+
+name: Test del filtro dei log
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/ship-ios-logs.py'
+      - 'scripts/test_ship_*'
+      - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift'
+      - '.github/workflows/shipper-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/ship-ios-logs.py'
+      - 'scripts/test_ship_*'
+      - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift'
+      - '.github/workflows/shipper-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shipper-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shipper-tests:
+    name: Test del filtro dei log
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Esegue i test del filtro
+        run: |
+          # Li lancia tutti anche se uno fallisce, poi esce con errore se
+          # almeno uno e' uscito con codice diverso da 0.
+          status=0
+          n=0
+          for t in scripts/test_ship_ios_*.py scripts/test_ship_redactor_fuzz.py; do
+            if [ ! -f "$t" ]; then
+              echo "::error::test non trovato: $t"
+              status=1
+              continue
+            fi
+            n=$((n + 1))
+            echo "=== $t"
+            if ! python -I "$t"; then
+              echo "::error file=$t::il test e' uscito con codice diverso da 0"
+              status=1
+            fi
+          done
+          echo "test eseguiti: $n"
+          exit $status
