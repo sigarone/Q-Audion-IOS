@@ -28,7 +28,24 @@
 
 name: iOS App Build + App Tests
 
+# The SPM cache below is written only from main (push, same paths as the pull
+# request trigger, or a manual dispatch on main) and only read from pull
+# requests. Before this, each pull request ref saved its own copy (about 1.2 GB)
+# at the end of its first run, because main never held the entry (this workflow
+# did not run on push), and those copies pushed the engine caches out of the
+# repository's cache quota.
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'QAudionApp/**'
+      - 'QAudionAppTests/**'
+      - 'QAudionEngine/**'
+      - 'QAudionIntents/**'
+      - 'QAudionPacketTunnel/**'
+      - 'scripts/ci/assert-no-vpn.sh'
+      - 'scripts/ci/test-assert-no-vpn.sh'
+      - '.github/workflows/ios-app-tests.yml'
   pull_request:
     branches: [main]
     paths:
@@ -42,9 +59,11 @@ on:
       - '.github/workflows/ios-app-tests.yml'
   workflow_dispatch:
 
+# A newer push to a pull request replaces the run in progress; a run on main is
+# never cancelled, so the step that writes the cache on main always completes.
 concurrency:
   group: ios-app-tests-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   app-build-and-tests:
@@ -75,8 +94,9 @@ jobs:
           sudo xcode-select -s "$MATCH"
           xcodebuild -version
 
-      - name: Cache SPM packages
-        uses: actions/cache@v5
+      - name: Restore SPM packages
+        id: cache-spm
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
@@ -120,6 +140,18 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             2>&1 | tee build-sim.log \
           || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-sim.log ==="; tail -300 build-sim.log; exit 1)
+
+      # Only main writes the entry, and only when the exact key was not found;
+      # pull requests read it and never save. The package cache is filled by
+      # the build above, so this sits right after it and does not wait for the
+      # tests.
+      - name: Save SPM packages (main only)
+        if: github.ref == 'refs/heads/main' && steps.cache-spm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
 
       # The gate's own self-test, then the gate on the app just built from the
       # default spec (Simulator Debug, ad-hoc signed so the entitlements are
@@ -229,6 +261,9 @@ jobs:
   # The variant WITH VPN support. Device destination, unsigned: libwg-go.a (built
   # by the QAudionPacketTunnel script phase, needs Go) has no Simulator slice.
   vpn-variant-build:
+    # Not on push to main: that run exists to write the SPM cache (the other
+    # job does it) and this variant was already built on the pull request.
+    if: github.event_name != 'push'
     runs-on: macos-latest
     timeout-minutes: 60
 
@@ -255,8 +290,9 @@ jobs:
           sudo xcode-select -s "$MATCH"
           xcodebuild -version
 
-      - name: Cache SPM packages
-        uses: actions/cache@v5
+      # Read only: the entry is written by the other job, on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
