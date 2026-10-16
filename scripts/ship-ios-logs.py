@@ -800,12 +800,14 @@ APP_VOCAB = frozenset("""
 
     assigned chatsend connect draining encrypt gatt notify prekeys sendbinary
     vpnservice
+
+    side same brake resize
 """.split())
 # W-NAMEGATE (2026-10-10) -- with MAX_UNKNOWN_BARE_WORDS = 0 every free word of a
 # line must be vocabulary, and so must the alphabetic value of a key=value. The
-# four blocks of words that close this set (senderid ... ipv4, apply ... vidpause,
-# output ... context, assigned ... vpnservice) are technical words that lines
-# already shipped used and that were not vocabulary yet:
+# five blocks of words that close this set (senderid ... ipv4, apply ... vidpause,
+# output ... context, assigned ... vpnservice, side ... resize) are technical words
+# that lines already shipped used and that were not vocabulary yet:
 #   * senderid ... ipv4: seen in the lines shipped over the last 8 days -- RTLog
 #     line prefixes (cryattach, muteapply, recon, rxinject), key labels (senderId:
 #     receiverId:), values (reason=rekey, state=running) and words of the native
@@ -818,7 +820,12 @@ APP_VOCAB = frozenset("""
 #     "output: 0", "duration: 5 sec", "context: in_call=1"), which are judged as
 #     free words too;
 #   * assigned ... vpnservice: the fixed words of the stdout lines (print) of the app
-#     sources, e.g. "[ChatSend] WS send failed: <n>", "prekeys: upload failed: <n>".
+#     sources, e.g. "[ChatSend] WS send failed: <n>", "prekeys: upload failed: <n>";
+#   * side ... resize: the avatar lines (AvatarAnnounceCoordinator): "side" is the key
+#     of a picture's long side in pixels (3 to 5 digits: a key of a number of more than
+#     2 digits must be vocabulary, see _short_num_key_ok), "same" / "brake" / "resize"
+#     are the action words of "skip same ...", "skip brake ..." and "resize bytes=..".
+#     Pinned by test_ship_ios_display_vocab.py.
 # Every one is a literal of the app or a common English word of the engine logs,
 # never a value typed by a person. Words seen once or twice, and the ones that are
 # also given names, are left out on purpose: fail closed, a new line shape is
@@ -1279,9 +1286,12 @@ def _num_token_ok(tok):
 
 def _hex_id_prefix(v):
     """A hex id prefix (4-8 hex digits) that is not a plain word: at least one
-    decimal digit. A 4-8 letter token made of a-f only (face, dead, decade) reads
-    as a word -- or a name -- not as a random id prefix (W-NAMEGATE)."""
-    return _RE_HEX_PREFIX.match(v) is not None and any(c.isdigit() for c in v)
+    decimal digit, unless it is the full 8-digit short id (to=8bc24df8: 1 in 2500
+    of them has no digit). A 4-7 letter token made of a-f only (face, dead, decade)
+    reads as a word -- or a name -- not as a random id prefix (W-NAMEGATE)."""
+    if _RE_HEX_PREFIX.match(v) is None:
+        return False
+    return any(c.isdigit() for c in v) or len(v) == 8
 
 
 def _gate_kv_ok(tok):

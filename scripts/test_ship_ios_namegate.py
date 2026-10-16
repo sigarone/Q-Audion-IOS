@@ -82,10 +82,18 @@ NAME_LINES = [
     "state={N} role=caller", "reason={N} state=ringing", "role={N} state=ringing",
     "state=ringing {N}", "[{N}] ok state=ringing", "{N}: ok state=ringing", "dial {N}: ok count=1",
     "dial,{N},ok state=ringing",
+    # the avatar lines (tag "avatar") with a name or a code where an id or a pixel size belongs
+    "send ok=1 del=0 to={N} trig=1 why=1 bytes=64000 side=512 min=512",
+    "skip same to={N} code=4 trig=1 bytes=64000",
+    "skip brake to={N} code=5 trig=1 age=119",
+    "resize bytes=64000 out=64000 side={N} min=512",
+    "recv applied=1 bytes=64000 out=64000 side=512 min={N}",
 ]
 CODE_LINES = [
     "dial {C} ok count=1", "code {C} ok count=1", "ext {C} ok count=1", "resolved {C} bytes=300",
     "dial {C}", "state=ringing name={C}", "state=ringing contactId={C}", "state=ringing label={C}",
+    "send ok=1 del=0 to={C} trig=1 why=1 bytes=64000 side=512 min=512",
+    "skip brake to={C} code=5 trig=1 age=119",
 ]
 # An invented key the app never printed next to a 3+ digit number: summarised until it is added.
 UNKNOWN_KEY_LINES = ["state=ringing zorkblat={C}", "state=ringing qq={C} count=1"]
@@ -108,6 +116,11 @@ for tmpl in NAME_LINES:
 for tmpl in CODE_LINES + UNKNOWN_KEY_LINES:
     for code in CODES:
         must_block(tmpl.replace("{C}", code), CODES)
+
+# A short id is 8 hex digits; a shorter run of hex letters under an identity key is a word (a name), not an id.
+for word in ("face", "dead", "decade"):
+    must_block("state=ringing to=%s" % word, [word])
+    must_block("send ok=1 del=0 to=%s trig=1 why=1 bytes=64000 side=512 min=512" % word, [word])
 
 # The same lines with the name replaced by a vocabulary-looking word must NOT be what keeps them out: the
 # structure around a name still ships (the summary carries the allowed attributes).
@@ -143,6 +156,11 @@ KEPT = [
     "filev2 send failed code=5", "inappring res=0",
     # labels (a vocabulary word and a short number) and the colon labels of the engine
     "senderId: audio0", "receiverId: janus1", "[PQC_DIAG_V5] kind=offer state=active",
+    # the avatar lines (see also test_ship_ios_display_vocab.py): "side" and the action words are vocabulary
+    "send ok=1 del=0 to=8bc24df8 trig=2 why=2 bytes=99999 side=16384 min=16384",
+    "skip same to=8bc24df8 code=4 trig=3 bytes=99999", "skip brake to=8bc24df8 code=5 trig=1 age=119",
+    "resize bytes=99999 out=99999 side=16384 min=16384",
+    "recv applied=1 bytes=99999 out=99999 side=16384 min=16384",
     # numbers in a measurement context
     "(audio.cc:551): output: 0",
     "(video.cc:283): Resolution: 720 x 1280",
