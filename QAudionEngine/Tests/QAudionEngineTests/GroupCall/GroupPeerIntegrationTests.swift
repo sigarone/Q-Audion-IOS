@@ -289,6 +289,25 @@ final class GroupPeerIntegrationTests: XCTestCase {
         peer.updateIceServers([])      // a closed wrapper ignores it
     }
 
+    /// The policy's layer request and the encoder watch's single-layer cap both land on the
+    /// real sender's encodings, and the cap holds against a later, larger request.
+    func testTheLayerRequestAndTheSingleLayerFallbackShapeTheVideoEncodings() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let peer = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),
+                                      selfPseudonym: GroupCallFixtures.pseudoA)
+        try await peer.start()
+        let video = try XCTUnwrap(peer.currentPeerConnection?.transceivers.first { $0.mediaType == .video })
+        func active() -> [Bool] { video.sender.parameters.encodings.map { $0.isActive } }
+        XCTAssertEqual(active(), [true, true, true])
+        peer.setActiveLayers(2)
+        XCTAssertEqual(active(), [true, true, false])
+        peer.fallBackToSingleLayer()
+        XCTAssertEqual(active(), [true, false, false])
+        peer.setActiveLayers(3)
+        XCTAssertEqual(active(), [true, false, false])
+        peer.close()
+    }
+
     func testAWrapperClosedBeforeItStartedNeverBuildsAPeerConnection() async throws {
         let factory = await QAudionPeerConnectionFactory.shared.factory()
         let publisher = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),
