@@ -190,7 +190,11 @@ final class DesignSystemAccessibilityTests: XCTestCase {
 
     /// The pill draws its labels from those keys and has no fixed Italian text left.
     func testTheRiskPillReadsItsLabelsFromTheCatalog() throws {
-        let pill = try sourceText("QAudionApp/DesignSystem/Components/RiskPill.swift")
+        let source = try sourceText("QAudionApp/DesignSystem/Components/RiskPill.swift")
+        // Comment lines (the header still describes the three levels in words) are not code.
+        let pill = source.components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: " ")
         for key in riskKeys {
             XCTAssertTrue(pill.contains("Text(\"\(key)\")"), "RiskPill does not use \(key)")
         }
