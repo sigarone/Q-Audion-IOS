@@ -84,7 +84,7 @@ struct GatedVisualBadge<Content: View>: View {
 private struct LockBadgeGlyph: View {
     var body: some View {
         Image(systemName: "lock.fill")
-            .font(.system(size: 8, weight: .bold))
+            .qaudionScaledFont(size: 8, weight: .bold, family: .label)
             .foregroundStyle(.white)
             .padding(3)
             .background(Circle().fill(Color.black.opacity(0.6)))

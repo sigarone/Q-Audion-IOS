@@ -167,7 +167,7 @@ public struct TrustVerificationCard: View {
                     .frame(width: 22, height: 22)
             } else {
                 Image(systemName: headerIcon)
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold, family: .label)
                     .foregroundStyle(headerColor)
                     .frame(width: 22, height: 22)
             }
@@ -294,7 +294,9 @@ public struct TrustVerificationCard: View {
 
     private func digitCell(_ digits: String, index: Int) -> some View {
         Text(digits)
-            .font(.system(size: 14, weight: .medium, design: .monospaced))
+            .qaudionScaledFont(size: 14, weight: .medium, design: .monospaced, family: .label)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
             .foregroundStyle(scheme.onSurface)
             .frame(maxWidth: .infinity, minHeight: 36)
             .background(
@@ -337,7 +339,7 @@ public struct TrustVerificationCard: View {
             Button(action: onRetry) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 13, weight: .semibold))
+                        .qaudionScaledFont(size: 13, weight: .semibold, family: .label)
                     Text("Riprova")
                         .qaudionStyle(type.labelLarge)
                 }
@@ -384,7 +386,7 @@ public struct TrustVerificationCard: View {
                     .foregroundStyle(scheme.onPrimary)
                 Spacer()
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
+                    .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                     .foregroundStyle(scheme.onPrimary)
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
@@ -416,7 +418,7 @@ public struct TrustVerificationCard: View {
                         .foregroundStyle(scheme.primary)
                     Spacer()
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
+                        .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                         .foregroundStyle(scheme.primary)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 12)
@@ -435,7 +437,7 @@ public struct TrustVerificationCard: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(extras.riskHigh)
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold, family: .body)
                     .padding(.top, 1)
                 Text("L'identità di questo contatto è cambiata. Verifica il nuovo safety number out-of-band prima di inviare informazioni sensibili.")
                     .qaudionStyle(type.bodySmall)

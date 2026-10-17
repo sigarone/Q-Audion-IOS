@@ -30,7 +30,7 @@ struct RiskPill: View {
     }
 
     var body: some View {
-        Text(displayLabel)
+        label
             .qaudionStyle(type.labelSmall)
             .tracking(1.2)
             .foregroundStyle(accent)
@@ -40,12 +40,15 @@ struct RiskPill: View {
             .overlay(Capsule().stroke(accent.opacity(0.55), lineWidth: 1))
     }
 
-    private var displayLabel: String {
-        if let customLabel { return customLabel }
+    /// The three standard labels are catalog keys (`risk_pill.low`, `.medium`,
+    /// `.high`, in the six app languages). `customLabel` is shown as given:
+    /// whoever passes it passes text that is already localized.
+    private var label: Text {
+        if let customLabel { return Text(verbatim: customLabel) }
         switch level {
-        case .low:    return "RISCHIO BASSO"
-        case .medium: return "RISCHIO MEDIO"
-        case .high:   return "RISCHIO ALTO"
+        case .low:    return Text("risk_pill.low")
+        case .medium: return Text("risk_pill.medium")
+        case .high:   return Text("risk_pill.high")
         }
     }
 

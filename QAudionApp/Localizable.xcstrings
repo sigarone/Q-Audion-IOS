@@ -4867,6 +4867,132 @@
         }
       }
     },
+    "risk_pill.low": {
+      "extractionState": "manual",
+      "comment": "Risk pill — label of the low risk level, always uppercase",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISCHIO BASSO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LOW RISK"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RIESGO BAJO"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISQUE FAIBLE"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NIEDRIGES RISIKO"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISCO BAIXO"
+          }
+        }
+      }
+    },
+    "risk_pill.medium": {
+      "extractionState": "manual",
+      "comment": "Risk pill — label of the medium risk level, always uppercase",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISCHIO MEDIO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEDIUM RISK"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RIESGO MEDIO"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISQUE MOYEN"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MITTLERES RISIKO"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISCO MÉDIO"
+          }
+        }
+      }
+    },
+    "risk_pill.high": {
+      "extractionState": "manual",
+      "comment": "Risk pill — label of the high risk level, always uppercase",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISCHIO ALTO"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HIGH RISK"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RIESGO ALTO"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISQUE ÉLEVÉ"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HOHES RISIKO"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RISCO ALTO"
+          }
+        }
+      }
+    },
     "in_call.disturbance_button": {
       "extractionState": "manual",
       "comment": "In-call transport row — small pill the user taps to mark the instant an audio glitch was heard (a telemetry marker for the maintainer). Keep it one short word.",

@@ -19,6 +19,10 @@ import SwiftUI
 public struct QAudionThemeModifier: ViewModifier {
     public let dark: Bool
 
+    /// The text size the user picked in Settings (or the one a parent
+    /// pinned); it only decides the sizes published as `qaudionType`.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     public init(dark: Bool = true) {
         self.dark = dark
     }
@@ -27,7 +31,7 @@ public struct QAudionThemeModifier: ViewModifier {
         content
             .environment(\.qaudionScheme, dark ? .dark : .light)
             .environment(\.qaudionExtras, dark ? .dark : .light)
-            .environment(\.qaudionType, .standard)
+            .environment(\.qaudionType, QAudionTypography.standard.scaled(for: dynamicTypeSize))
             .preferredColorScheme(dark ? .dark : .light)
     }
 }
