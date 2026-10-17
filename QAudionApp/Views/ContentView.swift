@@ -100,7 +100,10 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            mainStack
+            VStack(spacing: 0) {
+                callBar
+                mainStack
+            }
             QAudionSnackbarHost(state: snackbarHost)
             // W559 — bug report overlay (volume-gesture or auto-trigger).
             BugReportOverlay()
@@ -482,9 +485,10 @@ struct ContentView: View {
     /// The screens of the call, chosen by the rules above.
     @ViewBuilder
     private var inCallScreens: some View {
-        // The call reduced to the bar: the app on screen with the bar on top. The call screens below are unchanged.
+        // The call reduced: the app is on screen (the bar sits above it, at the root: `callBar`). The call screens below
+        // are unchanged.
         if callSurface == .appWithBar {
-            appWithCallBar
+            HomeView()
         // W-OUTGOINGDOT3 — gates on the async-flipped flag, not on
         // appState.callState directly. See showLiveCallScreen's doc.
         } else if showLiveCallScreen {
@@ -505,16 +509,18 @@ struct ContentView: View {
             isInCall: appState.isInCall, minimized: appState.callScreenMinimized, callState: appState.callState)
     }
 
-    /// The call reduced: the ordinary app (tabs, chats, contacts, settings) with the "call in progress" bar on top. The bar
-    /// takes the status bar area and the app fills what is left under it. The call itself (audio, CallKit, hang-up) is
-    /// untouched; its screen is not on screen meanwhile and comes back on a tap on the bar. The bar has no hang-up control.
-    private var appWithCallBar: some View {
-        VStack(spacing: 0) {
+    /// The "call in progress" bar, mounted once at the root (`body`) above whatever screen of the app is up: it shows while the
+    /// call is reduced and connected, so it is on every screen of the app and never on the call screen itself. It takes the
+    /// status bar area and the screen under it fills what is left. The call (audio, CallKit, hang-up) is untouched; a tap on
+    /// the bar brings the call screen back. The bar has no hang-up control and keeps its own one-second clock, so nothing
+    /// else is redrawn every second because of it.
+    @ViewBuilder
+    private var callBar: some View {
+        if callSurface == .appWithBar {
             CallInProgressBar(
                 contactName: outgoingDisplayName.isEmpty ? nil : outgoingDisplayName,
                 elapsedSeconds: { appState.callService.callDurationSeconds },
                 onReturn: onCallBarTapped)
-            HomeView()
         }
     }
 

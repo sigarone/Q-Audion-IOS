@@ -66,28 +66,54 @@ final class CallMinimizeWiringTests: XCTestCase {
     func testTheContentViewChoosesTheSurfaceThroughThePolicy() throws {
         let content = try code("QAudionApp/Views/ContentView.swift")
         XCTAssertTrue(
-            content.contains("if callSurface == .appWithBar { appWithCallBar } else if showLiveCallScreen {"),
-            "the bar branch comes first, then the call screens")
+            content.contains("if callSurface == .appWithBar { HomeView() } else if showLiveCallScreen {"),
+            "the reduced branch (the app) comes first, then the call screens")
         XCTAssertTrue(
             content.contains(
                 "CallMinimizePolicy.surface( isInCall: appState.isInCall, minimized: appState.callScreenMinimized, callState: appState.callState)"),
             "the surface follows the call, the reduced flag and the call state")
     }
 
-    /// The bar sits above the app, the app is the ordinary home, and a tap on the bar goes back through the state.
-    func testTheBarSitsAboveTheOrdinaryApp() throws {
+    /// ONE bar, mounted at the root of `ContentView` above whatever screen is up, only when the policy says so; the app under it
+    /// is the ordinary home. A tap goes back through the state. The bar is not part of the home or of any other screen.
+    func testTheBarIsMountedOnceAtTheRootAboveTheScreens() throws {
         let content = try code("QAudionApp/Views/ContentView.swift")
-        let layer = try slice(
-            content, from: "private var appWithCallBar: some View {", to: "private func onCallBarTapped()")
-        let bar = try XCTUnwrap(layer.range(of: "CallInProgressBar("))
-        let home = try XCTUnwrap(layer.range(of: "HomeView()"))
-        XCTAssertLessThan(bar.lowerBound, home.lowerBound, "the bar is above the app")
-        XCTAssertTrue(layer.contains("onReturn: onCallBarTapped"))
-        XCTAssertTrue(layer.contains("elapsedSeconds: { appState.callService.callDurationSeconds }"),
+        XCTAssertTrue(
+            content.contains("ZStack(alignment: .top) { VStack(spacing: 0) { callBar mainStack } QAudionSnackbarHost(state: snackbarHost)"),
+            "the bar is above mainStack, at the root")
+        XCTAssertEqual(occurrences(of: "CallInProgressBar(", in: content), 1, "one bar, one place")
+        let bar = try slice(content, from: "private var callBar: some View {", to: "private func onCallBarTapped()")
+        XCTAssertTrue(bar.contains("if callSurface == .appWithBar { CallInProgressBar("))
+        XCTAssertTrue(bar.contains("onReturn: onCallBarTapped"))
+        XCTAssertTrue(bar.contains("elapsedSeconds: { appState.callService.callDurationSeconds }"),
                       "the time is the one the call screen shows")
         let tap = try slice(content, from: "private func onCallBarTapped() {", to: "private func callerOutcomeScreen(")
         XCTAssertTrue(tap.contains("appState.returnToCallScreen()"))
         XCTAssertTrue(tap.contains("CallMinimizeAnimation.animation(reduceMotion: reduceMotion)"))
+
+        for screen in [
+            "QAudionApp/Views/HomeView.swift", "QAudionApp/Views/Call/LiveInCallScreen.swift",
+            "QAudionApp/Views/Call/InCallScreen.swift", "QAudionApp/Views/VideoCallView.swift",
+        ] {
+            XCTAssertFalse(try code(screen).contains("CallInProgressBar("), "\(screen) must not mount a bar of its own")
+        }
+    }
+
+    /// The length of the call is drawn by a clock local to the bar: nothing else is redrawn every second because of it. The
+    /// root does not tick, the call state does not publish the duration, and the call screen (which has its own clock, and is
+    /// not mounted while the call is reduced) was not given another.
+    func testTheClockIsLocalToTheBar() throws {
+        let bar = try code("QAudionApp/Views/Call/CallInProgressBar.swift")
+        XCTAssertEqual(occurrences(of: "TimelineView(.periodic(from: .now, by: 1))", in: bar), 1)
+        let content = try code("QAudionApp/Views/ContentView.swift")
+        XCTAssertFalse(content.contains("TimelineView("), "the root does not tick")
+        XCTAssertFalse(content.contains("Timer.publish"))
+        let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
+        XCTAssertEqual(occurrences(of: "TimelineView(", in: live), 1, "the call screen keeps the one clock it had")
+    }
+
+    private func occurrences(of needle: String, in haystack: String) -> Int {
+        haystack.components(separatedBy: needle).count - 1
     }
 
     /// The root keeps what the other call tests rely on: the in-call stack wins over everything and is wrapped in the chat
