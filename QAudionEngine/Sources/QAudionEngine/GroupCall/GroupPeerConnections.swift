@@ -304,6 +304,13 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     private var capturer: RTCCameraVideoCapturer?
     private var tuning: GroupNativeTuning?
     private var micEnabled = true
+    /// Guards `sourceLayerCap`, `requestedLayerCount`, `singleLayerFallback` and the
+    /// read-modify-write of the video sender's parameters: the publish policy calls
+    /// `setActiveLayers` from notification / timer threads while `applyAnswer` runs on the
+    /// publisher queue and the camera / encoder watch run in their own tasks. Held across
+    /// `sender.parameters` (a blocking hop to the WebRTC signaling thread), so it is never
+    /// taken by `close()` or by anything else the signaling thread runs.
+    private let layerLock = NSLock()
     /// How many of the three simulcast encodings the CAPTURE can feed: libwebrtc drops
     /// the top layer for a source below ~720p, so a smaller source publishes l,m (or l).
     private var sourceLayerCap = 3
@@ -404,7 +411,9 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         // An answer sets every encoding's `active` from its simulcast line, and the offer
         // never marks a layer inactive (`GroupSdpRules.activateSimulcastLayers`): the layers
         // the thermal / congestion policy wants off are switched off again here.
-        setActiveLayers(requestedLayerCount)
+        // The request is re-applied as it stands under the lock, never read and written back:
+        // a policy change landing meanwhile must not be overwritten by a stale count.
+        layerLock.withLock { applyActiveLayersLocked() }
     }
 
     /// Cumulative outbound counters (diagnosis only): audio bytes, and video bytes /
@@ -471,12 +480,12 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         if !enabled {
             stopCapturer()
             video.isEnabled = false
-            singleLayerFallback = false
+            layerLock.withLock { singleLayerFallback = false }
             onLocalVideoTrack?(nil)
             return .stopped
         }
         // A new attempt starts from the full ladder again.
-        singleLayerFallback = false
+        layerLock.withLock { singleLayerFallback = false }
         #if os(iOS)
         let granted = await Self.cameraAccess()
         guard granted else { return .permissionDenied }
@@ -484,7 +493,8 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         guard let camera = devices.first(where: { $0.position == .front }) ?? devices.first else { return .noCamera }
         let format = Self.closestFormat(for: camera)
         guard let selected = format else { return .noCamera }
-        sourceLayerCap = Self.layerCap(forHeight: CMVideoFormatDescriptionGetDimensions(selected.formatDescription).height)
+        let cap = Self.layerCap(forHeight: CMVideoFormatDescriptionGetDimensions(selected.formatDescription).height)
+        layerLock.withLock { sourceLayerCap = cap }
         let fps = selected.videoSupportedFrameRateRanges.compactMap { Int($0.maxFrameRate) }.filter { $0 <= 30 }.max() ?? 30
         let newCapturer = RTCCameraVideoCapturer(delegate: source)
         let started: Bool = await withCheckedContinuation { continuation in
@@ -495,7 +505,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         guard started else { return .noCamera }
         capturer = newCapturer
         video.isEnabled = true
-        setActiveLayers(sourceLayerCap)
+        setActiveLayers(cap)
         onLocalVideoTrack?(video)
         return .started
         #else
@@ -513,8 +523,10 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// Keeps `count` of the three simulcast encodings active (1 = l only,
     /// 2 = l+m, 3 = all): the thermal / congestion policy of `GroupPublishPolicy`.
     public func setActiveLayers(_ count: Int) {
-        requestedLayerCount = count
-        applyActiveLayers()
+        layerLock.withLock {
+            requestedLayerCount = count
+            applyActiveLayersLocked()
+        }
     }
 
     /// Safety net of the camera's first-frame watch: the camera is on, the publisher is
@@ -523,11 +535,14 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// encoder for the reduced set; the cap survives the policy's later `setActiveLayers`
     /// calls until the camera is switched on again.
     public func fallBackToSingleLayer() {
-        singleLayerFallback = true
-        applyActiveLayers()
+        layerLock.withLock {
+            singleLayerFallback = true
+            applyActiveLayersLocked()
+        }
     }
 
-    private func applyActiveLayers() {
+    /// Caller holds `layerLock` (an `NSLock`, not re-entrant).
+    private func applyActiveLayersLocked() {
         guard let sender = videoSender else { return }
         let allowed = min(requestedLayerCount, sourceLayerCap, singleLayerFallback ? 1 : Self.simulcast.count)
         let parameters = sender.parameters
