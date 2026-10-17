@@ -46,13 +46,6 @@ enum CallMinimizePolicy {
         return .appWithBar
     }
 
-    /// The "active call" banner of the home screen shows when a call is up and its cover is not open, except while the
-    /// reduced-call bar is on screen (two markers for one call).
-    static func showsHomeBanner(isInCall: Bool, coverPresented: Bool, minimized: Bool, callState: CallState) -> Bool {
-        guard isInCall, !coverPresented else { return false }
-        return surface(isInCall: isInCall, minimized: minimized, callState: callState) != .appWithBar
-    }
-
     /// The new "call reduced" value after an event. Tapping reduce only counts if the call can be reduced at that moment
     /// (the state may have changed between drawing the button and the tap); going back to the call, and the boundaries of
     /// a call, always clear it.

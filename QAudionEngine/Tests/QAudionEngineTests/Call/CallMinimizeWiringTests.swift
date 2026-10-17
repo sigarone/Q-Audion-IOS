@@ -185,16 +185,13 @@ final class CallMinimizeWiringTests: XCTestCase {
 
     // MARK: - the banner of the home screen
 
-    /// The thin banner of the home screen is still there; its one condition now also asks the policy, so it is hidden
-    /// exactly while the bar is on screen (two markers for one call).
-    func testTheHomeBannerStaysAndHidesWhileTheBarShows() throws {
+    /// The thin "active call" banner of the home screen is replaced by the bar: one marker for one call, so the home has
+    /// no call banner (and no way to open the old call cover from one) of its own.
+    func testTheHomeScreenHasNoCallBannerOfItsOwn() throws {
         let home = try code("QAudionApp/Views/HomeView.swift")
-        XCTAssertTrue(home.contains("private var inCallBanner: some View {"), "the banner is not removed")
-        XCTAssertTrue(home.contains("Text(\"Tocca per rientrare\")"))
-        XCTAssertTrue(
-            home.contains(
-                "if CallMinimizePolicy.showsHomeBanner( isInCall: appState.isInCall, coverPresented: presentingInCall, minimized: appState.callScreenMinimized, callState: appState.callState) { inCallBanner }"),
-            "one condition, through the policy")
+        XCTAssertFalse(home.contains("inCallBanner"))
+        XCTAssertFalse(home.contains("showsHomeBanner"))
+        XCTAssertFalse(home.contains("Tocca per rientrare"))
     }
 
     // MARK: - back to the call

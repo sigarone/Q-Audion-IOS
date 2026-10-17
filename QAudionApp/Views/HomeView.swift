@@ -100,19 +100,6 @@ struct HomeView: View {
             callsPath = NavigationPath()
             settingsPath = NavigationPath()
         }
-        .overlay(alignment: .top) {
-            // W-1TO1RING (2026-07-27) — the thin incomingCallBanner is retired:
-            // ContentView's fullScreenCover now shows the full IncomingCallScreen
-            // for 1:1 calls too (same screen already used for group calls),
-            // driven by appState.incomingCallRingVisible. Only inCallBanner
-            // (post-answer, mid-call) remains here.
-            // Not while the reduced-call bar is showing: one marker for one call.
-            if CallMinimizePolicy.showsHomeBanner(
-                isInCall: appState.isInCall, coverPresented: presentingInCall,
-                minimized: appState.callScreenMinimized, callState: appState.callState) {
-                inCallBanner
-            }
-        }
         .fullScreenCover(isPresented: $presentingInCall) {
             inCallCoverView
         }
@@ -435,40 +422,6 @@ struct HomeView: View {
         NavigationStack(path: $settingsPath) {
             SettingsScreen()
         }
-    }
-
-    // MARK: - Active call banner
-
-    private var inCallBanner: some View {
-        Button(action: { presentingInCall = true }) {
-            HStack {
-                Image(systemName: "phone.fill")
-                // Resolve peer display name (extension, contact, truncated UUID)
-                // — same priority as incoming call banner — never show raw UUID.
-                // W-EXTPREFIX consolidation (2026-07-29): the outgoing branch
-                // used to check only `looksLikeUUID` on the rubrica name (a
-                // stale "Phone #100" would have shown verbatim); both
-                // branches now collapse into one `DisplayName.forUser` call,
-                // which already does rubrica-first-then-serverDisplay itself.
-                Text({
-                    guard let cid = appState.callContactId, !cid.isEmpty else { return "Chiamata attiva" }
-                    // AppState.cachedContacts is refreshed on every
-                    // ContactsStore write — avoids a UserDefaults decode on
-                    // every in-call banner render.
-                    let candidate = appState.incomingCallerName.isEmpty ? nil : appState.incomingCallerName
-                    let name = DisplayName.forUser(cid, serverDisplay: candidate, contacts: appState.cachedContacts)
-                    return "Chiamata attiva con \(name)"
-                }())
-                Spacer()
-                Text("Tocca per rientrare")
-            }
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 16).padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
-            .background(Color.green)
-            .foregroundStyle(.white)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Full-screen in-call cover
