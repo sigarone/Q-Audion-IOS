@@ -4861,6 +4861,30 @@
         }
       }
     },
+    "in_call.custody.verdict": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — verdict while the post-quantum key exchange is active: where the protection starts and what it does not cover",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La protezione comincia al sigillo: l'audio viene cifrato con AES-256 usando chiavi derivate da ML-KEM-1024 e le chiavi della tua identità restano nel Keychain. Ma il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave."
+          }
+        }
+      }
+    },
+    "in_call.custody.verdict_no_pqc": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — verdict while the post-quantum key exchange is not active: what the protection does not cover",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave."
+          }
+        }
+      }
+    },
     "in_call.gauge.breath": {
       "extractionState": "manual",
       "comment": "Call screen voice ribbon — label of the breath gauge (harmonic-to-noise ratio)",
@@ -4977,6 +5001,18 @@
           "stringUnit": {
             "state": "translated",
             "value": "Riconoscimento vocale in corso…"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.pending": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — verdict word while there is no verdict yet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica in corso"
           }
         }
       }

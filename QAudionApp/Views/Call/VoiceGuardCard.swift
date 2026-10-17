@@ -36,7 +36,7 @@ struct VoiceGuardCard: View {
 
     /// Colour role of the icon, and of the whole card while a banner shows.
     private var iconTone: VoiceTone {
-        VoiceGuard.tone(of: banner) ?? VoiceGuard.tone(of: level)
+        VoiceGuard.bannerTone(of: banner) ?? VoiceGuard.tone(of: level)
     }
 
     private func color(_ tone: VoiceTone) -> Color {
@@ -84,14 +84,14 @@ struct VoiceGuardCard: View {
     }
 
     private var backgroundColor: Color {
-        if let tone = VoiceGuard.tone(of: banner) {
+        if let tone = VoiceGuard.bannerTone(of: banner) {
             return color(tone).opacity(0.14)
         }
         return scheme.surface.opacity(reduceTransparency ? 1.0 : 0.55)
     }
 
     private var borderColor: Color {
-        if let tone = VoiceGuard.tone(of: banner) {
+        if let tone = VoiceGuard.bannerTone(of: banner) {
             return color(tone).opacity(0.4)
         }
         return scheme.outline.opacity(0.5)
@@ -126,7 +126,7 @@ struct VoiceGuardCard: View {
                           comment: "Call screen voice check card — shown briefly when learning the voice of the other person did not succeed; it will be retried on the next call")
         }
         return Text(text)
-            .foregroundStyle(color(VoiceGuard.tone(of: kind) ?? .neutral))
+            .foregroundStyle(color(VoiceGuard.bannerTone(of: kind) ?? .neutral))
             .scaledMono(11, weight: .semibold)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -193,19 +193,23 @@ struct VoiceGuardCard: View {
     }
 
     private func verdictWord(_ verdictLevel: VoiceGuardLevel?) -> String {
-        switch verdictLevel {
-        case .caution?:
-            return String(localized: "in_call.voice_guard.caution",
-                          defaultValue: "Verifica incerta",
-                          comment: "Call screen voice check card — verdict word when the voice may have changed")
-        case .highRisk?:
-            return String(localized: "in_call.voice_guard.highrisk",
-                          defaultValue: "Anomalia rilevata",
-                          comment: "Call screen voice check card — verdict word when the voice has changed")
-        default:
+        switch VoiceGuard.word(for: verdictLevel) {
+        case .pending:
+            return String(localized: "in_call.voice_guard.pending",
+                          defaultValue: "Verifica in corso",
+                          comment: "Call screen voice check card — verdict word while there is no verdict yet")
+        case .verified:
             return String(localized: "in_call.voice_guard.verified",
                           defaultValue: "Voce riconosciuta",
                           comment: "Call screen voice check card — verdict word when the voice is still the one the call started with")
+        case .caution:
+            return String(localized: "in_call.voice_guard.caution",
+                          defaultValue: "Verifica incerta",
+                          comment: "Call screen voice check card — verdict word when the voice may have changed")
+        case .highRisk:
+            return String(localized: "in_call.voice_guard.highrisk",
+                          defaultValue: "Anomalia rilevata",
+                          comment: "Call screen voice check card — verdict word when the voice has changed")
         }
     }
 

@@ -139,21 +139,23 @@ enum VoiceBiometricsFormat {
     /// Jitter and shimmer arrive as ratios (0.03 = 3 %); shown as percentages
     /// with one decimal: "3.0% / 8.5%".
     static func jitterShimmer(jitter: Float, shimmer: Float) -> String {
-        oneDecimal(jitter * 100) + "% / " + oneDecimal(shimmer * 100) + "%"
+        guard jitter.isFinite, shimmer.isFinite else { return VoiceGauges.noValue }
+        return oneDecimal(jitter * 100) + "% / " + oneDecimal(shimmer * 100) + "%"
     }
 
     /// Breath as "N dB / 0.00" (HNR rounded to the dB, then breathiness),
     /// coloured like the ribbon gauge.
     static func breath(hnr: Float, breathiness: Float) -> Line {
+        guard hnr.isFinite, breathiness.isFinite else { return Line(text: VoiceGauges.noValue, tone: .neutral) }
         let reading = VoiceGauges.breath(hnr: hnr)
-        guard hnr.isFinite else { return Line(text: VoiceGauges.noValue, tone: .neutral) }
         let rounded = String(format: "%.0f", Double(hnr))
         return Line(text: rounded + " dB / " + twoDecimals(breathiness), tone: reading.tone)
     }
 
     /// Pitch and speech rate: "142 Hz · 4.1 syl/s".
     static func pitchRate(hz: Float, syllablesPerSecond: Float) -> String {
-        String(format: "%.0f", Double(hz)) + " Hz · " + oneDecimal(syllablesPerSecond) + " syl/s"
+        guard hz.isFinite, syllablesPerSecond.isFinite else { return VoiceGauges.noValue }
+        return String(format: "%.0f", Double(hz)) + " Hz · " + oneDecimal(syllablesPerSecond) + " syl/s"
     }
 
     private static func twoDecimals(_ value: Float) -> String {
@@ -195,6 +197,15 @@ enum VoiceGuardIcon: Equatable {
     case microphone
 }
 
+/// The word shown under the card's title.
+enum VoiceGuardWord: Equatable {
+    /// There is no verdict yet: the card must not claim the voice was recognised.
+    case pending
+    case verified
+    case caution
+    case highRisk
+}
+
 enum VoiceGuard {
     /// How long a banner stays on the card.
     static let bannerSeconds: Double = 3.5
@@ -213,10 +224,14 @@ enum VoiceGuard {
     /// The banner a learning-session state asks for, if any. Only the two final
     /// states do; the card shows it once, when the state changes to it.
     static func banner(for state: VoiceLearningSession.State?) -> VoiceGuardBanner? {
+        guard let state = state else { return nil }
         switch state {
-        case .completed?: return .learned
-        case .failed?:    return .failed
-        default:          return nil
+        case .completed:
+            return .learned
+        case .failed:
+            return .failed
+        case .idle, .inProgress:
+            return nil
         }
     }
 
@@ -227,7 +242,7 @@ enum VoiceGuard {
         if let banner {
             return .banner(banner)
         }
-        if case .inProgress(let progress)? = learning {
+        if let state = learning, case .inProgress(let progress) = state {
             return .learning(progress: clampedProgress(progress))
         }
         if !hasHistory {
@@ -257,11 +272,22 @@ enum VoiceGuard {
     }
 
     /// Colour role of the banner, or nil when there is no banner.
-    static func tone(of banner: VoiceGuardBanner?) -> VoiceTone? {
+    static func bannerTone(of banner: VoiceGuardBanner?) -> VoiceTone? {
         switch banner {
         case .learned?: return .success
         case .failed?:  return .riskHigh
         case nil:       return nil
+        }
+    }
+
+    /// "Voice recognised" is said only for an explicit verified level; no verdict
+    /// yet has its own neutral word.
+    static func word(for level: VoiceGuardLevel?) -> VoiceGuardWord {
+        switch level {
+        case nil:        return .pending
+        case .verified?: return .verified
+        case .caution?:  return .caution
+        case .highRisk?: return .highRisk
         }
     }
 
@@ -273,6 +299,31 @@ enum VoiceGuard {
             return .warning
         }
         return .microphone
+    }
+}
+
+// MARK: - "Custody of your voice" card
+
+/// The parts of the custody card that depend on the state of the call.
+enum VoiceCustody {
+    /// Value of the "Post-quantum" cell: the algorithm only while the
+    /// post-quantum exchange is really in use.
+    static func postQuantumValue(active: Bool) -> String {
+        active ? "ML-KEM" : "off"
+    }
+
+    /// Text of the verdict box. The cipher and the post-quantum exchange are
+    /// named only when the post-quantum exchange is active; the statement about
+    /// the microphone holds either way.
+    static func verdictText(pqcActive: Bool) -> String {
+        if pqcActive {
+            return String(localized: "in_call.custody.verdict",
+                          defaultValue: "La protezione comincia al sigillo: l'audio viene cifrato con AES-256 usando chiavi derivate da ML-KEM-1024 e le chiavi della tua identità restano nel Keychain. Ma il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave.",
+                          comment: "Call security sheet, custody of the voice card — verdict while the post-quantum key exchange is active: where the protection starts and what it does not cover")
+        }
+        return String(localized: "in_call.custody.verdict_no_pqc",
+                      defaultValue: "Il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave.",
+                      comment: "Call security sheet, custody of the voice card — verdict while the post-quantum key exchange is not active: what the protection does not cover")
     }
 }
 

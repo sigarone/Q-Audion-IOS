@@ -1857,8 +1857,8 @@ struct InCallScreen: View {
     /// The seal happens ON THE PHONE, so the protection envelope starts at
     /// 40% and the MICROPHONE sits just outside it — raw audio exists in the
     /// phone's audio pipeline for an instant before it is sealed. The
-    /// Keychain keeps the KEYS safe, but a compromised OS could tap the mic
-    /// upstream of encryption.
+    /// Keychain keeps the identity keys safe, but a compromised OS could tap
+    /// the mic upstream of encryption.
     private var trustChainCard: some View {
         let envColor = extras.pqcAccent
         let cipher = extras.pqcAccent      // cipher lane tint (violet)
@@ -2128,7 +2128,8 @@ struct InCallScreen: View {
 
     /// Verdict callout box — bordered/tinted box (in the envelope's accent)
     /// with a leading warning icon: where the protection starts, and what it
-    /// does not cover.
+    /// does not cover. The text is `VoiceCustody.verdictText`, which names the
+    /// cipher and the post-quantum exchange only while the latter is active.
     private func trustVerdictCallout() -> some View {
         let envColor = extras.pqcAccent
         return HStack(alignment: .top, spacing: 10) {
@@ -2137,7 +2138,7 @@ struct InCallScreen: View {
                 .foregroundStyle(envColor)
                 .padding(.top, 1)
                 .accessibilityHidden(true)
-            Text("Protection starts at the seal. ML-KEM-1024 + AES-256, keys locked in the Keychain — but the microphone sits just outside the protected zone: raw audio is captured in the phone for the instant before it's sealed, so a compromised OS could tap the mic upstream of encryption, without ever needing the key.")
+            Text(VoiceCustody.verdictText(pqcActive: pqcActive))
                 .font(.caption2)
                 .lineSpacing(3)
                 .foregroundStyle(scheme.onSurface.opacity(0.88))
@@ -2175,7 +2176,7 @@ struct InCallScreen: View {
                           value: sasVerified ? "SAS ✓" : "unverified",
                           active: sasVerified, accent: extras.success)
             trustStatCell(icon: "shield.lefthalf.filled", label: "Post-quantum",
-                          value: "ML-KEM",
+                          value: VoiceCustody.postQuantumValue(active: pqcActive),
                           active: pqcActive, accent: extras.success)
             trustStatCell(icon: "lock.rectangle.stack.fill", label: "Cipher",
                           value: "AES-256", active: true, accent: extras.success)

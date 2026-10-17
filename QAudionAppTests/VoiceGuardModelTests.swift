@@ -136,6 +136,8 @@ final class VoiceGuardModelTests: XCTestCase {
 
     func testPitchAndRateRow() {
         XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: 142, syllablesPerSecond: 4.5), "142 Hz · 4.5 syl/s")
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: .nan, syllablesPerSecond: 4.5), "—")
+        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitter: .nan, shimmer: 0.1), "—")
     }
 
     // MARK: - Voice check card: verdict
@@ -148,11 +150,22 @@ final class VoiceGuardModelTests: XCTestCase {
     }
 
     func testVerdictColourRoles() {
-        XCTAssertEqual(VoiceGuard.tone(of: VoiceGuardLevel.verified), .success)
-        XCTAssertEqual(VoiceGuard.tone(of: VoiceGuardLevel.caution), .warning)
-        XCTAssertEqual(VoiceGuard.tone(of: VoiceGuardLevel.highRisk), .riskHigh)
-        let unknown: VoiceGuardLevel? = nil
-        XCTAssertEqual(VoiceGuard.tone(of: unknown), .neutral)
+        XCTAssertEqual(VoiceGuard.tone(of: .verified), .success)
+        XCTAssertEqual(VoiceGuard.tone(of: .caution), .warning)
+        XCTAssertEqual(VoiceGuard.tone(of: .highRisk), .riskHigh)
+        XCTAssertEqual(VoiceGuard.tone(of: nil), .neutral)
+    }
+
+    /// Fail-open guard: "voice recognised" must never be shown for a missing
+    /// verdict, which is what the card has during the first seconds of a call.
+    func testNoVerdictYetNeverReadsAsRecognised() {
+        let none: VoiceGuardLevel? = nil
+        XCTAssertEqual(VoiceGuard.word(for: none), .pending)
+        XCTAssertEqual(VoiceGuard.word(for: VoiceGuardLevel.verified), .verified)
+        XCTAssertEqual(VoiceGuard.word(for: VoiceGuardLevel.caution), .caution)
+        XCTAssertEqual(VoiceGuard.word(for: VoiceGuardLevel.highRisk), .highRisk)
+        XCTAssertEqual(VoiceGuard.word(for: VoiceGuard.level(of: .unknown)), .pending)
+        XCTAssertEqual(VoiceGuard.word(for: VoiceGuard.level(of: .steady)), .verified)
     }
 
     func testIconFollowsBannerAndVerdict() {
@@ -209,10 +222,9 @@ final class VoiceGuardModelTests: XCTestCase {
     }
 
     func testBannerColourRoles() {
-        XCTAssertEqual(VoiceGuard.tone(of: VoiceGuardBanner.learned), .success)
-        XCTAssertEqual(VoiceGuard.tone(of: VoiceGuardBanner.failed), .riskHigh)
-        let none: VoiceGuardBanner? = nil
-        XCTAssertNil(VoiceGuard.tone(of: none))
+        XCTAssertEqual(VoiceGuard.bannerTone(of: .learned), .success)
+        XCTAssertEqual(VoiceGuard.bannerTone(of: .failed), .riskHigh)
+        XCTAssertNil(VoiceGuard.bannerTone(of: nil))
         XCTAssertEqual(VoiceGuard.bannerSeconds, 3.5)
     }
 
@@ -222,6 +234,35 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceGuard.clampedProgress(.nan), 0)
         XCTAssertEqual(VoiceGuard.percentText(0.5), "50%")
         XCTAssertEqual(VoiceGuard.percentText(2), "100%")
+    }
+
+    // MARK: - Custody of the voice card
+
+    func testPostQuantumCellNamesTheAlgorithmOnlyWhileActive() {
+        XCTAssertEqual(VoiceCustody.postQuantumValue(active: true), "ML-KEM")
+        XCTAssertEqual(VoiceCustody.postQuantumValue(active: false), "off")
+    }
+
+    /// The box may say which cipher and key exchange protect the call only when
+    /// the post-quantum exchange is really active; the microphone statement stays.
+    func testCustodyVerdictNamesTheExchangeOnlyWhenActive() {
+        let active = VoiceCustody.verdictText(pqcActive: true)
+        let inactive = VoiceCustody.verdictText(pqcActive: false)
+        XCTAssertTrue(active.contains("ML-KEM-1024"))
+        XCTAssertTrue(active.contains("AES-256"))
+        XCTAssertTrue(active.contains("Keychain"))
+        XCTAssertFalse(inactive.contains("ML-KEM"))
+        XCTAssertFalse(inactive.contains("AES"))
+        XCTAssertFalse(inactive.contains("Keychain"))
+        XCTAssertFalse(inactive.isEmpty)
+        XCTAssertNotEqual(active, inactive)
+    }
+
+    func testCustodyVerdictNeverClaimsTheSecureEnclave() {
+        for pqc in [true, false] {
+            XCTAssertFalse(VoiceCustody.verdictText(pqcActive: pqc).contains("Secure Enclave"))
+            XCTAssertFalse(VoiceCustody.verdictText(pqcActive: pqc).contains("TrustZone"))
+        }
     }
 
     // MARK: - Single-trace wave
