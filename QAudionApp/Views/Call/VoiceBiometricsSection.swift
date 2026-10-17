@@ -15,7 +15,7 @@ struct VoiceBiometricsSection: View {
         if let bio = biometrics {
             rows(bio)
         } else {
-            Text("Biometria vocale non disponibile per questa chiamata.")
+            Text(BioCopy.unavailable)
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
         }
@@ -26,7 +26,9 @@ struct VoiceBiometricsSection: View {
         let stress = VoiceBiometricsFormat.stress(points: bio.stressScore * 100)
         let breath = VoiceBiometricsFormat.breath(hnr: bio.hnr, breathiness: bio.breathiness)
         let jitterShimmer = VoiceBiometricsFormat.jitterShimmer(jitter: bio.jitter, shimmer: bio.shimmer)
-        let pitchRate = VoiceBiometricsFormat.pitchRate(hz: bio.pitchHz, syllablesPerSecond: bio.syllablesPerSec)
+        let pitchRate = VoiceBiometricsFormat.pitchRate(hz: bio.pitchHz,
+                                                        syllablesPerSecond: bio.syllablesPerSec,
+                                                        syllableUnit: BioCopy.syllableUnit)
         return VStack(alignment: .leading, spacing: 0) {
             BiometricRow(label: BioCopy.authenticity, value: authenticity.text,
                          valueColor: color(authenticity.tone), note: BioCopy.authenticityNote)
@@ -48,6 +50,16 @@ struct VoiceBiometricsSection: View {
 
 /// The texts of the section, kept apart from the layout.
 private enum BioCopy {
+    static var unavailable: String {
+        String(localized: "in_call.bio.unavailable",
+               defaultValue: "Biometria vocale non disponibile per questa chiamata.",
+               comment: "Call security sheet, voice biometrics — shown when no voice analysis is available for the call")
+    }
+    static var syllableUnit: String {
+        String(localized: "in_call.bio.syllables_unit",
+               defaultValue: "sill/s",
+               comment: "Call security sheet, voice biometrics — abbreviation of syllables per second, next to the speech rate")
+    }
     static var authenticity: String {
         String(localized: "in_call.bio.authenticity",
                defaultValue: "Autenticità",
@@ -85,8 +97,8 @@ private enum BioCopy {
     }
     static var breathNote: String {
         String(localized: "in_call.bio.breath_note",
-               defaultValue: "≥ 15 dB chiaro · 10–15 dB lieve · < 10 dB rauco o link rumoroso.",
-               comment: "Call security sheet, voice biometrics — how to read the breath value; the limits are those of the breath gauge on the voice ribbon")
+               defaultValue: "≥ 5 dB chiaro · 2–5 dB accettabile · < 2 dB rauco o link rumoroso (soglie calibrate per il microfono del telefono).",
+               comment: "Call security sheet, voice biometrics — how to read the breath value")
     }
     static var pitchRate: String {
         String(localized: "in_call.bio.pitch_rate",

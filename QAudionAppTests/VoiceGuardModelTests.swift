@@ -14,12 +14,12 @@ final class VoiceGuardModelTests: XCTestCase {
     // MARK: - Stress gauge
 
     func testStressBandsAndTheirBoundaries() {
-        XCTAssertEqual(VoiceGauges.stress(points: 0).status, "calm")
-        XCTAssertEqual(VoiceGauges.stress(points: 35).status, "calm", "35 is still calm")
-        XCTAssertEqual(VoiceGauges.stress(points: 35.5).status, "elevated")
-        XCTAssertEqual(VoiceGauges.stress(points: 60).status, "elevated", "60 is still elevated")
-        XCTAssertEqual(VoiceGauges.stress(points: 60.5).status, "high")
-        XCTAssertEqual(VoiceGauges.stress(points: 100).status, "high")
+        XCTAssertEqual(VoiceGauges.stress(points: 0).status, .calm)
+        XCTAssertEqual(VoiceGauges.stress(points: 35).status, .calm, "35 is still calm")
+        XCTAssertEqual(VoiceGauges.stress(points: 35.5).status, .elevated)
+        XCTAssertEqual(VoiceGauges.stress(points: 60).status, .elevated, "60 is still elevated")
+        XCTAssertEqual(VoiceGauges.stress(points: 60.5).status, .high)
+        XCTAssertEqual(VoiceGauges.stress(points: 100).status, .high)
     }
 
     func testStressColourRoles() {
@@ -37,19 +37,19 @@ final class VoiceGuardModelTests: XCTestCase {
     func testStressWithoutANumberMakesNoClaim() {
         let reading = VoiceGauges.stress(points: .nan)
         XCTAssertEqual(reading.value, "—")
-        XCTAssertEqual(reading.status, "")
+        XCTAssertEqual(reading.status, .none)
         XCTAssertEqual(reading.tone, .neutral)
     }
 
     // MARK: - Breath gauge
 
     func testBreathBandsAndTheirBoundaries() {
-        XCTAssertEqual(VoiceGauges.breath(hnr: 22).status, "clear")
-        XCTAssertEqual(VoiceGauges.breath(hnr: 15).status, "clear", "15 dB is clear")
-        XCTAssertEqual(VoiceGauges.breath(hnr: 14.9).status, "mild")
-        XCTAssertEqual(VoiceGauges.breath(hnr: 10).status, "mild", "10 dB is mild")
-        XCTAssertEqual(VoiceGauges.breath(hnr: 9.9).status, "hoarse")
-        XCTAssertEqual(VoiceGauges.breath(hnr: -3).status, "hoarse")
+        XCTAssertEqual(VoiceGauges.breath(hnr: 22).status, .clear)
+        XCTAssertEqual(VoiceGauges.breath(hnr: 15).status, .clear, "15 dB is clear")
+        XCTAssertEqual(VoiceGauges.breath(hnr: 14.9).status, .mild)
+        XCTAssertEqual(VoiceGauges.breath(hnr: 10).status, .mild, "10 dB is mild")
+        XCTAssertEqual(VoiceGauges.breath(hnr: 9.9).status, .hoarse)
+        XCTAssertEqual(VoiceGauges.breath(hnr: -3).status, .hoarse)
     }
 
     func testBreathColourRoles() {
@@ -68,8 +68,8 @@ final class VoiceGuardModelTests: XCTestCase {
     // MARK: - Pitch gauge
 
     func testPitchHasNoStatusWordWhileVoicedAndADashWhenNot() {
-        XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).status, "")
-        XCTAssertEqual(VoiceGauges.pitch(hz: 0, voiced: false).status, "—")
+        XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).status, .none)
+        XCTAssertEqual(VoiceGauges.pitch(hz: 0, voiced: false).status, .dash)
         XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).value, "142")
         XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).unit, "Hz")
     }
@@ -79,13 +79,27 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceGauges.pitch(hz: 0, voiced: false).tone, .neutral)
     }
 
-    func testPitchWordsNeverUseTheOldInventedOnes() {
-        for voiced in [true, false] {
-            let status = VoiceGauges.pitch(hz: 120, voiced: voiced).status
-            XCTAssertNotEqual(status, "steady")
-            XCTAssertNotEqual(status, "silent")
-            XCTAssertNotEqual(status, "n/d")
+    func testPitchHasOnlyTheTwoStates() {
+        XCTAssertEqual(VoiceGauges.pitch(hz: 120, voiced: true).status, .none)
+        XCTAssertEqual(VoiceGauges.pitch(hz: 120, voiced: false).status, .dash)
+    }
+
+    /// The dash printed for a missing value or an unvoiced pitch is the only
+    /// status text that is not a word, so it needs no translation.
+    func testTheDashIsNotLanguage() {
+        XCTAssertEqual(VoiceGaugeStatus.dash.localizedText, "—")
+        XCTAssertEqual(VoiceGaugeStatus.none.localizedText, "")
+    }
+
+    /// Every status word comes out of the catalog (the key falls back to the
+    /// Italian default), is not empty, and the six words differ from each other.
+    func testEveryStatusWordIsAWordAndTheyAreDistinct() {
+        let all: [VoiceGaugeStatus] = [.calm, .elevated, .high, .clear, .mild, .hoarse]
+        let words = all.map { $0.localizedText }
+        for word in words {
+            XCTAssertFalse(word.isEmpty)
         }
+        XCTAssertEqual(Set(words).count, words.count)
     }
 
     // MARK: - Voice-biometrics rows
@@ -135,8 +149,9 @@ final class VoiceGuardModelTests: XCTestCase {
     }
 
     func testPitchAndRateRow() {
-        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: 142, syllablesPerSecond: 4.5), "142 Hz · 4.5 syl/s")
-        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: .nan, syllablesPerSecond: 4.5), "—")
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: 142, syllablesPerSecond: 4.5, syllableUnit: "u/s"),
+                       "142 Hz · 4.5 u/s")
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: .nan, syllablesPerSecond: 4.5, syllableUnit: "u/s"), "—")
         XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitter: .nan, shimmer: 0.1), "—")
     }
 
@@ -240,7 +255,30 @@ final class VoiceGuardModelTests: XCTestCase {
 
     func testPostQuantumCellNamesTheAlgorithmOnlyWhileActive() {
         XCTAssertEqual(VoiceCustody.postQuantumValue(active: true), "ML-KEM")
-        XCTAssertEqual(VoiceCustody.postQuantumValue(active: false), "off")
+        let inactive = VoiceCustody.postQuantumValue(active: false)
+        XCTAssertEqual(inactive, VoiceCustodyCopy.postQuantumOff)
+        XCTAssertFalse(inactive.isEmpty)
+        XCTAssertFalse(inactive.contains("ML-KEM"))
+    }
+
+    func testIdentityCellShowsTheCheckOnlyOnceVerified() {
+        XCTAssertEqual(VoiceCustody.identityValue(verified: true), "SAS ✓")
+        let pending = VoiceCustody.identityValue(verified: false)
+        XCTAssertEqual(pending, VoiceCustodyCopy.identityUnverified)
+        XCTAssertFalse(pending.contains("✓"))
+    }
+
+    /// No label of the custody card is left empty (a missing catalog entry would
+    /// fall back to the Italian default, never to an empty string).
+    func testCustodyLabelsAreAllPresent() {
+        let labels = [VoiceCustodyCopy.title, VoiceCustodyCopy.sealedBySoftware, VoiceCustodyCopy.boundary,
+                      VoiceCustodyCopy.microphone, VoiceCustodyCopy.exposed, VoiceCustodyCopy.ciphertext,
+                      VoiceCustodyCopy.sealedOnPhone, VoiceCustodyCopy.identity, VoiceCustodyCopy.postQuantum,
+                      VoiceCustodyCopy.cipher, VoiceCustodyCopy.sealPoint, VoiceCustodyCopy.phone,
+                      VoiceCustodyCopy.liveness]
+        for label in labels {
+            XCTAssertFalse(label.isEmpty)
+        }
     }
 
     /// The box may say which cipher and key exchange protect the call only when

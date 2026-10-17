@@ -1867,14 +1867,14 @@ struct InCallScreen: View {
             // header
             HStack(spacing: 7) {
                 VoiceCustodyPulseDot(color: extras.success)
-                Text("CUSTODY OF YOUR VOICE")
+                Text(VoiceCustodyCopy.title)
                     .tracking(1.0)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .scaledMono(11, weight: .semibold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Spacer(minLength: 0)
-                Text("SOFTWARE-SEALED")
+                Text(VoiceCustodyCopy.sealedBySoftware)
                     .foregroundStyle(envColor)
                     .scaledMono(11, weight: .semibold)
                     .lineLimit(1)
@@ -1948,7 +1948,7 @@ struct InCallScreen: View {
                         // to the (not-yet-offset) rectangle's own bounds, so
                         // it rides along correctly once the whole composite
                         // is shifted by the trailing `.offset` below.
-                        Text("protected from here →")
+                        Text(VoiceCustodyCopy.boundary)
                             .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
                             .foregroundStyle(envColor)
                             .padding(.horizontal, 7)
@@ -1980,8 +1980,8 @@ struct InCallScreen: View {
                 HStack(spacing: 0) {
                     trustEndpointNode(
                         icon: "mic.fill",
-                        title: "Microphone",
-                        sub: "exposed",
+                        title: VoiceCustodyCopy.microphone,
+                        sub: VoiceCustodyCopy.exposed,
                         accent: extras.riskHigh
                     )
                     .frame(width: w * 0.30)
@@ -1992,7 +1992,7 @@ struct InCallScreen: View {
                     trustEndpointNode(
                         icon: "person.wave.2.fill",
                         title: peerDisplayName,
-                        sub: "ciphertext · over the net",
+                        sub: VoiceCustodyCopy.ciphertext,
                         accent: scheme.onSurfaceVariant
                     )
                     .frame(width: w * 0.30)
@@ -2070,7 +2070,7 @@ struct InCallScreen: View {
                         .font(.system(size: 26, weight: .medium))
                         .foregroundStyle(envColor)
                 }
-                Text("Sealed on the phone")
+                Text(VoiceCustodyCopy.sealedOnPhone)
                     .font(.system(size: 7, weight: .semibold, design: .monospaced))
                     .foregroundStyle(envColor)
                     .padding(.horizontal, 7)
@@ -2172,19 +2172,19 @@ struct InCallScreen: View {
     ///                     "LIVENESS OK" the pills row already shows today
     private func trustStatRing() -> some View {
         HStack(spacing: 0) {
-            trustStatCell(icon: "checkmark.seal.fill", label: "Identity",
-                          value: sasVerified ? "SAS ✓" : "unverified",
+            trustStatCell(icon: "checkmark.seal.fill", label: VoiceCustodyCopy.identity,
+                          value: VoiceCustody.identityValue(verified: sasVerified),
                           active: sasVerified, accent: extras.success)
-            trustStatCell(icon: "shield.lefthalf.filled", label: "Post-quantum",
+            trustStatCell(icon: "shield.lefthalf.filled", label: VoiceCustodyCopy.postQuantum,
                           value: VoiceCustody.postQuantumValue(active: pqcActive),
                           active: pqcActive, accent: extras.success)
-            trustStatCell(icon: "lock.rectangle.stack.fill", label: "Cipher",
+            trustStatCell(icon: "lock.rectangle.stack.fill", label: VoiceCustodyCopy.cipher,
                           value: "AES-256", active: true, accent: extras.success)
             trustStatCell(icon: "mic.fill",
-                          label: "Seal point",
-                          value: "Phone",
+                          label: VoiceCustodyCopy.sealPoint,
+                          value: VoiceCustodyCopy.phone,
                           active: true, accent: extras.success)
-            trustStatCell(icon: "shield.checkerboard", label: "Liveness",
+            trustStatCell(icon: "shield.checkerboard", label: VoiceCustodyCopy.liveness,
                           value: "Guardian", active: true, accent: extras.success)
         }
     }

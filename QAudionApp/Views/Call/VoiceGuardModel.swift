@@ -20,12 +20,27 @@ enum VoiceTone: Equatable {
 
 // MARK: - Ribbon gauges
 
-/// What one gauge cell prints: the number, its unit, a status word (empty when
-/// there is nothing to add) and the colour role of the status word.
+/// The status word of a gauge. The views turn it into the localized word; the
+/// decision itself stays free of any language.
+enum VoiceGaugeStatus: Equatable {
+    /// Nothing to add under the value.
+    case none
+    /// Printed as a dash: there is no pitch to speak of (unvoiced segment).
+    case dash
+    case calm
+    case elevated
+    case high
+    case clear
+    case mild
+    case hoarse
+}
+
+/// What one gauge cell prints: the number, its unit (a symbol, never
+/// translated), the status word and the colour role of the status word.
 struct VoiceGaugeReading: Equatable {
     let value: String
     let unit: String
-    let status: String
+    let status: VoiceGaugeStatus
     let tone: VoiceTone
 }
 
@@ -52,47 +67,47 @@ enum VoiceGauges {
     /// Stress gauge from the engine score scaled to 0...100.
     static func stress(points: Float) -> VoiceGaugeReading {
         guard points.isFinite else {
-            return VoiceGaugeReading(value: noValue, unit: "/100", status: "", tone: .neutral)
+            return VoiceGaugeReading(value: noValue, unit: "/100", status: .none, tone: .neutral)
         }
-        let word: String
+        let status: VoiceGaugeStatus
         let tone: VoiceTone
         if points <= stressCalmMax {
-            word = "calm"
+            status = .calm
             tone = .success
         } else if points <= stressElevatedMax {
-            word = "elevated"
+            status = .elevated
             tone = .warning
         } else {
-            word = "high"
+            status = .high
             tone = .riskHigh
         }
-        return VoiceGaugeReading(value: wholeNumber(points), unit: "/100", status: word, tone: tone)
+        return VoiceGaugeReading(value: wholeNumber(points), unit: "/100", status: status, tone: tone)
     }
 
     /// Breath gauge from the harmonic-to-noise ratio in dB.
     static func breath(hnr: Float) -> VoiceGaugeReading {
         guard hnr.isFinite else {
-            return VoiceGaugeReading(value: noValue, unit: "dB", status: "", tone: .neutral)
+            return VoiceGaugeReading(value: noValue, unit: "dB", status: .none, tone: .neutral)
         }
-        let word: String
+        let status: VoiceGaugeStatus
         let tone: VoiceTone
         if hnr >= hnrClearMin {
-            word = "clear"
+            status = .clear
             tone = .success
         } else if hnr >= hnrMildMin {
-            word = "mild"
+            status = .mild
             tone = .warning
         } else {
-            word = "hoarse"
+            status = .hoarse
             tone = .riskHigh
         }
-        return VoiceGaugeReading(value: wholeNumber(hnr), unit: "dB", status: word, tone: tone)
+        return VoiceGaugeReading(value: wholeNumber(hnr), unit: "dB", status: status, tone: tone)
     }
 
     /// Pitch gauge: no status word while the segment is voiced, a dash while
     /// it is not (an unvoiced segment has no pitch to speak of).
     static func pitch(hz: Float, voiced: Bool) -> VoiceGaugeReading {
-        VoiceGaugeReading(value: wholeNumber(hz), unit: "Hz", status: voiced ? "" : noValue, tone: .neutral)
+        VoiceGaugeReading(value: wholeNumber(hz), unit: "Hz", status: voiced ? .none : .dash, tone: .neutral)
     }
 }
 
@@ -152,10 +167,11 @@ enum VoiceBiometricsFormat {
         return Line(text: rounded + " dB / " + twoDecimals(breathiness), tone: reading.tone)
     }
 
-    /// Pitch and speech rate: "142 Hz · 4.1 syl/s".
-    static func pitchRate(hz: Float, syllablesPerSecond: Float) -> String {
+    /// Pitch and speech rate: "142 Hz · 4.1 <unit>", where the unit (syllables
+    /// per second) is the localized abbreviation the caller passes in.
+    static func pitchRate(hz: Float, syllablesPerSecond: Float, syllableUnit: String) -> String {
         guard hz.isFinite, syllablesPerSecond.isFinite else { return VoiceGauges.noValue }
-        return String(format: "%.0f", Double(hz)) + " Hz · " + oneDecimal(syllablesPerSecond) + " syl/s"
+        return String(format: "%.0f", Double(hz)) + " Hz · " + oneDecimal(syllablesPerSecond) + " " + syllableUnit
     }
 
     private static func twoDecimals(_ value: Float) -> String {
@@ -306,10 +322,16 @@ enum VoiceGuard {
 
 /// The parts of the custody card that depend on the state of the call.
 enum VoiceCustody {
-    /// Value of the "Post-quantum" cell: the algorithm only while the
-    /// post-quantum exchange is really in use.
+    /// Value of the "Post-quantum" cell: the algorithm (a name, not translated)
+    /// only while the post-quantum exchange is really in use.
     static func postQuantumValue(active: Bool) -> String {
-        active ? "ML-KEM" : "off"
+        active ? "ML-KEM" : VoiceCustodyCopy.postQuantumOff
+    }
+
+    /// Value of the "Identity" cell: the short-authentication-string check mark
+    /// once verified, otherwise the localized "not verified".
+    static func identityValue(verified: Bool) -> String {
+        verified ? "SAS ✓" : VoiceCustodyCopy.identityUnverified
     }
 
     /// Text of the verdict box. The cipher and the post-quantum exchange are

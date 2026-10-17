@@ -56,6 +56,10 @@ private struct GuardianGaugeCell: View {
     let label: String
     let reading: VoiceGaugeReading
 
+    private var statusText: String {
+        reading.status.localizedText
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
@@ -77,8 +81,8 @@ private struct GuardianGaugeCell: View {
                         .lineLimit(1)
                 }
             }
-            if !reading.status.isEmpty {
-                Text(reading.status)
+            if !statusText.isEmpty {
+                Text(statusText)
                     .tracking(0.4)
                     .foregroundStyle(reading.tone.color(scheme: scheme, extras: extras))
                     .scaledMono(11)
@@ -107,5 +111,42 @@ struct GuardianWaitingForVoice: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension VoiceGaugeStatus {
+    /// The word printed under a gauge value. The unit symbols and the dash are
+    /// not language, so they are not in the catalog.
+    var localizedText: String {
+        switch self {
+        case .none:
+            return ""
+        case .dash:
+            return VoiceGauges.noValue
+        case .calm:
+            return String(localized: "in_call.gauge.status.calm",
+                          defaultValue: "calmo",
+                          comment: "Call screen voice ribbon — stress gauge status word for a calm voice")
+        case .elevated:
+            return String(localized: "in_call.gauge.status.elevated",
+                          defaultValue: "elevato",
+                          comment: "Call screen voice ribbon — stress gauge status word for an elevated stress")
+        case .high:
+            return String(localized: "in_call.gauge.status.high",
+                          defaultValue: "alto",
+                          comment: "Call screen voice ribbon — stress gauge status word for a high stress")
+        case .clear:
+            return String(localized: "in_call.gauge.status.clear",
+                          defaultValue: "chiaro",
+                          comment: "Call screen voice ribbon — breath gauge status word for a clear voice")
+        case .mild:
+            return String(localized: "in_call.gauge.status.mild",
+                          defaultValue: "lieve",
+                          comment: "Call screen voice ribbon — breath gauge status word for a mildly breathy voice")
+        case .hoarse:
+            return String(localized: "in_call.gauge.status.hoarse",
+                          defaultValue: "rauco",
+                          comment: "Call screen voice ribbon — breath gauge status word for a hoarse voice or a noisy link")
+        }
     }
 }
