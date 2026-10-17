@@ -51,7 +51,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select Xcode
         id: select-xcode
@@ -79,7 +79,7 @@ jobs:
 
       - name: Cache SPM (iOS Simulator)
         id: cache-spm-ios
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             ~/Library/Caches/org.swift.swiftpm
@@ -156,7 +156,7 @@ jobs:
       # value is the ~30 SYSTEM framework .pcm files, which don't depend on
       # our own package's dependency graph at all.
       - name: Cache explicit-module cache (iOS Simulator)
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: |
             /tmp/dd-ios-sim/ModuleCache.noindex
@@ -397,7 +397,7 @@ jobs:
       - name: Upload the executed test case list
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: engine-test-cases-${{ github.run_number }}
           path: /tmp/engine-test-cases-*.txt
@@ -435,7 +435,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       # 2026-07-28 — was `--reporter github-actions-logging`, which surfaces
       # each violation as a GitHub annotation. Confirmed live (run
       # 30350292476) that this silently caps at ~20 annotations shown/
@@ -449,7 +449,7 @@ jobs:
       - name: SwiftLint (full JSON report)
         id: swiftlint
         continue-on-error: true
-        uses: docker://ghcr.io/realm/swiftlint:latest
+        uses: docker://ghcr.io/realm/swiftlint@sha256:b8f3cf76353336c048f133aa5b02f5c35c6984b9e6451e906fb8f8c9f92bb30b # latest as of 2026-10-17 (image built 2026-09-28, no version tag; newer than 0.65.1)
         with:
           args: lint --config .swiftlint.yml --reporter json --output swiftlint-report.json
       - name: Summarize SwiftLint results (uncapped)
@@ -488,7 +488,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload full SwiftLint report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: swiftlint-full-report
           path: swiftlint-report.json
@@ -507,10 +507,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: SwiftLint (QAudionApp, print()-ban rule only)
         continue-on-error: true
-        uses: docker://ghcr.io/realm/swiftlint:latest
+        uses: docker://ghcr.io/realm/swiftlint@sha256:b8f3cf76353336c048f133aa5b02f5c35c6984b9e6451e906fb8f8c9f92bb30b # latest as of 2026-10-17 (image built 2026-09-28, no version tag; newer than 0.65.1)
         with:
           args: lint --config .swiftlint-qaudionapp.yml --path QAudionApp
 
@@ -522,11 +522,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
       - name: gitleaks (report only)
         continue-on-error: true
-        uses: docker://zricethezav/gitleaks:latest
+        uses: docker://zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f # v8.30.1
         with:
           args: detect --source . -v --redact
