@@ -524,6 +524,10 @@ final class AppState: ObservableObject {
     @Published var isInCall: Bool = false {
         didSet {
             guard oldValue != isInCall else { return }
+            // A call never starts reduced and never stays reduced once it is over (same choke point as the rest
+            // below, so none of the dozen `isInCall = ...` sites has to remember it).
+            callScreenMinimized = CallMinimizePolicy.next(
+                minimized: callScreenMinimized, event: .callBoundary, canMinimize: false)
             if isInCall { startVideoBeacon() } else { stopVideoBeacon() }
             // W-CALLAWAKE — same choke point, same reason as the beacon: the
             // system auto-lock must be held off for exactly as long as a
@@ -537,6 +541,27 @@ final class AppState: ObservableObject {
         }
     }
     @Published var isVideoCall: Bool = false { didSet { noteVideoLaneChanged() } }
+
+    /// The user reduced the live audio call to the "call in progress" bar on top of the app (`CallMinimizePolicy`).
+    /// Cleared whenever a call starts or ends (the `isInCall` choke point above). `ContentView` reads it, together with
+    /// `isInCall` and `callState`, to pick between the call screen and the app with the bar. Reducing the call changes
+    /// only what is on screen: the call itself (audio, CallKit, audio session) is not touched.
+    @Published private(set) var callScreenMinimized: Bool = false
+
+    /// Reduces the call screen to the bar. Ignored unless the call can be reduced right now.
+    func minimizeCallScreen() {
+        let canReduce: Bool = CallMinimizePolicy.canMinimize(
+            callState: callState, isVideoCall: isVideoCall, remoteScreenSharing: peerScreenShareActive)
+        callScreenMinimized = CallMinimizePolicy.next(
+            minimized: callScreenMinimized, event: .reduceTapped, canMinimize: canReduce)
+    }
+
+    /// Brings the call screen back (a tap on the bar).
+    func returnToCallScreen() {
+        callScreenMinimized = CallMinimizePolicy.next(
+            minimized: callScreenMinimized, event: .barTapped, canMinimize: false)
+    }
+
     /// Numeric diagnostics of a call: one line ("[Call] cpu=42 st=0 lock=0 therm=0 low=0") when a call becomes
     /// active, every 15 s while it lasts and when it ends. It reads and logs, nothing more. Driven from
     /// `callState`'s didSet below, the one place every call path passes through.
@@ -17819,6 +17844,10 @@ final class AppState: ObservableObject {
         guard !isInCall else {
             callStartGate.end()
             RTLog.warn("call", "startCall ignored — already in call (isInCall=true)")
+            // With the call reduced to the bar, a tap on a call button brings the call screen back instead of
+            // doing nothing.
+            callScreenMinimized = CallMinimizePolicy.next(
+                minimized: callScreenMinimized, event: .newCallRefused, canMinimize: false)
             return
         }
         // Rebuilds the engine when logout() released it and nothing has made a

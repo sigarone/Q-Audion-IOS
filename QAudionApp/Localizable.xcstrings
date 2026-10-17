@@ -11736,6 +11736,17 @@
         }
       }
     },
+    "Chiamata in corso": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiamata in corso"
+          }
+        }
+      }
+    },
     "Chiamata non riuscita": {
       "extractionState": "manual",
       "localizations": {
@@ -25270,6 +25281,17 @@
         }
       }
     },
+    "Riduci la chiamata": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riduci la chiamata"
+          }
+        }
+      }
+    },
     "Rifiuta": {
       "extractionState": "manual",
       "localizations": {
@@ -27088,6 +27110,47 @@
         }
       }
     },
+    "Sei già in una chiamata": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sei già in una chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You're already on a call"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ya hay una llamada en curso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un appel est déjà en cours"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bereits in einem Anruf"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Já há uma chamada em andamento"
+          }
+        }
+      }
+    },
     "Sent · Start · Stop · Reaction · Destructive · Failure": {
       "extractionState": "manual",
       "localizations": {
@@ -28604,6 +28667,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Voltar ao transporte normal"
+          }
+        }
+      }
+    },
+    "Torna alla chiamata": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Torna alla chiamata"
           }
         }
       }

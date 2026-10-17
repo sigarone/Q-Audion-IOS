@@ -611,6 +611,13 @@ struct GroupChatScreen: View {
     /// video group call actually publishes the camera once the media path is
     /// up (this was audio-only, unconditionally, until this change).
     private func handleStartGroupCall(video: Bool) {
+        // A 1:1 call is up (reduced to the bar, so the app is usable): no group call on top of it. The call screen comes
+        // back and the notice says why.
+        guard !appState.isInCall else {
+            appState.returnToCallScreen()
+            snackbar?.show(.init(text: String(localized: "Sei già in una chiamata"), severity: .info))
+            return
+        }
         let invitees = groupCallInvitees
         guard !invitees.isEmpty else {
             snackbar?.show(.init(text: String(localized: "group_chat.no_other_members", defaultValue: "Nessun altro membro nel gruppo", comment: "Snackbar shown when trying to start a group call but no other group members are available to invite."), severity: .info))

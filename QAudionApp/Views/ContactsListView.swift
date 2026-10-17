@@ -388,10 +388,33 @@ struct ContactsListView: View {
     @State private var showingPhonebookImport: Bool = false
     @State private var lastScanResult: ScanResultBanner?
     @State private var showingGroupCallPicker: Bool = false
+    /// The group call could not be created: said out loud, not ignored.
+    @State private var showingGroupCallUnavailable: Bool = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.qaudionSnackbar) private var snackbar
 
     init() {
         _container = StateObject(wrappedValue: ContactsListContainer())
+    }
+
+    /// Starts the group call chosen in the picker. With a 1:1 call up (reduced to the bar, so the app is usable) it does not:
+    /// the call screen comes back and a notice says why. A refused create is shown, not ignored.
+    private func startGroupCall(invitees: [String], video: Bool) {
+        guard !appState.isInCall else {
+            appState.returnToCallScreen()
+            snackbar?.show(.init(text: String(localized: "Sei già in una chiamata"), severity: .info))
+            return
+        }
+        let created = appState.groupCallController?.createCall(
+            invitees: invitees,
+            callType: video ? "video" : "audio")
+        if created == nil { showingGroupCallUnavailable = true }
+    }
+
+    private var groupCallUnavailableTitle: String {
+        String(
+            localized: "group_chat.group_call_unavailable", defaultValue: "Chiamata di gruppo non disponibile ora",
+            comment: "Snackbar error shown when creating a group call fails.")
     }
 
     /// Transient banner shown after a successful QR scan so the user gets
@@ -488,11 +511,12 @@ struct ContactsListView: View {
                     .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) },
                 onStart: { selectedIds, video in
                     showingGroupCallPicker = false
-                    appState.groupCallController?.createCall(
-                        invitees: selectedIds,
-                        callType: video ? "video" : "audio")
+                    startGroupCall(invitees: selectedIds, video: video)
                 }
             )
+        }
+        .alert(groupCallUnavailableTitle, isPresented: $showingGroupCallUnavailable) {
+            Button("Ho capito", role: .cancel) {}
         }
         .refreshable { container.refresh() }
         .onAppear {
