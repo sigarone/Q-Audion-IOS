@@ -360,14 +360,25 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
 
     private func startTransceivers() async throws {
         let pc = try makePeerConnection()
+        // The claim (ownership of the hub's sender books and the tuning store) is taken under the
+        // leaf lock, before any effect on the hub: a `close()` that already ran raised `closing`
+        // and never releases the books, so a start that lost the race must leave them untouched.
+        let newTuning = GroupNativeTuning()
+        let claimed = senderLock.withLock { () -> Bool in
+            guard !closing else { return false }
+            ownsSenderCryptors = true
+            tuning = newTuning
+            return true
+        }
+        guard claimed else {
+            newTuning.stop()
+            throw GroupPeerError.notStarted
+        }
         // Sender ids are the (fixed) track ids: entries left by a previous
         // publisher PeerConnection of this call (which has been closed by now)
         // must not make `attachSender` believe a sender of THIS one already has
         // its cryptor. Forgetting an entry disables nothing.
         hub.releaseSenders()
-        ownsSenderCryptors = true
-        let newTuning = GroupNativeTuning()
-        senderLock.withLock { tuning = newTuning }
 
         // Audio.
         let audioSource = factory.audioSource(with: nil)
@@ -523,6 +534,10 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
             return audioTrack
         }
         track?.isEnabled = enabled
+        // A second call may have landed between the locked store and the assignment above and
+        // had its value overwritten here: the last stored value wins (one re-read, no loop).
+        let current = senderLock.withLock { micEnabled }
+        if current != enabled { track?.isEnabled = current }
     }
 
     /// Camera on / off. Started only after the permission is granted.
@@ -573,6 +588,10 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         }
         video.isEnabled = true
         layerLock.withLock { applyActiveLayersLocked() }
+        // A `close()` that ran while the camera was starting has torn the track down:
+        // do not hand it to the self tile.
+        let stillOpen = senderLock.withLock { !closing }
+        guard stillOpen else { return .stopped }
         onLocalVideoTrack?(video)
         return .started
         #else

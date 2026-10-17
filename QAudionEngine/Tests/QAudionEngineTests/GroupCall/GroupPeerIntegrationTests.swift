@@ -262,6 +262,23 @@ final class GroupPeerIntegrationTests: XCTestCase {
         XCTAssertFalse(booked.contains { $0 === late }, "own cryptor, not the closed publisher's")
     }
 
+    func testTheSenderCryptorTakesTheKeyIndexSetDuringItsConstruction() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let hub = fixtureHub(factory)
+        let publisher = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: hub,
+                                           selfPseudonym: GroupCallFixtures.pseudoA)
+        // A key-slot change that lands while the audio cryptor is still being built (it is not
+        // booked yet, so the hub's per-cryptor update cannot reach it) must not be lost.
+        hub.senderConstructionReturned = { id, _ in
+            if id == "audio0" { hub.setSendKeyIndex(2) }
+        }
+        try await publisher.start()
+        hub.senderConstructionReturned = nil
+        XCTAssertFalse(hub.attachedSenderCryptors.isEmpty)
+        XCTAssertTrue(hub.attachedSenderCryptors.allSatisfy { $0.keyIndex == 2 })
+        publisher.close()
+    }
+
     func testASenderWithoutATrackOrWithoutABoundFactoryGetsNoCryptor() async throws {
         let factory = await QAudionPeerConnectionFactory.shared.factory()
         let configuration = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: true)
