@@ -12,7 +12,8 @@ import UIKit
 ///     metrics in `Style` so the Text helper can apply them together.
 ///   - letterSpacing → `.tracking(_:)` modifier.
 ///   - weight 400 → `.regular`, 500 → `.medium`, 700 → `.bold`.
-///   - Only the iOS system font is used: no font file is bundled (UIAppFonts stays empty).
+///   - Only the iOS system font is used: no font file is bundled and the
+///     UIAppFonts key is not set.
 ///
 /// Text size chosen by the user (Dynamic Type): the sizes below are the ones
 /// shown at the default text size ("Large"). The theme modifier
