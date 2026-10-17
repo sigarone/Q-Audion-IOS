@@ -184,7 +184,7 @@ public final class BCryptoAccountApiImpl: AccountApi {
     }
 
     public func verifyOtp(phoneNumber: String, code: String, purpose: OtpPurpose, deviceName: String,
-                           inviteCode: String?, displayName: String?, termsVersion: String?) async throws -> OtpAuthResult {
+                           inviteCode: String?, displayName: String?) async throws -> OtpAuthResult {
         var dict: [String: Any] = [
             "phone_number": phoneNumber,
             "code": code,
@@ -193,16 +193,14 @@ public final class BCryptoAccountApiImpl: AccountApi {
             "platform": "ios",
         ]
         if let invite = inviteCode, !invite.isEmpty { dict["invite_code"] = invite }
-        if purpose == .register, let tv = termsVersion { dict["age_declaration"] = true; dict["terms_version"] = tv }
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/otp/verify", body: body)
         return try JSONDecoder().decode(OtpAuthResult.self, from: data)
     }
 
-    public func registerExtensionOnly(displayName: String?, email: String, inviteCode: String, termsVersion: String?) async throws -> OtpAuthResult {
+    public func registerExtensionOnly(displayName: String?, email: String, inviteCode: String) async throws -> OtpAuthResult {
         var dict: [String: Any] = ["email": email, "platform": "ios", "invite_code": inviteCode]
-        if let tv = termsVersion { dict["age_declaration"] = true; dict["terms_version"] = tv }
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/register/extension", body: body)
