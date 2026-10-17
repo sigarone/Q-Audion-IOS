@@ -137,8 +137,10 @@ struct TransportSettingsScreen: View {
                         .padding(.horizontal, 14)
                         .padding(.top, 6)
 
+                    #if QAUDION_VPN
                     SettingsSectionHeader("NODO VPN (USCITA)")
                     vpnNodeSection
+                    #endif
 
                     SettingsSectionHeader("SERVER TURN")
                     turnInputRow
@@ -205,9 +207,9 @@ struct TransportSettingsScreen: View {
         )
     }
 
+    #if QAUDION_VPN
     // MARK: - VPN exit node
 
-    #if QAUDION_VPN
     @ViewBuilder
     private var vpnNodeSection: some View {
         VStack(spacing: 8) {
@@ -259,35 +261,6 @@ struct TransportSettingsScreen: View {
             )
         }
         .buttonStyle(.plain)
-    }
-    #else
-    /// Greyed-out, inactive exit-node row for builds without VPN support
-    /// (`QAUDION_VPN` not set).
-    @ViewBuilder
-    private var vpnNodeSection: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Auto")
-                    .qaudionStyle(type.bodyMedium)
-                    .foregroundStyle(scheme.onSurface)
-                Text("Nodo migliore · latenza + carico")
-                    .qaudionStyle(type.labelSmall)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 52)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
-        .opacity(0.45)
-        .accessibilityElement(children: .combine)
-        Text("VPN non disponibile al momento")
-            .qaudionStyle(type.labelSmall)
-            .foregroundStyle(scheme.onSurfaceVariant)
-            .padding(.horizontal, 14).padding(.top, 6)
     }
     #endif
 
