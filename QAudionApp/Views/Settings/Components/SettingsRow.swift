@@ -145,7 +145,7 @@ private struct MonoIfNeeded: ViewModifier {
         SettingsRow(icon: "person", title: "Profilo",
                     subtitle: "Mario Rossi · Int. 103")
         // Plain layout row.
-        SettingsRow(icon: "iphone", iconColor: .blue, title: "Dispositivi collegati",
+        SettingsRow(icon: "candybarphone", iconColor: .blue, title: "Dispositivi collegati",
                     subtitle: "1 dispositivo")
         SettingsRow(icon: "key.fill", iconColor: .purple,
                     title: "Gestione chiavi",

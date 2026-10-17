@@ -33,9 +33,6 @@ public struct QAudionRootView: View {
         ZStack {
             QColors.deepSpace.ignoresSafeArea()
             VStack(spacing: 16) {
-                Image(systemName: "shield.checkered")
-                    .font(.system(size: 64))
-                    .foregroundColor(QColors.qGreen)
                 Text("Q-Audion")
                     .font(.title.bold())
                     .foregroundColor(QColors.textPrimary)
