@@ -91,18 +91,20 @@ public protocol AccountApi {
     /// `inviteCode`/`displayName` are only meaningful when
     /// `purpose == .register` (both optional even then). `deviceName`
     /// mirrors the same field on ``login(phoneHash:password:deviceName:)``.
+    /// `termsVersion`: non-nil = l'utente ha spuntato la casella età e Termini: invia age_declaration=true e terms_version.
     /// Matches `POST /api/v1/auth/otp/verify`.
     func verifyOtp(phoneNumber: String, code: String, purpose: OtpPurpose, deviceName: String,
-                    inviteCode: String?, displayName: String?) async throws -> OtpAuthResult
+                    inviteCode: String?, displayName: String?, termsVersion: String?) async throws -> OtpAuthResult
 
     /// Extension-only registration — no phone number at all, just a PBX
     /// extension the server assigns. Email is REQUIRED (no phone means no
     /// other recovery/support channel for the account). `inviteCode` is
     /// REQUIRED too (the server runs in `registration_mode="invite"`): the
     /// normalised dashed form, see ``InviteCodeInput/wireValue(_:)``. A 403
-    /// about the code surfaces as ``BCryptoInviteCodeError``. Matches
-    /// `POST /api/v1/auth/register/extension`.
-    func registerExtensionOnly(displayName: String?, email: String, inviteCode: String) async throws -> OtpAuthResult
+    /// about the code surfaces as ``BCryptoInviteCodeError``.
+    /// `termsVersion`: non-nil = l'utente ha spuntato la casella età e Termini: invia age_declaration=true e terms_version.
+    /// Matches `POST /api/v1/auth/register/extension`.
+    func registerExtensionOnly(displayName: String?, email: String, inviteCode: String, termsVersion: String?) async throws -> OtpAuthResult
 
     /// Authenticated — request a verification link/token for the email on
     /// the current account. Matches `POST /api/v1/auth/email/verify-request`.

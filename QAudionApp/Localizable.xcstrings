@@ -45002,6 +45002,166 @@
           }
         }
       }
+    },
+    "Prima di creare l'account": {
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prima di creare l'account"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Before you create an account"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bevor du ein Konto erstellst"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antes de crear la cuenta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avant de créer le compte"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antes de criar a conta"
+          }
+        }
+      }
+    },
+    "Q-Audion è riservato a chi ha almeno 18 anni. Non verifichiamo l'età: ci basiamo su quello che dichiari qui.": {
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion è riservato a chi ha almeno 18 anni. Non verifichiamo l'età: ci basiamo su quello che dichiari qui."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion is for people aged 18 or over. We do not verify your age: we rely on what you declare here."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion ist nur für Personen ab 18 Jahren. Wir prüfen dein Alter nicht: Wir verlassen uns auf das, was du hier angibst."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion está reservado a mayores de 18 años. No verificamos tu edad: nos basamos en lo que declaras aquí."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion est réservé aux personnes âgées d'au moins 18 ans. Nous ne vérifions pas votre âge : nous nous fions à ce que vous déclarez ici."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion é destinado a pessoas com 18 anos ou mais. Não verificamos sua idade: confiamos no que você declara aqui."
+          }
+        }
+      }
+    },
+    "Dichiaro di avere almeno 18 anni e accetto i Termini e condizioni d'uso.": {
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dichiaro di avere almeno 18 anni e accetto i Termini e condizioni d'uso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I declare that I am at least 18 years old and I accept the Terms and Conditions of Use."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich erkläre, dass ich mindestens 18 Jahre alt bin, und akzeptiere die Nutzungsbedingungen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declaro que tengo al menos 18 años y acepto los Términos y condiciones de uso."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je déclare avoir au moins 18 ans et j'accepte les Conditions générales d'utilisation."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declaro que tenho pelo menos 18 anos e aceito os Termos e Condições de Uso."
+          }
+        }
+      }
+    },
+    "Termini e condizioni d'uso": {
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termini e condizioni d'uso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terms and Conditions of Use"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nutzungsbedingungen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Términos y condiciones de uso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conditions générales d'utilisation"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termos e Condições de Uso"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
