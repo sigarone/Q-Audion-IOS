@@ -18,18 +18,22 @@ name: SwiftLint autofix
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
+# No default token scope; the single job below requests only what it needs.
+permissions: {}
 
 jobs:
   autofix:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The only write access in this workflow: the last step pushes a new
+    # branch with the autocorrected files (git push origin "$BRANCH").
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: SwiftLint --fix (mechanical formatting only)
-        uses: docker://ghcr.io/realm/swiftlint:latest
+        uses: docker://ghcr.io/realm/swiftlint@sha256:b8f3cf76353336c048f133aa5b02f5c35c6984b9e6451e906fb8f8c9f92bb30b # latest as of 2026-10-17 (image built 2026-09-28, no version tag; newer than 0.65.1)
         with:
           args: lint --fix --config .swiftlint.yml --quiet
 
