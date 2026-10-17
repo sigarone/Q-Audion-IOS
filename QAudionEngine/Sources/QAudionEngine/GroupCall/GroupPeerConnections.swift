@@ -550,14 +550,19 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         guard started else { return .noCamera }
         // The decision and the store share one locked section with `close()`'s swap: either the
         // capturer is stored (and `close()` stops it) or it is stopped here, never left running.
-        let abandoned: Bool = senderLock.withLock {
-            if closing { return true }
+        // A capturer that this one replaces is handed back and stopped outside the lock.
+        let (stored, old) = senderLock.withLock { () -> (Bool, RTCCameraVideoCapturer?) in
+            guard !closing else { return (false, nil) }
+            let previous = capturer
             capturer = newCapturer
-            return false
+            return (true, previous)
         }
-        if abandoned {
+        if !stored {
             await newCapturer.stopCapture()
             return .stopped
+        }
+        if let old = old {
+            await old.stopCapture()
         }
         video.isEnabled = true
         layerLock.withLock { applyActiveLayersLocked() }
