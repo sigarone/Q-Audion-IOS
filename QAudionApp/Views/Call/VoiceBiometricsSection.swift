@@ -76,8 +76,8 @@ enum VoiceTechnicalCopy {
 private enum BioCopy {
     static var unavailable: String {
         String(localized: "in_call.bio.unavailable",
-               defaultValue: "Biometria vocale non disponibile per questa chiamata.",
-               comment: "Call security sheet, voice biometrics — shown when no voice analysis is available for the call")
+               defaultValue: "Analisi vocale non disponibile per questa chiamata.",
+               comment: "Call security sheet, voice section — shown when no voice analysis is available for the call")
     }
     static var syllableUnit: String {
         String(localized: "in_call.bio.syllables_unit",

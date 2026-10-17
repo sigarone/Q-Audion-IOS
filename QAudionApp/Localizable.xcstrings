@@ -5925,42 +5925,42 @@
     },
     "in_call.bio.unavailable": {
       "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — shown when no voice analysis is available for the call",
+      "comment": "Call security sheet, voice section — shown when no voice analysis is available for the call",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Biometria vocale non disponibile per questa chiamata."
+            "value": "Analisi vocale non disponibile per questa chiamata."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice biometrics not available for this call."
+            "value": "Voice analysis not available for this call."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stimmbiometrie für diesen Anruf nicht verfügbar."
+            "value": "Stimmanalyse für diesen Anruf nicht verfügbar."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Biometría de voz no disponible para esta llamada."
+            "value": "Análisis de voz no disponible en esta llamada."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Biométrie vocale indisponible pour cet appel."
+            "value": "Analyse vocale indisponible pour cet appel."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Biometria de voz indisponível para esta chamada."
+            "value": "Análise de voz indisponível nesta chamada."
           }
         }
       }
@@ -12066,47 +12066,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bem-vindo ao Q-Audion."
-          }
-        }
-      }
-    },
-    "Biometria vocale non disponibile per questa chiamata.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Biometria vocale non disponibile per questa chiamata."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice biometrics unavailable for this call."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Biometría de voz no disponible para esta llamada."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Biométrie vocale indisponible pour cet appel."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprachbiometrie für diesen Anruf nicht verfügbar."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Biometria de voz não disponível para esta chamada."
           }
         }
       }
