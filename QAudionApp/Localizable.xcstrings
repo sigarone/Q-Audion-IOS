@@ -26404,6 +26404,36 @@
             "state": "translated",
             "value": "Sei già in una chiamata"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You're already on a call"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ya hay una llamada en curso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un appel est déjà en cours"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bereits in einem Anruf"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Já há uma chamada em andamento"
+          }
         }
       }
     },

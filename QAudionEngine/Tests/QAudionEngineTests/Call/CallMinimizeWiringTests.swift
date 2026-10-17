@@ -321,4 +321,20 @@ final class CallMinimizeWiringTests: XCTestCase {
             XCTAssertEqual(unit["value"] as? String, key)
         }
     }
+
+    /// The notice for a refused group call has all six languages (the source language and the five translations), none empty.
+    func testTheNoticeForAGroupCallRefusedByACallHasAllSixLanguages() throws {
+        let url = try sourceURL("QAudionApp/Localizable.xcstrings")
+        let data = try Data(contentsOf: url)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let strings = try XCTUnwrap(root["strings"] as? [String: Any])
+        let entry = try XCTUnwrap(strings["Sei già in una chiamata"] as? [String: Any])
+        let localizations = try XCTUnwrap(entry["localizations"] as? [String: Any])
+        for language in ["it", "en", "es", "fr", "de", "pt-BR"] {
+            let one = try XCTUnwrap(localizations[language] as? [String: Any], "missing language: \(language)")
+            let unit = try XCTUnwrap(one["stringUnit"] as? [String: Any], language)
+            let value = try XCTUnwrap(unit["value"] as? String, language)
+            XCTAssertFalse(value.isEmpty, language)
+        }
+    }
 }
