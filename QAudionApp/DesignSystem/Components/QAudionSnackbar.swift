@@ -116,7 +116,7 @@ public struct QAudionSnackbarHost: View {
         let accent = color(for: msg.severity)
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: icon(for: msg.severity))
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold, family: .body)
                 .foregroundStyle(accent)
             Text(msg.text)
                 .qaudionStyle(type.bodySmall)
@@ -138,7 +138,7 @@ public struct QAudionSnackbarHost: View {
                     state.dismiss()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold))
+                        .qaudionScaledFont(size: 13, weight: .semibold, family: .label)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(6)
                         .contentShape(Rectangle())

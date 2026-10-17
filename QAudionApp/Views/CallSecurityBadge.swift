@@ -63,7 +63,7 @@ struct CallSecurityBadge: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
+        .qaudionMaterialBackground()
         .cornerRadius(20)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -114,7 +114,7 @@ struct CallSecurityBadge: View {
             detailRow(label: String(localized: "call_security.label.latency", defaultValue: "Latenza", comment: "Call security detail panel — field label for round-trip latency"), value: "\(appState.latencyMs) ms", valueColor: latencyColor)
         }
         .padding(16)
-        .background(.ultraThinMaterial)
+        .qaudionMaterialBackground()
         .cornerRadius(16)
         .padding(.horizontal, 16)
         .padding(.top, 4)

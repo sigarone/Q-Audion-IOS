@@ -40,7 +40,7 @@ public struct TapCopyRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Image(systemName: "doc.on.clipboard")
-                .font(.system(size: 12, weight: .regular))
+                .qaudionScaledFont(size: 12, weight: .regular, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant.opacity(0.6))
         }
         .padding(.horizontal, 14)

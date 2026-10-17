@@ -85,7 +85,7 @@ struct WaveformPanel: View {
             }
         }
         .padding(12)
-        .background(.ultraThinMaterial)
+        .qaudionMaterialBackground()
         .cornerRadius(12)
         .padding(.horizontal, 16)
     }

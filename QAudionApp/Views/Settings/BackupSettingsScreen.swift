@@ -249,7 +249,7 @@ struct BackupSettingsScreen: View {
                         .foregroundStyle(.white)
                 }
                 .padding(32)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .qaudionMaterialBackground(in: RoundedRectangle(cornerRadius: 16))
             }
         }
         .navigationTitle("Backup cifrato")
