@@ -26396,6 +26396,17 @@
         }
       }
     },
+    "Sei già in una chiamata": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sei già in una chiamata"
+          }
+        }
+      }
+    },
     "Sent · Start · Stop · Reaction · Destructive · Failure": {
       "extractionState": "manual",
       "localizations": {

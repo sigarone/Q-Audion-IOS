@@ -220,6 +220,59 @@ final class CallMinimizeWiringTests: XCTestCase {
                 "callScreenMinimized = CallMinimizePolicy.next( minimized: callScreenMinimized, event: .newCallRefused, canMinimize: false)"))
     }
 
+    // MARK: - group calls
+
+    /// With the call reduced the whole app is reachable, group call buttons included. A group call is not started over a 1:1
+    /// call: both places that start one (the group chat and the group picker of the contact list) check first, bring the call
+    /// screen back and say why; the picker also says out loud when the create is refused (it used to ignore it).
+    func testAGroupCallIsNotStartedOverAOneToOneCall() throws {
+        let chat = try code("QAudionApp/Views/Chat/Group/GroupChatScreen.swift")
+        let start = try slice(
+            chat, from: "private func handleStartGroupCall(video: Bool) {", to: "let invitees = groupCallInvitees")
+        XCTAssertTrue(
+            start.contains(
+                "guard !appState.isInCall else { appState.returnToCallScreen() snackbar?.show(.init(text: String(localized: \"Sei già in una chiamata\"), severity: .info)) return }"),
+            "back to the call screen, with a visible notice, and no group call")
+        XCTAssertEqual(occurrences(of: "groupCallController?.createCall(", in: chat), 1)
+        let guardPlace = try XCTUnwrap(chat.range(of: "guard !appState.isInCall else {"))
+        let createPlace = try XCTUnwrap(chat.range(of: "groupCallController?.createCall("))
+        XCTAssertLessThan(guardPlace.lowerBound, createPlace.lowerBound, "the check comes before the create")
+
+        let contacts = try code("QAudionApp/Views/ContactsListView.swift")
+        let picker = try slice(contacts, from: "onStart: { selectedIds, video in", to: ".alert(groupCallUnavailableTitle")
+        XCTAssertTrue(picker.contains("startGroupCall(invitees: selectedIds, video: video)"))
+        XCTAssertFalse(picker.contains("createCall("), "the picker no longer creates the call on its own")
+        let method = try slice(
+            contacts, from: "private func startGroupCall(invitees: [String], video: Bool) {",
+            to: "private var groupCallUnavailableTitle")
+        XCTAssertTrue(
+            method.contains(
+                "guard !appState.isInCall else { appState.returnToCallScreen() snackbar?.show(.init(text: String(localized: \"Sei già in una chiamata\"), severity: .info)) return }"))
+        XCTAssertTrue(method.contains("if created == nil { showingGroupCallUnavailable = true }"),
+                      "a refused create is shown, not ignored")
+        XCTAssertEqual(occurrences(of: "groupCallController?.createCall(", in: contacts), 1)
+        XCTAssertTrue(contacts.contains(".alert(groupCallUnavailableTitle, isPresented: $showingGroupCallUnavailable)"))
+    }
+
+    /// The other way to a group call from a 1:1 call, the "+" of the call screen (promotion), is not refused for being in a
+    /// call: it is reachable on the call screen, creates the group itself in `AppState` and has none of the checks above; the
+    /// engine controller was given no call check either.
+    func testThePromotionOfTheCallToAGroupStaysReachable() throws {
+        let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
+        XCTAssertTrue(live.contains("GroupCallContactPickerSheet("))
+        XCTAssertTrue(live.contains("appState.promoteToGroupCall(newPeerIds: selectedIds)"))
+        let app = try code("QAudionApp/AppState.swift")
+        let promote = try slice(
+            app, from: "func promoteToGroupCall(newPeerIds: [String]) {",
+            to: "beginGroupPromotion(groupCallId: groupCallId, peerId: peer)")
+        XCTAssertTrue(promote.contains("controller.createCall("), "the promotion creates the group call itself")
+        for forbidden in ["returnToCallScreen", "callScreenMinimized", "guard !isInCall", "snackbar"] {
+            XCTAssertFalse(promote.contains(forbidden), "the promotion must not be refused or redirected: found \(forbidden)")
+        }
+        let controller = try code("QAudionEngine/Sources/QAudionEngine/GroupCall/GroupCallController.swift")
+        XCTAssertFalse(controller.contains("isInCall"), "the engine controller has no call check")
+    }
+
     // MARK: - the security confirmation
 
     /// The SAS confirmation is not state of the call screen: it is recorded in `SasVerificationStore` (keychain) and the media
@@ -254,13 +307,13 @@ final class CallMinimizeWiringTests: XCTestCase {
 
     // MARK: - the texts
 
-    /// The three strings are in the catalog, in the source language. (Other languages are added separately.)
-    func testTheCatalogHasTheThreeItalianKeys() throws {
+    /// The four strings are in the catalog, in the source language. (Other languages are added separately.)
+    func testTheCatalogHasTheFourItalianKeys() throws {
         let url = try sourceURL("QAudionApp/Localizable.xcstrings")
         let data = try Data(contentsOf: url)
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let strings = try XCTUnwrap(root["strings"] as? [String: Any])
-        for key in ["Chiamata in corso", "Torna alla chiamata", "Riduci la chiamata"] {
+        for key in ["Chiamata in corso", "Torna alla chiamata", "Riduci la chiamata", "Sei già in una chiamata"] {
             let entry = try XCTUnwrap(strings[key] as? [String: Any], "missing key: \(key)")
             let localizations = try XCTUnwrap(entry["localizations"] as? [String: Any], key)
             let it = try XCTUnwrap(localizations["it"] as? [String: Any], key)
