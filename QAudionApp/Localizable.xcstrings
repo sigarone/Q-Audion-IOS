@@ -346,6 +346,36 @@
             "state": "translated",
             "value": "%lld non letti"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld unread"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ungelesen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld sin leer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld non lus"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld não lidas"
+          }
         }
       }
     },
@@ -1996,6 +2026,36 @@
             "state": "translated",
             "value": "%@ ti ha silenziato"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ muted you"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ hat Sie stummgeschaltet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ te ha silenciado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ t'a mis en sourdine"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ silenciou você"
+          }
         }
       }
     },
@@ -2013,6 +2073,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Couldn't turn on the camera for this call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Kamera konnte für diesen Anruf nicht aktiviert werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo activar la cámara para esta llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'activer la caméra pour cet appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível ativar a câmera para esta chamada."
           }
         }
       }
@@ -2032,6 +2116,30 @@
             "state": "translated",
             "value": "Allow camera access in Settings to turn on video."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erlauben Sie den Kamerazugriff in den Einstellungen, um das Video zu aktivieren."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permite el acceso a la cámara en Ajustes para activar el video."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorise l'accès à la caméra dans les Réglages pour activer la vidéo."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permita o acesso à câmera nos Ajustes para ativar o vídeo."
+          }
         }
       }
     },
@@ -2049,6 +2157,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "This call is full."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Anruf ist voll."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La llamada está llena."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'appel est complet."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chamada está cheia."
           }
         }
       }
@@ -2068,6 +2200,30 @@
             "state": "translated",
             "value": "No media server available."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kein Medienserver verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay ningún servidor multimedia disponible."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun serveur média disponible."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum servidor de mídia disponível."
+          }
         }
       }
     },
@@ -2086,6 +2242,30 @@
             "state": "translated",
             "value": "Couldn't set up the media room for this call."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Medienraum des Anrufs konnte nicht erstellt werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo crear la sala multimedia de la llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de créer la salle média de l'appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível criar a sala de mídia da chamada."
+          }
         }
       }
     },
@@ -2103,6 +2283,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "You are not a participant of this call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie sind nicht unter den Teilnehmern dieses Anrufs aufgeführt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No apareces entre los participantes de esta llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu ne figures pas parmi les participants de cet appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você não consta entre os participantes desta chamada."
           }
         }
       }
@@ -2164,6 +2368,30 @@
             "state": "translated",
             "value": "Insecure connection refused: the call was ended."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsichere Verbindung abgelehnt: Der Anruf wurde beendet."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexión no segura rechazada: la llamada se ha terminado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion non sécurisée refusée : l'appel a été terminé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexão não segura recusada: a chamada foi encerrada."
+          }
         }
       }
     },
@@ -2182,6 +2410,30 @@
             "state": "translated",
             "value": "Media connection lost: the call was ended."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medienverbindung verloren: Der Anruf wurde beendet."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se perdió la conexión multimedia: la llamada se ha terminado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion média perdue : l'appel a été terminé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexão de mídia perdida: a chamada foi encerrada."
+          }
         }
       }
     },
@@ -2199,6 +2451,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Media error: the call was ended."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fehler bei der Medienverbindung: Der Anruf wurde beendet."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de conexión multimedia: la llamada se ha terminado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur de connexion média : l'appel a été terminé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro de conexão de mídia: a chamada foi encerrada."
           }
         }
       }
@@ -2716,6 +2992,36 @@
             "state": "translated",
             "value": "Aggiornamento a %@ avviato."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update to %@ started."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualisierung auf %@ gestartet."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualización a %@ iniciada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mise à jour vers %@ lancée."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atualização para %@ iniciada."
+          }
         }
       }
     },
@@ -2769,6 +3075,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Versione copiata: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version copied: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version kopiert: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versión copiada: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version copiée : %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versão copiada: %@"
           }
         }
       }
@@ -2866,6 +3202,36 @@
             "state": "translated",
             "value": "%lld membri aggiunti."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld members added."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Mitglieder hinzugefügt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld miembros añadidos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld membres ajoutés."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld membros adicionados."
+          }
         }
       }
     },
@@ -2962,6 +3328,36 @@
             "state": "translated",
             "value": "%@ non è più admin."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is no longer an admin."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ist kein Admin mehr."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ya no es administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ n'est plus administrateur."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ não é mais administrador."
+          }
         }
       }
     },
@@ -2973,6 +3369,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ è ora admin."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is now an admin."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ist jetzt Admin."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ahora es administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ est maintenant administrateur."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ agora é administrador."
           }
         }
       }
@@ -3196,6 +3622,36 @@
             "state": "translated",
             "value": "%@ rimosso dalla rubrica."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ removed from contacts."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ aus den Kontakten entfernt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ eliminado de los contactos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ supprimé des contacts."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ removido dos contatos."
+          }
         }
       }
     },
@@ -3207,6 +3663,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@ verificato via %2$@."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ verified via %2$@."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ verifiziert über %2$@."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ verificado mediante %2$@."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ vérifié via %2$@."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ verificado via %2$@."
           }
         }
       }
@@ -3304,6 +3790,36 @@
             "state": "translated",
             "value": "Identità di %1$@ marcata verificata via %2$@."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@'s identity marked as verified via %2$@."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identität von %1$@ über %2$@ als verifiziert markiert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad de %1$@ marcada como verificada mediante %2$@."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité de %1$@ marquée comme vérifiée via %2$@."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidade de %1$@ marcada como verificada via %2$@."
+          }
         }
       }
     },
@@ -3358,6 +3874,36 @@
             "state": "translated",
             "value": "%@ bloccato."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ blocked."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ blockiert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ bloqueado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ bloqué."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ bloqueado."
+          }
         }
       }
     },
@@ -3370,6 +3916,36 @@
             "state": "translated",
             "value": "%@ sbloccato."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ unblocked."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ entsperrt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ desbloqueado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ débloqué."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ desbloqueado."
+          }
         }
       }
     },
@@ -3381,6 +3957,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Apri la chat con %@ dalla scheda Chat."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open the chat with %@ from the Chat tab."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnen Sie den Chat mit %@ über den Reiter Chat."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre el chat con %@ desde la pestaña Chats."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre le chat avec %@ depuis l'onglet Chat."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abra o chat com %@ na aba Chat."
           }
         }
       }
@@ -3478,6 +4084,36 @@
             "state": "translated",
             "value": "Interno %lld non assegnato — verifica il numero."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extension %lld not assigned — check the number."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nebenstelle %lld nicht zugewiesen — prüfen Sie die Nummer."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extensión %lld sin asignar — verifica el número."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Poste %lld non attribué — vérifie le numéro."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ramal %lld não atribuído — verifique o número."
+          }
         }
       }
     },
@@ -3489,6 +4125,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Contatto %@ salvato in rubrica."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact %@ saved to contacts."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt %@ in den Kontakten gespeichert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contacto %@ guardado en los contactos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact %@ enregistré dans les contacts."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contato %@ salvo nos contatos."
           }
         }
       }
@@ -3502,6 +4168,36 @@
             "state": "translated",
             "value": "Salvataggio fallito: %@"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save failed: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speichern fehlgeschlagen: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al guardar: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'enregistrement : %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao salvar: %@"
+          }
         }
       }
     },
@@ -3513,6 +4209,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Contatto %@ importato in rubrica."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact %@ imported to contacts."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt %@ in die Kontakte importiert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contacto %@ importado a los contactos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact %@ importé dans les contacts."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contato %@ importado para os contatos."
           }
         }
       }
@@ -3568,6 +4294,36 @@
             "state": "translated",
             "value": "%1$lld foto su %2$lld non leggibili."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld photos unreadable."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld von %2$lld Fotos nicht lesbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld fotos no legibles."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld sur %2$lld photos illisibles."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld fotos ilegíveis."
+          }
         }
       }
     },
@@ -3622,6 +4378,36 @@
             "state": "translated",
             "value": "Allegato non inviato — %@"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attachment not sent — %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anhang nicht gesendet — %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adjunto no enviado — %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pièce jointe non envoyée — %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anexo não enviado — %@"
+          }
         }
       }
     },
@@ -3633,6 +4419,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "ID gruppo copiato (%@…)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group ID copied (%@…)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppen-ID kopiert (%@…)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID del grupo copiado (%@…)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID du groupe copié (%@…)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID do grupo copiado (%@…)"
           }
         }
       }
@@ -3729,6 +4545,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Segnate %lld conversazioni come lette."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marked %lld conversations as read."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Unterhaltungen als gelesen markiert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld conversaciones marcadas como leídas."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld conversations marquées comme lues."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld conversas marcadas como lidas."
           }
         }
       }
@@ -3952,6 +4798,36 @@
             "state": "translated",
             "value": "Gruppo \"%@\" creato. Invio inviti…"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group \"%@\" created. Sending invitations…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppe \"%@\" erstellt. Einladungen werden gesendet…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grupo \"%@\" creado. Enviando invitaciones…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Groupe \"%@\" créé. Envoi des invitations…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grupo \"%@\" criado. Enviando convites…"
+          }
         }
       }
     },
@@ -3963,6 +4839,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Messaggio non inviato — %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message not sent — %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nachricht nicht gesendet — %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensaje no enviado — %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message non envoyé — %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensagem não enviada — %@"
           }
         }
       }
@@ -4396,6 +5302,36 @@
             "state": "translated",
             "value": "%1$lld foto su %2$lld non leggibili."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld photos unreadable."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld von %2$lld Fotos nicht lesbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld fotos no legibles."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld sur %2$lld photos illisibles."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld fotos ilegíveis."
+          }
         }
       }
     },
@@ -4449,6 +5385,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$lld foto su %2$lld non inviate: formato non valido o file troppo grandi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld photos not sent: invalid format or files too large."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld von %2$lld Fotos nicht gesendet: ungültiges Format oder Dateien zu groß."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld fotos no enviadas: formato no válido o archivos demasiado grandes."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld sur %2$lld photos non envoyées : format invalide ou fichiers trop volumineux."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld fotos não enviadas: formato inválido ou arquivos muito grandes."
           }
         }
       }
@@ -4630,6 +5596,36 @@
             "state": "translated",
             "value": "\"%@\" verrà rimossa da questo dispositivo insieme a tutti i suoi messaggi, e uscirai dal gruppo. L'operazione non può essere annullata."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\"%@\" will be removed from this device along with all its messages, and you will leave the group. This action cannot be undone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\"%@\" wird zusammen mit allen Nachrichten von diesem Gerät entfernt, und Sie verlassen die Gruppe. Dieser Vorgang kann nicht rückgängig gemacht werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\"%@\" se eliminará de este dispositivo junto con todos sus mensajes, y saldrás del grupo. Esta operación no se puede deshacer."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\"%@\" sera supprimé de cet appareil avec tous ses messages, et tu quitteras le groupe. Cette action ne peut pas être annulée."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "\"%@\" será removido deste dispositivo junto com todas as suas mensagens, e você sairá do grupo. Esta ação não pode ser desfeita."
+          }
         }
       }
     },
@@ -4726,6 +5722,36 @@
             "state": "translated",
             "value": "%1$lld membri · epoch %2$lld"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld members · epoch %2$lld"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld Mitglieder · Epoche %2$lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld miembros · época %2$lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld membres · époque %2$lld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld membros · época %2$lld"
+          }
         }
       }
     },
@@ -4737,6 +5763,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$lld di %2$lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld von %2$lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld sur %2$lld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld"
           }
         }
       }
@@ -4750,6 +5806,36 @@
             "state": "translated",
             "value": "Autenticità"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authenticity"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentizität"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticidad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authenticité"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticidade"
+          }
         }
       }
     },
@@ -4761,6 +5847,36 @@
           "stringUnit": {
             "state": "translated",
             "value": ">0.80 genuina · 0.50–0.80 verifica con SAS · <0.50 probabile voce sintetica."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">0.80 genuine · 0.50–0.80 verify with SAS · <0.50 likely synthetic voice."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">0.80 echt · 0.50–0.80 mit SAS prüfen · <0.50 wahrscheinlich synthetische Stimme."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">0.80 genuina · 0.50–0.80 verifica con SAS · <0.50 probable voz sintética."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">0.80 authentique · 0.50–0.80 vérifie avec le SAS · <0.50 voix probablement synthétique."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">0.80 genuína · 0.50–0.80 verifique com o SAS · <0.50 provável voz sintética."
           }
         }
       }
@@ -4774,6 +5890,36 @@
             "state": "translated",
             "value": "Respiro · HNR"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Breath · HNR"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atmung · HNR"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respiración · HNR"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Souffle · HNR"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respiração · HNR"
+          }
         }
       }
     },
@@ -4786,6 +5932,36 @@
             "state": "translated",
             "value": "≥ 5 dB chiaro · 2–5 dB accettabile · < 2 dB rauco o link rumoroso (soglie calibrate per il microfono del telefono)."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≥ 5 dB clear · 2–5 dB acceptable · < 2 dB hoarse or noisy link (thresholds calibrated for the phone microphone)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≥ 5 dB klar · 2–5 dB akzeptabel · < 2 dB heiser oder verrauschte Verbindung (Schwellenwerte für das Telefonmikrofon kalibriert)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≥ 5 dB claro · 2–5 dB aceptable · < 2 dB ronco o enlace ruidoso (umbrales calibrados para el micrófono del teléfono)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≥ 5 dB clair · 2–5 dB acceptable · < 2 dB rauque ou liaison bruyante (seuils calibrés pour le micro du téléphone)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≥ 5 dB claro · 2–5 dB aceitável · < 2 dB rouco ou link ruidoso (limiares calibrados para o microfone do telefone)."
+          }
         }
       }
     },
@@ -4794,6 +5970,36 @@
       "comment": "Call security sheet, voice biometrics — row label for pitch jitter and amplitude shimmer",
       "localizations": {
         "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jitter / Shimmer"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jitter / Shimmer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jitter / Shimmer"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jitter / Shimmer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jitter / Shimmer"
+          }
+        },
+        "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Jitter / Shimmer"
@@ -4810,6 +6016,36 @@
             "state": "translated",
             "value": "Normale su questo microfono (con AEC/NS attivi): jitter sotto il 6 per cento, shimmer sotto il 12 per cento. Valori oltre 15/25 indicano forte instabilità della voce."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal on this microphone (with AEC/NS active): jitter below 6 percent, shimmer below 12 percent. Values above 15/25 indicate strong voice instability."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal bei diesem Mikrofon (bei aktiven AEC/NS): Jitter unter 6 Prozent, Shimmer unter 12 Prozent. Werte über 15/25 deuten auf eine starke Instabilität der Stimme hin."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal en este micrófono (con AEC/NS activos): jitter por debajo del 6 por ciento, shimmer por debajo del 12 por ciento. Valores superiores a 15/25 indican una fuerte inestabilidad de la voz."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal sur ce micro (avec AEC/NS actifs) : jitter sous 6 pour cent, shimmer sous 12 pour cent. Des valeurs supérieures à 15/25 indiquent une forte instabilité de la voix."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal neste microfone (com AEC/NS ativos): jitter abaixo de 6 por cento, shimmer abaixo de 12 por cento. Valores acima de 15/25 indicam forte instabilidade da voz."
+          }
         }
       }
     },
@@ -4821,6 +6057,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tono f0 · ritmo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pitch f0 · rate"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tonhöhe f0 · Tempo"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tono f0 · ritmo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hauteur f0 · débit"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tom f0 · ritmo"
           }
         }
       }
@@ -4834,6 +6100,36 @@
             "state": "translated",
             "value": "Ritmo normale 3–5 sillabe al secondo, pause tra il 20 e il 40 per cento del tempo. Un cambio improvviso rispetto al tono abituale del contatto può segnalare una sostituzione."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal rate 3–5 syllables per second, pauses between 20 and 40 percent of the time. A sudden change from the contact's usual pitch may indicate a substitution."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normales Tempo 3–5 Silben pro Sekunde, Pausen zwischen 20 und 40 Prozent der Zeit. Ein plötzlicher Wechsel gegenüber der gewohnten Tonlage des Kontakts kann auf einen Austausch hindeuten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ritmo normal de 3–5 sílabas por segundo, pausas entre el 20 y el 40 por ciento del tiempo. Un cambio repentino respecto al tono habitual del contacto puede indicar una sustitución."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Débit normal de 3–5 syllabes par seconde, pauses entre 20 et 40 pour cent du temps. Un changement soudain par rapport à la hauteur habituelle du contact peut signaler une substitution."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ritmo normal de 3–5 sílabas por segundo, pausas entre 20 e 40 por cento do tempo. Uma mudança repentina em relação ao tom habitual do contato pode indicar uma substituição."
+          }
         }
       }
     },
@@ -4845,6 +6141,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Stress"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estrés"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estresse"
           }
         }
       }
@@ -4858,6 +6184,36 @@
             "state": "translated",
             "value": "10–35 rilassato · >60 agitato / possibile coercizione — un picco sostenuto va verificato a voce."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10–35 relaxed · >60 agitated / possible coercion — a sustained peak should be verified verbally."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10–35 entspannt · >60 aufgeregt / mögliche Nötigung — eine anhaltende Spitze sollte mündlich überprüft werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10–35 relajado · >60 agitado / posible coacción — un pico sostenido debe verificarse de viva voz."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10–35 détendu · >60 agité / contrainte possible — un pic prolongé doit être vérifié de vive voix."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10–35 relaxado · >60 agitado / possível coação — um pico sustentado deve ser verificado de viva voz."
+          }
         }
       }
     },
@@ -4869,6 +6225,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "sill/s"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "syl/s"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Silb./s"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "síl/s"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "syll/s"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "síl/s"
           }
         }
       }
@@ -4882,6 +6268,36 @@
             "state": "translated",
             "value": "Biometria vocale non disponibile per questa chiamata."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice biometrics not available for this call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimmbiometrie für diesen Anruf nicht verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Biometría de voz no disponible para esta llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Biométrie vocale indisponible pour cet appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Biometria de voz indisponível para esta chamada."
+          }
         }
       }
     },
@@ -4893,6 +6309,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "protetto da qui →"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "protected from here →"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "geschützt ab hier →"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "protegido desde aquí →"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "protégé à partir d'ici →"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "protegido a partir daqui →"
           }
         }
       }
@@ -4906,6 +6352,36 @@
             "state": "translated",
             "value": "Cifratura"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encryption"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verschlüsselung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cifrado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiffrement"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Criptografia"
+          }
         }
       }
     },
@@ -4917,6 +6393,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "testo cifrato · in rete"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ciphertext · on the network"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiffretext · im Netz"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "texto cifrado · en la red"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "texte chiffré · sur le réseau"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "texto cifrado · na rede"
           }
         }
       }
@@ -4930,6 +6436,36 @@
             "state": "translated",
             "value": "esposto"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "exposed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ungeschützt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "expuesto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "exposé"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "exposto"
+          }
         }
       }
     },
@@ -4941,6 +6477,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Identità"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identität"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidade"
           }
         }
       }
@@ -4954,6 +6520,36 @@
             "state": "translated",
             "value": "non verificata"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "not verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nicht verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "no verificada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "non vérifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "não verificada"
+          }
         }
       }
     },
@@ -4962,6 +6558,36 @@
       "comment": "Call security sheet, custody of the voice card — label of the cell for the live-voice check",
       "localizations": {
         "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liveness"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liveness"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liveness"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liveness"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liveness"
+          }
+        },
+        "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Liveness"
@@ -4978,6 +6604,36 @@
             "state": "translated",
             "value": "Microfono"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Micrófono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Micro"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microfone"
+          }
         }
       }
     },
@@ -4989,6 +6645,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Telefono"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefon"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teléfono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Téléphone"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefone"
           }
         }
       }
@@ -5002,6 +6688,36 @@
             "state": "translated",
             "value": "Post-quantistico"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Poscuántico"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantique"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pós-quântico"
+          }
         }
       }
     },
@@ -5013,6 +6729,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "non attivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "not active"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nicht aktiv"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "no activo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "inactif"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "inativo"
           }
         }
       }
@@ -5026,6 +6772,36 @@
             "state": "translated",
             "value": "Punto di sigillo"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seal point"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Siegelpunkt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punto de sellado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Point de scellement"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ponto de selagem"
+          }
         }
       }
     },
@@ -5037,6 +6813,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "SIGILLATO DA SOFTWARE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SEALED BY SOFTWARE"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DURCH SOFTWARE VERSIEGELT"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SELLADO POR SOFTWARE"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SCELLÉ PAR LOGICIEL"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SELADO POR SOFTWARE"
           }
         }
       }
@@ -5050,6 +6856,36 @@
             "state": "translated",
             "value": "Sigillato sul telefono"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sealed on the phone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auf dem Telefon versiegelt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sellado en el teléfono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scellé sur le téléphone"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selado no telefone"
+          }
         }
       }
     },
@@ -5061,6 +6897,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "CUSTODIA DELLA TUA VOCE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CUSTODY OF YOUR VOICE"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VERWAHRUNG IHRER STIMME"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CUSTODIA DE TU VOZ"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GARDE DE TA VOIX"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CUSTÓDIA DA SUA VOZ"
           }
         }
       }
@@ -5074,6 +6940,36 @@
             "state": "translated",
             "value": "La protezione comincia al sigillo: l'audio viene cifrato con AES-256 usando chiavi derivate da ML-KEM-1024 e le chiavi della tua identità restano nel Keychain. Ma il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave."
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protection starts at the seal: audio is encrypted with AES-256 using keys derived from ML-KEM-1024, and your identity keys stay in the Keychain. But the microphone sits just outside the protected zone: the raw audio exists in the phone for an instant before being sealed, so a compromised operating system could intercept it upstream of encryption, without needing any key."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Schutz beginnt am Siegel: Das Audio wird mit AES-256 verschlüsselt, mit Schlüsseln, die aus ML-KEM-1024 abgeleitet werden, und die Schlüssel Ihrer Identität bleiben im Keychain. Das Mikrofon liegt jedoch knapp außerhalb der geschützten Zone: Das Rohaudio existiert für einen Augenblick im Telefon, bevor es versiegelt wird. Ein kompromittiertes Betriebssystem könnte es daher vor der Verschlüsselung abfangen, ohne irgendeinen Schlüssel zu benötigen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La protección empieza en el sello: el audio se cifra con AES-256 usando claves derivadas de ML-KEM-1024 y las claves de tu identidad permanecen en el Keychain. Pero el micrófono queda justo fuera de la zona protegida: el audio sin procesar existe en el teléfono durante un instante antes de ser sellado, así que un sistema operativo comprometido podría interceptarlo antes del cifrado, sin necesidad de ninguna clave."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La protection commence au sceau : l'audio est chiffré avec AES-256 à l'aide de clés dérivées de ML-KEM-1024, et les clés de ton identité restent dans le Keychain. Mais le micro se trouve juste en dehors de la zone protégée : l'audio brut existe dans le téléphone un instant avant d'être scellé, si bien qu'un système d'exploitation compromis pourrait l'intercepter en amont du chiffrement, sans avoir besoin d'aucune clé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A proteção começa no selo: o áudio é criptografado com AES-256 usando chaves derivadas de ML-KEM-1024 e as chaves da sua identidade permanecem no Keychain. Mas o microfone fica logo fora da zona protegida: o áudio bruto existe no telefone por um instante antes de ser selado, então um sistema operacional comprometido poderia interceptá-lo antes da criptografia, sem precisar de nenhuma chave."
+          }
         }
       }
     },
@@ -5085,6 +6981,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone sits just outside the protected zone: the raw audio exists in the phone for an instant before being sealed, so a compromised operating system could intercept it upstream of encryption, without needing any key."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Mikrofon liegt knapp außerhalb der geschützten Zone: Das Rohaudio existiert für einen Augenblick im Telefon, bevor es versiegelt wird. Ein kompromittiertes Betriebssystem könnte es daher vor der Verschlüsselung abfangen, ohne irgendeinen Schlüssel zu benötigen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El micrófono queda justo fuera de la zona protegida: el audio sin procesar existe en el teléfono durante un instante antes de ser sellado, así que un sistema operativo comprometido podría interceptarlo antes del cifrado, sin necesidad de ninguna clave."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le micro se trouve juste en dehors de la zone protégée : l'audio brut existe dans le téléphone un instant avant d'être scellé, si bien qu'un système d'exploitation compromis pourrait l'intercepter en amont du chiffrement, sans avoir besoin d'aucune clé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O microfone fica logo fora da zona protegida: o áudio bruto existe no telefone por um instante antes de ser selado, então um sistema operacional comprometido poderia interceptá-lo antes da criptografia, sem precisar de nenhuma chave."
           }
         }
       }
@@ -5098,6 +7024,36 @@
             "state": "translated",
             "value": "RESPIRO·HNR"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BREATH·HNR"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ATMUNG·HNR"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RESPIRACIÓN·HNR"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SOUFFLE·HNR"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RESPIRAÇÃO·HNR"
+          }
         }
       }
     },
@@ -5110,6 +7066,36 @@
             "state": "translated",
             "value": "TONO"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PITCH"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TONHÖHE"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TONO"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HAUTEUR"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TOM"
+          }
         }
       }
     },
@@ -5118,6 +7104,36 @@
       "comment": "Call screen voice ribbon — stress gauge status word for a calm voice",
       "localizations": {
         "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "calmo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "calm"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ruhig"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "calmado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "calme"
+          }
+        },
+        "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "calmo"
@@ -5134,6 +7150,36 @@
             "state": "translated",
             "value": "chiaro"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "clear"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "klar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "claro"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "clair"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "claro"
+          }
         }
       }
     },
@@ -5146,6 +7192,36 @@
             "state": "translated",
             "value": "elevato"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "elevated"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "erhöht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "elevado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "accru"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "elevado"
+          }
         }
       }
     },
@@ -5154,6 +7230,36 @@
       "comment": "Call screen voice ribbon — stress gauge status word for a high stress",
       "localizations": {
         "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "alto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "high"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hoch"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "alto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "élevé"
+          }
+        },
+        "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "alto"
@@ -5170,6 +7276,36 @@
             "state": "translated",
             "value": "rauco"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hoarse"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "heiser"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ronco"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "rauque"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "rouco"
+          }
         }
       }
     },
@@ -5181,6 +7317,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "lieve"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mild"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "leicht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "leve"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "léger"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "leve"
           }
         }
       }
@@ -5194,6 +7360,36 @@
             "state": "translated",
             "value": "STRESS"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "STRESS"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "STRESS"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ESTRÉS"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "STRESS"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ESTRESSE"
+          }
         }
       }
     },
@@ -5205,6 +7401,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "in attesa di voce…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "waiting for voice…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten auf Stimme…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "esperando voz…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en attente de voix…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "aguardando voz…"
           }
         }
       }
@@ -5218,6 +7444,36 @@
             "state": "translated",
             "value": "Verifica incerta"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uncertain check"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsichere Prüfung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación incierta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification incertaine"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação incerta"
+          }
         }
       }
     },
@@ -5229,6 +7485,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Andamento della verifica vocale in questa chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trend of the voice check during this call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verlauf der Stimmprüfung in diesem Anruf"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evolución de la verificación de voz en esta llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Évolution de la vérification vocale pendant cet appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evolução da verificação de voz nesta chamada"
           }
         }
       }
@@ -5242,6 +7528,36 @@
             "state": "translated",
             "value": "Anomalia rilevata"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomaly detected"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalie erkannt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalía detectada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalie détectée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalia detectada"
+          }
         }
       }
     },
@@ -5253,6 +7569,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Apprendimento non riuscito — riproverà alla prossima chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learning failed — will retry on the next call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lernen fehlgeschlagen — neuer Versuch beim nächsten Anruf"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendizaje fallido — se reintentará en la próxima llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'apprentissage — nouvel essai au prochain appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no aprendizado — nova tentativa na próxima chamada"
           }
         }
       }
@@ -5266,6 +7612,36 @@
             "state": "translated",
             "value": "Voce appresa e verificata"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice learned and verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme gelernt und verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz aprendida y verificada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix apprise et vérifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz aprendida e verificada"
+          }
         }
       }
     },
@@ -5277,6 +7653,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Riconoscimento vocale in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice recognition in progress…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimmerkennung läuft…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconocimiento de voz en curso…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnaissance vocale en cours…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconhecimento de voz em andamento…"
           }
         }
       }
@@ -5290,6 +7696,36 @@
             "state": "translated",
             "value": "Verifica in corso"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check in progress"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfung läuft"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación en curso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification en cours"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação em andamento"
+          }
         }
       }
     },
@@ -5301,6 +7737,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verifica vocale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice check"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimmprüfung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification vocale"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação de voz"
           }
         }
       }
@@ -5314,6 +7780,36 @@
             "state": "translated",
             "value": "Voce riconosciuta"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice recognized"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme erkannt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz reconocida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix reconnue"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz reconhecida"
+          }
         }
       }
     },
@@ -5325,6 +7821,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "In attesa di dati vocali…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for voice data…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten auf Stimmdaten…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esperando datos de voz…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente de données vocales…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aguardando dados de voz…"
           }
         }
       }
@@ -6142,6 +8668,30 @@
             "state": "translated",
             "value": "The transport is protected by DTLS 1.3 with a hybrid post-quantum key exchange (X25519MLKEM768) and SRTP AEAD_AES_256_GCM, verified by your device after connecting. The content is end-to-end encrypted by each sender, per epoch, with a fresh random 32-byte key (AES-256-GCM). Keys only travel over the sealed control channel between individual participants: the media server never sees them."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Transport ist durch DTLS 1.3 mit einem hybriden Post-Quanten-Schlüsselaustausch (X25519MLKEM768) und SRTP AEAD_AES_256_GCM geschützt, nach dem Verbindungsaufbau von Ihrem Gerät geprüft. Die Inhalte werden von jedem Absender pro Epoche Ende-zu-Ende verschlüsselt, mit einem zufälligen 32-Byte-Schlüssel (AES-256-GCM). Die Schlüssel werden nur über den versiegelten Steuerkanal zwischen den einzelnen Teilnehmern übertragen: Der Medienserver sieht sie nie."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El transporte está protegido por DTLS 1.3 con intercambio de claves híbrido poscuántico (X25519MLKEM768) y SRTP AEAD_AES_256_GCM, verificado por tu dispositivo tras la conexión. Cada remitente cifra el contenido de extremo a extremo, por época, con una clave aleatoria de 32 bytes (AES-256-GCM). Las claves solo viajan por el canal de control sellado entre los participantes individuales: el servidor multimedia nunca las ve."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le transport est protégé par DTLS 1.3 avec un échange de clés hybride post-quantique (X25519MLKEM768) et SRTP AEAD_AES_256_GCM, vérifié par ton appareil après la connexion. Le contenu est chiffré de bout en bout par chaque expéditeur, par époque, avec une clé aléatoire de 32 octets (AES-256-GCM). Les clés ne circulent que sur le canal de contrôle scellé entre les participants : le serveur média ne les voit jamais."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O transporte é protegido por DTLS 1.3 com troca de chaves híbrida pós-quântica (X25519MLKEM768) e SRTP AEAD_AES_256_GCM, verificado pelo seu dispositivo após a conexão. O conteúdo é criptografado de ponta a ponta por cada remetente, por época, com uma chave aleatória de 32 bytes (AES-256-GCM). As chaves trafegam apenas pelo canal de controle selado entre os participantes individuais: o servidor de mídia nunca as vê."
+          }
         }
       }
     },
@@ -6364,6 +8914,36 @@
             "state": "translated",
             "value": "Numero non valido: %@"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid number: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültige Nummer: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número no válido: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro non valide : %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número inválido: %@"
+          }
         }
       }
     },
@@ -6460,6 +9040,36 @@
             "state": "translated",
             "value": "Richiesta codice fallita: %@"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code request failed: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anforderung des Codes fehlgeschlagen: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al solicitar el código: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la demande de code : %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao solicitar o código: %@"
+          }
         }
       }
     },
@@ -6555,6 +9165,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Codice non valido o scaduto: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid or expired code: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiger oder abgelaufener Code: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código no válido o caducado: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code invalide ou expiré : %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código inválido ou expirado: %@"
           }
         }
       }
@@ -6736,6 +9376,36 @@
             "state": "translated",
             "value": "Push numeri al server fallito: %@"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending numbers to the server failed: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senden der Nummern an den Server fehlgeschlagen: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al enviar los números al servidor: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'envoi des numéros au serveur : %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao enviar os números ao servidor: %@"
+          }
         }
       }
     },
@@ -6789,6 +9459,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verifica fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check failed: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfung fehlgeschlagen: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error en la comprobación: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la vérification : %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na verificação: %@"
           }
         }
       }
@@ -11743,6 +14443,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Chiamata in corso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Call in progress"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anruf läuft"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Llamada en curso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appel en cours"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chamada em andamento"
           }
         }
       }
@@ -25289,6 +28019,36 @@
             "state": "translated",
             "value": "Riduci la chiamata"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimize the call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anruf verkleinern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reducir la llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réduire l'appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reduzir a chamada"
+          }
         }
       }
     },
@@ -28679,6 +31439,36 @@
             "state": "translated",
             "value": "Torna alla chiamata"
           }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back to the call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zurück zum Anruf"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Volver a la llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revenir à l'appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voltar para a chamada"
+          }
         }
       }
     },
@@ -31288,6 +34078,30 @@
             "state": "translated",
             "value": "Video request"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Videoanfrage"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solicitud de video"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demande vidéo"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solicitação de vídeo"
+          }
         }
       }
     },
@@ -31305,6 +34119,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ is sending video. Turn on your camera?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ überträgt Video. Möchten Sie Ihre Kamera aktivieren?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ está transmitiendo video. ¿Quieres activar tu cámara?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ envoie de la vidéo. Veux-tu activer ta caméra ?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ está transmitindo vídeo. Quer ativar sua câmera?"
           }
         }
       }
@@ -31324,6 +34162,30 @@
             "state": "translated",
             "value": "Close"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schließen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cerrar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fechar"
+          }
         }
       }
     },
@@ -31341,6 +34203,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "No, audio only"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nein, nur Audio"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No, solo audio"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non, audio seulement"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não, só áudio"
           }
         }
       }
@@ -31360,6 +34246,30 @@
             "state": "translated",
             "value": "Turn on video"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video einschalten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activar video"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer la vidéo"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativar vídeo"
+          }
         }
       }
     },
@@ -31377,6 +34287,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "The other person asked you to turn off your video"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der andere Nutzer hat darum gebeten, Ihr Video auszuschalten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El otro usuario te ha pedido que desactives tu video"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'autre utilisateur a demandé de désactiver ta vidéo"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O outro usuário pediu que você desative seu vídeo"
           }
         }
       }
@@ -31560,6 +34494,30 @@
             "state": "translated",
             "value": "Key added to an existing contact"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel zu bestehendem Kontakt hinzugefügt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave añadida a un contacto existente"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé ajoutée à un contact existant"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave adicionada a um contato existente"
+          }
         }
       }
     },
@@ -31577,6 +34535,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Key saved, contact not added"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel gespeichert, Kontakt nicht hinzugefügt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave guardada, contacto no añadido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé enregistrée, contact non ajouté"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave salva, contato não adicionado"
           }
         }
       }
@@ -31596,6 +34578,30 @@
             "state": "translated",
             "value": "New contact added and verified"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neuer Kontakt hinzugefügt und verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuevo contacto añadido y verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nouveau contact ajouté et vérifié"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Novo contato adicionado e verificado"
+          }
         }
       }
     },
@@ -31613,6 +34619,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Key saved, server verification unavailable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel gespeichert, Serverprüfung nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave guardada, verificación del servidor no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé enregistrée, vérification du serveur indisponible"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave salva, verificação do servidor indisponível"
           }
         }
       }
@@ -31632,6 +34662,30 @@
             "state": "translated",
             "value": "Pair in person (QR + Bluetooth) · New"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persönlich koppeln (QR + Bluetooth) · Neu"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vincular en persona (QR + Bluetooth) · Nuevo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associer en personne (QR + Bluetooth) · Nouveau"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associar pessoalmente (QR + Bluetooth) · Novo"
+          }
         }
       }
     },
@@ -31649,6 +34703,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "How it works"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "So funktioniert's"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cómo funciona"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment ça marche"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Como funciona"
           }
         }
       }
@@ -31668,6 +34746,30 @@
             "state": "translated",
             "value": "The other phone shows or scans the QR code.\n\nThe phones connect to each other over Bluetooth by themselves — nothing to set up.\n\nRead the 6 digits shown on both screens out loud: they must match.\n\nThe 6 digits catch anyone trying to sit in the middle of the exchange — if they don't match, cancel.\n\nThe exchange uses hybrid post-quantum encryption (ML-KEM-1024 + X25519): nothing ever leaves the two phones unencrypted.\n\nThe key this creates stays on your phones and protects your calls with each other from now on."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das andere Telefon zeigt den QR-Code an oder scannt ihn.\n\nDie Telefone verbinden sich von selbst über Bluetooth: Es gibt nichts einzurichten.\n\nLesen Sie die 6 Ziffern, die auf beiden Bildschirmen angezeigt werden, laut vor: Sie müssen übereinstimmen.\n\nMit den 6 Ziffern lässt sich erkennen, wer versuchen sollte, sich in den Austausch einzuschalten. Wenn sie nicht übereinstimmen, brechen Sie ab.\n\nDer Austausch verwendet hybride Post-Quanten-Kryptografie (ML-KEM-1024 + X25519): Nichts verlässt die beiden Telefone unverschlüsselt.\n\nDer so erzeugte Schlüssel bleibt auf Ihren Telefonen und schützt die Anrufe zwischen Ihnen ab sofort."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El otro teléfono muestra o escanea el código QR.\n\nLos teléfonos se conectan solos por Bluetooth: no hay nada que configurar.\n\nLean en voz alta los 6 dígitos que aparecen en las dos pantallas: deben coincidir.\n\nLos 6 dígitos sirven para descubrir si alguien intenta interponerse en el intercambio. Si no coinciden, cancelen.\n\nEl intercambio usa criptografía poscuántica híbrida (ML-KEM-1024 + X25519): nada sale de los dos teléfonos sin cifrar.\n\nLa clave así creada se queda en los teléfonos de ambos y protege las llamadas entre ustedes a partir de ahora."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'autre téléphone affiche ou scanne le code QR.\n\nLes téléphones se connectent tout seuls en Bluetooth : il n'y a rien à configurer.\n\nLisez à voix haute les 6 chiffres affichés sur les deux écrans : ils doivent correspondre.\n\nLes 6 chiffres servent à détecter quiconque tenterait de s'interposer dans l'échange. S'ils ne correspondent pas, annulez.\n\nL'échange utilise une cryptographie post-quantique hybride (ML-KEM-1024 + X25519) : rien ne quitte les deux téléphones en clair.\n\nLa clé ainsi créée reste sur vos téléphones et protège les appels entre vous à partir de maintenant."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O outro telefone mostra ou escaneia o código QR.\n\nOs telefones se conectam sozinhos por Bluetooth: não há nada para configurar.\n\nLeiam em voz alta os 6 dígitos mostrados nas duas telas: eles devem coincidir.\n\nOs 6 dígitos servem para descobrir quem tentar se interpor na troca. Se não coincidirem, cancelem.\n\nA troca usa criptografia pós-quântica híbrida (ML-KEM-1024 + X25519): nada sai dos dois telefones sem criptografia.\n\nA chave assim criada permanece nos seus telefones e protege as chamadas entre vocês a partir de agora."
+          }
         }
       }
     },
@@ -31686,6 +34788,30 @@
             "state": "translated",
             "value": "Verified in person · QR + Bluetooth"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persönlich verifiziert · QR + Bluetooth"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificado en persona · QR + Bluetooth"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifié en personne · QR + Bluetooth"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificado pessoalmente · QR + Bluetooth"
+          }
         }
       }
     },
@@ -31703,6 +34829,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Key saved in person · QR + Bluetooth"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel persönlich gespeichert · QR + Bluetooth"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave guardada en persona · QR + Bluetooth"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé enregistrée en personne · QR + Bluetooth"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave salva pessoalmente · QR + Bluetooth"
           }
         }
       }
@@ -32646,6 +35796,30 @@
             "state": "translated",
             "value": "The file is empty."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Datei ist leer."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El archivo está vacío."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fichier est vide."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O arquivo está vazio."
+          }
         }
       }
     },
@@ -32663,6 +35837,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "The file is larger than the 5 GB limit."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Datei überschreitet das Limit von 5 GB."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El archivo supera el límite de 5 GB."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fichier dépasse la limite de 5 Go."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O arquivo excede o limite de 5 GB."
           }
         }
       }
@@ -32682,6 +35880,30 @@
             "state": "translated",
             "value": "The file could not be read."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Datei kann nicht gelesen werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se puede leer el archivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de lire le fichier."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível ler o arquivo."
+          }
         }
       }
     },
@@ -32699,6 +35921,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "The encrypted channel with this contact is not ready yet. Try again in a moment."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der verschlüsselte Kanal zu diesem Kontakt ist noch nicht bereit. Bitte versuchen Sie es gleich noch einmal."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El canal cifrado con este contacto aún no está listo. Inténtalo de nuevo en un momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le canal chiffré avec ce contact n'est pas encore prêt. Réessaie dans un instant."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O canal criptografado com este contato ainda não está pronto. Tente novamente em instantes."
           }
         }
       }
@@ -32718,6 +35964,30 @@
             "state": "translated",
             "value": "The file is no longer available on the server (expired or removed)."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Datei ist auf dem Server nicht mehr verfügbar (abgelaufen oder entfernt)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El archivo ya no está disponible en el servidor (caducado o eliminado)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fichier n'est plus disponible sur le serveur (expiré ou supprimé)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O arquivo não está mais disponível no servidor (expirado ou removido)."
+          }
         }
       }
     },
@@ -32736,6 +36006,30 @@
             "state": "translated",
             "value": "The server stopped the upload. Try again."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server hat den Upload abgebrochen. Bitte versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servidor interrumpió la subida. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le serveur a interrompu l'envoi. Réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O servidor interrompeu o envio. Tente novamente."
+          }
         }
       }
     },
@@ -32753,6 +36047,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "The received file is damaged and was not saved."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die empfangene Datei ist beschädigt und wurde nicht gespeichert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El archivo recibido está dañado y no se ha guardado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fichier reçu est endommagé et n'a pas été enregistré."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O arquivo recebido está danificado e não foi salvo."
           }
         }
       }
@@ -32814,6 +36132,30 @@
             "state": "translated",
             "value": "File storage is full (%1$@ of %2$@ used). Delete something and try again."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speicherplatz für Dateien aufgebraucht (%1$@ von %2$@ belegt). Löschen Sie etwas und versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espacio para archivos agotado (usados %1$@ de %2$@). Elimina algo e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espace de fichiers épuisé (%1$@ utilisés sur %2$@). Supprime quelque chose et réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espaço para arquivos esgotado (usados %1$@ de %2$@). Exclua algo e tente novamente."
+          }
         }
       }
     },
@@ -32831,6 +36173,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "The file is too large for the server."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Datei ist für den Server zu groß."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El archivo es demasiado grande para el servidor."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fichier est trop volumineux pour le serveur."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O arquivo é grande demais para o servidor."
           }
         }
       }
@@ -32850,6 +36216,30 @@
             "state": "translated",
             "value": "You have too many transfers pending on the server. Try again shortly."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie haben zu viele ausstehende Übertragungen auf dem Server. Bitte versuchen Sie es in Kürze erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tienes demasiadas transferencias pendientes en el servidor. Inténtalo de nuevo en un rato."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu as trop de transferts en attente sur le serveur. Réessaie dans un moment."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você tem muitas transferências pendentes no servidor. Tente novamente em breve."
+          }
         }
       }
     },
@@ -32867,6 +36257,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "File storage on your account is full."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Speicherplatz für Dateien in Ihrem Konto ist aufgebraucht."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espacio para archivos agotado en tu cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espace de fichiers épuisé sur ton compte."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espaço para arquivos esgotado na sua conta."
           }
         }
       }
@@ -32886,6 +36300,30 @@
             "state": "translated",
             "value": "The server is out of space right now. Try again later."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server hat derzeit keinen Speicherplatz. Bitte versuchen Sie es später erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servidor no tiene espacio en este momento. Inténtalo de nuevo más tarde."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le serveur n'a plus de place pour le moment. Réessaie plus tard."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O servidor está sem espaço no momento. Tente novamente mais tarde."
+          }
         }
       }
     },
@@ -32903,6 +36341,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Too many requests to the server. Try again shortly."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Anfragen an den Server. Bitte versuchen Sie es in Kürze erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiadas solicitudes al servidor. Inténtalo de nuevo en un rato."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de requêtes envoyées au serveur. Réessaie dans un moment."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitas solicitações ao servidor. Tente novamente em breve."
           }
         }
       }
@@ -32922,6 +36384,30 @@
             "state": "translated",
             "value": "Could not reach the server. Check your network and try again."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung zum Server fehlgeschlagen. Bitte überprüfen Sie Ihr Netzwerk und versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo conectar con el servidor. Comprueba tu red e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion au serveur impossible. Vérifie ton réseau et réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na conexão com o servidor. Verifique sua rede e tente novamente."
+          }
         }
       }
     },
@@ -32939,6 +36425,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "File access denied."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zugriff auf Dateien verweigert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acceso a los archivos denegado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accès aux fichiers refusé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acesso aos arquivos negado."
           }
         }
       }
@@ -32958,6 +36468,30 @@
             "state": "translated",
             "value": "Not enough space on this device."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht genügend Speicherplatz auf dem Gerät."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay espacio suficiente en el dispositivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espace insuffisant sur l'appareil."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Espaço insuficiente no dispositivo."
+          }
         }
       }
     },
@@ -32975,6 +36509,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "The file changed while it was being sent. Try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Datei wurde während des Sendens geändert. Bitte versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El archivo cambió durante el envío. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fichier a changé pendant l'envoi. Réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O arquivo mudou durante o envio. Tente novamente."
           }
         }
       }
@@ -32994,6 +36552,30 @@
             "state": "translated",
             "value": "The server rejected the request."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server hat die Anfrage abgelehnt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servidor rechazó la solicitud."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le serveur a refusé la requête."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O servidor recusou a solicitação."
+          }
         }
       }
     },
@@ -33011,6 +36593,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "The message with the file could not be sent, so the file was not sent. Try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Nachricht mit der Datei wurde nicht gesendet, daher wurde auch die Datei nicht gesendet. Bitte versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El mensaje con el archivo no se envió, así que el archivo no se ha enviado. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le message contenant le fichier n'est pas parti, donc le fichier n'a pas été envoyé. Réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A mensagem com o arquivo não foi enviada, portanto o arquivo não foi enviado. Tente novamente."
           }
         }
       }
@@ -33030,6 +36636,30 @@
             "state": "translated",
             "value": "The file description is too long."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Dateibeschreibung ist zu lang."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La descripción del archivo es demasiado larga."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La description du fichier est trop longue."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A descrição do arquivo é longa demais."
+          }
         }
       }
     },
@@ -33048,6 +36678,30 @@
             "state": "translated",
             "value": "📎 Unsupported attachment: update the app to open it"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Nicht unterstützter Anhang: Aktualisieren Sie die App, um ihn zu öffnen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Adjunto no compatible: actualiza la app para abrirlo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Pièce jointe non prise en charge : mets à jour l'app pour l'ouvrir"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Anexo não compatível: atualize o app para abri-lo"
+          }
         }
       }
     },
@@ -33065,6 +36719,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "📎 Invalid attachment"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Ungültiger Anhang"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Adjunto no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Pièce jointe non valide"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📎 Anexo inválido"
           }
         }
       }
@@ -33588,6 +37266,30 @@
             "state": "translated",
             "value": "This text cannot be sent as a message."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Text kann nicht als Nachricht gesendet werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este texto no se puede enviar como mensaje."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce texte ne peut pas être envoyé comme message."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este texto não pode ser enviado como mensagem."
+          }
         }
       }
     },
@@ -33605,6 +37307,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Attachments cannot be forwarded in this version."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anhänge können in dieser Version nicht weitergeleitet werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los adjuntos no se pueden reenviar en esta versión."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les pièces jointes ne peuvent pas être transférées dans cette version."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Os anexos não podem ser encaminhados nesta versão."
           }
         }
       }
@@ -33624,6 +37350,30 @@
             "state": "translated",
             "value": "The file is no longer available: attach it again."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Datei ist nicht mehr verfügbar: Hängen Sie sie erneut an."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El archivo ya no está disponible: adjúntalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fichier n'est plus disponible : joins-le à nouveau."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O arquivo não está mais disponível: anexe-o novamente."
+          }
         }
       }
     },
@@ -33641,6 +37391,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Cancel"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abbrechen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annuler"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar"
           }
         }
       }
@@ -33660,6 +37434,30 @@
             "state": "translated",
             "value": "Retry"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut versuchen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reintentar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réessayer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentar novamente"
+          }
         }
       }
     },
@@ -33677,6 +37475,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Download"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herunterladen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descargar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Télécharger"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baixar"
           }
         }
       }
@@ -33696,6 +37518,30 @@
             "state": "translated",
             "value": "Could not send the file. Try again."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senden der Datei fehlgeschlagen. Bitte versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo enviar el archivo. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'envoi du fichier. Réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao enviar o arquivo. Tente novamente."
+          }
         }
       }
     },
@@ -33713,6 +37559,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Documents and videos cannot be sent as “view once”."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dokumente und Videos können nicht mit „Einmal ansehen“ gesendet werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los documentos y videos no se pueden enviar con «ver una vez»."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les documents et les vidéos ne peuvent pas être envoyés avec « voir une fois »."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Documentos e vídeos não podem ser enviados com “visualizar uma vez”."
           }
         }
       }
@@ -33732,6 +37602,30 @@
             "state": "translated",
             "value": "📷 Photo"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📷 Foto"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📷 Foto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📷 Photo"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "📷 Foto"
+          }
         }
       }
     },
@@ -33749,6 +37643,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "🎤 Voice note"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Sprachnachricht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Nota de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Message vocal"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Nota de voz"
           }
         }
       }
@@ -33768,6 +37686,30 @@
             "state": "translated",
             "value": "🎬 Video"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎬 Video"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎬 Video"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎬 Vidéo"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎬 Vídeo"
+          }
         }
       }
     },
@@ -33785,6 +37727,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Play video"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video abspielen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reproducir video"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lire la vidéo"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reproduzir vídeo"
           }
         }
       }
@@ -33804,6 +37770,30 @@
             "state": "translated",
             "value": "The image is not valid or is too large."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bild ungültig oder zu groß."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagen no válida o demasiado grande."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image non valide ou trop volumineuse."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagem inválida ou grande demais."
+          }
         }
       }
     },
@@ -33821,6 +37811,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Open chat"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat öffnen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir el chat"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir le chat"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir o chat"
           }
         }
       }
@@ -33840,6 +37854,30 @@
             "state": "translated",
             "value": "New message"
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neue Nachricht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensaje nuevo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nouveau message"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nova mensagem"
+          }
         }
       }
     },
@@ -33857,6 +37895,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Voice recording is not available during a call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprachaufnahme während des Anrufs nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grabación de voz no disponible durante la llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrement vocal indisponible pendant l'appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gravação de voz indisponível durante a chamada"
           }
         }
       }
@@ -33876,6 +37938,30 @@
             "state": "translated",
             "value": "During a call you cannot record or play voice notes and videos: they would use the call's audio."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Während eines Anrufs können keine Sprachnachrichten und Videos aufgenommen oder abgespielt werden, da sie den Ton des Anrufs belegen würden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante una llamada no se pueden grabar ni reproducir notas de voz y videos: usarían el audio de la llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendant un appel, il est impossible d'enregistrer ou de lire des messages vocaux et des vidéos : ils utiliseraient l'audio de l'appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante uma chamada, não é possível gravar nem reproduzir notas de voz e vídeos: eles usariam o áudio da chamada."
+          }
         }
       }
     },
@@ -33893,6 +37979,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "Image not sent: the location and device data cannot be removed from this format."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bild nicht gesendet: Aus diesem Format lassen sich Standort und Gerätedaten nicht entfernen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagen no enviada: de este formato no se pueden quitar la ubicación y los datos del dispositivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image non envoyée : impossible de supprimer la position et les données de l'appareil de ce format."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagem não enviada: não é possível remover a localização e os dados do dispositivo deste formato."
           }
         }
       }
@@ -33912,6 +38022,30 @@
             "state": "translated",
             "value": "During a video call the camera is used by the call: pick a photo from the library, or take one after the call."
           }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Während eines Videoanrufs wird die Kamera vom Anruf verwendet: Wählen Sie ein Foto aus der Galerie oder nehmen Sie es nach dem Anruf auf."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante una videollamada la cámara la usa la llamada: elige una foto de la galería o haz una después de la llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendant un appel vidéo, la caméra est utilisée par l'appel : choisis une photo dans la galerie ou prends-en une après l'appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante uma videochamada, a câmera é usada pela chamada: escolha uma foto da galeria ou tire uma depois da chamada."
+          }
         }
       }
     },
@@ -33926,6 +38060,30 @@
           }
         },
         "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat"
+          }
+        },
+        "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "Chat"
