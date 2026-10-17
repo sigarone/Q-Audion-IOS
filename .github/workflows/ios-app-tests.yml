@@ -59,6 +59,12 @@ on:
       - '.github/workflows/ios-app-tests.yml'
   workflow_dispatch:
 
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# every job here only checks the repository out and reads it. Caches and artifacts
+# use the runner's own token, not GITHUB_TOKEN, so no other scope is needed.
+permissions:
+  contents: read
+
 # A newer push to a pull request replaces the run in progress; a run on main is
 # never cancelled, so the step that writes the cache on main always completes.
 concurrency:
