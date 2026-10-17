@@ -296,6 +296,10 @@ final class AvatarAnnounceCoordinatorTests: XCTestCase {
         var pairKey = "AAAA"
         var outcome: FileV2AvatarSender.Outcome = .sent
         var onSleep: (() -> Void)?
+        /// While true, the fake `sleep` records its value and then parks until `releaseSleeps()`, so the test (not the scheduler)
+        /// decides when a guard re-check may run. Off by default: the other tests want the sleep to return at once.
+        var holdSleeps = false
+        private var parkedSleeps: [CheckedContinuation<Void, Never>] = []
         private(set) var sent: [URL] = []
         private(set) var slept: [TimeInterval] = []
         let directory: URL
@@ -323,6 +327,11 @@ final class AvatarAnnounceCoordinatorTests: XCTestCase {
                 },
                 sleep: { [unowned self] seconds in
                     self.slept.append(seconds)
+                    if self.holdSleeps {
+                        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                            self.parkedSleeps.append(continuation)
+                        }
+                    }
                     self.clock = self.clock.addingTimeInterval(seconds)
                     self.onSleep?()
                 },
@@ -338,6 +347,14 @@ final class AvatarAnnounceCoordinatorTests: XCTestCase {
         }
 
         func advance(_ seconds: TimeInterval) { clock = clock.addingTimeInterval(seconds) }
+
+        /// Resumes every parked `sleep` and stops parking, so a sleep that has not started yet passes straight through.
+        func releaseSleeps() {
+            holdSleeps = false
+            let parked = parkedSleeps
+            parkedSleeps = []
+            for continuation in parked { continuation.resume() }
+        }
 
         func tearDown() {
             try? FileManager.default.removeItem(at: directory)
@@ -519,8 +536,11 @@ final class AvatarAnnounceCoordinatorTests: XCTestCase {
         try rig.setAvatar(avatarA)
         rig.coordinator.noteCall(active: true)
         rig.advance(25)
+        rig.holdSleeps = true
         await rig.coordinator.announce(to: peer, trigger: .callConnect)
         XCTAssertTrue(rig.sent.isEmpty, "inside the guard")
+        // The re-check cannot run before this point, so the assertion above no longer races it.
+        rig.releaseSleeps()
         try await waitUntil { !rig.sent.isEmpty }
         XCTAssertEqual(rig.sent.count, 1, "sent when the guard ended, the call being still on")
         XCTAssertEqual(rig.slept, [AvatarAnnouncePolicy.callGuardSec - 25 + 1])
