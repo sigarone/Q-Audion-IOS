@@ -311,9 +311,14 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// `sender.parameters` (a blocking hop to the WebRTC signaling thread), so it is never
     /// taken by `close()` or by anything else the signaling thread runs.
     private let layerLock = NSLock()
-    /// Only the `videoSender` reference. Leaf lock: never held across a WebRTC call or a
-    /// last release, so `close()` may take it on the signaling thread. Order: layerLock -> senderLock.
+    /// The media references (`capturer`, `tuning`, both tracks, the video source, both senders),
+    /// `micEnabled` and `closing`. Leaf lock: never held across a WebRTC call, a `stopCapture` or
+    /// a last release, so `close()` may take it on the signaling thread. Order: layerLock -> senderLock.
     private let senderLock = NSLock()
+    /// Set by `close()` in the same locked section that takes the references out; read and
+    /// written only under `senderLock`. A camera start that finishes after it stops its capturer
+    /// instead of storing it.
+    private var closing = false
     /// How many of the three simulcast encodings the CAPTURE can feed: libwebrtc drops
     /// the top layer for a source below ~720p, so a smaller source publishes l,m (or l).
     private var sourceLayerCap = 3
@@ -361,20 +366,29 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         // its cryptor. Forgetting an entry disables nothing.
         hub.releaseSenders()
         ownsSenderCryptors = true
-        tuning = GroupNativeTuning()
+        let newTuning = GroupNativeTuning()
+        senderLock.withLock { tuning = newTuning }
 
         // Audio.
         let audioSource = factory.audioSource(with: nil)
         let audio = factory.audioTrack(with: audioSource, trackId: "audio0")
-        audio.isEnabled = micEnabled
+        let initialMic = senderLock.withLock { micEnabled }
+        audio.isEnabled = initialMic
         let audioInit = RTCRtpTransceiverInit()
         audioInit.direction = .sendOnly
         audioInit.streamIds = ["qa"]
         guard let audioTransceiver = pc.addTransceiver(with: audio, init: audioInit) else { throw GroupPeerError.transceiverFailed }
         // Kept before the cryptor attach: a start that fails from here on is torn
         // down by `close()`, which must be able to detach this sender's track.
-        audioTrack = audio
-        audioSender = audioTransceiver.sender
+        // `micEnabled` is read in the same locked section that publishes the track, so a mute
+        // pressed while this start was running is applied to the new track, not lost.
+        let audioSenderRef = audioTransceiver.sender
+        let currentMic: Bool = senderLock.withLock {
+            audioTrack = audio
+            audioSender = audioSenderRef
+            return micEnabled
+        }
+        if currentMic != initialMic { audio.isEnabled = currentMic }
         restrictHeaderExtensions(audioTransceiver)
         applyAudioSenderProfile(audioTransceiver.sender)
         // Fail closed (spec §12.9): a sender without its cryptor would publish in
@@ -391,9 +405,12 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         videoInit.streamIds = ["qa"]
         videoInit.sendEncodings = Self.videoSendEncodings()
         guard let videoTransceiver = pc.addTransceiver(with: video, init: videoInit) else { throw GroupPeerError.transceiverFailed }
-        videoSource = source
-        videoTrack = video
-        senderLock.withLock { videoSender = videoTransceiver.sender }
+        let videoSenderRef = videoTransceiver.sender
+        senderLock.withLock {
+            videoSource = source
+            videoTrack = video
+            videoSender = videoSenderRef
+        }
         restrictHeaderExtensions(videoTransceiver)
         guard hub.attachSender(videoTransceiver.sender, participantId: selfPseudonym) else { throw GroupPeerError.cryptorFailed }
     }
@@ -453,37 +470,58 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// Runs once; a second `close()` (the session and the link both close) is a no-op.
     public func close() {
         guard beginTeardown() else { return }
-        stopCapturer()
-        tuning?.stop()
-        tuning = nil
-        audioTrack?.isEnabled = false
-        videoTrack?.isEnabled = false
-        audioSender?.track = nil
-        let video: RTCRtpSender? = senderLock.withLock {
-            let sender = videoSender
+        // Every reference is taken out under the leaf lock and `closing` is raised in the same
+        // section; the calls on them run outside it (and keep the objects alive until the end).
+        var cap: RTCCameraVideoCapturer?
+        var tun: GroupNativeTuning?
+        var aT: RTCAudioTrack?
+        var vT: RTCVideoTrack?
+        var vS: RTCVideoSource?
+        var aS: RTCRtpSender?
+        var vSn: RTCRtpSender?
+        senderLock.withLock {
+            closing = true
+            cap = capturer
+            tun = tuning
+            aT = audioTrack
+            vT = videoTrack
+            vS = videoSource
+            aS = audioSender
+            vSn = videoSender
+            capturer = nil
+            tuning = nil
+            audioTrack = nil
+            videoTrack = nil
+            videoSource = nil
+            audioSender = nil
             videoSender = nil
-            return sender
         }
-        video?.track = nil
+        cap?.stopCapture()
+        tun?.stop()
+        aT?.isEnabled = false
+        vT?.isEnabled = false
+        aS?.track = nil
+        vSn?.track = nil
         closePeerConnection()
         if ownsSenderCryptors { hub.releaseSenders() }
-        videoTrack = nil
-        audioTrack = nil
-        videoSource = nil
-        audioSender = nil
         onLocalVideoTrack = nil
+        withExtendedLifetime((cap, tun, aT, vT, vS, aS, vSn)) {}
     }
 
     // MARK: Controls
 
     public func setMicrophoneEnabled(_ enabled: Bool) {
-        micEnabled = enabled
-        audioTrack?.isEnabled = enabled
+        let track: RTCAudioTrack? = senderLock.withLock {
+            micEnabled = enabled
+            return audioTrack
+        }
+        track?.isEnabled = enabled
     }
 
     /// Camera on / off. Started only after the permission is granted.
     public func setCameraEnabled(_ enabled: Bool) async -> CameraResult {
-        guard let video = videoTrack, let source = videoSource else { return .notReady }
+        let (videoRef, sourceRef, isClosing) = senderLock.withLock { (videoTrack, videoSource, closing) }
+        guard !isClosing, let video = videoRef, let source = sourceRef else { return .notReady }
         if !enabled {
             stopCapturer()
             video.isEnabled = false
@@ -510,7 +548,17 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
             }
         }
         guard started else { return .noCamera }
-        capturer = newCapturer
+        // The decision and the store share one locked section with `close()`'s swap: either the
+        // capturer is stored (and `close()` stops it) or it is stopped here, never left running.
+        let abandoned: Bool = senderLock.withLock {
+            if closing { return true }
+            capturer = newCapturer
+            return false
+        }
+        if abandoned {
+            await newCapturer.stopCapture()
+            return .stopped
+        }
         video.isEnabled = true
         layerLock.withLock { applyActiveLayersLocked() }
         onLocalVideoTrack?(video)
@@ -523,8 +571,12 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// Sync on purpose: inside an `async` function `stopCapture()` would bind to the
     /// completion-handler overload the SDK imports as `async` and need an `await`.
     private func stopCapturer() {
-        capturer?.stopCapture()
-        capturer = nil
+        let old: RTCCameraVideoCapturer? = senderLock.withLock {
+            let current = capturer
+            capturer = nil
+            return current
+        }
+        old?.stopCapture()
     }
 
     /// Keeps `count` of the three simulcast encodings active (1 = l only,
