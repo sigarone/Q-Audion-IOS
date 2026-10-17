@@ -9745,28 +9745,6 @@
         }
       }
     },
-    "(\\(release.versionCode))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "(\\(release.versionCode))"
-          }
-        }
-      }
-    },
-    "+\\(count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "+\\(count)"
-          }
-        }
-      }
-    },
     "1. Apri Q-Audion sul nuovo dispositivo.\\n2. Tocca \\\"Collega dispositivo\\\".\\n3. Inquadra il QR qui sotto con la fotocamera.": {
       "extractionState": "manual",
       "localizations": {
@@ -11776,17 +11754,6 @@
         }
       }
     },
-    "Apri chat con \\(item.displayName)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apri chat con \\(item.displayName)"
-          }
-        }
-      }
-    },
     "Apri il QR scanner per aggiungere un contatto in modo verificato, o passa per NFC pairing.": {
       "extractionState": "manual",
       "localizations": {
@@ -12357,17 +12324,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Aviso de segurança: a assinatura desta chamada não corresponde à chave confiável do contato. Verifique as palavras SAS."
-          }
-        }
-      }
-    },
-    "Avviso: \\(outdatedMembersMessage)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Avviso: \\(outdatedMembersMessage)"
           }
         }
       }
@@ -13151,17 +13107,6 @@
         }
       }
     },
-    "CHIAVI INTERESSATE (\\(DevResetContainer.knownKeys.count))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CHIAVI INTERESSATE (\\(DevResetContainer.knownKeys.count))"
-          }
-        }
-      }
-    },
     "COLLEGA NUOVO DISPOSITIVO": {
       "extractionState": "manual",
       "localizations": {
@@ -13445,17 +13390,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Trocar imagem do grupo"
-          }
-        }
-      }
-    },
-    "Campione \\(container.viewModel.currentPromptIndex + 1) / \\(container.viewModel.totalPrompts)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Campione \\(container.viewModel.currentPromptIndex + 1) / \\(container.viewModel.totalPrompts)"
           }
         }
       }
@@ -14198,17 +14132,6 @@
         }
       }
     },
-    "Chatta con \\(entry.peerDisplay)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chatta con \\(entry.peerDisplay)"
-          }
-        }
-      }
-    },
     "Chiama": {
       "extractionState": "manual",
       "localizations": {
@@ -14246,28 +14169,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ligar"
-          }
-        }
-      }
-    },
-    "Chiama \\(entry.peerDisplay)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chiama \\(entry.peerDisplay)"
-          }
-        }
-      }
-    },
-    "Chiama \\(item.displayName)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chiama \\(item.displayName)"
           }
         }
       }
@@ -15051,17 +14952,6 @@
         }
       }
     },
-    "Codice inviato a \\(phone)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Codice inviato a \\(phone)"
-          }
-        }
-      }
-    },
     "Codice invito": {
       "extractionState": "manual",
       "localizations": {
@@ -15386,17 +15276,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Compartilhar"
-          }
-        }
-      }
-    },
-    "Conferma di aver confrontato il numero di sicurezza a 60 cifre con \\(peerName) fuori da questa app, e come.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conferma di aver confrontato il numero di sicurezza a 60 cifre con \\(peerName) fuori da questa app, e come."
           }
         }
       }
@@ -16303,17 +16182,6 @@
         }
       }
     },
-    "Crea (\\(state.selectedMemberIds.count))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Crea (\\(state.selectedMemberIds.count))"
-          }
-        }
-      }
-    },
     "Crea un account senza numero di telefono": {
       "extractionState": "manual",
       "localizations": {
@@ -16638,28 +16506,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "DESARMAR"
-          }
-        }
-      }
-    },
-    "DISPOSITIVI ATTIVI · \\(container.enhanced.count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DISPOSITIVI ATTIVI · \\(container.enhanced.count)"
-          }
-        }
-      }
-    },
-    "DOWNLOAD \\(Int(container.downloadProgress * 100))%": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DOWNLOAD \\(Int(container.downloadProgress * 100))%"
           }
         }
       }
@@ -17648,17 +17494,6 @@
         }
       }
     },
-    "Eliminare la chat \\\"\\(state.name)\\\"?": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Eliminare la chat \\\"\\(state.name)\\\"?"
-          }
-        }
-      }
-    },
     "Eliminare questa chat di gruppo?": {
       "extractionState": "manual",
       "localizations": {
@@ -17983,17 +17818,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Erro de importação"
-          }
-        }
-      }
-    },
-    "Errore: \\(err)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Errore: \\(err)"
           }
         }
       }
@@ -21975,17 +21799,6 @@
         }
       }
     },
-    "LOG RUNTIME (\\(logSink.entryCount) righe)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LOG RUNTIME (\\(logSink.entryCount) righe)"
-          }
-        }
-      }
-    },
     "La chat e tutti i suoi messaggi verranno eliminati da questo dispositivo e uscirai dal gruppo. L'operazione non può essere annullata.": {
       "extractionState": "manual",
       "localizations": {
@@ -22843,17 +22656,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nível de log Zephyr"
-          }
-        }
-      }
-    },
-    "Log runtime — \\(sink.entryCount)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Log runtime — \\(sink.entryCount)"
           }
         }
       }
@@ -25482,17 +25284,6 @@
         }
       }
     },
-    "ONLINE · \\(onlineCount)/\\(totalCount)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ONLINE · \\(onlineCount)/\\(totalCount)"
-          }
-        }
-      }
-    },
     "Oggetto": {
       "extractionState": "manual",
       "localizations": {
@@ -25612,17 +25403,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Opções de anexo"
-          }
-        }
-      }
-    },
-    "Ora stai usando \\(version)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ora stai usando \\(version)"
           }
         }
       }
@@ -26283,28 +26063,6 @@
         }
       }
     },
-    "Presenza fisica NFC: \\(presenceAuthStatusLabel(auth.status)). \\(presenceAuthSummary(auth))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Presenza fisica NFC: \\(presenceAuthStatusLabel(auth.status)). \\(presenceAuthSummary(auth))"
-          }
-        }
-      }
-    },
-    "Presenza fisica verificata. \\(presentation.message)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Presenza fisica verificata. \\(presentation.message)"
-          }
-        }
-      }
-    },
     "Privacy": {
       "extractionState": "manual",
       "localizations": {
@@ -26469,17 +26227,6 @@
         }
       }
     },
-    "Prossimo re-key tra \\(remaining) secondi": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prossimo re-key tra \\(remaining) secondi"
-          }
-        }
-      }
-    },
     "Protezione chiavi": {
       "extractionState": "manual",
       "localizations": {
@@ -26599,17 +26346,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Aponte a câmera para um QR do Q-Audion"
-          }
-        }
-      }
-    },
-    "Puoi richiedere un nuovo codice tra \\(resendRemaining)s": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Puoi richiedere un nuovo codice tra \\(resendRemaining)s"
           }
         }
       }
@@ -27106,17 +26842,6 @@
         }
       }
     },
-    "RE-KEY \\(formatMmSs(rekeyInSeconds))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RE-KEY \\(formatMmSs(rekeyInSeconds))"
-          }
-        }
-      }
-    },
     "REMOTE VOICE": {
       "extractionState": "manual",
       "localizations": {
@@ -27445,28 +27170,6 @@
         }
       }
     },
-    "Reagisci con \\(emoji)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reagisci con \\(emoji)"
-          }
-        }
-      }
-    },
-    "Reazione \\(r.emoji), \\(r.count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reazione \\(r.emoji), \\(r.count)"
-          }
-        }
-      }
-    },
     "Registrazione solo interno": {
       "extractionState": "manual",
       "localizations": {
@@ -27709,17 +27412,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Reset de dados locais"
-          }
-        }
-      }
-    },
-    "Reset eseguito alle \\(stamp)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reset eseguito alle \\(stamp)"
           }
         }
       }
@@ -28175,17 +27867,6 @@
         }
       }
     },
-    "Rimuovere \\(pendingRemoveMember?.displayName ?? ": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rimuovere \\(pendingRemoveMember?.displayName ?? "
-          }
-        }
-      }
-    },
     "Rimuovere questo numero?": {
       "extractionState": "manual",
       "localizations": {
@@ -28264,17 +27945,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Remover"
-          }
-        }
-      }
-    },
-    "Rimuovi \\(member.displayName)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rimuovi \\(member.displayName)"
           }
         }
       }
@@ -28480,17 +28150,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Risco de interceptação: "
-          }
-        }
-      }
-    },
-    "Rispondi a \\(reply.author)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rispondi a \\(reply.author)"
           }
         }
       }
@@ -29356,17 +29015,6 @@
         }
       }
     },
-    "Scansione rubrica: \\(p.processedContacts) / \\(p.totalContacts) — trovati \\(p.resolvedUserCount) utenti Q-Audion": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scansione rubrica: \\(p.processedContacts) / \\(p.totalContacts) — trovati \\(p.resolvedUserCount) utenti Q-Audion"
-          }
-        }
-      }
-    },
     "Scatta foto": {
       "extractionState": "manual",
       "localizations": {
@@ -29609,17 +29257,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tela compartilhada"
-          }
-        }
-      }
-    },
-    "Schermo di \\(sharer.displayName)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Schermo di \\(sharer.displayName)"
           }
         }
       }
@@ -29952,17 +29589,6 @@
         }
       }
     },
-    "Sessione attiva da \\(uptimeStr)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sessione attiva da \\(uptimeStr)"
-          }
-        }
-      }
-    },
     "Showcase aptico (6 pattern)": {
       "extractionState": "manual",
       "localizations": {
@@ -30086,17 +29712,6 @@
         }
       }
     },
-    "Sicurezza chiamata: \\(statusLabel)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sicurezza chiamata: \\(statusLabel)"
-          }
-        }
-      }
-    },
     "Sicurezza sessione": {
       "extractionState": "manual",
       "localizations": {
@@ -30134,17 +29749,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Segurança da sessão"
-          }
-        }
-      }
-    },
-    "Silenzia \\(participant.displayName)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Silenzia \\(participant.displayName)"
           }
         }
       }
@@ -31010,17 +30614,6 @@
         }
       }
     },
-    "Ti abbiamo inviato un SMS al numero \\(maskedPhone).": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ti abbiamo inviato un SMS al numero \\(maskedPhone)."
-          }
-        }
-      }
-    },
     "Ti invieremo un codice via SMS per verificare questo numero.": {
       "extractionState": "manual",
       "localizations": {
@@ -31636,17 +31229,6 @@
         }
       }
     },
-    "Ultimo controllo \\(last.formatted(.relative(presentation: .named)))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ultimo controllo \\(last.formatted(.relative(presentation: .named)))"
-          }
-        }
-      }
-    },
     "Una volta revocato, il dispositivo non potrà accedere all'account. Le chiavi di sessione verranno invalidate.": {
       "extractionState": "manual",
       "localizations": {
@@ -31725,17 +31307,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Você vai sair do grupo e a conversa será removida deste dispositivo, com todas as suas mensagens. Para voltar, você vai precisar ser reconvidado por um admin."
-          }
-        }
-      }
-    },
-    "Uscire dal gruppo \\\"\\(state.name)\\\"?": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uscire dal gruppo \\\"\\(state.name)\\\"?"
           }
         }
       }
@@ -32273,17 +31844,6 @@
         }
       }
     },
-    "Verranno rimosse \\(store.entries.count) chiamate dallo storico locale. L'azione non si può annullare.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verranno rimosse \\(store.entries.count) chiamate dallo storico locale. L'azione non si può annullare."
-          }
-        }
-      }
-    },
     "Verranno rimossi numeri salvati, opt-in beta, banner dismessi, e tutto lo stato non-credenziale. La sessione di login resta attiva — usa Esci nelle Impostazioni se vuoi anche fare logout.": {
       "extractionState": "manual",
       "localizations": {
@@ -32403,28 +31963,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Vídeo criptografado"
-          }
-        }
-      }
-    },
-    "Videochiama \\(entry.peerDisplay)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Videochiama \\(entry.peerDisplay)"
-          }
-        }
-      }
-    },
-    "Videochiama \\(item.displayName)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Videochiama \\(item.displayName)"
           }
         }
       }
@@ -32880,248 +32418,6 @@
         }
       }
     },
-    "[\\(e.tag)]": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "[\\(e.tag)]"
-          }
-        }
-      }
-    },
-    "\\(admins.count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(admins.count)"
-          }
-        }
-      }
-    },
-    "\\(appState.framesRx) RX": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(appState.framesRx) RX"
-          }
-        }
-      }
-    },
-    "\\(appState.framesTx) TX": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(appState.framesTx) TX"
-          }
-        }
-      }
-    },
-    "\\(cachedPeerDisplayName) vuole attivare il video. Se accetti, si attiva anche la tua fotocamera.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(cachedPeerDisplayName) vuole attivare il video. Se accetti, si attiva anche la tua fotocamera."
-          }
-        }
-      }
-    },
-    "\\(container.viewModel.completedPromptsCount) di \\(container.viewModel.totalPrompts) campioni": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(container.viewModel.completedPromptsCount) di \\(container.viewModel.totalPrompts) campioni"
-          }
-        }
-      }
-    },
-    "\\(count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(count)"
-          }
-        }
-      }
-    },
-    "\\(count) caratteri": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(count) caratteri"
-          }
-        }
-      }
-    },
-    "\\(item.displayName) sarà rimosso dalla rubrica locale.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(item.displayName) sarà rimosso dalla rubrica locale."
-          }
-        }
-      }
-    },
-    "\\(item.unreadCount)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(item.unreadCount)"
-          }
-        }
-      }
-    },
-    "\\(item.unreadMessageCount)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(item.unreadMessageCount)"
-          }
-        }
-      }
-    },
-    "\\(matched.count) utenti Q-Audion trovati": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(matched.count) utenti Q-Audion trovati"
-          }
-        }
-      }
-    },
-    "\\(members.count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(members.count)"
-          }
-        }
-      }
-    },
-    "\\(peerDisplayName) sta condividendo lo schermo": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(peerDisplayName) sta condividendo lo schermo"
-          }
-        }
-      }
-    },
-    "\\(r.count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(r.count)"
-          }
-        }
-      }
-    },
-    "\\(row.unread)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(row.unread)"
-          }
-        }
-      }
-    },
-    "\\(selection + 1) / \\(items.count)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(selection + 1) / \\(items.count)"
-          }
-        }
-      }
-    },
-    "\\(spec.profile.displayName) — \\(spec.profile.secureBoundaryLabel)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(spec.profile.displayName) — \\(spec.profile.secureBoundaryLabel)"
-          }
-        }
-      }
-    },
-    "\\(state.memberCount) membri": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(state.memberCount) membri"
-          }
-        }
-      }
-    },
-    "\\(unmatched) dei tuoi contatti non sono ancora su Q-Audion.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "\\(unmatched) dei tuoi contatti non sono ancora su Q-Audion."
-          }
-        }
-      }
-    },
-    "curl -H \\\"Authorization: Bearer <admin>\\\" \\(appState.serverUrl)/api/v1/files/\\(id)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "curl -H \\\"Authorization: Bearer <admin>\\\" \\(appState.serverUrl)/api/v1/files/\\(id)"
-          }
-        }
-      }
-    },
-    "da \\(displayName(for: fromAdmin))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "da \\(displayName(for: fromAdmin))"
-          }
-        }
-      }
-    },
     "dovrai rispondere entro 30s": {
       "extractionState": "manual",
       "localizations": {
@@ -33204,50 +32500,6 @@
         }
       }
     },
-    "epoch \\(state.epoch) · \\(state.members.count) membri": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "epoch \\(state.epoch) · \\(state.members.count) membri"
-          }
-        }
-      }
-    },
-    "inbound drop: \\(formatPct(container.active.inboundLossRatio))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "inbound drop: \\(formatPct(container.active.inboundLossRatio))"
-          }
-        }
-      }
-    },
-    "nodo · \\(peer.nodeHex)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "nodo · \\(peer.nodeHex)"
-          }
-        }
-      }
-    },
-    "offline: \\(container.active.offline ? ": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "offline: \\(container.active.offline ? "
-          }
-        }
-      }
-    },
     "online · verified voice": {
       "extractionState": "manual",
       "localizations": {
@@ -33285,28 +32537,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "online · verified voice"
-          }
-        }
-      }
-    },
-    "outbound delay: \\(container.active.outboundDelayMs) ms": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "outbound delay: \\(container.active.outboundDelayMs) ms"
-          }
-        }
-      }
-    },
-    "outbound drop: \\(formatPct(container.active.outboundLossRatio))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "outbound drop: \\(formatPct(container.active.outboundLossRatio))"
           }
         }
       }
@@ -33434,39 +32664,6 @@
         }
       }
     },
-    "v\\(gi.version)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "v\\(gi.version)"
-          }
-        }
-      }
-    },
-    "v\\(v) (build \\(b))": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "v\\(v) (build \\(b))"
-          }
-        }
-      }
-    },
-    "versionCode \\(container.currentVersionCode)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "versionCode \\(container.currentVersionCode)"
-          }
-        }
-      }
-    },
     "© 2026 Q-Audion · ML-KEM-1024 PQC": {
       "extractionState": "manual",
       "localizations": {
@@ -33586,17 +32783,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "⚠ DURESS ATIVO — secure-wipe necessário"
-          }
-        }
-      }
-    },
-    "✓ Verificato via \\(methodLabel) il \\(dateLabel)": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "✓ Verificato via \\(methodLabel) il \\(dateLabel)"
           }
         }
       }
@@ -45772,6 +44958,47 @@
           "stringUnit": {
             "state": "translated",
             "value": "Última verificação %@"
+          }
+        }
+      }
+    },
+    "Rimuovere %@?": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rimuovere %@?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %@?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ entfernen?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Eliminar a %@?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retirer %@ ?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remover %@?"
           }
         }
       }
