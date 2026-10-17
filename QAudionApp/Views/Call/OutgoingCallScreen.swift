@@ -10,7 +10,8 @@ import SwiftUI
 ///   - 240pt `AvatarHalo` (pqcAccent) + 160pt avatar circle
 ///   - peer display name (displaySmall, italic, semibold)
 ///   - "Chiamata audio sicura" subtitle
-///   - 3 `MetaPill`s (PQC NEGOTIATING / VOICE TRUST · ENROLLED / LOW LATENCY)
+///   - `MetaPill`s (PQC NEGOTIATING / LOW LATENCY; the "VOICE TRUST · ENROLLED"
+///     pill of the original port is gone: it had no reading behind it)
 ///   - **Handshake log** — 3 rows that tick from circle → check as the
 ///     state machine advances:
 ///        1. "KEM encap generated"           (≥ handshaking)
@@ -166,7 +167,8 @@ struct OutgoingCallScreen: View {
                     if state != .ended {
                         HStack(spacing: 8) {
                             MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
-                            MetaPill("VOICE TRUST · ENROLLED", accent: extras.success, filled: true)
+                            // No "VOICE TRUST · ENROLLED" pill: it was shown on every
+                            // outgoing call with no voice reading behind it.
                             MetaPill("LOW LATENCY · 48ms", accent: extras.warning)
                             if let method = pskMethodLabel {
                                 MetaPill("PSK · \(method)", accent: pskPillColor, filled: true)
