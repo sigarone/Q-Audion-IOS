@@ -4741,6 +4741,594 @@
         }
       }
     },
+    "in_call.bio.authenticity": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — row label for the authenticity score of the voice",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticità"
+          }
+        }
+      }
+    },
+    "in_call.bio.authenticity_note": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — how to read the authenticity score",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">0.80 genuina · 0.50–0.80 verifica con SAS · <0.50 probabile voce sintetica."
+          }
+        }
+      }
+    },
+    "in_call.bio.breath": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — row label for breath (harmonic-to-noise ratio)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respiro · HNR"
+          }
+        }
+      }
+    },
+    "in_call.bio.breath_note": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — how to read the breath value",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≥ 5 dB chiaro · 2–5 dB accettabile · < 2 dB rauco o link rumoroso (soglie calibrate per il microfono del telefono)."
+          }
+        }
+      }
+    },
+    "in_call.bio.jitter_shimmer": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — row label for pitch jitter and amplitude shimmer",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jitter / Shimmer"
+          }
+        }
+      }
+    },
+    "in_call.bio.jitter_shimmer_note": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — how to read jitter and shimmer",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normale su questo microfono (con AEC/NS attivi): jitter sotto il 6 per cento, shimmer sotto il 12 per cento. Valori oltre 15/25 indicano forte instabilità della voce."
+          }
+        }
+      }
+    },
+    "in_call.bio.pitch_rate": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — row label for pitch and speech rate",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tono f0 · ritmo"
+          }
+        }
+      }
+    },
+    "in_call.bio.pitch_rate_note": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — how to read pitch and speech rate",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ritmo normale 3–5 sillabe al secondo, pause tra il 20 e il 40 per cento del tempo. Un cambio improvviso rispetto al tono abituale del contatto può segnalare una sostituzione."
+          }
+        }
+      }
+    },
+    "in_call.bio.stress": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — row label for the vocal stress score",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress"
+          }
+        }
+      }
+    },
+    "in_call.bio.stress_note": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — how to read the stress score",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10–35 rilassato · >60 agitato / possibile coercizione — un picco sostenuto va verificato a voce."
+          }
+        }
+      }
+    },
+    "in_call.bio.syllables_unit": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — abbreviation of syllables per second, next to the speech rate",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sill/s"
+          }
+        }
+      }
+    },
+    "in_call.bio.unavailable": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — shown when no voice analysis is available for the call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Biometria vocale non disponibile per questa chiamata."
+          }
+        }
+      }
+    },
+    "in_call.custody.boundary": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — label on the edge of the protected zone of the diagram",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "protetto da qui →"
+          }
+        }
+      }
+    },
+    "in_call.custody.cipher": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — label of the cipher cell",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cifratura"
+          }
+        }
+      }
+    },
+    "in_call.custody.ciphertext": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — caption under the far-end node: what travels on the network is ciphertext",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "testo cifrato · in rete"
+          }
+        }
+      }
+    },
+    "in_call.custody.exposed": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — caption under the microphone node: outside the protected zone",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "esposto"
+          }
+        }
+      }
+    },
+    "in_call.custody.identity": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — label of the identity cell",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identità"
+          }
+        }
+      }
+    },
+    "in_call.custody.identity_unverified": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — value of the identity cell while the security code has not been confirmed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "non verificata"
+          }
+        }
+      }
+    },
+    "in_call.custody.liveness": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — label of the cell for the live-voice check",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liveness"
+          }
+        }
+      }
+    },
+    "in_call.custody.microphone": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — diagram node: the microphone",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microfono"
+          }
+        }
+      }
+    },
+    "in_call.custody.phone": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — value of the seal point cell: the voice is sealed on the phone",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefono"
+          }
+        }
+      }
+    },
+    "in_call.custody.post_quantum": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — label of the post-quantum cell",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantistico"
+          }
+        }
+      }
+    },
+    "in_call.custody.post_quantum_off": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — value of the post-quantum cell when the post-quantum exchange is not active",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "non attivo"
+          }
+        }
+      }
+    },
+    "in_call.custody.seal_point": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — label of the cell that says where the voice is sealed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punto di sigillo"
+          }
+        }
+      }
+    },
+    "in_call.custody.sealed_by_software": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — header tag: the voice is sealed by the app software, not by dedicated hardware",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIGILLATO DA SOFTWARE"
+          }
+        }
+      }
+    },
+    "in_call.custody.sealed_on_phone": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — tag under the seal at the centre of the diagram",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sigillato sul telefono"
+          }
+        }
+      }
+    },
+    "in_call.custody.title": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — header",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CUSTODIA DELLA TUA VOCE"
+          }
+        }
+      }
+    },
+    "in_call.custody.verdict": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — verdict while the post-quantum key exchange is active: where the protection starts and what it does not cover",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La protezione comincia al sigillo: l'audio viene cifrato con AES-256 usando chiavi derivate da ML-KEM-1024 e le chiavi della tua identità restano nel Keychain. Ma il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave."
+          }
+        }
+      }
+    },
+    "in_call.custody.verdict_no_pqc": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, custody of the voice card — verdict while the post-quantum key exchange is not active: what the protection does not cover",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il microfono sta appena fuori dalla zona protetta: l'audio grezzo esiste nel telefono per un istante prima di essere sigillato, quindi un sistema operativo compromesso potrebbe intercettarlo a monte della cifratura, senza bisogno di alcuna chiave."
+          }
+        }
+      }
+    },
+    "in_call.gauge.breath": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — label of the breath gauge (harmonic-to-noise ratio)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "RESPIRO·HNR"
+          }
+        }
+      }
+    },
+    "in_call.gauge.pitch": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — label of the pitch gauge",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TONO"
+          }
+        }
+      }
+    },
+    "in_call.gauge.status.calm": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — stress gauge status word for a calm voice",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "calmo"
+          }
+        }
+      }
+    },
+    "in_call.gauge.status.clear": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — breath gauge status word for a clear voice",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "chiaro"
+          }
+        }
+      }
+    },
+    "in_call.gauge.status.elevated": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — stress gauge status word for an elevated stress",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "elevato"
+          }
+        }
+      }
+    },
+    "in_call.gauge.status.high": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — stress gauge status word for a high stress",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "alto"
+          }
+        }
+      }
+    },
+    "in_call.gauge.status.hoarse": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — breath gauge status word for a hoarse voice or a noisy link",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "rauco"
+          }
+        }
+      }
+    },
+    "in_call.gauge.status.mild": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — breath gauge status word for a mildly breathy voice",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "lieve"
+          }
+        }
+      }
+    },
+    "in_call.gauge.stress": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — label of the stress gauge",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "STRESS"
+          }
+        }
+      }
+    },
+    "in_call.gauge.waiting": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon — shown in place of the gauges until the first voice analysis of the call is available",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "in attesa di voce…"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.caution": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — verdict word when the voice may have changed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica incerta"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.curve_a11y": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the live wave on the call screen voice check card",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Andamento della verifica vocale in questa chiamata"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.highrisk": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — verdict word when the voice has changed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalia rilevata"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.learn_failed": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — shown briefly when learning the voice of the other person did not succeed; it will be retried on the next call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprendimento non riuscito — riproverà alla prossima chiamata"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.learned": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — shown briefly when the voice of the other person has been learned and verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce appresa e verificata"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.learning": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — shown while the voice of the other person is being learned",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riconoscimento vocale in corso…"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.pending": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — verdict word while there is no verdict yet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica in corso"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.title": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — small title above the verdict word",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica vocale"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.verified": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — verdict word when the voice is still the one the call started with",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce riconosciuta"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.waiting": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — shown until the first voice sample of the call has been analysed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa di dati vocali…"
+          }
+        }
+      }
+    },
     "in_call.confidence_word_genuine": {
       "extractionState": "manual",
       "comment": "Biometrics row value — voice authenticity confidence label when the score is above the green threshold (genuine)",

@@ -50,6 +50,8 @@ struct InCallScreen: View {
     /// the animated mini-spectrum + crypto-engine comet freeze to a single
     /// representative frame instead of continuously redrawing.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// With Reduce Transparency on, the translucent cards of this screen are drawn opaque.
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     /// Unified call UI — security sheet presentation state. Local to this
     /// view (not plumbed from AppState): purely a "is the aggregating
@@ -132,12 +134,16 @@ struct InCallScreen: View {
         let f3: Float                 // .f3 (Hz)
         let f4: Float                 // .f4 (Hz)
         let speaking: Bool            // .speechRate.isSpeaking && .pitch.voiced
+        /// Whether the averaged window counted as voiced (VoiceAnalysisResult.Pitch.voiced):
+        /// the pitch gauge prints no status word while it is, a dash while it is not.
+        let pitchVoiced: Bool
 
         init(stressScore: Float, jitter: Float, shimmer: Float, hnr: Float,
              breathiness: Float, pitchHz: Float, syllablesPerSec: Float,
              confidence: Float,
              f1: Float = 0, f2: Float = 0, f3: Float = 0, f4: Float = 0,
-             speaking: Bool = false) {
+             speaking: Bool = false,
+             pitchVoiced: Bool? = nil) {
             self.stressScore = stressScore
             self.jitter = jitter
             self.shimmer = shimmer
@@ -148,6 +154,7 @@ struct InCallScreen: View {
             self.confidence = confidence
             self.f1 = f1; self.f2 = f2; self.f3 = f3; self.f4 = f4
             self.speaking = speaking
+            self.pitchVoiced = pitchVoiced ?? (pitchHz > 0)
         }
     }
 
@@ -372,22 +379,17 @@ struct InCallScreen: View {
     /// `voiceBiometrics`/`voiceSpectrum` above. nil ⇒ no session has run
     /// this call. Item 5 (2026-07-31 port): auto-started silently by
     /// `AppState` on first-ever connect to a contact — this view never asks
-    /// for a tap, it only SHOWS state (`voiceLearningControl`'s brief
-    /// progress indicator while `.inProgress`).
+    /// for a tap, it only SHOWS state (`VoiceGuardCard`: the learning progress
+    /// while `.inProgress`, a brief confirmation when the session ends).
     let voiceLearningState: VoiceLearningSession.State?
     /// Manual re-learn entry point — kept for API parity with
-    /// `AppState.startVoiceLearning()` (mirrors Android's `CallController
-    /// .startVoiceLearning()`, itself kept non-private "in case a future UI
-    /// wants a manual re-learn affordance too"). No control in this view
-    /// calls it any more since item 5 removed the manual CTA — see
-    /// `voiceLearningControl`.
+    /// `AppState.startVoiceLearning()`. No control in this view calls it
+    /// any more since item 5 removed the manual CTA — see `VoiceGuardCard`.
     let onStartVoiceLearning: () -> Void
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
-    /// of RAW per-frame Guardian confidence samples driving
-    /// `voiceConfidenceWave`, the permanent UI slot `voiceLearningControl`
-    /// falls back to whenever no learning session is `.inProgress` (i.e.
-    /// most of any call). Empty ⇒ the wave renders its neutral flat-line
-    /// state. See `AppState.voiceConfidenceHistory`'s doc for the source.
+    /// of RAW per-frame Guardian confidence samples driving the wave of
+    /// `VoiceGuardCard`. Empty ⇒ the card shows its "waiting for voice data"
+    /// line. See `AppState.voiceConfidenceHistory`'s doc for the source.
     let voiceConfidenceHistory: [Float]
     /// "Voce storica" — the PEER's self-reported
     /// `AppState.peerOwnerContinuityLevel`: does THEIR live voice still
@@ -884,6 +886,13 @@ struct InCallScreen: View {
                 Spacer().frame(height: 8)
 
                 guardianRibbon.padding(.horizontal, 20)
+
+                Spacer().frame(height: 6)
+
+                VoiceGuardCard(learningState: voiceLearningState,
+                               confidenceHistory: voiceConfidenceHistory,
+                               speakerChange: speakerChange)
+                    .padding(.horizontal, 20)
 
                 // D11 / W-NOBRICK — non-blocking security advisory. Shown when the
                 // peer's identity key changed and is NOT in the server-published
@@ -1657,8 +1666,8 @@ struct InCallScreen: View {
     /// the full decorative canvas spectrum-analyzer from the HTML reference.
     /// The mini-spectrum shows the REAL RX FFT bands (see `miniSpectrum`),
     /// for parity with Android's `MiniSpectrum`. When `voiceBiometrics == nil`
-    /// (engine flag off, or no result yet) the gauges render an em-dash rather
-    /// than fabricated numbers.
+    /// (engine flag off, or no result yet) the gauges are replaced by a
+    /// "waiting for voice" line rather than fabricated numbers.
     private var guardianRibbon: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
@@ -1686,25 +1695,13 @@ struct InCallScreen: View {
                 .fill(scheme.outline.opacity(0.3))
                 .frame(height: 1)
 
-            HStack(spacing: 0) {
-                guardianGauge(
-                    label: "STRESS",
-                    value: stressDisplayValue,
-                    status: stressStatusWord,
-                    statusColor: stressStatusColor
-                )
-                guardianGauge(
-                    label: "BREATH·HNR",
-                    value: hnrDisplayValue,
-                    status: hnrStatusWord,
-                    statusColor: hnrStatusColor
-                )
-                guardianGauge(
-                    label: "PITCH",
-                    value: pitchDisplayValue,
-                    status: pitchStatusWord,
-                    statusColor: scheme.onSurfaceVariant
-                )
+            if let bio = voiceBiometrics {
+                GuardianGaugeRow(stressPoints: bio.stressScore * 100,
+                                 hnr: bio.hnr,
+                                 pitchHz: bio.pitchHz,
+                                 pitchVoiced: bio.pitchVoiced)
+            } else {
+                GuardianWaitingForVoice()
             }
 
             // Live crypto-engine meter — real AES-256-GCM frame ops/s
@@ -1830,26 +1827,6 @@ struct InCallScreen: View {
         }
     }
 
-    private func guardianGauge(label: String, value: String, status: String, statusColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label)
-                .qaudionStyle(type.labelSmall)
-                .tracking(0.6)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .font(.system(size: 8))
-            Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(scheme.onSurface)
-            Text(status)
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                .tracking(0.4)
-                .foregroundStyle(statusColor)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     // MARK: - Trust-chain card (unified call UI — custody of your voice)
     //
     // Two ambient particle-flow lanes either side of a glowing pulsing seal
@@ -1868,16 +1845,19 @@ struct InCallScreen: View {
 
     /// Protection-envelope start fraction: the seal happens on the phone,
     /// so the envelope covers Seal→Air and the MIC sits just OUTSIDE it on
-    /// the left. Same 0.42 constant as Android's `TrustChainCard`.
-    private static let trustEnvelopeStartSoftware: CGFloat = 0.42
+    /// the left, 40% of the way across.
+    private static let trustEnvelopeStartSoftware: CGFloat = 0.40
+
+    /// Height of the mic ↔ seal ↔ far-end diagram inside the custody card.
+    private static let trustDiagramHeight: CGFloat = 150
 
     /// Trust-chain card — the honest "where is the voice sealed, and does
     /// the protection reach the microphone?" visual.
     ///
     /// The seal happens ON THE PHONE, so the protection envelope starts at
-    /// 42% and the MICROPHONE sits just outside it — raw audio exists in the
-    /// phone's audio pipeline for an instant before it is sealed. The OS
-    /// keystore/Keychain keeps the KEYS safe, but a compromised OS could tap
+    /// 40% and the MICROPHONE sits just outside it — raw audio exists in the
+    /// phone's audio pipeline for an instant before it is sealed. The
+    /// Keychain keeps the identity keys safe, but a compromised OS could tap
     /// the mic upstream of encryption.
     private var trustChainCard: some View {
         let envColor = extras.pqcAccent
@@ -1885,40 +1865,48 @@ struct InCallScreen: View {
         let envelopeStart: CGFloat = Self.trustEnvelopeStartSoftware
         return VStack(alignment: .leading, spacing: 0) {
             // header
-            HStack {
-                Circle()
-                    .fill(extras.success)
-                    .frame(width: 5, height: 5)
-                Text("SESSION SECURITY · CUSTODY OF YOUR VOICE")
-                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+            HStack(spacing: 7) {
+                VoiceCustodyPulseDot(color: extras.success)
+                Text(VoiceCustodyCopy.title)
+                    .tracking(1.0)
                     .foregroundStyle(scheme.onSurfaceVariant)
+                    .scaledMono(11, weight: .semibold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Spacer(minLength: 0)
-                Text("SOFTWARE-SEALED")
-                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                Text(VoiceCustodyCopy.sealedBySoftware)
                     .foregroundStyle(envColor)
+                    .scaledMono(11, weight: .semibold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
             .padding(.horizontal, 14)
-            Spacer().frame(height: 16)
+            .padding(.vertical, 10)
+            Rectangle()
+                .fill(scheme.outline.opacity(0.6))
+                .frame(height: 1)
 
             // Mic ↔ seal ↔ peer chain, with the two particle-flow lanes and
             // the morphing protection-boundary box layered behind it.
             trustChainDiagram(envColor: envColor, cipher: cipher, envelopeStart: envelopeStart)
                 .padding(.horizontal, 6)
-                .frame(height: 118)
+                .frame(height: Self.trustDiagramHeight)
             Spacer().frame(height: 14)
 
             trustVerdictCallout()
                 .padding(.horizontal, 14)
-            Spacer().frame(height: 10)
+            Spacer().frame(height: 12)
 
+            Rectangle()
+                .fill(scheme.outline.opacity(0.6))
+                .frame(height: 1)
             trustStatRing()
                 .padding(.horizontal, 6)
         }
-        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(scheme.surfaceVariant.opacity(0.45))
+                .fill(scheme.surface.opacity(reduceTransparency ? 1.0 : 0.55))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -1931,7 +1919,7 @@ struct InCallScreen: View {
     /// Mic → seal → peer row, with the two ambient particle canvases and the
     /// morphing protection-boundary box behind it in one `ZStack` so the
     /// boundary can span from an arbitrary fraction of the width (0.0 or
-    /// 0.42) to the trailing edge exactly like the mockup's `.boundary`.
+    /// 0.40) to the trailing edge exactly like the mockup's `.boundary`.
     private func trustChainDiagram(envColor: Color, cipher: Color, envelopeStart: CGFloat) -> some View {
         GeometryReader { geo in
             let w = geo.size.width
@@ -1960,7 +1948,7 @@ struct InCallScreen: View {
                         // to the (not-yet-offset) rectangle's own bounds, so
                         // it rides along correctly once the whole composite
                         // is shifted by the trailing `.offset` below.
-                        Text("protected from here →")
+                        Text(VoiceCustodyCopy.boundary)
                             .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
                             .foregroundStyle(envColor)
                             .padding(.horizontal, 7)
@@ -1992,8 +1980,8 @@ struct InCallScreen: View {
                 HStack(spacing: 0) {
                     trustEndpointNode(
                         icon: "mic.fill",
-                        title: "Microphone",
-                        sub: "exposed",
+                        title: VoiceCustodyCopy.microphone,
+                        sub: VoiceCustodyCopy.exposed,
                         accent: extras.riskHigh
                     )
                     .frame(width: w * 0.30)
@@ -2004,7 +1992,7 @@ struct InCallScreen: View {
                     trustEndpointNode(
                         icon: "person.wave.2.fill",
                         title: peerDisplayName,
-                        sub: "ciphertext · over the net",
+                        sub: VoiceCustodyCopy.ciphertext,
                         accent: scheme.onSurfaceVariant
                     )
                     .frame(width: w * 0.30)
@@ -2082,7 +2070,7 @@ struct InCallScreen: View {
                         .font(.system(size: 26, weight: .medium))
                         .foregroundStyle(envColor)
                 }
-                Text("Sealed on the phone")
+                Text(VoiceCustodyCopy.sealedOnPhone)
                     .font(.system(size: 7, weight: .semibold, design: .monospaced))
                     .foregroundStyle(envColor)
                     .padding(.horizontal, 7)
@@ -2138,28 +2126,33 @@ struct InCallScreen: View {
 
     // MARK: Verdict callout
 
-    /// Verdict callout box — bordered/tinted box with a leading icon,
-    /// matching the mockup's `.verdict .v` treatment (the previous
-    /// implementation had the same copy as a bare paragraph with no box).
+    /// Verdict callout box — bordered/tinted box (in the envelope's accent)
+    /// with a leading warning icon: where the protection starts, and what it
+    /// does not cover. The text is `VoiceCustody.verdictText`, which names the
+    /// cipher and the post-quantum exchange only while the latter is active.
     private func trustVerdictCallout() -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(extras.riskHigh)
+        let envColor = extras.pqcAccent
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(envColor)
                 .padding(.top, 1)
-            Text("Keys stay safe in the OS keystore, but the raw mic audio exists in the phone for an instant before the seal — an OS compromise could tap it upstream of encryption.")
-                .font(.system(size: 11))
-                .foregroundStyle(scheme.onSurface.opacity(0.9))
+                .accessibilityHidden(true)
+            Text(VoiceCustody.verdictText(pqcActive: pqcActive))
+                .font(.caption2)
+                .lineSpacing(3)
+                .foregroundStyle(scheme.onSurface.opacity(0.88))
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(11)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(extras.riskHigh.opacity(0.08))
+                .fill(envColor.opacity(0.07))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(extras.riskHigh.opacity(0.28), lineWidth: 1)
+                .stroke(envColor.opacity(0.22), lineWidth: 1)
         )
     }
 
@@ -2179,19 +2172,19 @@ struct InCallScreen: View {
     ///                     "LIVENESS OK" the pills row already shows today
     private func trustStatRing() -> some View {
         HStack(spacing: 0) {
-            trustStatCell(icon: "checkmark.seal.fill", label: "Identity",
-                          value: sasVerified ? "SAS ✓" : "unverified",
+            trustStatCell(icon: "checkmark.seal.fill", label: VoiceCustodyCopy.identity,
+                          value: VoiceCustody.identityValue(verified: sasVerified),
                           active: sasVerified, accent: extras.success)
-            trustStatCell(icon: "shield.lefthalf.filled", label: "Post-quantum",
-                          value: pqcActive ? "ML-KEM" : "off",
+            trustStatCell(icon: "shield.lefthalf.filled", label: VoiceCustodyCopy.postQuantum,
+                          value: VoiceCustody.postQuantumValue(active: pqcActive),
                           active: pqcActive, accent: extras.success)
-            trustStatCell(icon: "lock.rectangle.stack.fill", label: "Cipher",
+            trustStatCell(icon: "lock.rectangle.stack.fill", label: VoiceCustodyCopy.cipher,
                           value: "AES-256", active: true, accent: extras.success)
-            trustStatCell(icon: "iphone",
-                          label: "Seal point",
-                          value: "Phone",
+            trustStatCell(icon: "mic.fill",
+                          label: VoiceCustodyCopy.sealPoint,
+                          value: VoiceCustodyCopy.phone,
                           active: true, accent: extras.success)
-            trustStatCell(icon: "shield.checkerboard", label: "Liveness",
+            trustStatCell(icon: "shield.checkerboard", label: VoiceCustodyCopy.liveness,
                           value: "Guardian", active: true, accent: extras.success)
         }
     }
@@ -2337,87 +2330,6 @@ struct InCallScreen: View {
         return ops.description + "/s"
     }
 
-    // MARK: - Guardian ribbon — interpreted display values (shared with
-    //         the security-sheet biometrics rows so the two never disagree)
-
-    /// Real thresholds from `StressDetector`/`ConfidenceIndex`
-    /// (QAudionEngine/Sources/QAudionEngine/Analysis + Deepfake):
-    /// `stress.score` is already normalised to [0,1]
-    /// (`min(1, (jitter*10 + shimmer*5)/2)`). Displayed ×100 as "/100"
-    /// to match the reference's convention; bands below are a UI-only
-    /// interpretive convention (the engine itself has no named bands for
-    /// this composite score) loosely aligned to common voice-stress
-    /// literature: <35 calm, 35-60 elevated, >60 agitated/possible duress.
-    /// W-GAUGEUNITS (2026-07-31 InCallScreen Android→iOS parity, item 3) —
-    /// the compact `guardianGauge`'s bare `Int(...)` used to render with NO
-    /// unit suffix (unlike this same value's use in
-    /// `voiceBiometricsSectionBody`, which already appended "/100" at its
-    /// own call site). Now the unit lives HERE, once, so the compact gauge
-    /// and the security-sheet detail row can never disagree — the sheet's
-    /// call site below no longer appends its own "/100".
-    private var stressDisplayValue: String {
-        guard let bio = voiceBiometrics else { return "—" }
-        return "\(Int((bio.stressScore * 100).rounded()))/100"
-    }
-    private var stressStatusWord: String {
-        guard let bio = voiceBiometrics else { return "n/d" }
-        let pct = bio.stressScore * 100
-        if pct < 35 { return "calm" }
-        if pct < 60 { return "elevated" }
-        return "agitated"
-    }
-    private var stressStatusColor: Color {
-        guard let bio = voiceBiometrics else { return scheme.onSurfaceVariant }
-        let pct = bio.stressScore * 100
-        if pct < 35 { return extras.success }
-        if pct < 60 { return extras.warning }
-        return extras.riskHigh
-    }
-
-    /// HNR threshold is REAL and load-bearing: `VoiceHealthMonitor.analyze`
-    /// computes `breathiness = max(0, 1 - hnr/20)`, i.e. the engine itself
-    /// treats 20 dB as the "fully clear" reference point and 0 dB as
-    /// maximally breathy — so >20 dB clear / <10 dB hoarse-or-noisy-link
-    /// (breathiness ≥ 0.5) is a direct reading of that formula, not an
-    /// invented band.
-    /// W-GAUGEUNITS (item 3) — same fix as `stressDisplayValue` above: the
-    /// unit now lives in the shared helper instead of only at the
-    /// security-sheet call site, so the compact gauge stops rendering a
-    /// bare number.
-    private var hnrDisplayValue: String {
-        guard let bio = voiceBiometrics else { return "—" }
-        return "\(Int(bio.hnr.rounded())) dB"
-    }
-    private var hnrStatusWord: String {
-        guard let bio = voiceBiometrics else { return "n/d" }
-        if bio.hnr > 20 { return "clear" }
-        if bio.hnr < 10 { return "hoarse" }
-        return "fair"
-    }
-    private var hnrStatusColor: Color {
-        guard let bio = voiceBiometrics else { return scheme.onSurfaceVariant }
-        if bio.hnr > 20 { return extras.success }
-        if bio.hnr < 10 { return extras.warning }
-        return scheme.onSurfaceVariant
-    }
-
-    /// W-GAUGEUNITS (item 3) — same fix as `stressDisplayValue`/
-    /// `hnrDisplayValue` above.
-    private var pitchDisplayValue: String {
-        guard let bio = voiceBiometrics else { return "—" }
-        return "\(Int(bio.pitchHz.rounded())) Hz"
-    }
-    /// SpeechRateAnalyzer/PitchExtractor expose no explicit "steady vs
-    /// shifting" band — this is a coarse UI-only heuristic (no baseline
-    /// history is tracked here) so it always reads "steady" while voiced.
-    /// It exists only so the gauge has a status word rather than a blank;
-    /// a real "shifted from this peer's baseline" comparison would need
-    /// a per-peer stored baseline, which is out of scope for this pass.
-    private var pitchStatusWord: String {
-        guard let bio = voiceBiometrics else { return "n/d" }
-        return bio.pitchHz > 0 ? "steady" : "silent"
-    }
-
     // MARK: - Pills row
 
     private var pillsRow: some View {
@@ -2427,108 +2339,8 @@ struct InCallScreen: View {
         HStack(spacing: 8) {
             MetaPill("LIVENESS OK",   accent: extras.success, filled: true)
             MetaPill("PSK ROTATION",  accent: extras.success)
-            Spacer(minLength: 8)
-            voiceLearningControl
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: - Feature B ("voce verificata") — call-time voice learning
-
-    /// W-AUTOLEARN parity (item 5, 2026-07-31 InCallScreen Android→iOS
-    /// port) — no more manual "Avvia apprendimento voce" tap. Enrollment is
-    /// started silently by `AppState.maybeAutoStartVoiceLearning` the first
-    /// time this call ever connects to a NEW contact (fed from the SAME
-    /// decoded RX audio the Guardian ribbon above already uses — never
-    /// local mic), so this slot only ever SHOWS state, never asks for one:
-    ///  - `.inProgress` → the brief (~3s) auto-enrollment is running; a
-    ///    determinate progress bar, no button.
-    ///  - every other state (`.none`/`.idle`/`.completed`/`.failed`, or a
-    ///    call where this contact already had a template so no session
-    ///    ever ran) → the live `voiceConfidenceWave` for THIS call — the
-    ///    permanent "is this still really them" signal, driven by real
-    ///    per-frame Guardian data the whole time, not just during the rare
-    ///    first-contact enrollment window.
-    @ViewBuilder
-    private var voiceLearningControl: some View {
-        if case .inProgress(let progress) = voiceLearningState {
-            HStack(spacing: 6) {
-                ProgressView(value: Double(progress))
-                    .frame(width: 44)
-                    .tint(extras.pqcAccent)
-                Text("APPRENDIMENTO VOCE…")
-                    .qaudionStyle(type.labelSmall)
-                    .tracking(1.0)
-                    .foregroundStyle(extras.pqcAccent)
-            }
-        } else {
-            voiceConfidenceWave
-        }
-    }
-
-    /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — live moving wave
-    /// of `voiceConfidenceHistory`, the RAW per-frame Guardian confidence
-    /// score (never the smoothed number, which barely moves — see that
-    /// property's doc). W-VOICEWAVE parity (Android 2026-07-31): plotting
-    /// the value against its own absolute 0...1 scale reads as a dead flat
-    /// line — a healthy call's raw score sits in a tight band. Instead this
-    /// auto-scales to the CURRENT window's own deviation from its mean (a
-    /// floor keeps a silent/rock-steady window from blowing tiny noise up
-    /// into fake-looking movement) and draws it as a filled wave around a
-    /// center baseline — same "real data, not decoration" discipline as
-    /// `miniSpectrum`/`drawCipherTube` elsewhere on this screen: it only
-    /// ever moves because a genuinely new sample arrived.
-    private var voiceConfidenceWave: some View {
-        Canvas { ctx, size in
-            drawVoiceConfidenceWave(ctx: &ctx, size: size)
-        }
-        .frame(width: 90, height: 20)
-        .accessibilityLabel("Curva di verifica vocale in tempo reale")
-    }
-
-    /// Floor on the auto-scale window spread — keeps a rock-steady call's
-    /// real micro-noise from being amplified into misleadingly large
-    /// swings. Matches Android's `CONFIDENCE_WAVE_MIN_SPREAD`.
-    private static let voiceConfidenceWaveMinSpread: Float = 0.02
-
-    /// Pure Canvas draw for `voiceConfidenceWave`, extracted per this
-    /// file's own convention (`drawMiniSpectrum`/`drawCipherTube`).
-    /// Mirrors Android's `ConfidenceCurve` algorithm exactly: center
-    /// baseline, per-sample deviation from the window's mean divided by its
-    /// (floored) spread, clipped to ±1, scaled to 85% of half-height.
-    private func drawVoiceConfidenceWave(ctx: inout GraphicsContext, size: CGSize) {
-        let history = voiceConfidenceHistory
-        let midY = size.height / 2
-        let color = extras.pqcAccent
-        guard history.count >= 2 else {
-            var flat = Path()
-            flat.move(to: CGPoint(x: 0, y: midY))
-            flat.addLine(to: CGPoint(x: size.width, y: midY))
-            ctx.stroke(flat, with: .color(color.opacity(0.35)), lineWidth: 1.5)
-            return
-        }
-        let mean = history.reduce(0, +) / Float(history.count)
-        let spread = max(history.map { abs($0 - mean) }.max() ?? 0, Self.voiceConfidenceWaveMinSpread)
-        let stepX = size.width / CGFloat(history.count - 1)
-        var line = Path()
-        var fill = Path()
-        for (i, v) in history.enumerated() {
-            let dev = max(-1, min(1, (v - mean) / spread))
-            let x = CGFloat(i) * stepX
-            let y = midY - CGFloat(dev) * midY * 0.85
-            if i == 0 {
-                line.move(to: CGPoint(x: x, y: y))
-                fill.move(to: CGPoint(x: x, y: midY))
-                fill.addLine(to: CGPoint(x: x, y: y))
-            } else {
-                line.addLine(to: CGPoint(x: x, y: y))
-                fill.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-        fill.addLine(to: CGPoint(x: size.width, y: midY))
-        fill.closeSubpath()
-        ctx.fill(fill, with: .color(color.opacity(0.16)))
-        ctx.stroke(line, with: .color(color), lineWidth: 2)
     }
 
     // MARK: - Transport row
@@ -2646,7 +2458,7 @@ struct InCallScreen: View {
                     }
 
                     securitySection(title: "Biometria vocale · \(peerDisplayName)", isLast: true) {
-                        voiceBiometricsSectionBody
+                        VoiceBiometricsSection(biometrics: voiceBiometrics)
                     }
                 }
                 .padding(.vertical, 4)
@@ -2710,102 +2522,6 @@ struct InCallScreen: View {
         VStack(alignment: .leading, spacing: 6) {
             keyInfoRow("PERCORSO", transportMode.label)
             keyInfoRow("STATO", transportMode == .disconnected ? "in negoziazione…" : "attivo")
-        }
-    }
-
-    /// INTERPRETED voice biometrics: value + plain-language meaning, using
-    /// the SAME thresholds/status helpers as `guardianRibbon` (stress/HNR
-    /// bands) plus jitter/shimmer and speech-rate rows that the compact
-    /// ribbon has no room for. All rows omitted (not zero-filled) when
-    /// `voiceBiometrics == nil`.
-    @ViewBuilder
-    private var voiceBiometricsSectionBody: some View {
-        if let bio = voiceBiometrics {
-            VStack(alignment: .leading, spacing: 10) {
-                biometricRow(
-                    label: "Autenticità",
-                    value: Self.authenticityReading(bio.confidence) < 0
-                        ? Self.statDash
-                        : "\(confidenceWord(bio.confidence)) · \(String(format: "%.2f", bio.confidence))",
-                    valueColor: confidenceColorFor(bio.confidence),
-                    meaning: ">0.70 genuina · 0.25–0.70 verifica con SAS · <0.25 possibile voce sintetica (soglie ConfidenceIndex/ConfidenceThresholds)."
-                )
-                biometricRow(
-                    label: "Stress",
-                    // W-GAUGEUNITS (item 3) — stressDisplayValue now already
-                    // includes "/100" (see its doc), no longer appended here.
-                    value: "\(stressDisplayValue) · \(stressStatusWord)",
-                    valueColor: stressStatusColor,
-                    meaning: "<35 calmo · 35–60 elevato · >60 agitato — un picco sostenuto può indicare pressione/coercizione."
-                )
-                biometricRow(
-                    label: "Jitter / Shimmer",
-                    value: "\(String(format: "%.1f", bio.jitter * 100))% / \(String(format: "%.1f", bio.shimmer * 100))%",
-                    valueColor: scheme.onSurface,
-                    meaning: "Normale <1% / <3% (convenzione voice-science). Valori troppo perfetti (≈0) sono a loro volta sospetti — una voce umana non è mai così stabile."
-                )
-                biometricRow(
-                    label: "Respiro · HNR",
-                    // W-GAUGEUNITS (item 3) — hnrDisplayValue now already
-                    // includes "dB" (see its doc), no longer appended here.
-                    value: "\(hnrDisplayValue) · \(String(format: "%.2f", bio.breathiness))",
-                    valueColor: hnrStatusColor,
-                    meaning: ">20 dB chiara · <10 dB rauca o link rumoroso (VoiceHealthMonitor: breathiness = 1 − hnr/20)."
-                )
-                biometricRow(
-                    label: "Pitch f0 · rate",
-                    // W-GAUGEUNITS (item 3) — pitchDisplayValue now already
-                    // includes "Hz" (see its doc), no longer appended here.
-                    value: "\(pitchDisplayValue) · \(String(format: "%.1f", bio.syllablesPerSec)) syl/s",
-                    valueColor: scheme.onSurface,
-                    meaning: "Uno scarto improvviso dal basale di \(peerDisplayName) può segnalare una sostituzione/impersonificazione."
-                )
-            }
-        } else {
-            Text("Biometria vocale non disponibile per questa chiamata.")
-                .qaudionStyle(type.bodySmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-        }
-    }
-
-    private func biometricRow(label: String, value: String, valueColor: Color, meaning: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(label)
-                    .qaudionStyle(type.labelMedium)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                Spacer()
-                Text(value)
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(valueColor)
-            }
-            Text(meaning)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant.opacity(0.85))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 4)
-    }
-
-    /// `ConfidenceIndex.greenThreshold`/`redThreshold` equivalents exposed
-    /// via `ConfidenceThresholds` (0.70 / 0.25) — same values already used
-    /// by `confidenceColor` below, reused here for the biometrics row so
-    /// the "Autenticità" wording and its color never diverge from the
-    /// avatar-halo tone.
-    private func confidenceWord(_ value: Float) -> String {
-        switch ConfidenceThresholds.tone(of: Self.authenticityReading(value)) {
-        case .noReading: return Self.statDash
-        case .verified:  return String(localized: "in_call.confidence_word_genuine", defaultValue: "genuina", comment: "Biometrics row value — voice authenticity confidence label when the score is above the green threshold (genuine)")
-        case .caution:   return String(localized: "in_call.confidence_word_verify_sas", defaultValue: "verifica con SAS", comment: "Biometrics row value — voice authenticity confidence label for the mid-range score, prompting an SAS compare")
-        case .highRisk:  return String(localized: "in_call.confidence_word_at_risk", defaultValue: "a rischio", comment: "Biometrics row value — voice authenticity confidence label when the score is below the red threshold (possible synthetic voice)")
-        }
-    }
-    private func confidenceColorFor(_ value: Float) -> Color {
-        switch ConfidenceThresholds.tone(of: Self.authenticityReading(value)) {
-        case .noReading: return scheme.onSurfaceVariant
-        case .verified:  return extras.success
-        case .caution:   return extras.warning
-        case .highRisk:  return extras.riskHigh
         }
     }
 
