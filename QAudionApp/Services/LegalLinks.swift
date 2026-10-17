@@ -32,6 +32,24 @@ enum LegalLinks {
         page("delete-account", languageCode: languageCode)
     }
 
+    /// Last-updated date of the app Terms. Change it together with the Terms text.
+    static let appTermsVersion = "2026-08-05"
+
+    static func appTerms(languageCode: String = AppLanguageManager.effectiveLanguageCode) -> URL {
+        appDoc("qaudion-terms", languageCode: languageCode)
+    }
+
+    static func appPrivacy(languageCode: String = AppLanguageManager.effectiveLanguageCode) -> URL {
+        appDoc("qaudion-privacy", languageCode: languageCode)
+    }
+
+    private static func appDoc(_ section: String, languageCode: String) -> URL {
+        let base = languageCode.split(separator: "-").first.map(String.init)?.lowercased() ?? ""
+        let prefix = base == "it" ? "/it" : ""
+        // Constant host and path segments: the force-unwrap can only fail on a typo in this file.
+        return URL(string: "https://bcrypto.com" + prefix + "/legal/" + section)!
+    }
+
     private static func page(_ section: String, languageCode: String) -> URL {
         let base = languageCode.split(separator: "-").first.map(String.init)?.lowercased() ?? "en"
         let locale = siteLocales.contains(base) ? base : "en"

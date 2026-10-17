@@ -118,7 +118,8 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         let result = try await makeApi().registerExtensionOnly(
             displayName: "Alice",
             email: "alice@example.com",
-            inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ"
+            inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ",
+            termsVersion: nil
         )
         XCTAssertEqual(result.userId, "u")
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/auth/register/extension")
@@ -133,7 +134,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     func testRegisterExtensionOnlyOmitsDisplayNameWhenNil() async throws {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"invite code required"}"#.utf8))
-        _ = try? await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ")
+        _ = try? await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", termsVersion: nil)
 
         let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -144,7 +145,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnly403RequiredThrowsInviteCodeRequired() async {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"invite code required"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "")
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "", termsVersion: nil)
             XCTFail("expected BCryptoInviteCodeError")
         } catch {
             XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .required))
@@ -154,7 +155,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnly403InvalidThrowsInviteCodeInvalid() async {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"invalid or expired invite code"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ")
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", termsVersion: nil)
             XCTFail("expected BCryptoInviteCodeError")
         } catch {
             XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .invalid))
@@ -164,7 +165,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnlyUnrelated403StaysHttpError() async {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ")
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", termsVersion: nil)
             XCTFail("expected BCryptoError.httpError(403)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 403)
@@ -176,7 +177,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnly429StaysHttpError() async {
         StubURLProtocol.stubResponse = (429, Data(#"{"error":"too many attempts"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ")
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", termsVersion: nil)
             XCTFail("expected BCryptoError.httpError(429)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 429)
@@ -190,7 +191,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"invite_code required"}"#.utf8))
         do {
             _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                              deviceName: "iPhone", inviteCode: nil, displayName: nil)
+                                              deviceName: "iPhone", inviteCode: nil, displayName: nil, termsVersion: nil)
             XCTFail("expected BCryptoInviteCodeError")
         } catch {
             XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .required))
@@ -201,7 +202,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"invalid or expired invite code"}"#.utf8))
         do {
             _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                              deviceName: "iPhone", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", displayName: nil)
+                                              deviceName: "iPhone", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", displayName: nil, termsVersion: nil)
             XCTFail("expected BCryptoInviteCodeError")
         } catch {
             XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .invalid))
@@ -212,13 +213,72 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
         do {
             _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .login,
-                                              deviceName: "iPhone", inviteCode: nil, displayName: nil)
+                                              deviceName: "iPhone", inviteCode: nil, displayName: nil, termsVersion: nil)
             XCTFail("expected BCryptoError.httpError(403)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 403)
         } catch {
             XCTFail("unexpected error \(error)")
         }
+    }
+
+    // MARK: - age declaration and terms version
+
+    private static let credentialsJson = #"{"user_id":"u","device_id":"d","access_token":"a","refresh_token":"r","expires_in":900}"#
+
+    func testVerifyOtpRegisterSendsAgeDeclarationAndTermsVersion() async throws {
+        StubURLProtocol.stubResponse = (200, Data(Self.credentialsJson.utf8))
+        _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
+                                          deviceName: "iPhone", inviteCode: nil, displayName: nil,
+                                          termsVersion: "2026-08-05")
+        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["age_declaration"] as? Bool, true)
+        XCTAssertEqual(json["terms_version"] as? String, "2026-08-05")
+    }
+
+    func testVerifyOtpLoginNeverSendsAgeDeclaration() async throws {
+        StubURLProtocol.stubResponse = (200, Data(Self.credentialsJson.utf8))
+        _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .login,
+                                          deviceName: "iPhone", inviteCode: nil, displayName: nil,
+                                          termsVersion: "2026-08-05")
+        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["age_declaration"])
+        XCTAssertNil(json["terms_version"])
+    }
+
+    func testVerifyOtpRegisterWithoutTermsVersionOmitsAgeDeclaration() async throws {
+        StubURLProtocol.stubResponse = (200, Data(Self.credentialsJson.utf8))
+        _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
+                                          deviceName: "iPhone", inviteCode: nil, displayName: nil,
+                                          termsVersion: nil)
+        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["age_declaration"])
+        XCTAssertNil(json["terms_version"])
+    }
+
+    func testRegisterExtensionOnlySendsAgeDeclarationAndTermsVersion() async throws {
+        StubURLProtocol.stubResponse = (200, Data(Self.credentialsJson.utf8))
+        _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co",
+                                                      inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ",
+                                                      termsVersion: "2026-08-05")
+        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["age_declaration"] as? Bool, true)
+        XCTAssertEqual(json["terms_version"] as? String, "2026-08-05")
+    }
+
+    func testRegisterExtensionOnlyWithoutTermsVersionOmitsAgeDeclaration() async throws {
+        StubURLProtocol.stubResponse = (200, Data(Self.credentialsJson.utf8))
+        _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co",
+                                                      inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ",
+                                                      termsVersion: nil)
+        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["age_declaration"])
+        XCTAssertNil(json["terms_version"])
     }
 }
 
