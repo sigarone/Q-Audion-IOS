@@ -1,0 +1,305 @@
+import Foundation
+import QAudionEngine
+
+// Pure decisions behind the voice analysis shown during a call: the three
+// ribbon gauges (stress, breath, pitch), the "voice check" card and the
+// voice-biometrics rows of the security sheet. No SwiftUI in here, so every
+// threshold, word and format is covered by unit tests; the views only map a
+// `VoiceTone` onto a design-system colour and a string onto a Text.
+
+/// Colour role of one indicator. The views translate it into the
+/// design-system colours (`extras.success`, `extras.warning`, `extras.riskHigh`
+/// and the secondary text colour) so light and dark themes stay in step.
+enum VoiceTone: Equatable {
+    case success
+    case warning
+    case riskHigh
+    /// No claim is made: drawn in the secondary text colour.
+    case neutral
+}
+
+// MARK: - Ribbon gauges
+
+/// What one gauge cell prints: the number, its unit, a status word (empty when
+/// there is nothing to add) and the colour role of the status word.
+struct VoiceGaugeReading: Equatable {
+    let value: String
+    let unit: String
+    let status: String
+    let tone: VoiceTone
+}
+
+enum VoiceGauges {
+    /// Stress is read on a 0...100 scale: up to this value the speaker is calm.
+    static let stressCalmMax: Float = 35
+    /// ... up to this one elevated, above it high.
+    static let stressElevatedMax: Float = 60
+    /// Breath (HNR, dB): at or above this value the voice is clear.
+    static let hnrClearMin: Float = 15
+    /// ... at or above this one mild, below it hoarse.
+    static let hnrMildMin: Float = 10
+
+    /// Printed where a measurement does not exist.
+    static let noValue = "—"
+
+    /// The whole part of a measurement, cut towards zero (not rounded): 44.9
+    /// reads "44". A value that is not a finite number reads as `noValue`.
+    static func wholeNumber(_ value: Float) -> String {
+        guard value.isFinite, abs(value) < 1_000_000 else { return noValue }
+        return Int(value).description
+    }
+
+    /// Stress gauge from the engine score scaled to 0...100.
+    static func stress(points: Float) -> VoiceGaugeReading {
+        guard points.isFinite else {
+            return VoiceGaugeReading(value: noValue, unit: "/100", status: "", tone: .neutral)
+        }
+        let word: String
+        let tone: VoiceTone
+        if points <= stressCalmMax {
+            word = "calm"
+            tone = .success
+        } else if points <= stressElevatedMax {
+            word = "elevated"
+            tone = .warning
+        } else {
+            word = "high"
+            tone = .riskHigh
+        }
+        return VoiceGaugeReading(value: wholeNumber(points), unit: "/100", status: word, tone: tone)
+    }
+
+    /// Breath gauge from the harmonic-to-noise ratio in dB.
+    static func breath(hnr: Float) -> VoiceGaugeReading {
+        guard hnr.isFinite else {
+            return VoiceGaugeReading(value: noValue, unit: "dB", status: "", tone: .neutral)
+        }
+        let word: String
+        let tone: VoiceTone
+        if hnr >= hnrClearMin {
+            word = "clear"
+            tone = .success
+        } else if hnr >= hnrMildMin {
+            word = "mild"
+            tone = .warning
+        } else {
+            word = "hoarse"
+            tone = .riskHigh
+        }
+        return VoiceGaugeReading(value: wholeNumber(hnr), unit: "dB", status: word, tone: tone)
+    }
+
+    /// Pitch gauge: no status word while the segment is voiced, a dash while
+    /// it is not (an unvoiced segment has no pitch to speak of).
+    static func pitch(hz: Float, voiced: Bool) -> VoiceGaugeReading {
+        VoiceGaugeReading(value: wholeNumber(hz), unit: "Hz", status: voiced ? "" : noValue, tone: .neutral)
+    }
+}
+
+// MARK: - Voice-biometrics rows of the security sheet
+
+enum VoiceBiometricsFormat {
+    /// Authenticity above this value reads as genuine (green).
+    static let authenticityGenuineAbove: Float = 0.80
+    /// From this value up to the one above it asks for a check by SAS (amber);
+    /// below it the voice is flagged (red).
+    static let authenticityVerifyFrom: Float = 0.50
+
+    struct Line: Equatable {
+        let text: String
+        let tone: VoiceTone
+    }
+
+    /// Authenticity as a number between 0 and 1. A score of exactly 0 means no
+    /// voiced frame was heard in the averaged second: that is no reading, so it
+    /// is a dash in the neutral colour, never a red zero.
+    static func authenticity(_ confidence: Float) -> Line {
+        guard InCallScreen.authenticityReading(confidence) >= 0, confidence.isFinite else {
+            return Line(text: VoiceGauges.noValue, tone: .neutral)
+        }
+        let clamped = min(1, max(0, confidence))
+        let tone: VoiceTone
+        if clamped > authenticityGenuineAbove {
+            tone = .success
+        } else if clamped >= authenticityVerifyFrom {
+            tone = .warning
+        } else {
+            tone = .riskHigh
+        }
+        return Line(text: twoDecimals(clamped), tone: tone)
+    }
+
+    /// Stress as "N/100", coloured like the ribbon gauge.
+    static func stress(points: Float) -> Line {
+        let reading = VoiceGauges.stress(points: points)
+        guard reading.value != VoiceGauges.noValue else { return Line(text: VoiceGauges.noValue, tone: .neutral) }
+        return Line(text: reading.value + "/100", tone: reading.tone)
+    }
+
+    /// Jitter and shimmer arrive as ratios (0.03 = 3 %); shown as percentages
+    /// with one decimal: "3.0% / 8.5%".
+    static func jitterShimmer(jitter: Float, shimmer: Float) -> String {
+        oneDecimal(jitter * 100) + "% / " + oneDecimal(shimmer * 100) + "%"
+    }
+
+    /// Breath as "N dB / 0.00" (HNR rounded to the dB, then breathiness),
+    /// coloured like the ribbon gauge.
+    static func breath(hnr: Float, breathiness: Float) -> Line {
+        let reading = VoiceGauges.breath(hnr: hnr)
+        guard hnr.isFinite else { return Line(text: VoiceGauges.noValue, tone: .neutral) }
+        let rounded = String(format: "%.0f", Double(hnr))
+        return Line(text: rounded + " dB / " + twoDecimals(breathiness), tone: reading.tone)
+    }
+
+    /// Pitch and speech rate: "142 Hz · 4.1 syl/s".
+    static func pitchRate(hz: Float, syllablesPerSecond: Float) -> String {
+        String(format: "%.0f", Double(hz)) + " Hz · " + oneDecimal(syllablesPerSecond) + " syl/s"
+    }
+
+    private static func twoDecimals(_ value: Float) -> String {
+        String(format: "%.2f", Double(value))
+    }
+
+    private static func oneDecimal(_ value: Float) -> String {
+        String(format: "%.1f", Double(value))
+    }
+}
+
+// MARK: - "Voice check" card
+
+/// How the speaker-change verdict reads on the card.
+enum VoiceGuardLevel: Equatable {
+    case verified
+    case caution
+    case highRisk
+}
+
+/// The short confirmation shown when the voice-learning session ends.
+enum VoiceGuardBanner: Equatable {
+    case learned
+    case failed
+}
+
+/// What the card shows, in priority order: the banner, the learning progress,
+/// the waiting line, and finally the verdict with its wave.
+enum VoiceGuardContent: Equatable {
+    case banner(VoiceGuardBanner)
+    case learning(progress: Float)
+    case waiting
+    case verdict(level: VoiceGuardLevel?)
+}
+
+enum VoiceGuardIcon: Equatable {
+    case check
+    case warning
+    case microphone
+}
+
+enum VoiceGuard {
+    /// How long a banner stays on the card.
+    static let bannerSeconds: Double = 3.5
+
+    /// The verdict of "is this still the voice the call started with". An
+    /// unknown verdict has no level: the card then shows the neutral wording.
+    static func level(of change: RemoteSpeakerChangeMonitor.Level) -> VoiceGuardLevel? {
+        switch change {
+        case .unknown: return nil
+        case .steady:  return .verified
+        case .suspect: return .caution
+        case .changed: return .highRisk
+        }
+    }
+
+    /// The banner a learning-session state asks for, if any. Only the two final
+    /// states do; the card shows it once, when the state changes to it.
+    static func banner(for state: VoiceLearningSession.State?) -> VoiceGuardBanner? {
+        switch state {
+        case .completed?: return .learned
+        case .failed?:    return .failed
+        default:          return nil
+        }
+    }
+
+    static func content(banner: VoiceGuardBanner?,
+                        learning: VoiceLearningSession.State?,
+                        hasHistory: Bool,
+                        level: VoiceGuardLevel?) -> VoiceGuardContent {
+        if let banner {
+            return .banner(banner)
+        }
+        if case .inProgress(let progress)? = learning {
+            return .learning(progress: clampedProgress(progress))
+        }
+        if !hasHistory {
+            return .waiting
+        }
+        return .verdict(level: level)
+    }
+
+    static func clampedProgress(_ progress: Float) -> Float {
+        guard progress.isFinite else { return 0 }
+        return min(1, max(0, progress))
+    }
+
+    /// Learning progress as a whole percentage, for the spoken value of the bar.
+    static func percentText(_ progress: Float) -> String {
+        let percent = Int((clampedProgress(progress) * 100).rounded())
+        return percent.description + "%"
+    }
+
+    static func tone(of level: VoiceGuardLevel?) -> VoiceTone {
+        switch level {
+        case .verified?: return .success
+        case .caution?:  return .warning
+        case .highRisk?: return .riskHigh
+        case nil:        return .neutral
+        }
+    }
+
+    /// Colour role of the banner, or nil when there is no banner.
+    static func tone(of banner: VoiceGuardBanner?) -> VoiceTone? {
+        switch banner {
+        case .learned?: return .success
+        case .failed?:  return .riskHigh
+        case nil:       return nil
+        }
+    }
+
+    static func icon(banner: VoiceGuardBanner?, level: VoiceGuardLevel?) -> VoiceGuardIcon {
+        if banner == .learned || level == .verified {
+            return .check
+        }
+        if level == .highRisk {
+            return .warning
+        }
+        return .microphone
+    }
+}
+
+// MARK: - Single-trace wave
+
+enum VoiceGuardWave {
+    /// Floor on the spread the trace is scaled by: a perfectly steady window
+    /// must not have its tiny noise blown up into movement.
+    static let minSpread: Float = 0.02
+
+    /// Each sample's distance from the window's mean, in units of the largest
+    /// distance (but never less than `minSpread`), kept within -1...1. An empty
+    /// result means there is too little to draw and the wave is a flat line.
+    static func deviations(of history: [Float]) -> [Float] {
+        let samples = history.filter { $0.isFinite }
+        guard samples.count >= 2 else { return [] }
+        let mean = samples.reduce(0, +) / Float(samples.count)
+        var spread = minSpread
+        for sample in samples {
+            spread = max(spread, abs(sample - mean))
+        }
+        var result: [Float] = []
+        result.reserveCapacity(samples.count)
+        for sample in samples {
+            let deviation: Float = (sample - mean) / spread
+            result.append(min(1, max(-1, deviation)))
+        }
+        return result
+    }
+}
