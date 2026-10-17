@@ -170,7 +170,7 @@ struct WelcomeScreen: View {
                     Button {
                         LegalLinks.open(LegalLinks.privacyPolicy())
                     } label: {
-                        Text("Continuando accetti l'Informativa privacy")
+                        Text("Informativa privacy")
                             .qaudionStyle(type.labelSmall)
                             .underline()
                             .foregroundStyle(scheme.onSurfaceVariant)
