@@ -39,6 +39,8 @@ struct HiddenMPVolumeView: UIViewRepresentable {
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    /// With Reduce Motion on, the swap between the call screen and the "call in progress" bar is not animated.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Tracks whether the SplashScreen has resolved. Mirrors Android's
     /// `SplashViewModel.state: Loading | GoHome | GoOnboarding`.
@@ -480,9 +482,12 @@ struct ContentView: View {
     /// The screens of the call, chosen by the rules above.
     @ViewBuilder
     private var inCallScreens: some View {
+        // The call reduced to the bar: the app on screen with the bar on top. The call screens below are unchanged.
+        if callSurface == .appWithBar {
+            appWithCallBar
         // W-OUTGOINGDOT3 — gates on the async-flipped flag, not on
         // appState.callState directly. See showLiveCallScreen's doc.
-        if showLiveCallScreen {
+        } else if showLiveCallScreen {
             let bothCamerasPaused = appState.localVideoPaused && appState.remoteVideoPaused
             if (appState.isVideoCall || appState.peerScreenShareActive) && !bothCamerasPaused {
                 VideoCallView()
@@ -491,6 +496,31 @@ struct ContentView: View {
             }
         } else {
             makeOutgoingScreen()
+        }
+    }
+
+    /// Which surface the call is on: its own screen, or the app with the call reduced to a bar (`CallMinimizePolicy`).
+    private var callSurface: CallSurface {
+        CallMinimizePolicy.surface(
+            isInCall: appState.isInCall, minimized: appState.callScreenMinimized, callState: appState.callState)
+    }
+
+    /// The call reduced: the ordinary app (tabs, chats, contacts, settings) with the "call in progress" bar on top. The bar
+    /// takes the status bar area and the app fills what is left under it. The call itself (audio, CallKit, hang-up) is
+    /// untouched; its screen is not on screen meanwhile and comes back on a tap on the bar. The bar has no hang-up control.
+    private var appWithCallBar: some View {
+        VStack(spacing: 0) {
+            CallInProgressBar(
+                contactName: outgoingDisplayName.isEmpty ? nil : outgoingDisplayName,
+                elapsedSeconds: { appState.callService.callDurationSeconds },
+                onReturn: onCallBarTapped)
+            HomeView()
+        }
+    }
+
+    private func onCallBarTapped() {
+        withAnimation(CallMinimizeAnimation.animation(reduceMotion: reduceMotion)) {
+            appState.returnToCallScreen()
         }
     }
 

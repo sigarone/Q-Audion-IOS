@@ -11022,6 +11022,17 @@
         }
       }
     },
+    "Chiamata in corso": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiamata in corso"
+          }
+        }
+      }
+    },
     "Chiamata non riuscita": {
       "extractionState": "manual",
       "localizations": {
@@ -24556,6 +24567,17 @@
         }
       }
     },
+    "Riduci la chiamata": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riduci la chiamata"
+          }
+        }
+      }
+    },
     "Rifiuta": {
       "extractionState": "manual",
       "localizations": {
@@ -27890,6 +27912,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Voltar ao transporte normal"
+          }
+        }
+      }
+    },
+    "Torna alla chiamata": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Torna alla chiamata"
           }
         }
       }
