@@ -188,6 +188,33 @@ final class DesignSystemAccessibilityTests: XCTestCase {
         XCTAssertEqual(catalogValue(strings, "risk_pill.high", "it"), "RISCHIO ALTO")
     }
 
+    // MARK: - Voice verdict labels
+
+    private let verdictKeys = ["in_call.voice_guard.verified", "in_call.voice_guard.caution",
+                               "in_call.voice_guard.highrisk", "in_call.voice_guard.pending"]
+
+    /// The four words of the voice verdict (the card's only states) have a value in the six languages, none empty,
+    /// and the four read differently in each language. The Italian source is exactly the agreed wording.
+    func testTheVoiceVerdictLabelsAreInTheCatalogInAllSixLanguages() throws {
+        let strings = try catalogStrings()
+        for key in verdictKeys {
+            for language in appLanguages {
+                let value = catalogValue(strings, key, language)
+                XCTAssertNotNil(value, "\(key) is translated into \(language)")
+                guard let text = value else { continue }
+                XCTAssertFalse(text.trimmingCharacters(in: .whitespaces).isEmpty, "\(key) \(language) is empty")
+            }
+        }
+        for language in appLanguages {
+            let texts = verdictKeys.compactMap { catalogValue(strings, $0, language) }
+            XCTAssertEqual(Set(texts).count, 4, "the four verdict words read differently in \(language)")
+        }
+        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.verified", "it"), "Voce coerente")
+        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.caution", "it"), "Da controllare")
+        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.highrisk", "it"), "Anomalia")
+        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.pending", "it"), "Dati insufficienti")
+    }
+
     /// The pill draws its labels from those keys and has no fixed Italian text left.
     func testTheRiskPillReadsItsLabelsFromTheCatalog() throws {
         let source = try sourceText("QAudionApp/DesignSystem/Components/RiskPill.swift")

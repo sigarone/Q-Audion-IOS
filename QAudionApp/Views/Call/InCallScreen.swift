@@ -21,20 +21,20 @@ import QAudionEngine
 ///      the per-name gradient.
 ///   2. **Peer name** + presence subtitle.
 ///   3. **Stats band** — one outlined box, two rows: DURATA / CODEC /
-///      FLUSSO kbps / RITARDO on the first, CONFIDENCE / RE-KEY progress
-///      on the second (Android's W-NETVIS stats box; absorbs what
-///      SessionStatusStrip showed).
+///      FLUSSO kbps / RITARDO on the first, RE-KEY progress on the second
+///      (Android's W-NETVIS stats box; absorbs what SessionStatusStrip
+///      showed). The confidence number is not here any more: it is a plain
+///      value in the collapsed technical-data block of the security sheet.
 ///   4. **Trust bar** — SAS ✓ / PQC / transport chips + shield-to-expand.
 ///   5. **Guardian ribbon** — real-FFT MiniSpectrum + cipher-seal chip +
-///      3 gauges (STRESS / BREATH·HNR / PITCH) + ENGINE CipherFlowTube.
+///      pitch reading (Tono) + ENGINE CipherFlowTube.
 ///   6. **TrustChainCard** — Mic→Seal→Air custody visual (iOS-only card,
 ///      honest data).
 ///   7. **SAS verification panel** — visible only when `sasWords.count == 6`.
 ///   8. **Key info panel** — visible only when `keyInfo != nil`.
-///   9. **Pills row** — LIVENESS / PSK ROTATION badges.
-///  10. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
+///   9. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
 ///      optional analytics toggle (`onToggleDiagnostics`).
-///  11. **Pinned bottom action row** — 2-row dock: mute / speaker /
+///  10. **Pinned bottom action row** — 2-row dock: mute / speaker /
 ///      video / screen-share · enhance / add-participant / hangup.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
@@ -111,6 +111,12 @@ struct InCallScreen: View {
     /// InCallScreen's previews/tests don't need to construct the full
     /// engine result type. nil at the call site ⇒ every biometrics row
     /// in the security sheet is omitted gracefully (no fabricated data).
+    ///
+    /// `stressScore`, `breathiness` and `confidence` are carried from the engine
+    /// but no longer shown anywhere: stress, breath/hoarseness and authenticity
+    /// are not validated for phone-quality speech, so the UI makes no claim
+    /// from them. What is shown: the pitch (`pitchHz`, `pitchVoiced`), the
+    /// spectrum, and the raw numbers in the collapsed technical-data block.
     struct VoiceBiometrics: Equatable {
         let stressScore: Float        // 0...1 (VoiceAnalysisResult.Stress.score)
         let jitter: Float             // 0...1 fraction (not yet ×100)
@@ -856,7 +862,10 @@ struct InCallScreen: View {
                 Spacer().frame(height: 16)
 
                 ZStack {
-                    AvatarHalo(color: confidenceColor, diameter: 180)
+                    // Neutral on purpose: the halo used to turn green, amber or
+                    // red with the confidence score, a second verdict outside
+                    // the four states of the voice card.
+                    AvatarHalo(color: scheme.onSurfaceVariant, diameter: 180)
                     QAudionAvatar(displayName: peerDisplayName,
                                   imageURL: avatarUrl,
                                   size: 120,
@@ -929,10 +938,9 @@ struct InCallScreen: View {
                     keyInfoPanel(keyInfo).padding(.horizontal, 20)
                 }
 
+                // No pills row any more: its "LIVENESS OK" and "PSK ROTATION"
+                // pills were fixed green on every call, with no reading behind them.
                 Spacer().frame(height: 12)
-                pillsRow.padding(.horizontal, 20)
-
-                Spacer().frame(height: 8)
                 transportRow.padding(.horizontal, 20)
 
                 // Reserve room for the pinned 2-row bottom action row.
@@ -949,7 +957,9 @@ struct InCallScreen: View {
             Circle()
                 .fill(extras.success)
                 .frame(width: 6, height: 6)
-            Text("online · verified voice")
+            // Presence only: it used to add a fixed "verified voice" claim that
+            // no measurement backed, shown on every call.
+            Text("online")
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(scheme.onSurfaceVariant)
             // W323: tiny "DATI DEMO" badge surfaced when key panel is
@@ -980,7 +990,7 @@ struct InCallScreen: View {
     /// per SWIFT6_PATTERNS §1 / §6.
     private static let stubBadgeText: String = "DEMO"
 
-    // MARK: - Stats band (DURATA / CODEC / FLUSSO / RITARDO · CONFIDENCE / RE-KEY)
+    // MARK: - Stats band (DURATA / CODEC / FLUSSO / RITARDO · RE-KEY)
 
     /// Unified stats band under the peer name — 1:1 port of Android
     /// InCallScreen.kt's W-NETVIS stats box (InCallScreen.kt:913-991): ONE
@@ -1016,8 +1026,10 @@ struct InCallScreen: View {
                 // measurement exists (never an invented or last-known number).
                 statColumn("RITARDO", Self.delayText(rttMs, bufMs: bufMs), delayColor)
             }
+            // The confidence number no longer lives here: it is a plain
+            // technical value, in the collapsed "Dati tecnici (non validati)"
+            // block of the security sheet.
             HStack(alignment: .center, spacing: 0) {
-                statColumn("CONFIDENCE", Self.confidenceText(confidence), confidenceLabelColor)
                 Spacer(minLength: 8)
                 VStack(spacing: 4) {
                     Text("RE-KEY")
@@ -1026,6 +1038,7 @@ struct InCallScreen: View {
                         .foregroundStyle(scheme.onSurfaceVariant)
                     rekeyProgress
                 }
+                Spacer(minLength: 8)
             }
         }
         .padding(.horizontal, 14)
@@ -1109,14 +1122,6 @@ struct InCallScreen: View {
         return String(format: "%.0fms", ms)
     }
 
-    /// Guardian confidence: "C=0.87", or "C=—" when no real score exists
-    /// (Android's `confidence >= 0f` test — a negative value is that
-    /// platform's "no score yet" sentinel).
-    private static func confidenceText(_ confidence: Double) -> String {
-        guard confidence >= 0 else { return "C=" + Self.statDash }
-        return String(format: "C=%.2f", min(1.0, max(0.0, confidence)))
-    }
-
     /// CODEC colour — warning for the 1…16 kbps constrained-link profile
     /// (worth flagging: that is the coding level that costs intelligibility
     /// to fit a bad link), success otherwise. Neutral for the dash: an
@@ -1138,12 +1143,6 @@ struct InCallScreen: View {
         if total > 400 { return extras.riskHigh }
         if total > 200 { return extras.warning }
         return extras.success
-    }
-
-    /// CONFIDENCE colour — the live risk colour when there is a real score,
-    /// neutral when the value is the "C=—" placeholder.
-    private var confidenceLabelColor: Color {
-        confidence >= 0 ? confidenceColor : scheme.onSurfaceVariant
     }
 
     /// Compact circular rekey countdown — port of Android core-ui
@@ -1659,20 +1658,24 @@ struct InCallScreen: View {
     // MARK: - Guardian ribbon (unified call UI)
 
     /// Compact Guardian strip: a small live remote-voice spectrum on the
-    /// left, a cipher/seal visual on the right, 3 mini gauges below
-    /// (stress / breath·HNR / pitch) with a one-word status per gauge, and —
-    /// when the crypto engine is doing real work (ops/s > 0) — a thin
-    /// cipher-flow tube at the bottom. Additive and small per spec — NOT
-    /// the full decorative canvas spectrum-analyzer from the HTML reference.
+    /// left (neutral label "Spettro", no verdict), a cipher/seal visual on the
+    /// right, the pitch reading below ("Tono" with a line saying what it is —
+    /// no stress, breath or authenticity reading, none of them validated for
+    /// phone-quality speech), and — when the crypto engine is doing real work
+    /// (ops/s > 0) — a thin cipher-flow tube at the bottom. Additive and small
+    /// per spec — NOT the full decorative canvas spectrum-analyzer from the
+    /// HTML reference.
     /// The mini-spectrum shows the REAL RX FFT bands (see `miniSpectrum`),
     /// for parity with Android's `MiniSpectrum`. When `voiceBiometrics == nil`
-    /// (engine flag off, or no result yet) the gauges are replaced by a
+    /// (engine flag off, or no result yet) the pitch reading is replaced by a
     /// "waiting for voice" line rather than fabricated numbers.
     private var guardianRibbon: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("REMOTE VOICE")
+                    Text(String(localized: "in_call.ribbon.spectrum",
+                                defaultValue: "Spettro",
+                                comment: "Call screen voice ribbon — neutral label of the live spectrum of the voice; it carries no verdict"))
                         .qaudionStyle(type.labelSmall)
                         .tracking(1.0)
                         .foregroundStyle(scheme.onSurfaceVariant)
@@ -1696,9 +1699,7 @@ struct InCallScreen: View {
                 .frame(height: 1)
 
             if let bio = voiceBiometrics {
-                GuardianGaugeRow(stressPoints: bio.stressScore * 100,
-                                 hnr: bio.hnr,
-                                 pitchHz: bio.pitchHz,
+                GuardianGaugeRow(pitchHz: bio.pitchHz,
                                  pitchVoiced: bio.pitchVoiced)
             } else {
                 GuardianWaitingForVoice()
@@ -2158,7 +2159,7 @@ struct InCallScreen: View {
 
     // MARK: Stat ring row
 
-    /// Row of 5 stat cells (icon + label + value), wired to REAL state
+    /// Row of 4 stat cells (icon + label + value), wired to REAL state
     /// already threaded to this view for the trust bar above — no new
     /// state invented. Informational badges of already-real values:
     ///  - Identity      → `sasVerified` (same flag the trust bar's "SAS ✓" chip uses)
@@ -2168,8 +2169,9 @@ struct InCallScreen: View {
     ///                     `cipherKeySectionBody`'s doc comment on why no
     ///                     second, possibly-wrong cipher string is fabricated)
     ///  - Seal point    → static "Phone" (the seal happens on the phone)
-    ///  - Liveness      → static "Guardian" badge, same unconditional
-    ///                     "LIVENESS OK" the pills row already shows today
+    ///
+    /// The fifth cell, "Liveness / Guardian", is gone: it was fixed green on
+    /// every call, with no liveness reading behind it.
     private func trustStatRing() -> some View {
         HStack(spacing: 0) {
             trustStatCell(icon: "checkmark.seal.fill", label: VoiceCustodyCopy.identity,
@@ -2184,8 +2186,6 @@ struct InCallScreen: View {
                           label: VoiceCustodyCopy.sealPoint,
                           value: VoiceCustodyCopy.phone,
                           active: true, accent: extras.success)
-            trustStatCell(icon: "shield.checkerboard", label: VoiceCustodyCopy.liveness,
-                          value: "Guardian", active: true, accent: extras.success)
         }
     }
 
@@ -2330,19 +2330,6 @@ struct InCallScreen: View {
         return ops.description + "/s"
     }
 
-    // MARK: - Pills row
-
-    private var pillsRow: some View {
-        // RE-KEY removed here — already shown in the stats band's RE-KEY
-        // progress column above (Android parity keeps its pill because its
-        // band has no countdown text; ours does).
-        HStack(spacing: 8) {
-            MetaPill("LIVENESS OK",   accent: extras.success, filled: true)
-            MetaPill("PSK ROTATION",  accent: extras.success)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     // MARK: - Transport row
 
     private var transportRow: some View {
@@ -2376,6 +2363,15 @@ struct InCallScreen: View {
     // so it is omitted rather than fabricated), transport, and INTERPRETED
     // voice biometrics (reusing the same display/status helpers as
     // `guardianRibbon` so the two surfaces never disagree).
+
+    /// Title of the voice section: just "Voce · <name>". It used to say
+    /// "Biometria vocale", which suggested a biometric identification; the
+    /// section only holds the collapsed, not-validated technical data.
+    private var voiceSectionTitle: String {
+        String(localized: "in_call.security.voice_section_title",
+               defaultValue: "Voce · \(peerDisplayName)",
+               comment: "Call security sheet — title of the voice section; %@ is the display name of the other person")
+    }
 
     private var securitySheet: some View {
         ScrollView {
@@ -2457,8 +2453,8 @@ struct InCallScreen: View {
                         transportSectionBody
                     }
 
-                    securitySection(title: "Biometria vocale · \(peerDisplayName)", isLast: true) {
-                        VoiceBiometricsSection(biometrics: voiceBiometrics)
+                    securitySection(title: voiceSectionTitle, isLast: true) {
+                        VoiceBiometricsSection(biometrics: voiceBiometrics, confidence: confidence)
                     }
                 }
                 .padding(.vertical, 4)
@@ -2731,17 +2727,6 @@ struct InCallScreen: View {
         #else
         return true
         #endif
-    }
-
-    /// Avatar halo and CONFIDENCE stat colour. No reading yet (the -1 sentinel) is neutral, the same colour as
-    /// the "C=—" text, never a clamped 0 painted red (W-CONFNEUTRAL).
-    private var confidenceColor: Color {
-        switch ConfidenceThresholds.tone(of: confidence) {
-        case .noReading: return scheme.onSurfaceVariant
-        case .verified:  return extras.success
-        case .caution:   return extras.warning
-        case .highRisk:  return extras.riskHigh
-        }
     }
 
     private func formatMmSs(_ seconds: Int) -> String {

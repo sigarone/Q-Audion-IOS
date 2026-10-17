@@ -2,70 +2,18 @@ import XCTest
 @testable import QAudionApp
 import QAudionEngine
 
-/// The voice analysis of the call screen: ribbon gauges, "voice check" card and
-/// voice-biometrics rows. The decisions live in `VoiceGuardModel.swift` as pure
-/// functions (value in, word / colour role / text out), so the thresholds, the
-/// wording and the number formats are pinned here without any UI.
+/// The voice analysis of the call screen: pitch reading of the ribbon, "voice
+/// check" card and technical-data rows. The decisions live in
+/// `VoiceGuardModel.swift` as pure functions (value in, word / colour role /
+/// text out), so the thresholds, the wording and the number formats are pinned
+/// here without any UI. Stress, breath and authenticity readings are gone on
+/// purpose: they are not validated for phone-quality speech.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in
 /// the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
 final class VoiceGuardModelTests: XCTestCase {
 
-    // MARK: - Stress gauge
-
-    func testStressBandsAndTheirBoundaries() {
-        XCTAssertEqual(VoiceGauges.stress(points: 0).status, .calm)
-        XCTAssertEqual(VoiceGauges.stress(points: 35).status, .calm, "35 is still calm")
-        XCTAssertEqual(VoiceGauges.stress(points: 35.5).status, .elevated)
-        XCTAssertEqual(VoiceGauges.stress(points: 60).status, .elevated, "60 is still elevated")
-        XCTAssertEqual(VoiceGauges.stress(points: 60.5).status, .high)
-        XCTAssertEqual(VoiceGauges.stress(points: 100).status, .high)
-    }
-
-    func testStressColourRoles() {
-        XCTAssertEqual(VoiceGauges.stress(points: 12).tone, .success)
-        XCTAssertEqual(VoiceGauges.stress(points: 48).tone, .warning)
-        XCTAssertEqual(VoiceGauges.stress(points: 83).tone, .riskHigh)
-    }
-
-    func testStressValueIsCutNotRounded() {
-        XCTAssertEqual(VoiceGauges.stress(points: 44.9).value, "44")
-        XCTAssertEqual(VoiceGauges.stress(points: 44.9).unit, "/100")
-        XCTAssertEqual(VoiceGauges.stress(points: 0.99).value, "0")
-    }
-
-    func testStressWithoutANumberMakesNoClaim() {
-        let reading = VoiceGauges.stress(points: .nan)
-        XCTAssertEqual(reading.value, "—")
-        XCTAssertEqual(reading.status, .none)
-        XCTAssertEqual(reading.tone, .neutral)
-    }
-
-    // MARK: - Breath gauge
-
-    func testBreathBandsAndTheirBoundaries() {
-        XCTAssertEqual(VoiceGauges.breath(hnr: 22).status, .clear)
-        XCTAssertEqual(VoiceGauges.breath(hnr: 15).status, .clear, "15 dB is clear")
-        XCTAssertEqual(VoiceGauges.breath(hnr: 14.9).status, .mild)
-        XCTAssertEqual(VoiceGauges.breath(hnr: 10).status, .mild, "10 dB is mild")
-        XCTAssertEqual(VoiceGauges.breath(hnr: 9.9).status, .hoarse)
-        XCTAssertEqual(VoiceGauges.breath(hnr: -3).status, .hoarse)
-    }
-
-    func testBreathColourRoles() {
-        XCTAssertEqual(VoiceGauges.breath(hnr: 18).tone, .success)
-        XCTAssertEqual(VoiceGauges.breath(hnr: 12).tone, .warning)
-        XCTAssertEqual(VoiceGauges.breath(hnr: 4).tone, .riskHigh, "a hoarse voice is red, not amber")
-    }
-
-    func testBreathValueAndUnit() {
-        let reading = VoiceGauges.breath(hnr: 20.8)
-        XCTAssertEqual(reading.value, "20")
-        XCTAssertEqual(reading.unit, "dB")
-        XCTAssertEqual(VoiceGauges.breath(hnr: .infinity).value, "—")
-    }
-
-    // MARK: - Pitch gauge
+    // MARK: - Pitch reading
 
     func testPitchHasNoStatusWordWhileVoicedAndADashWhenNot() {
         XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).status, .none)
@@ -91,61 +39,43 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceGaugeStatus.none.localizedText, "")
     }
 
-    /// Every status word comes out of the catalog (the key falls back to the
-    /// Italian default), is not empty, and the six words differ from each other.
-    func testEveryStatusWordIsAWordAndTheyAreDistinct() {
-        let all: [VoiceGaugeStatus] = [.calm, .elevated, .high, .clear, .mild, .hoarse]
-        let words = all.map { $0.localizedText }
-        for word in words {
-            XCTAssertFalse(word.isEmpty)
-        }
-        XCTAssertEqual(Set(words).count, words.count)
+    /// The pitch reading has no status word beyond the dash: the two states it
+    /// can have print nothing and a dash, never a word about the speaker.
+    func testPitchStatusHasNoWordsOfItsOwn() {
+        let all: [VoiceGaugeStatus] = [.none, .dash]
+        XCTAssertEqual(all.map { $0.localizedText }, ["", "—"])
     }
 
-    // MARK: - Voice-biometrics rows
-
-    func testAuthenticityBands() {
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(0.95).tone, .success)
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(0.801).tone, .success)
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(0.80).tone, .warning, "above 0.80 is genuine, 0.80 itself is not")
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(0.50).tone, .warning, "0.50 still asks for a check")
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(0.499).tone, .riskHigh)
-    }
-
-    func testAuthenticityIsJustTheNumber() {
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(0.87).text, "0.87")
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(1.0).text, "1.00")
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(1.4).text, "1.00", "never above 1")
-    }
-
-    func testAuthenticityOfZeroIsNoReadingNotRed() {
-        let line = VoiceBiometricsFormat.authenticity(0)
-        XCTAssertEqual(line.text, "—")
-        XCTAssertEqual(line.tone, .neutral)
-        XCTAssertEqual(VoiceBiometricsFormat.authenticity(.nan).tone, .neutral)
-    }
-
-    func testStressRowIsPointsOutOfOneHundredWithTheGaugeColour() {
-        let line = VoiceBiometricsFormat.stress(points: 44.9)
-        XCTAssertEqual(line.text, "44/100")
-        XCTAssertEqual(line.tone, .warning)
-        XCTAssertEqual(VoiceBiometricsFormat.stress(points: .nan).text, "—")
-    }
+    // MARK: - Technical-data rows
 
     func testJitterAndShimmerAreShownAsPercentages() {
         XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitter: 0.25, shimmer: 0.5), "25.0% / 50.0%")
         XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitter: 0, shimmer: 0), "0.0% / 0.0%")
     }
 
-    func testBreathRowIsWholeDecibelsThenBreathiness() {
-        let clear = VoiceBiometricsFormat.breath(hnr: 21.4, breathiness: 0.5)
-        XCTAssertEqual(clear.text, "21 dB / 0.50")
-        XCTAssertEqual(clear.tone, .success)
-        let mild = VoiceBiometricsFormat.breath(hnr: 12.2, breathiness: 0.4)
-        XCTAssertEqual(mild.text, "12 dB / 0.40")
-        XCTAssertEqual(mild.tone, .warning)
-        XCTAssertEqual(VoiceBiometricsFormat.breath(hnr: 3, breathiness: 1).tone, .riskHigh)
-        XCTAssertEqual(VoiceBiometricsFormat.breath(hnr: .nan, breathiness: 1).text, "—")
+    func testHnrRowIsWholeDecibels() {
+        XCTAssertEqual(VoiceBiometricsFormat.hnr(21.4), "21 dB")
+        XCTAssertEqual(VoiceBiometricsFormat.hnr(0), "0 dB")
+        XCTAssertEqual(VoiceBiometricsFormat.hnr(.nan), "—")
+        XCTAssertEqual(VoiceBiometricsFormat.hnr(.infinity), "—")
+    }
+
+    /// The Guardian confidence is a plain "C=0.NN" with no colour or band; "C=—" while
+    /// there is no score (the negative sentinel, or a NaN).
+    func testConfidenceRowIsAPlainNumber() {
+        XCTAssertEqual(VoiceBiometricsFormat.confidence(0.5), "C=0.50")
+        XCTAssertEqual(VoiceBiometricsFormat.confidence(0), "C=0.00")
+        XCTAssertEqual(VoiceBiometricsFormat.confidence(1.4), "C=1.00", "never above 1")
+        XCTAssertEqual(VoiceBiometricsFormat.confidence(-1), "C=—")
+        XCTAssertEqual(VoiceBiometricsFormat.confidence(.nan), "C=—")
+    }
+
+    /// The block that holds the raw measures says up front that they are not
+    /// validated, whatever the language of the device.
+    func testTechnicalDataBlockHasATitleAndANote() {
+        XCTAssertFalse(VoiceTechnicalCopy.title.isEmpty)
+        XCTAssertFalse(VoiceTechnicalCopy.note.isEmpty)
+        XCTAssertNotEqual(VoiceTechnicalCopy.title, VoiceTechnicalCopy.note)
     }
 
     func testPitchAndRateRow() {
@@ -171,8 +101,9 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceGuard.tone(of: nil), .neutral)
     }
 
-    /// Fail-open guard: "voice recognised" must never be shown for a missing
-    /// verdict, which is what the card has during the first seconds of a call.
+    /// Fail-open guard: "Voce coerente" must never be shown for a missing
+    /// verdict, which is what the card has during the first seconds of a call
+    /// (it reads "Dati insufficienti" then).
     func testNoVerdictYetNeverReadsAsRecognised() {
         let none: VoiceGuardLevel? = nil
         XCTAssertEqual(VoiceGuard.word(for: none), .pending)
@@ -212,6 +143,8 @@ final class VoiceGuardModelTests: XCTestCase {
                        .learning(progress: 0.4))
     }
 
+    /// Before the first sample there is nothing to compare: the card then shows
+    /// the same "Dati insufficienti" word as a verdict without a level.
     func testWaitsForVoiceDataUntilTheFirstSample() {
         let states: [VoiceLearningSession.State?] = [nil, .idle, .failed, .completed(contactId: "c1")]
         for state in states {
@@ -274,8 +207,7 @@ final class VoiceGuardModelTests: XCTestCase {
         let labels = [VoiceCustodyCopy.title, VoiceCustodyCopy.sealedBySoftware, VoiceCustodyCopy.boundary,
                       VoiceCustodyCopy.microphone, VoiceCustodyCopy.exposed, VoiceCustodyCopy.ciphertext,
                       VoiceCustodyCopy.sealedOnPhone, VoiceCustodyCopy.identity, VoiceCustodyCopy.postQuantum,
-                      VoiceCustodyCopy.cipher, VoiceCustodyCopy.sealPoint, VoiceCustodyCopy.phone,
-                      VoiceCustodyCopy.liveness]
+                      VoiceCustodyCopy.cipher, VoiceCustodyCopy.sealPoint, VoiceCustodyCopy.phone]
         for label in labels {
             XCTAssertFalse(label.isEmpty)
         }

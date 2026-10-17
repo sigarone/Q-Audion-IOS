@@ -8,7 +8,8 @@ import SwiftUI
 ///   - Stacked dual halo (240pt success + 200pt pqcAccent) + 160pt avatar
 ///   - Caller display name (displaySmall, italic, semibold)
 ///   - Subtitle "Chiamata audio sicura" / "Videochiamata sicura"
-///   - 3 `MetaPill`s (PQC ACTIVE / VOICE VERIFIED / LOW RISK · C=0.NN)
+///   - `MetaPill` (PQC ACTIVE). The "VOICE VERIFIED" and "LOW RISK · C=0.NN"
+///     pills of the original port are gone: they were fixed values.
 ///   - "Hybrid ML-KEM-1024 · E2E" footer line
 ///   - Bottom action row (3 buttons, SpaceEvenly):
 ///       • Reject  — `CircularAction(72, riskHigh, "phone.down.fill")`
@@ -25,7 +26,6 @@ struct IncomingCallScreen: View {
     let peerDisplayName: String
     let avatarUrl: URL?
     let callType: CallType
-    let confidence: Double
     /// Numero interno PBX del chiamante (es. "103").
     /// Priorità assoluta nel cerchietto dell'avatar.
     let peerShortNumber: String?
@@ -55,7 +55,6 @@ struct IncomingCallScreen: View {
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
          callType: CallType = .audio,
-         confidence: Double = 0.94,
          peerShortNumber: String? = nil,
          subtitle: String? = nil,
          showReplyAction: Bool = true,
@@ -65,7 +64,6 @@ struct IncomingCallScreen: View {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.callType = callType
-        self.confidence = confidence
         self.peerShortNumber = peerShortNumber
         self.subtitle = subtitle
         self.showReplyAction = showReplyAction
@@ -150,11 +148,10 @@ struct IncomingCallScreen: View {
                         .padding(.bottom, 24)
                 }
 
+                // No "voice verified" / "low risk · C=…" pills: on a ringing call
+                // nothing has been measured yet, and they were fixed values.
                 HStack(spacing: 8) {
                     MetaPill("PQC ACTIVE", accent: extras.pqcAccent)
-                    MetaPill("VOICE VERIFIED", accent: extras.success, filled: true)
-                    MetaPill(String(format: "LOW RISK · C=%.2f", confidence),
-                             accent: extras.success, filled: true)
                 }
                 .padding(.bottom, 12)
 
@@ -217,7 +214,6 @@ struct IncomingCallScreen: View {
 #Preview("Video") {
     IncomingCallScreen(peerDisplayName: "Anna Bianchi",
                        callType: .video,
-                       confidence: 0.81,
                        onAccept: { _ in }, onReject: {})
         .qAudionTheme(dark: true)
 }

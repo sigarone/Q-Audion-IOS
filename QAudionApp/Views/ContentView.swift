@@ -269,8 +269,8 @@ struct ContentView: View {
         // schermo. Il pattern Android è "color-only inline durante la
         // chiamata" — ma l'iOS ha l'esigenza extra di notificare anche
         // se l'utente ha messo l'app in background o aperto un altro
-        // tab. La snackbar svanisce dopo 6s; il detector continua a
-        // pulsare l'avatar halo via confidenceColor in parallelo.
+        // tab. La snackbar svanisce dopo 6s. (L'avatar halo della schermata
+        // in chiamata non cambia più colore con il punteggio: resta neutro.)
         .onChange(of: appState.deepfakeAlert) { isAlert in
             guard isAlert else { return }
             // Mostra l'opzione "Termina chiamata" solo se siamo
@@ -278,7 +278,11 @@ struct ContentView: View {
             // avrebbe senso.
             let inCall = appState.isInCall
             snackbarHost.show(.init(
-                text: "Voce sospetta rilevata. Controlla l'identità del peer.",
+                // Same wording as the "Anomalia" state of the voice card; the
+                // "Termina chiamata" action below is unchanged.
+                text: String(localized: "in_call.voice_alert.anomaly",
+                             defaultValue: "Anomalia nella voce: verifica l'identità della persona.",
+                             comment: "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action; same wording as the Anomalia state of the voice card"),
                 severity: .error,
                 actionLabel: inCall ? "Termina chiamata" : nil,
                 onAction: inCall ? { appState.endCall() } : nil,

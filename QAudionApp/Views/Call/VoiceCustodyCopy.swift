@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Not in the catalog on purpose, because they are names or symbols and not
 /// language: the algorithm names "ML-KEM" and "AES-256", the check mark of
-/// "SAS ✓", the name "Guardian" of the voice analysis, and the arrow glyph.
+/// "SAS ✓", and the arrow glyph.
 enum VoiceCustodyCopy {
     static var title: String {
         String(localized: "in_call.custody.title",
@@ -77,10 +77,5 @@ enum VoiceCustodyCopy {
         String(localized: "in_call.custody.phone",
                defaultValue: "Telefono",
                comment: "Call security sheet, custody of the voice card — value of the seal point cell: the voice is sealed on the phone")
-    }
-    static var liveness: String {
-        String(localized: "in_call.custody.liveness",
-               defaultValue: "Liveness",
-               comment: "Call security sheet, custody of the voice card — label of the cell for the live-voice check")
     }
 }
