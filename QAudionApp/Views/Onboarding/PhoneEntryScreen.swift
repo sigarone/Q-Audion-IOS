@@ -44,7 +44,6 @@ struct PhoneEntryScreen: View {
 
     @State private var raw: String = "+39 "
     @State private var inviteCode: String = ""
-    @State private var ageDeclared = false
     @State private var validationError: String?
     // W315 — track last submit attempt to give the user feedback that
     // their tap was registered (server flow is stubbed today).
@@ -71,11 +70,6 @@ struct PhoneEntryScreen: View {
         mode != .register || InviteCodeInput.isValid(inviteCode)
     }
 
-    /// Registration requires the age declaration and Terms box; login does not show it.
-    static func ageOk(mode: Mode, ageDeclared: Bool) -> Bool {
-        mode != .register || ageDeclared
-    }
-
     /// The `invite_code` handed to the OTP step: the normalised dashed form for
     /// `.register`, nil for `.login` or when the input is not a valid code.
     static func inviteWireValue(mode: Mode, inviteCode: String) -> String? {
@@ -83,7 +77,7 @@ struct PhoneEntryScreen: View {
     }
 
     private var isValid: Bool {
-        PhoneHashHelper.isValid(raw) && Self.inviteOk(mode: mode, inviteCode: inviteCode) && Self.ageOk(mode: mode, ageDeclared: ageDeclared)
+        PhoneHashHelper.isValid(raw) && Self.inviteOk(mode: mode, inviteCode: inviteCode)
     }
 
     var body: some View {
@@ -157,9 +151,6 @@ struct PhoneEntryScreen: View {
                     Spacer().frame(height: 16)
                     InviteCodeField(code: $inviteCode, isInvalid: InviteCodeInput.isCompleteButInvalid(inviteCode))
                     .padding(.horizontal, 24)
-                    Spacer().frame(height: 16)
-                    AgeDeclarationSection(declared: $ageDeclared)
-                        .padding(.horizontal, 24)
                 }
 
                 Spacer().frame(height: 32)

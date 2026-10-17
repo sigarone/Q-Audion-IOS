@@ -30,7 +30,6 @@ targets:
     sources:
       - path: ../QAudionAppTests
         includes:
-          - AgeDeclarationTests.swift
           - AppStateFilesServerUrlTests.swift
           - AvatarAnnounceReductionTests.swift
           - AvatarResizeTests.swift

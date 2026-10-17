@@ -200,8 +200,7 @@ struct OtpVerificationScreen: View {
                 purpose: purpose,
                 deviceName: deviceName,
                 inviteCode: inviteCode,
-                displayName: nil,
-                termsVersion: mode == .register ? LegalLinks.appTermsVersion : nil
+                displayName: nil
             )
             appState.completeOtpAuth(result)
             if mode == .register {

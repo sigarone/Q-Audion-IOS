@@ -24,7 +24,6 @@ struct ExtensionOnlyRegisterScreen: View {
     @State private var displayName: String = ""
     @State private var email: String = ""
     @State private var inviteCode: String = ""
-    @State private var ageDeclared = false
     @State private var isSubmitting = false
     @State private var errorText: String?
 
@@ -44,7 +43,7 @@ struct ExtensionOnlyRegisterScreen: View {
     /// the form is submittable only with a well-formed email AND a code whose
     /// format and checksum pass the same local check the phone flow uses.
     private var canSubmit: Bool {
-        isValidEmail && InviteCodeInput.isValid(inviteCode) && ageDeclared
+        isValidEmail && InviteCodeInput.isValid(inviteCode)
     }
 
     var body: some View {
@@ -123,11 +122,6 @@ struct ExtensionOnlyRegisterScreen: View {
                     }
                     .padding(.horizontal, 24)
 
-                    Spacer().frame(height: 16)
-
-                    AgeDeclarationSection(declared: $ageDeclared)
-                        .padding(.horizontal, 24)
-
                     if let err = errorText {
                         Text(err)
                             .font(.caption)
@@ -170,8 +164,7 @@ struct ExtensionOnlyRegisterScreen: View {
             let result = try await provider.accountApi.registerExtensionOnly(
                 displayName: trimmedName.isEmpty ? nil : trimmedName,
                 email: trimmedEmail,
-                inviteCode: wireInviteCode,
-                termsVersion: LegalLinks.appTermsVersion
+                inviteCode: wireInviteCode
             )
             appState.completeOtpAuth(result)
             onRegistered()
