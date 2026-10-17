@@ -345,7 +345,7 @@ struct SettingsScreen: View {
             NavigationLink {
                 LazyView { DeviceManagementScreen(state: appState) }
             } label: {
-                SettingsRow(icon: "iphone",
+                SettingsRow(icon: "candybarphone",
                             iconColor: scheme.primary,
                             title: "Dispositivi collegati",
                             subtitle: "Gestisci i dispositivi attivi")

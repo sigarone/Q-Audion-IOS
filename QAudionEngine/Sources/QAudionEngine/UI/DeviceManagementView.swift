@@ -70,9 +70,9 @@ public struct DeviceManagementView: View {
 
     private func platformIcon(_ p: DeviceManagementViewModel.Device.Platform) -> String {
         switch p {
-        case .iOS: return "apple.logo"
+        case .iOS: return "iphone"
         case .android: return "circle.grid.2x2.fill"
-        case .desktop: return "desktopcomputer"
+        case .desktop: return "display"
         case .unknown: return "questionmark.app"
         }
     }

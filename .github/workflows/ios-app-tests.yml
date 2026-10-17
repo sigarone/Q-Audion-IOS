@@ -217,6 +217,7 @@ jobs:
             -only-testing:QAudionAppTests/CallStartSupportTests \
             -only-testing:QAudionAppTests/ConfidenceToneTests \
             -only-testing:QAudionAppTests/DesignSystemAccessibilityTests \
+            -only-testing:QAudionAppTests/DeviceSymbolTests \
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \

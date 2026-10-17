@@ -1,3 +1,4 @@
+import LocalAuthentication
 import SwiftUI
 
 /// W441 — Full-screen lock overlay shown when AppLockService.isLocked = true.
@@ -14,6 +15,19 @@ import SwiftUI
 struct AppLockGateView: View {
     @ObservedObject var lockService: AppLockService
     @StateObject private var voiceUnlock = VoiceUnlockController()
+
+    /// Simbolo del pulsante di sblocco secondo la biometria disponibile:
+    /// Face ID o Touch ID se il dispositivo li ha, altrimenti un lucchetto.
+    private var unlockSymbol: String {
+        let ctx = LAContext()
+        // biometryType è valorizzato solo dopo canEvaluatePolicy.
+        _ = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        switch ctx.biometryType {
+        case .faceID: return "faceid"
+        case .touchID: return "touchid"
+        default: return "lock.open.fill"
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -37,7 +51,7 @@ struct AppLockGateView: View {
                     Task { await lockService.evaluatePolicy() }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "faceid")
+                        Image(systemName: unlockSymbol)
                         Text("Sblocca")
                             .fontWeight(.semibold)
                     }

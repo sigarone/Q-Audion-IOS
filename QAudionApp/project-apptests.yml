@@ -43,6 +43,7 @@ targets:
           - CallStartSupportTests.swift
           - ConfidenceToneTests.swift
           - DesignSystemAccessibilityTests.swift
+          - DeviceSymbolTests.swift
           - FileV2ImageCleanerTests.swift
           - MissedCallsBadgeTests.swift
           - PersistentCallRecordStoreTests.swift

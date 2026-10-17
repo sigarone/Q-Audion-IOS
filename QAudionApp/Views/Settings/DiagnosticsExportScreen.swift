@@ -309,7 +309,7 @@ struct DiagnosticsExportScreen: View {
                         if uploading {
                             ProgressView().scaleEffect(0.7)
                         } else {
-                            Image(systemName: "icloud.and.arrow.up")
+                            Image(systemName: "arrow.up.circle")
                         }
                         Text(uploading ? "Carico…" : "Carica al server")
                             .qaudionStyle(type.labelSmall)

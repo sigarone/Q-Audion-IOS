@@ -85,13 +85,26 @@ public struct EnhancedDeviceItem: Identifiable, Equatable {
         }
     }
 
-    private static func platformTag(for platform: DeviceManagementViewModel.Device.Platform,
-                                    deviceName: String) -> String {
+    static func platformTag(for platform: DeviceManagementViewModel.Device.Platform,
+                            deviceName: String) -> String {
         switch platform {
         case .iOS:      return "iOS"
         case .android:  return "Android"
-        case .desktop:  return "macOS"
+        case .desktop:  return "Desktop"
         case .unknown:  return "—"
+        }
+    }
+
+    /// Simbolo SF del tipo di dispositivo. I simboli specifici Apple
+    /// (iPhone, iPad, Apple Watch) si usano solo per i dispositivi iOS;
+    /// per gli altri si usano simboli generici.
+    static func kindIcon(kind: Kind, platformTag: String) -> String {
+        let apple = (platformTag == "iOS")
+        switch kind {
+        case .phonePrimary, .phoneSecondary: return apple ? "iphone" : "candybarphone"
+        case .desktop:                       return "display"
+        case .tablet:                        return apple ? "ipad" : "rectangle.portrait"
+        case .watch:                         return apple ? "applewatch" : "clock"
         }
     }
 
@@ -477,12 +490,7 @@ private struct DeviceRow: View {
     }
 
     private var kindIcon: String {
-        switch device.kind {
-        case .phonePrimary, .phoneSecondary: return "iphone"
-        case .desktop:                       return "laptopcomputer"
-        case .tablet:                        return "ipad"
-        case .watch:                         return "applewatch"
-        }
+        EnhancedDeviceItem.kindIcon(kind: device.kind, platformTag: device.platformTag)
     }
 
     private var trustColor: Color {

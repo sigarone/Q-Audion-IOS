@@ -10,11 +10,6 @@ public struct WelcomeView: View {
         VStack(spacing: 32) {
             Spacer()
 
-            // Logo
-            Image(systemName: "shield.checkered")
-                .font(.system(size: 80))
-                .foregroundColor(QColors.qGreen)
-
             Text("Q-Audion")
                 .font(.largeTitle.bold())
                 .foregroundColor(QColors.textPrimary)
