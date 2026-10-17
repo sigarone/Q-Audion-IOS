@@ -235,6 +235,33 @@ final class GroupPeerIntegrationTests: XCTestCase {
         XCTAssertEqual(hub.attachedSenderCount, 0)
     }
 
+    func testASenderCryptorBuiltAcrossACloseIsNeverBookedForTheNextPublisher() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let hub = fixtureHub(factory)
+        let first = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: hub, selfPseudonym: GroupCallFixtures.pseudoA)
+        var late: RTCFrameCryptor?
+        hub.senderConstructionReturned = { id, built in
+            guard id == "audio0", late == nil else { return }
+            late = built
+            first.close()          // close during the native init
+            hub.releaseSenders()   // as the start of the next publisher does
+        }
+        do { try await first.start(); XCTFail("closed during start") } catch {}
+        hub.senderConstructionReturned = nil
+        XCTAssertNotNil(late)
+        XCTAssertEqual(hub.attachedSenderCount, 0, "late cryptor never booked")
+        let pc = try XCTUnwrap(factory.peerConnection(with: QAudionPeerConnectionFactory.defaultConfiguration(
+            iceServers: [], nativeSrtpEnabledLocally: true),
+            constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil), delegate: nil))
+        defer { pc.close() }
+        let track = factory.audioTrack(with: factory.audioSource(with: nil), trackId: "audio0")
+        let next = try XCTUnwrap(pc.addTransceiver(with: track, init: RTCRtpTransceiverInit()))
+        XCTAssertTrue(hub.attachSender(next.sender, participantId: GroupCallFixtures.pseudoA))
+        let booked = hub.attachedSenderCryptors
+        XCTAssertEqual(booked.count, 1)
+        XCTAssertFalse(booked.contains { $0 === late }, "own cryptor, not the closed publisher's")
+    }
+
     func testASenderWithoutATrackOrWithoutABoundFactoryGetsNoCryptor() async throws {
         let factory = await QAudionPeerConnectionFactory.shared.factory()
         let configuration = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [], nativeSrtpEnabledLocally: true)
