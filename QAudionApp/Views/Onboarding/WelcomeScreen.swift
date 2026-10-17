@@ -90,7 +90,7 @@ struct WelcomeScreen: View {
                     Spacer().frame(height: 32)
 
                     // Feature pills (PQC accent token from extras)
-                    HStack(spacing: 8) {
+                    AnyLayout(FeatureFlowLayout(spacing: 8)) {
                         FeaturePill(label: "ML-KEM 1024", accent: extras.pqcAccent)
                         FeaturePill(label: "Voice-as-Key", accent: extras.pqcAccent)
                         FeaturePill(label: "Deepfake Guard", accent: extras.pqcAccent)
@@ -228,6 +228,52 @@ struct WelcomeScreen: View {
     }
 }
 
+/// Places the feature pills in rows: a pill that does not fit on the current row
+/// moves to the next one. A pill is never split (see `FeaturePill`), so the text of
+/// a token like "ML-KEM 1024" keeps its line at every text size.
+private struct FeatureFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
+                widest = max(widest, rowWidth)
+                totalHeight += rowHeight + spacing
+                rowWidth = 0
+                rowHeight = 0
+            }
+            rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        widest = max(widest, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(width: min(widest, maxWidth), height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
 /// Feature pill rendered with the design-system `pqcAccent` color (no
 /// more hardcoded `Color(red: 0.40, green: 0.80, blue: 1.0)`). 12% fill
 /// + full-color label matches Android's `extras.pqcAccent.copy(alpha=0.12f)`.
@@ -238,6 +284,7 @@ private struct FeaturePill: View {
 
     var body: some View {
         Text(label)
+            .fixedSize(horizontal: true, vertical: false)
             .qaudionStyle(type.labelSmall)
             .tracking(1.0)
             .foregroundStyle(accent)
