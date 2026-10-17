@@ -49,7 +49,14 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
     private var receivers: [String: (participantId: String, cryptor: RTCFrameCryptor)] = [:]
     private var constructing: Set<String> = []
     private var sendKeyIndex: Int32 = 0
+    /// Bumped by `releaseSenders()`: a sender cryptor whose native construction
+    /// straddled a release belongs to a publisher that is gone, and is not booked.
+    private var senderGeneration: UInt64 = 0
     private var disposed = false
+
+    /// Test seam: called right after the native sender-cryptor init returns, outside
+    /// `lock`, with the sender id and the result. Nil in production.
+    var senderConstructionReturned: ((String, RTCFrameCryptor?) -> Void)?
 
     public override init() {
         self.keyProvider = RTCFrameCryptorKeyProvider(
@@ -117,19 +124,24 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
             return false
         }
         constructing.insert(id)
-        let index = sendKeyIndex
+        let generation = senderGeneration
         lock.unlock()
 
         let built = RTCFrameCryptor(factory: factory, rtpSender: sender, participantId: participantId,
                                     algorithm: .aesGcm, keyProvider: keyProvider)
+        senderConstructionReturned?(id, built)
 
         lock.lock()
         constructing.remove(id)
-        guard let cryptor = built, !disposed else {
+        guard let cryptor = built, !disposed, generation == senderGeneration else {
             lock.unlock()
+            withExtendedLifetime(built) {}   // released outside the lock, never disabled
             return false
         }
-        cryptor.keyIndex = index
+        // Read under the same lock hold that books the cryptor: a `setSendKeyIndex`
+        // that ran during the native init (before the cryptor was in `senders`) is
+        // not lost.
+        cryptor.keyIndex = sendKeyIndex
         cryptor.enabled = true
         cryptor.delegate = self
         senders[id] = cryptor
@@ -194,6 +206,7 @@ public final class GroupFrameCryptorHub: NSObject, @unchecked Sendable {
     /// (sender ids repeat) before a new one attaches its own.
     public func releaseSenders() {
         lock.lock()
+        senderGeneration &+= 1
         let all = Array(senders.values)
         senders.removeAll()
         lock.unlock()

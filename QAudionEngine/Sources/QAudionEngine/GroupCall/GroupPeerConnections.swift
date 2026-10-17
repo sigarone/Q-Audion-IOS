@@ -383,11 +383,15 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         // `micEnabled` is read in the same locked section that publishes the track, so a mute
         // pressed while this start was running is applied to the new track, not lost.
         let audioSenderRef = audioTransceiver.sender
-        let currentMic: Bool = senderLock.withLock {
+        // A `close()` that already ran took the references out and raised `closing`: nothing is
+        // published into a wrapper that was closed meanwhile (`start()` closes again, a no-op).
+        let published: Bool? = senderLock.withLock {
+            guard !closing else { return nil }
             audioTrack = audio
             audioSender = audioSenderRef
             return micEnabled
         }
+        guard let currentMic = published else { throw GroupPeerError.notStarted }
         if currentMic != initialMic { audio.isEnabled = currentMic }
         restrictHeaderExtensions(audioTransceiver)
         applyAudioSenderProfile(audioTransceiver.sender)
@@ -406,11 +410,14 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         videoInit.sendEncodings = Self.videoSendEncodings()
         guard let videoTransceiver = pc.addTransceiver(with: video, init: videoInit) else { throw GroupPeerError.transceiverFailed }
         let videoSenderRef = videoTransceiver.sender
-        senderLock.withLock {
+        let videoPublished: Bool = senderLock.withLock {
+            guard !closing else { return false }
             videoSource = source
             videoTrack = video
             videoSender = videoSenderRef
+            return true
         }
+        guard videoPublished else { throw GroupPeerError.notStarted }
         restrictHeaderExtensions(videoTransceiver)
         guard hub.attachSender(videoTransceiver.sender, participantId: selfPseudonym) else { throw GroupPeerError.cryptorFailed }
     }
