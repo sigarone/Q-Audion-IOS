@@ -32,10 +32,9 @@ import QAudionEngine
 ///      honest data).
 ///   7. **SAS verification panel** — visible only when `sasWords.count == 6`.
 ///   8. **Key info panel** — visible only when `keyInfo != nil`.
-///   9. **Pills row** — PSK ROTATION badge.
-///  10. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
+///   9. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
 ///      optional analytics toggle (`onToggleDiagnostics`).
-///  11. **Pinned bottom action row** — 2-row dock: mute / speaker /
+///  10. **Pinned bottom action row** — 2-row dock: mute / speaker /
 ///      video / screen-share · enhance / add-participant / hangup.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
@@ -939,10 +938,9 @@ struct InCallScreen: View {
                     keyInfoPanel(keyInfo).padding(.horizontal, 20)
                 }
 
+                // No pills row any more: its "LIVENESS OK" and "PSK ROTATION"
+                // pills were fixed green on every call, with no reading behind them.
                 Spacer().frame(height: 12)
-                pillsRow.padding(.horizontal, 20)
-
-                Spacer().frame(height: 8)
                 transportRow.padding(.horizontal, 20)
 
                 // Reserve room for the pinned 2-row bottom action row.
@@ -2332,20 +2330,6 @@ struct InCallScreen: View {
         return ops.description + "/s"
     }
 
-    // MARK: - Pills row
-
-    private var pillsRow: some View {
-        // RE-KEY removed here — already shown in the stats band's RE-KEY
-        // progress column above (Android parity keeps its pill because its
-        // band has no countdown text; ours does).
-        // No "LIVENESS OK" pill: it was fixed green on every call, with no
-        // liveness reading behind it.
-        HStack(spacing: 8) {
-            MetaPill("PSK ROTATION",  accent: extras.success)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     // MARK: - Transport row
 
     private var transportRow: some View {
@@ -2379,6 +2363,15 @@ struct InCallScreen: View {
     // so it is omitted rather than fabricated), transport, and INTERPRETED
     // voice biometrics (reusing the same display/status helpers as
     // `guardianRibbon` so the two surfaces never disagree).
+
+    /// Title of the voice section: just "Voce · <name>". It used to say
+    /// "Biometria vocale", which suggested a biometric identification; the
+    /// section only holds the collapsed, not-validated technical data.
+    private var voiceSectionTitle: String {
+        String(localized: "in_call.security.voice_section_title",
+               defaultValue: "Voce · \(peerDisplayName)",
+               comment: "Call security sheet — title of the voice section; %@ is the display name of the other person")
+    }
 
     private var securitySheet: some View {
         ScrollView {
@@ -2460,7 +2453,7 @@ struct InCallScreen: View {
                         transportSectionBody
                     }
 
-                    securitySection(title: "Biometria vocale · \(peerDisplayName)", isLast: true) {
+                    securitySection(title: voiceSectionTitle, isLast: true) {
                         VoiceBiometricsSection(biometrics: voiceBiometrics, confidence: confidence)
                     }
                 }

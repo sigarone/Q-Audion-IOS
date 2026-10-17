@@ -22,8 +22,8 @@ struct GuardianGaugeRow: View {
                               comment: "Call screen voice ribbon — label of the pitch reading"),
                 reading: pitch)
             Text(String(localized: "in_call.gauge.pitch_note",
-                        defaultValue: "Quanto la voce dell'altra persona si alza o si abbassa durante la chiamata.",
-                        comment: "Call screen voice ribbon — one-line explanation under the pitch reading: how much the voice of the other person (the received audio) rises or falls during the call; it states what the number is, with no conclusion about the person"))
+                        defaultValue: "Quanto è alta o bassa la voce dell'altra persona in questo momento.",
+                        comment: "Call screen voice ribbon — one-line explanation under the pitch reading: how high or low the voice of the other person (the received audio) is right now; it states what the number is, with no conclusion about the person"))
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .scaledMono(11)
                 .fixedSize(horizontal: false, vertical: true)

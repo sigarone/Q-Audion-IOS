@@ -278,7 +278,11 @@ struct ContentView: View {
             // avrebbe senso.
             let inCall = appState.isInCall
             snackbarHost.show(.init(
-                text: "Voce sospetta rilevata. Controlla l'identità del peer.",
+                // Same wording as the "Anomalia" state of the voice card; the
+                // "Termina chiamata" action below is unchanged.
+                text: String(localized: "in_call.voice_alert.anomaly",
+                             defaultValue: "Anomalia nella voce: verifica l'identità della persona.",
+                             comment: "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action; same wording as the Anomalia state of the voice card"),
                 severity: .error,
                 actionLabel: inCall ? "Termina chiamata" : nil,
                 onAction: inCall ? { appState.endCall() } : nil,

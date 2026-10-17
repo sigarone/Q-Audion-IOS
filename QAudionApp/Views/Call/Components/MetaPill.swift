@@ -45,7 +45,6 @@ struct MetaPill: View {
         }
         HStack(spacing: 8) {
             MetaPill("RE-KEY 4m 12s", accent: .purple)
-            MetaPill("PSK ROTATION OK", accent: .green)
         }
         HStack(spacing: 8) {
             MetaPill("P2P SRTP", accent: .green, filled: true)

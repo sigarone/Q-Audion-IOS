@@ -5965,6 +5965,48 @@
         }
       }
     },
+    "in_call.security.voice_section_title": {
+      "extractionState": "manual",
+      "comment": "Call security sheet — title of the voice section; %@ is the display name of the other person",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce · %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice · %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme · %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz · %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix · %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz · %@"
+          }
+        }
+      }
+    },
     "in_call.bio.technical_title": {
       "extractionState": "manual",
       "comment": "Call security sheet and video diagnostics — title of the collapsed block that holds every raw voice measure; it says up front that they are not validated",
@@ -6849,42 +6891,42 @@
     },
     "in_call.gauge.pitch_note": {
       "extractionState": "manual",
-      "comment": "Call screen voice ribbon — one-line explanation under the pitch reading: how much the voice of the other person (the received audio) rises or falls during the call; it states what the number is, with no conclusion about the person",
+      "comment": "Call screen voice ribbon — one-line explanation under the pitch reading: how high or low the voice of the other person (the received audio) is right now; it states what the number is, with no conclusion about the person",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quanto la voce dell'altra persona si alza o si abbassa durante la chiamata."
+            "value": "Quanto è alta o bassa la voce dell'altra persona in questo momento."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "How much the other person's voice rises or falls during the call."
+            "value": "How high or low the other person's voice is right now."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wie stark die Stimme der anderen Person während des Anrufs steigt oder fällt."
+            "value": "Wie hoch oder tief die Stimme der anderen Person gerade ist."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cuánto sube o baja la voz de la otra persona durante la llamada."
+            "value": "Qué tan aguda o grave es la voz de la otra persona en este momento."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "À quel point la voix de l'autre personne monte ou descend pendant l'appel."
+            "value": "À quel point la voix de l'autre personne est aiguë ou grave en ce moment."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quanto a voz da outra pessoa sobe ou desce durante a chamada."
+            "value": "Quão aguda ou grave é a voz da outra pessoa neste momento."
           }
         }
       }
@@ -7515,6 +7557,48 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nenhuma mudança incomum em relação à voz habitual da pessoa."
+          }
+        }
+      }
+    },
+    "in_call.voice_alert.anomaly": {
+      "extractionState": "manual",
+      "comment": "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action; same wording as the Anomalia state of the voice card",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalia nella voce: verifica l'identità della persona."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice anomaly: verify the person's identity."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalie in der Stimme: Überprüfen Sie die Identität der Person."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalía en la voz: verifica la identidad de la persona."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalie dans la voix : vérifie l'identité de la personne."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anomalia na voz: verifique a identidade da pessoa."
           }
         }
       }
