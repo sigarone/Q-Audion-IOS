@@ -30,7 +30,6 @@ struct CallDesignShowcase: View {
                     IncomingCallScreen(
                         peerDisplayName: "Mario Rossi",
                         callType: .audio,
-                        confidence: 0.94,
                         onAccept: { _ in }, onReject: {}
                     )
                     .navigationBarBackButtonHidden(false)
@@ -39,7 +38,6 @@ struct CallDesignShowcase: View {
                     IncomingCallScreen(
                         peerDisplayName: "Anna Bianchi",
                         callType: .video,
-                        confidence: 0.81,
                         onAccept: { _ in }, onReject: {}
                     )
                 }

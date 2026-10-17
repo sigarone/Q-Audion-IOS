@@ -269,8 +269,8 @@ struct ContentView: View {
         // schermo. Il pattern Android è "color-only inline durante la
         // chiamata" — ma l'iOS ha l'esigenza extra di notificare anche
         // se l'utente ha messo l'app in background o aperto un altro
-        // tab. La snackbar svanisce dopo 6s; il detector continua a
-        // pulsare l'avatar halo via confidenceColor in parallelo.
+        // tab. La snackbar svanisce dopo 6s. (L'avatar halo della schermata
+        // in chiamata non cambia più colore con il punteggio: resta neutro.)
         .onChange(of: appState.deepfakeAlert) { isAlert in
             guard isAlert else { return }
             // Mostra l'opzione "Termina chiamata" solo se siamo

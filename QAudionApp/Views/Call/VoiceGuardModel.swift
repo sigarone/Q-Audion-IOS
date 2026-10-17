@@ -1,11 +1,15 @@
 import Foundation
 import QAudionEngine
 
-// Pure decisions behind the voice analysis shown during a call: the three
-// ribbon gauges (stress, breath, pitch), the "voice check" card and the
-// voice-biometrics rows of the security sheet. No SwiftUI in here, so every
-// threshold, word and format is covered by unit tests; the views only map a
-// `VoiceTone` onto a design-system colour and a string onto a Text.
+// Pure decisions behind the voice analysis shown during a call: the pitch
+// reading of the ribbon, the "voice check" card and the technical-data rows of
+// the security sheet. No SwiftUI in here, so every threshold, word and format
+// is covered by unit tests; the views only map a `VoiceTone` onto a
+// design-system colour and a string onto a Text.
+//
+// Nothing here turns a measurement into a claim about the person (stress,
+// agitation, health, authenticity): the measures are not validated for
+// phone-quality speech, so the only verdict shown is the speaker-change one.
 
 /// Colour role of one indicator. The views translate it into the
 /// design-system colours (`extras.success`, `extras.warning`, `extras.riskHigh`
@@ -18,25 +22,19 @@ enum VoiceTone: Equatable {
     case neutral
 }
 
-// MARK: - Ribbon gauges
+// MARK: - Pitch reading of the ribbon
 
-/// The status word of a gauge. The views turn it into the localized word; the
+/// The status text of a reading. The views turn it into the printed text; the
 /// decision itself stays free of any language.
 enum VoiceGaugeStatus: Equatable {
     /// Nothing to add under the value.
     case none
     /// Printed as a dash: there is no pitch to speak of (unvoiced segment).
     case dash
-    case calm
-    case elevated
-    case high
-    case clear
-    case mild
-    case hoarse
 }
 
-/// What one gauge cell prints: the number, its unit (a symbol, never
-/// translated), the status word and the colour role of the status word.
+/// What the pitch cell prints: the number, its unit (a symbol, never
+/// translated), the status text and the colour role of the status text.
 struct VoiceGaugeReading: Equatable {
     let value: String
     let unit: String
@@ -45,15 +43,6 @@ struct VoiceGaugeReading: Equatable {
 }
 
 enum VoiceGauges {
-    /// Stress is read on a 0...100 scale: up to this value the speaker is calm.
-    static let stressCalmMax: Float = 35
-    /// ... up to this one elevated, above it high.
-    static let stressElevatedMax: Float = 60
-    /// Breath (HNR, dB): at or above this value the voice is clear.
-    static let hnrClearMin: Float = 15
-    /// ... at or above this one mild, below it hoarse.
-    static let hnrMildMin: Float = 10
-
     /// Printed where a measurement does not exist.
     static let noValue = "—"
 
@@ -64,93 +53,20 @@ enum VoiceGauges {
         return Int(value).description
     }
 
-    /// Stress gauge from the engine score scaled to 0...100.
-    static func stress(points: Float) -> VoiceGaugeReading {
-        guard points.isFinite else {
-            return VoiceGaugeReading(value: noValue, unit: "/100", status: .none, tone: .neutral)
-        }
-        let status: VoiceGaugeStatus
-        let tone: VoiceTone
-        if points <= stressCalmMax {
-            status = .calm
-            tone = .success
-        } else if points <= stressElevatedMax {
-            status = .elevated
-            tone = .warning
-        } else {
-            status = .high
-            tone = .riskHigh
-        }
-        return VoiceGaugeReading(value: wholeNumber(points), unit: "/100", status: status, tone: tone)
-    }
-
-    /// Breath gauge from the harmonic-to-noise ratio in dB.
-    static func breath(hnr: Float) -> VoiceGaugeReading {
-        guard hnr.isFinite else {
-            return VoiceGaugeReading(value: noValue, unit: "dB", status: .none, tone: .neutral)
-        }
-        let status: VoiceGaugeStatus
-        let tone: VoiceTone
-        if hnr >= hnrClearMin {
-            status = .clear
-            tone = .success
-        } else if hnr >= hnrMildMin {
-            status = .mild
-            tone = .warning
-        } else {
-            status = .hoarse
-            tone = .riskHigh
-        }
-        return VoiceGaugeReading(value: wholeNumber(hnr), unit: "dB", status: status, tone: tone)
-    }
-
-    /// Pitch gauge: no status word while the segment is voiced, a dash while
-    /// it is not (an unvoiced segment has no pitch to speak of).
+    /// Pitch reading: no status text while the segment is voiced, a dash while
+    /// it is not (an unvoiced segment has no pitch to speak of). It is never
+    /// coloured: a pitch is a measurement, not a verdict.
     static func pitch(hz: Float, voiced: Bool) -> VoiceGaugeReading {
         VoiceGaugeReading(value: wholeNumber(hz), unit: "Hz", status: voiced ? .none : .dash, tone: .neutral)
     }
 }
 
-// MARK: - Voice-biometrics rows of the security sheet
+// MARK: - Technical data of the security sheet
 
+/// The measures that are left once nothing is read as a claim about the
+/// person. They are plain numbers, never coloured, and the view puts them in a
+/// section titled as not validated.
 enum VoiceBiometricsFormat {
-    /// Authenticity above this value reads as genuine (green).
-    static let authenticityGenuineAbove: Float = 0.80
-    /// From this value up to the one above it asks for a check by SAS (amber);
-    /// below it the voice is flagged (red).
-    static let authenticityVerifyFrom: Float = 0.50
-
-    struct Line: Equatable {
-        let text: String
-        let tone: VoiceTone
-    }
-
-    /// Authenticity as a number between 0 and 1. A score of exactly 0 means no
-    /// voiced frame was heard in the averaged second: that is no reading, so it
-    /// is a dash in the neutral colour, never a red zero.
-    static func authenticity(_ confidence: Float) -> Line {
-        guard InCallScreen.authenticityReading(confidence) >= 0, confidence.isFinite else {
-            return Line(text: VoiceGauges.noValue, tone: .neutral)
-        }
-        let clamped = min(1, max(0, confidence))
-        let tone: VoiceTone
-        if clamped > authenticityGenuineAbove {
-            tone = .success
-        } else if clamped >= authenticityVerifyFrom {
-            tone = .warning
-        } else {
-            tone = .riskHigh
-        }
-        return Line(text: twoDecimals(clamped), tone: tone)
-    }
-
-    /// Stress as "N/100", coloured like the ribbon gauge.
-    static func stress(points: Float) -> Line {
-        let reading = VoiceGauges.stress(points: points)
-        guard reading.value != VoiceGauges.noValue else { return Line(text: VoiceGauges.noValue, tone: .neutral) }
-        return Line(text: reading.value + "/100", tone: reading.tone)
-    }
-
     /// Jitter and shimmer arrive as ratios (0.03 = 3 %); shown as percentages
     /// with one decimal: "3.0% / 8.5%".
     static func jitterShimmer(jitter: Float, shimmer: Float) -> String {
@@ -158,13 +74,19 @@ enum VoiceBiometricsFormat {
         return oneDecimal(jitter * 100) + "% / " + oneDecimal(shimmer * 100) + "%"
     }
 
-    /// Breath as "N dB / 0.00" (HNR rounded to the dB, then breathiness),
-    /// coloured like the ribbon gauge.
-    static func breath(hnr: Float, breathiness: Float) -> Line {
-        guard hnr.isFinite, breathiness.isFinite else { return Line(text: VoiceGauges.noValue, tone: .neutral) }
-        let reading = VoiceGauges.breath(hnr: hnr)
-        let rounded = String(format: "%.0f", Double(hnr))
-        return Line(text: rounded + " dB / " + twoDecimals(breathiness), tone: reading.tone)
+    /// Guardian confidence as plain text: "C=0.87", or "C=—" when no real score
+    /// exists (a negative value is the "no score yet" sentinel; a NaN is no
+    /// score either). It is a number and nothing more: no colour, no band, no
+    /// word, because the score is not validated for phone-quality speech.
+    static func confidence(_ value: Double) -> String {
+        guard value >= 0 else { return "C=" + VoiceGauges.noValue }
+        return String(format: "C=%.2f", min(1.0, max(0.0, value)))
+    }
+
+    /// Harmonic-to-noise ratio in whole dB: "21 dB".
+    static func hnr(_ decibels: Float) -> String {
+        guard decibels.isFinite else { return VoiceGauges.noValue }
+        return String(format: "%.0f", Double(decibels)) + " dB"
     }
 
     /// Pitch and speech rate: "142 Hz · 4.1 <unit>", where the unit (syllables
@@ -172,10 +94,6 @@ enum VoiceBiometricsFormat {
     static func pitchRate(hz: Float, syllablesPerSecond: Float, syllableUnit: String) -> String {
         guard hz.isFinite, syllablesPerSecond.isFinite else { return VoiceGauges.noValue }
         return String(format: "%.0f", Double(hz)) + " Hz · " + oneDecimal(syllablesPerSecond) + " " + syllableUnit
-    }
-
-    private static func twoDecimals(_ value: Float) -> String {
-        String(format: "%.2f", Double(value))
     }
 
     private static func oneDecimal(_ value: Float) -> String {
@@ -199,7 +117,9 @@ enum VoiceGuardBanner: Equatable {
 }
 
 /// What the card shows, in priority order: the banner, the learning progress,
-/// the waiting line, and finally the verdict with its wave.
+/// the waiting state (before the first sample: the view draws it as the
+/// "Dati insufficienti" word with a flat trace), and finally the verdict with
+/// its wave.
 enum VoiceGuardContent: Equatable {
     case banner(VoiceGuardBanner)
     case learning(progress: Float)
@@ -213,9 +133,17 @@ enum VoiceGuardIcon: Equatable {
     case microphone
 }
 
-/// The word shown under the card's title.
+/// The word shown under the card's title. These are the only four states the
+/// card ever shows, each with a short explanation under it:
+///  - `verified`  "Voce coerente": no unusual change from the person's usual voice;
+///  - `caution`   "Da controllare": a change worth verifying (for example with
+///                the 60-digit safety number);
+///  - `highRisk`  "Anomalia": the voice changed in an unusual way, so the
+///                identity of the person should be verified;
+///  - `pending`   "Dati insufficienti": not enough data to compare yet.
+/// None of them says anything about emotion, stress, health or coercion.
 enum VoiceGuardWord: Equatable {
-    /// There is no verdict yet: the card must not claim the voice was recognised.
+    /// There is no verdict yet: the card must not claim the voice is consistent.
     case pending
     case verified
     case caution
@@ -296,8 +224,8 @@ enum VoiceGuard {
         }
     }
 
-    /// "Voice recognised" is said only for an explicit verified level; no verdict
-    /// yet has its own neutral word.
+    /// "Voce coerente" is said only for an explicit verified level; no verdict
+    /// yet has its own neutral word ("Dati insufficienti").
     static func word(for level: VoiceGuardLevel?) -> VoiceGuardWord {
         switch level {
         case nil:        return .pending

@@ -1,19 +1,34 @@
 import SwiftUI
 
-/// The "voice biometrics" section of the call security sheet: one row per
-/// measurement, each with its value (coloured when it has a verdict) and a
-/// plain-language note on how to read it. Without an analysis it shows a single
-/// line saying so.
+/// The "voice biometrics" section of the call security sheet. Every raw
+/// measure of the voice (jitter and shimmer, pitch and speech rate, HNR, and
+/// the Guardian confidence number) lives here, in one block that is collapsed
+/// until the user opens it and titled as not validated: these numbers have not
+/// been validated for phone-quality speech, so they are plain values, never
+/// coloured and never read as a claim about the person (no stress, breath,
+/// authenticity or risk reading). Without any measure it shows a single line
+/// saying so.
 struct VoiceBiometricsSection: View {
     @Environment(\.qaudionScheme) private var scheme
-    @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
     let biometrics: InCallScreen.VoiceBiometrics?
+    /// Guardian confidence of the call, 0...1; negative means "no score yet".
+    let confidence: Double
+
+    /// Collapsed by default, and again every time the sheet is presented.
+    @State private var expanded = false
 
     var body: some View {
-        if let bio = biometrics {
-            rows(bio)
+        if biometrics != nil || confidence >= 0 {
+            DisclosureGroup(isExpanded: $expanded) {
+                rows
+                    .padding(.top, 6)
+            } label: {
+                Text(VoiceTechnicalCopy.title)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurface)
+            }
         } else {
             Text(BioCopy.unavailable)
                 .qaudionStyle(type.bodySmall)
@@ -21,30 +36,39 @@ struct VoiceBiometricsSection: View {
         }
     }
 
-    private func rows(_ bio: InCallScreen.VoiceBiometrics) -> some View {
-        let authenticity = VoiceBiometricsFormat.authenticity(bio.confidence)
-        let stress = VoiceBiometricsFormat.stress(points: bio.stressScore * 100)
-        let breath = VoiceBiometricsFormat.breath(hnr: bio.hnr, breathiness: bio.breathiness)
-        let jitterShimmer = VoiceBiometricsFormat.jitterShimmer(jitter: bio.jitter, shimmer: bio.shimmer)
-        let pitchRate = VoiceBiometricsFormat.pitchRate(hz: bio.pitchHz,
-                                                        syllablesPerSecond: bio.syllablesPerSec,
-                                                        syllableUnit: BioCopy.syllableUnit)
-        return VStack(alignment: .leading, spacing: 0) {
-            BiometricRow(label: BioCopy.authenticity, value: authenticity.text,
-                         valueColor: color(authenticity.tone), note: BioCopy.authenticityNote)
-            BiometricRow(label: BioCopy.stress, value: stress.text,
-                         valueColor: color(stress.tone), note: BioCopy.stressNote)
-            BiometricRow(label: BioCopy.jitterShimmer, value: jitterShimmer,
-                         valueColor: scheme.onSurface, note: BioCopy.jitterShimmerNote)
-            BiometricRow(label: BioCopy.breath, value: breath.text,
-                         valueColor: color(breath.tone), note: BioCopy.breathNote)
-            BiometricRow(label: BioCopy.pitchRate, value: pitchRate,
-                         valueColor: scheme.onSurface, note: BioCopy.pitchRateNote)
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(VoiceTechnicalCopy.note)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 4)
+            if let bio = biometrics {
+                BiometricRow(label: BioCopy.jitterShimmer,
+                             value: VoiceBiometricsFormat.jitterShimmer(jitter: bio.jitter, shimmer: bio.shimmer))
+                BiometricRow(label: BioCopy.pitchRate,
+                             value: VoiceBiometricsFormat.pitchRate(hz: bio.pitchHz,
+                                                                    syllablesPerSecond: bio.syllablesPerSec,
+                                                                    syllableUnit: BioCopy.syllableUnit))
+                BiometricRow(label: BioCopy.hnr, value: VoiceBiometricsFormat.hnr(bio.hnr))
+            }
+            BiometricRow(label: BioCopy.confidence, value: VoiceBiometricsFormat.confidence(confidence))
         }
     }
+}
 
-    private func color(_ tone: VoiceTone) -> Color {
-        tone.color(scheme: scheme, extras: extras)
+/// The title and the note of the technical-data block, shared with the video
+/// call diagnostics so both say the same thing.
+enum VoiceTechnicalCopy {
+    static var title: String {
+        String(localized: "in_call.bio.technical_title",
+               defaultValue: "Dati tecnici (non validati)",
+               comment: "Call security sheet and video diagnostics — title of the collapsed block that holds every raw voice measure; it says up front that they are not validated")
+    }
+    static var note: String {
+        String(localized: "in_call.bio.technical_note",
+               defaultValue: "Misure non ancora validate per la voce al telefono. Non indicano lo stato di una persona.",
+               comment: "Call security sheet and video diagnostics — note inside the technical-data block: the raw voice measures are not validated for phone-quality speech and say nothing about the state of a person")
     }
 }
 
@@ -60,83 +84,44 @@ private enum BioCopy {
                defaultValue: "sill/s",
                comment: "Call security sheet, voice biometrics — abbreviation of syllables per second, next to the speech rate")
     }
-    static var authenticity: String {
-        String(localized: "in_call.bio.authenticity",
-               defaultValue: "Autenticità",
-               comment: "Call security sheet, voice biometrics — row label for the authenticity score of the voice")
-    }
-    static var authenticityNote: String {
-        String(localized: "in_call.bio.authenticity_note",
-               defaultValue: ">0.80 genuina · 0.50–0.80 verifica con SAS · <0.50 probabile voce sintetica.",
-               comment: "Call security sheet, voice biometrics — how to read the authenticity score")
-    }
-    static var stress: String {
-        String(localized: "in_call.bio.stress",
-               defaultValue: "Stress",
-               comment: "Call security sheet, voice biometrics — row label for the vocal stress score")
-    }
-    static var stressNote: String {
-        String(localized: "in_call.bio.stress_note",
-               defaultValue: "10–35 rilassato · >60 agitato / possibile coercizione — un picco sostenuto va verificato a voce.",
-               comment: "Call security sheet, voice biometrics — how to read the stress score")
-    }
     static var jitterShimmer: String {
         String(localized: "in_call.bio.jitter_shimmer",
                defaultValue: "Jitter / Shimmer",
                comment: "Call security sheet, voice biometrics — row label for pitch jitter and amplitude shimmer")
-    }
-    static var jitterShimmerNote: String {
-        String(localized: "in_call.bio.jitter_shimmer_note",
-               defaultValue: "Normale su questo microfono (con AEC/NS attivi): jitter sotto il 6 per cento, shimmer sotto il 12 per cento. Valori oltre 15/25 indicano forte instabilità della voce.",
-               comment: "Call security sheet, voice biometrics — how to read jitter and shimmer")
-    }
-    static var breath: String {
-        String(localized: "in_call.bio.breath",
-               defaultValue: "Respiro · HNR",
-               comment: "Call security sheet, voice biometrics — row label for breath (harmonic-to-noise ratio)")
-    }
-    static var breathNote: String {
-        String(localized: "in_call.bio.breath_note",
-               defaultValue: "≥ 5 dB chiaro · 2–5 dB accettabile · < 2 dB rauco o link rumoroso (soglie calibrate per il microfono del telefono).",
-               comment: "Call security sheet, voice biometrics — how to read the breath value")
     }
     static var pitchRate: String {
         String(localized: "in_call.bio.pitch_rate",
                defaultValue: "Tono f0 · ritmo",
                comment: "Call security sheet, voice biometrics — row label for pitch and speech rate")
     }
-    static var pitchRateNote: String {
-        String(localized: "in_call.bio.pitch_rate_note",
-               defaultValue: "Ritmo normale 3–5 sillabe al secondo, pause tra il 20 e il 40 per cento del tempo. Un cambio improvviso rispetto al tono abituale del contatto può segnalare una sostituzione.",
-               comment: "Call security sheet, voice biometrics — how to read pitch and speech rate")
+    static var hnr: String {
+        String(localized: "in_call.bio.hnr",
+               defaultValue: "HNR",
+               comment: "Call security sheet, voice biometrics — row label for the harmonic-to-noise ratio, in dB (a raw measure, not a verdict)")
+    }
+    static var confidence: String {
+        String(localized: "in_call.bio.confidence",
+               defaultValue: "Confidenza",
+               comment: "Call security sheet, voice biometrics — row label for the Guardian confidence number (C=0.NN), shown as plain text with no colour and no verdict")
     }
 }
 
 private struct BiometricRow: View {
     @Environment(\.qaudionScheme) private var scheme
-    @Environment(\.qaudionType) private var type
 
     let label: String
     let value: String
-    let valueColor: Color
-    let note: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .lastTextBaseline) {
-                Text(label)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                    .scaledMono(11)
-                Spacer(minLength: 8)
-                Text(value)
-                    .foregroundStyle(valueColor)
-                    .scaledMono(14, weight: .semibold, relativeTo: .body)
-                    .multilineTextAlignment(.trailing)
-            }
-            Text(note)
-                .qaudionStyle(type.labelSmall)
+        HStack(alignment: .lastTextBaseline) {
+            Text(label)
                 .foregroundStyle(scheme.onSurfaceVariant)
-                .fixedSize(horizontal: false, vertical: true)
+                .scaledMono(11)
+            Spacer(minLength: 8)
+            Text(value)
+                .foregroundStyle(scheme.onSurface)
+                .scaledMono(14, weight: .semibold, relativeTo: .body)
+                .multilineTextAlignment(.trailing)
         }
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)

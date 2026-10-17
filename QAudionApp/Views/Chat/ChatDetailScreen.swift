@@ -47,8 +47,10 @@ enum PendingAttachmentSend {
 /// Layout (top → bottom):
 ///   1. **Top bar** — back chevron + 36pt avatar + display name + presence
 ///                    label + ephemeral timer + audio call + video call + ⋯
-///   2. **SessionStatusStrip** — confidence dot, presence label, C=0.NN,
-///                                MiniSpark, RE-KEY countdown.
+///   2. (no session strip: the one that used to sit here showed a fixed
+///      confidence, voice label, spark line and re-key countdown with no
+///      data behind them, so it was removed — nothing is shown until a real
+///      reading is wired in)
 ///   3. **Message list** — `LazyVStack` with day headers, `MessageBubble`
 ///                          per item (Sent/Received/Admin), reactions,
 ///                          reply quote, voice notes, system banners.
@@ -202,12 +204,6 @@ struct ChatDetailScreen: View {
     /// of calling `container.send*` directly.
     @State private var pendingAttachmentSend: PendingAttachmentSend? = nil
 
-    // Stub values for the SessionStatusStrip until the engine wires them.
-    private let stubConfidence: Double = 0.92
-    private let stubPresenceLabel: String = "VOCE VERIFICATA"
-    private let stubRekeyInSeconds: Int? = 252
-    private let stubSamples: [Float] = [0.84, 0.86, 0.89, 0.91, 0.92, 0.92, 0.93, 0.92]
-
     // MARK: - Init
 
     init(conversationId: UUID, peerUserId: String, peerDisplayName: String) {
@@ -265,12 +261,6 @@ struct ChatDetailScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            SessionStatusStrip(
-                confidence: stubConfidence,
-                presence: stubPresenceLabel,
-                recentSamples: stubSamples,
-                rekeyInSeconds: stubRekeyInSeconds
-            )
             messageList
             // W261: extract the MessageComposer construction itself into
             // a separate computed property. Even with all closures

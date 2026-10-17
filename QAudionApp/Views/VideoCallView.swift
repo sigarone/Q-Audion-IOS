@@ -50,6 +50,8 @@ struct VideoCallView: View {
     @State private var showSas = false
     /// W502: toggle for the diagnostics overlay.
     @State private var showDiagnostics = false
+    /// The voice technical-data block of the diagnostics panel is collapsed by default.
+    @State private var showVoiceTechnicalData = false
 
     // Resolved display name (same lookup pattern as LiveInCallScreen).
     @State private var peerDisplayName: String = ""
@@ -697,38 +699,32 @@ struct VideoCallView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.green.opacity(0.35), lineWidth: 1))
     }
 
-    /// Interpreted voice biometrics — same thresholds as InCallScreen's
-    /// security sheet (StressDetector composite score bands, and the REAL
-    /// VoiceHealthMonitor >20dB/<10dB HNR bands, since breathiness = 1 −
-    /// hnr/20 is the engine's own formula, not a UI-invented threshold).
+    /// Raw voice measures, as plain numbers and nothing else: no stress, breath
+    /// or hoarseness reading, because none of them is validated for
+    /// phone-quality speech. They sit in one block that is collapsed until the
+    /// user opens it, titled and annotated as not validated (the same texts as
+    /// the technical-data block of InCallScreen's security sheet).
     @ViewBuilder
     private var videoDiagVoiceBiometrics: some View {
         if let bio = appState.voiceAnalysis {
-            let stressPct = Int((bio.stress.score * 100).rounded())
-            let stressWord = Self.videoStressWord(bio.stress.score * 100)
-            let hnrWord = Self.videoHnrWord(bio.voiceHealth.hnr)
-            videoDiagRow("STRESS", "\(stressPct)/100 · \(stressWord)")
-            videoDiagRow("RESPIRO · HNR", "\(Int(bio.voiceHealth.hnr.rounded())) dB · \(hnrWord)")
-            videoDiagRow("PITCH f0", "\(Int(bio.pitch.f0Hz.rounded())) Hz")
+            DisclosureGroup(isExpanded: $showVoiceTechnicalData) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(VoiceTechnicalCopy.note)
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                        .fixedSize(horizontal: false, vertical: true)
+                    videoDiagRow("HNR", VoiceBiometricsFormat.hnr(bio.voiceHealth.hnr))
+                    videoDiagRow("PITCH f0", "\(Int(bio.pitch.f0Hz.rounded())) Hz")
+                }
+                .padding(.top, 6)
+            } label: {
+                Text(VoiceTechnicalCopy.title)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundColor(.gray)
+            }
+            .tint(.green)
         }
-    }
-
-    /// UI-only interpretive band (the engine's composite stress score has
-    /// no named bands of its own) — matches InCallScreen's
-    /// stressStatusWord thresholds so the two surfaces never disagree.
-    private static func videoStressWord(_ pct: Float) -> String {
-        if pct < 35 { return String(localized: "video_call.stress_word_calm", defaultValue: "calmo", comment: "Video call diagnostics row — interpreted voice-stress band label for a low composite stress score") }
-        if pct < 60 { return String(localized: "video_call.stress_word_elevated", defaultValue: "elevato", comment: "Video call diagnostics row — interpreted voice-stress band label for a mid-range composite stress score") }
-        return String(localized: "video_call.stress_word_agitated", defaultValue: "agitato", comment: "Video call diagnostics row — interpreted voice-stress band label for a high composite stress score")
-    }
-
-    /// REAL threshold: VoiceHealthMonitor.analyze computes
-    /// `breathiness = max(0, 1 - hnr/20)`, so >20dB clear / <10dB hoarse
-    /// is a direct reading of that formula.
-    private static func videoHnrWord(_ hnr: Float) -> String {
-        if hnr > 20 { return String(localized: "video_call.hnr_word_clear", defaultValue: "chiara", comment: "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for a clear voice (HNR > 20dB)") }
-        if hnr < 10 { return String(localized: "video_call.hnr_word_hoarse", defaultValue: "rauca", comment: "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for a hoarse voice (HNR < 10dB)") }
-        return String(localized: "video_call.hnr_word_medium", defaultValue: "media", comment: "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for the mid-range (10-20dB)")
     }
 
     @ViewBuilder

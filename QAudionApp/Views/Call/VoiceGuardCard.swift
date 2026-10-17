@@ -5,11 +5,14 @@ import QAudionEngine
 ///
 /// It only ever shows state, never asks for a tap. In priority order:
 ///  - the brief confirmation (3.5 s) when the voice-learning session ends,
-///    either "learned and verified" or "learning failed, will retry next call";
+///    either "voice learned" or "learning failed, will retry next call";
 ///  - the learning progress while the session runs;
-///  - "waiting for voice data" until the first sample of the call exists;
-///  - the verdict word with the live wave, coloured by the verdict of "is this
-///    still the voice the call started with".
+///  - the verdict word with the live wave and a short explanation under it,
+///    coloured by the verdict of "is this still the voice the call started
+///    with". There are exactly four words: "Voce coerente", "Da controllare",
+///    "Anomalia" and "Dati insufficienti" (shown until there is enough to
+///    compare, which includes the first seconds of the call, before the first
+///    sample exists). None of them speaks of emotion, stress, health or coercion.
 struct VoiceGuardCard: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -21,7 +24,7 @@ struct VoiceGuardCard: View {
 
     @State private var banner: VoiceGuardBanner?
     @State private var bannerTask: Task<Void, Never>?
-    @ScaledMetric(relativeTo: .caption) private var verdictColumnWidth: CGFloat = 92
+    @ScaledMetric(relativeTo: .caption) private var verdictColumnWidth: CGFloat = 110
 
     private var level: VoiceGuardLevel? {
         VoiceGuard.level(of: speakerChange.level)
@@ -107,7 +110,9 @@ struct VoiceGuardCard: View {
         case .learning(let progress):
             learningView(progress)
         case .waiting:
-            waitingText
+            // Nothing to compare yet: the same "Dati insufficienti" word as a
+            // verdict without a level, with a flat trace (no history to draw).
+            verdictView(nil)
         case .verdict(let verdictLevel):
             verdictView(verdictLevel)
         }
@@ -118,8 +123,8 @@ struct VoiceGuardCard: View {
         switch kind {
         case .learned:
             text = String(localized: "in_call.voice_guard.learned",
-                          defaultValue: "Voce appresa e verificata",
-                          comment: "Call screen voice check card — shown briefly when the voice of the other person has been learned and verified")
+                          defaultValue: "Voce appresa",
+                          comment: "Call screen voice check card — shown briefly when the voice of the other person has been learned; it does not claim the voice was verified as genuine")
         case .failed:
             text = String(localized: "in_call.voice_guard.learn_failed",
                           defaultValue: "Apprendimento non riuscito — riproverà alla prossima chiamata",
@@ -157,59 +162,84 @@ struct VoiceGuardCard: View {
         .frame(height: 4)
     }
 
-    private var waitingText: some View {
-        Text(String(localized: "in_call.voice_guard.waiting",
-                    defaultValue: "In attesa di dati vocali…",
-                    comment: "Call screen voice check card — shown until the first voice sample of the call has been analysed"))
-            .foregroundStyle(scheme.onSurfaceVariant)
-            .scaledMono(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private func verdictView(_ verdictLevel: VoiceGuardLevel?) -> some View {
         let tone = VoiceGuard.tone(of: verdictLevel)
-        return HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(String(localized: "in_call.voice_guard.title",
-                            defaultValue: "Verifica vocale",
-                            comment: "Call screen voice check card — small title above the verdict word"))
-                    .tracking(0.4)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                    .scaledMono(11)
-                    .lineLimit(2)
-                Text(verdictWord(verdictLevel))
-                    .foregroundStyle(color(tone))
-                    .scaledMono(11, weight: .semibold)
-                    .lineLimit(2)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(String(localized: "in_call.voice_guard.title",
+                                defaultValue: "Verifica vocale",
+                                comment: "Call screen voice check card — small title above the verdict word"))
+                        .tracking(0.4)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .scaledMono(11)
+                        .lineLimit(2)
+                    Text(verdictWord(verdictLevel))
+                        .foregroundStyle(color(tone))
+                        .scaledMono(11, weight: .semibold)
+                        .lineLimit(2)
+                }
+                .frame(width: verdictColumnWidth, alignment: .leading)
+                VoiceGuardWaveView(history: confidenceHistory, color: color(tone))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 30)
+                    .accessibilityLabel(Text(String(localized: "in_call.voice_guard.curve_a11y",
+                                                    defaultValue: "Andamento della verifica vocale in questa chiamata",
+                                                    comment: "Accessibility label of the live wave on the call screen voice check card")))
             }
-            .frame(width: verdictColumnWidth, alignment: .leading)
-            VoiceGuardWaveView(history: confidenceHistory, color: color(tone))
-                .frame(maxWidth: .infinity)
-                .frame(height: 30)
-                .accessibilityLabel(Text(String(localized: "in_call.voice_guard.curve_a11y",
-                                                defaultValue: "Andamento della verifica vocale in questa chiamata",
-                                                comment: "Accessibility label of the live wave on the call screen voice check card")))
+            Text(verdictNote(verdictLevel))
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .scaledMono(11)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The four words of the verdict. `pending` is also what the card shows
+    /// before the first voice sample of the call exists.
     private func verdictWord(_ verdictLevel: VoiceGuardLevel?) -> String {
         switch VoiceGuard.word(for: verdictLevel) {
         case .pending:
             return String(localized: "in_call.voice_guard.pending",
-                          defaultValue: "Verifica in corso",
-                          comment: "Call screen voice check card — verdict word while there is no verdict yet")
+                          defaultValue: "Dati insufficienti",
+                          comment: "Call screen voice check card — verdict word when there is not enough data to compare the voice yet")
         case .verified:
             return String(localized: "in_call.voice_guard.verified",
-                          defaultValue: "Voce riconosciuta",
-                          comment: "Call screen voice check card — verdict word when the voice is still the one the call started with")
+                          defaultValue: "Voce coerente",
+                          comment: "Call screen voice check card — verdict word when the voice shows no unusual change from the one the call started with")
         case .caution:
             return String(localized: "in_call.voice_guard.caution",
-                          defaultValue: "Verifica incerta",
-                          comment: "Call screen voice check card — verdict word when the voice may have changed")
+                          defaultValue: "Da controllare",
+                          comment: "Call screen voice check card — verdict word when the voice changed and the change is worth verifying")
         case .highRisk:
             return String(localized: "in_call.voice_guard.highrisk",
-                          defaultValue: "Anomalia rilevata",
-                          comment: "Call screen voice check card — verdict word when the voice has changed")
+                          defaultValue: "Anomalia",
+                          comment: "Call screen voice check card — verdict word when the voice changed in an unusual way")
+        }
+    }
+
+    /// The short explanation under the verdict word. It says what the word
+    /// means for the comparison and what to do; it never states a conclusion
+    /// about emotion, stress, health or coercion.
+    private func verdictNote(_ verdictLevel: VoiceGuardLevel?) -> String {
+        switch VoiceGuard.word(for: verdictLevel) {
+        case .pending:
+            return String(localized: "in_call.voice_guard.pending_note",
+                          defaultValue: "Non ci sono ancora abbastanza dati per confrontare la voce.",
+                          comment: "Call screen voice check card — explanation under the verdict word when there is not enough data to compare the voice yet")
+        case .verified:
+            return String(localized: "in_call.voice_guard.verified_note",
+                          defaultValue: "Nessun cambiamento insolito rispetto alla voce abituale della persona.",
+                          comment: "Call screen voice check card — explanation under the verdict word when the voice shows no unusual change")
+        case .caution:
+            return String(localized: "in_call.voice_guard.caution_note",
+                          defaultValue: "C'è un cambiamento da verificare, per esempio con il numero di sicurezza di 60 cifre.",
+                          comment: "Call screen voice check card — explanation under the verdict word when the voice changed and the change should be verified, for example by comparing the 60-digit safety number")
+        case .highRisk:
+            return String(localized: "in_call.voice_guard.highrisk_note",
+                          defaultValue: "La voce è cambiata in modo insolito: verifica l'identità della persona.",
+                          comment: "Call screen voice check card — explanation under the verdict word when the voice changed in an unusual way: verify the identity of the person")
         }
     }
 

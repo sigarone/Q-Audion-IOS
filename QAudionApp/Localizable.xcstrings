@@ -5797,174 +5797,6 @@
         }
       }
     },
-    "in_call.bio.authenticity": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — row label for the authenticity score of the voice",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Autenticità"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Authenticity"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Authentizität"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Autenticidad"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Authenticité"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Autenticidade"
-          }
-        }
-      }
-    },
-    "in_call.bio.authenticity_note": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — how to read the authenticity score",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": ">0.80 genuina · 0.50–0.80 verifica con SAS · <0.50 probabile voce sintetica."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": ">0.80 genuine · 0.50–0.80 verify with SAS · <0.50 likely synthetic voice."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": ">0.80 echt · 0.50–0.80 mit SAS prüfen · <0.50 wahrscheinlich synthetische Stimme."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": ">0.80 genuina · 0.50–0.80 verifica con SAS · <0.50 probable voz sintética."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": ">0.80 authentique · 0.50–0.80 vérifie avec le SAS · <0.50 voix probablement synthétique."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": ">0.80 genuína · 0.50–0.80 verifique com o SAS · <0.50 provável voz sintética."
-          }
-        }
-      }
-    },
-    "in_call.bio.breath": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — row label for breath (harmonic-to-noise ratio)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Respiro · HNR"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Breath · HNR"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Atmung · HNR"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Respiración · HNR"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Souffle · HNR"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Respiração · HNR"
-          }
-        }
-      }
-    },
-    "in_call.bio.breath_note": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — how to read the breath value",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "≥ 5 dB chiaro · 2–5 dB accettabile · < 2 dB rauco o link rumoroso (soglie calibrate per il microfono del telefono)."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "≥ 5 dB clear · 2–5 dB acceptable · < 2 dB hoarse or noisy link (thresholds calibrated for the phone microphone)."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "≥ 5 dB klar · 2–5 dB akzeptabel · < 2 dB heiser oder verrauschte Verbindung (Schwellenwerte für das Telefonmikrofon kalibriert)."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "≥ 5 dB claro · 2–5 dB aceptable · < 2 dB ronco o enlace ruidoso (umbrales calibrados para el micrófono del teléfono)."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "≥ 5 dB clair · 2–5 dB acceptable · < 2 dB rauque ou liaison bruyante (seuils calibrés pour le micro du téléphone)."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "≥ 5 dB claro · 2–5 dB aceitável · < 2 dB rouco ou link ruidoso (limiares calibrados para o microfone do telefone)."
-          }
-        }
-      }
-    },
     "in_call.bio.jitter_shimmer": {
       "extractionState": "manual",
       "comment": "Call security sheet, voice biometrics — row label for pitch jitter and amplitude shimmer",
@@ -6007,48 +5839,6 @@
         }
       }
     },
-    "in_call.bio.jitter_shimmer_note": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — how to read jitter and shimmer",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normale su questo microfono (con AEC/NS attivi): jitter sotto il 6 per cento, shimmer sotto il 12 per cento. Valori oltre 15/25 indicano forte instabilità della voce."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normal on this microphone (with AEC/NS active): jitter below 6 percent, shimmer below 12 percent. Values above 15/25 indicate strong voice instability."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normal bei diesem Mikrofon (bei aktiven AEC/NS): Jitter unter 6 Prozent, Shimmer unter 12 Prozent. Werte über 15/25 deuten auf eine starke Instabilität der Stimme hin."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normal en este micrófono (con AEC/NS activos): jitter por debajo del 6 por ciento, shimmer por debajo del 12 por ciento. Valores superiores a 15/25 indican una fuerte inestabilidad de la voz."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normal sur ce micro (avec AEC/NS actifs) : jitter sous 6 pour cent, shimmer sous 12 pour cent. Des valeurs supérieures à 15/25 indiquent une forte instabilité de la voix."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normal neste microfone (com AEC/NS ativos): jitter abaixo de 6 por cento, shimmer abaixo de 12 por cento. Valores acima de 15/25 indicam forte instabilidade da voz."
-          }
-        }
-      }
-    },
     "in_call.bio.pitch_rate": {
       "extractionState": "manual",
       "comment": "Call security sheet, voice biometrics — row label for pitch and speech rate",
@@ -6087,132 +5877,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tom f0 · ritmo"
-          }
-        }
-      }
-    },
-    "in_call.bio.pitch_rate_note": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — how to read pitch and speech rate",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ritmo normale 3–5 sillabe al secondo, pause tra il 20 e il 40 per cento del tempo. Un cambio improvviso rispetto al tono abituale del contatto può segnalare una sostituzione."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normal rate 3–5 syllables per second, pauses between 20 and 40 percent of the time. A sudden change from the contact's usual pitch may indicate a substitution."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Normales Tempo 3–5 Silben pro Sekunde, Pausen zwischen 20 und 40 Prozent der Zeit. Ein plötzlicher Wechsel gegenüber der gewohnten Tonlage des Kontakts kann auf einen Austausch hindeuten."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ritmo normal de 3–5 sílabas por segundo, pausas entre el 20 y el 40 por ciento del tiempo. Un cambio repentino respecto al tono habitual del contacto puede indicar una sustitución."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Débit normal de 3–5 syllabes par seconde, pauses entre 20 et 40 pour cent du temps. Un changement soudain par rapport à la hauteur habituelle du contact peut signaler une substitution."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ritmo normal de 3–5 sílabas por segundo, pausas entre 20 e 40 por cento do tempo. Uma mudança repentina em relação ao tom habitual do contato pode indicar uma substituição."
-          }
-        }
-      }
-    },
-    "in_call.bio.stress": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — row label for the vocal stress score",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stress"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stress"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stress"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Estrés"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stress"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Estresse"
-          }
-        }
-      }
-    },
-    "in_call.bio.stress_note": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — how to read the stress score",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "10–35 rilassato · >60 agitato / possibile coercizione — un picco sostenuto va verificato a voce."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "10–35 relaxed · >60 agitated / possible coercion — a sustained peak should be verified verbally."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "10–35 entspannt · >60 aufgeregt / mögliche Nötigung — eine anhaltende Spitze sollte mündlich überprüft werden."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "10–35 relajado · >60 agitado / posible coacción — un pico sostenido debe verificarse de viva voz."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "10–35 détendu · >60 agité / contrainte possible — un pic prolongé doit être vérifié de vive voix."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "10–35 relaxado · >60 agitado / possível coação — um pico sustentado deve ser verificado de viva voz."
           }
         }
       }
@@ -6297,6 +5961,174 @@
           "stringUnit": {
             "state": "translated",
             "value": "Biometria de voz indisponível para esta chamada."
+          }
+        }
+      }
+    },
+    "in_call.bio.technical_title": {
+      "extractionState": "manual",
+      "comment": "Call security sheet and video diagnostics — title of the collapsed block that holds every raw voice measure; it says up front that they are not validated",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dati tecnici (non validati)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Technical data (not validated)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Technische Daten (nicht validiert)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datos técnicos (no validados)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Données techniques (non validées)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dados técnicos (não validados)"
+          }
+        }
+      }
+    },
+    "in_call.bio.technical_note": {
+      "extractionState": "manual",
+      "comment": "Call security sheet and video diagnostics — note inside the technical-data block: the raw voice measures are not validated for phone-quality speech and say nothing about the state of a person",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Misure non ancora validate per la voce al telefono. Non indicano lo stato di una persona."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Measures not yet validated for voice over the phone. They do not indicate a person's state."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messwerte, die für die Stimme am Telefon noch nicht validiert sind. Sie sagen nichts über den Zustand einer Person aus."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medidas aún no validadas para la voz por teléfono. No indican el estado de una persona."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesures pas encore validées pour la voix au téléphone. Elles n'indiquent pas l'état d'une personne."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medidas ainda não validadas para a voz ao telefone. Não indicam o estado de uma pessoa."
+          }
+        }
+      }
+    },
+    "in_call.bio.hnr": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — row label for the harmonic-to-noise ratio, in dB (a raw measure, not a verdict)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HNR"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HNR"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HNR"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HNR"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HNR"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HNR"
+          }
+        }
+      }
+    },
+    "in_call.bio.confidence": {
+      "extractionState": "manual",
+      "comment": "Call security sheet, voice biometrics — row label for the Guardian confidence number (C=0.NN), shown as plain text with no colour and no verdict",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confidenza"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confidence"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konfidenz"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confianza"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confiance"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confiança"
           }
         }
       }
@@ -6549,48 +6381,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "não verificada"
-          }
-        }
-      }
-    },
-    "in_call.custody.liveness": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, custody of the voice card — label of the cell for the live-voice check",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liveness"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liveness"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liveness"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liveness"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liveness"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Liveness"
           }
         }
       }
@@ -7015,387 +6805,135 @@
         }
       }
     },
-    "in_call.gauge.breath": {
-      "extractionState": "manual",
-      "comment": "Call screen voice ribbon — label of the breath gauge (harmonic-to-noise ratio)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RESPIRO·HNR"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "BREATH·HNR"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ATMUNG·HNR"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RESPIRACIÓN·HNR"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SOUFFLE·HNR"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RESPIRAÇÃO·HNR"
-          }
-        }
-      }
-    },
     "in_call.gauge.pitch": {
       "extractionState": "manual",
-      "comment": "Call screen voice ribbon — label of the pitch gauge",
+      "comment": "Call screen voice ribbon — label of the pitch reading",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "TONO"
+            "value": "Tono"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "PITCH"
+            "value": "Pitch"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "TONHÖHE"
+            "value": "Tonhöhe"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "TONO"
+            "value": "Tono"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "HAUTEUR"
+            "value": "Hauteur"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "TOM"
+            "value": "Tom"
           }
         }
       }
     },
-    "in_call.gauge.status.calm": {
+    "in_call.gauge.pitch_note": {
       "extractionState": "manual",
-      "comment": "Call screen voice ribbon — stress gauge status word for a calm voice",
+      "comment": "Call screen voice ribbon — one-line explanation under the pitch reading: how much the voice of the other person (the received audio) rises or falls during the call; it states what the number is, with no conclusion about the person",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "calmo"
+            "value": "Quanto la voce dell'altra persona si alza o si abbassa durante la chiamata."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "calm"
+            "value": "How much the other person's voice rises or falls during the call."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "ruhig"
+            "value": "Wie stark die Stimme der anderen Person während des Anrufs steigt oder fällt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "calmado"
+            "value": "Cuánto sube o baja la voz de la otra persona durante la llamada."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "calme"
+            "value": "À quel point la voix de l'autre personne monte ou descend pendant l'appel."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "calmo"
+            "value": "Quanto a voz da outra pessoa sobe ou desce durante a chamada."
           }
         }
       }
     },
-    "in_call.gauge.status.clear": {
+    "in_call.ribbon.spectrum": {
       "extractionState": "manual",
-      "comment": "Call screen voice ribbon — breath gauge status word for a clear voice",
+      "comment": "Call screen voice ribbon — neutral label of the live spectrum of the voice; it carries no verdict",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "chiaro"
+            "value": "Spettro"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "clear"
+            "value": "Spectrum"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "klar"
+            "value": "Spektrum"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "claro"
+            "value": "Espectro"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "clair"
+            "value": "Spectre"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "claro"
-          }
-        }
-      }
-    },
-    "in_call.gauge.status.elevated": {
-      "extractionState": "manual",
-      "comment": "Call screen voice ribbon — stress gauge status word for an elevated stress",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevato"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevated"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "erhöht"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevado"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "accru"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevado"
-          }
-        }
-      }
-    },
-    "in_call.gauge.status.high": {
-      "extractionState": "manual",
-      "comment": "Call screen voice ribbon — stress gauge status word for a high stress",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "alto"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "high"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "hoch"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "alto"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "élevé"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "alto"
-          }
-        }
-      }
-    },
-    "in_call.gauge.status.hoarse": {
-      "extractionState": "manual",
-      "comment": "Call screen voice ribbon — breath gauge status word for a hoarse voice or a noisy link",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "rauco"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "hoarse"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "heiser"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ronco"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "rauque"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "rouco"
-          }
-        }
-      }
-    },
-    "in_call.gauge.status.mild": {
-      "extractionState": "manual",
-      "comment": "Call screen voice ribbon — breath gauge status word for a mildly breathy voice",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "lieve"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "mild"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "leicht"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "leve"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "léger"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "leve"
-          }
-        }
-      }
-    },
-    "in_call.gauge.stress": {
-      "extractionState": "manual",
-      "comment": "Call screen voice ribbon — label of the stress gauge",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "STRESS"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "STRESS"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "STRESS"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ESTRÉS"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "STRESS"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ESTRESSE"
+            "value": "Espectro"
           }
         }
       }
     },
     "in_call.gauge.waiting": {
       "extractionState": "manual",
-      "comment": "Call screen voice ribbon — shown in place of the gauges until the first voice analysis of the call is available",
+      "comment": "Call screen voice ribbon — shown in place of the pitch reading until the first voice analysis of the call is available",
       "localizations": {
         "it": {
           "stringUnit": {
@@ -7437,42 +6975,84 @@
     },
     "in_call.voice_guard.caution": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word when the voice may have changed",
+      "comment": "Call screen voice check card — verdict word when the voice changed and the change is worth verifying",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verifica incerta"
+            "value": "Da controllare"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uncertain check"
+            "value": "Needs checking"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Unsichere Prüfung"
+            "value": "Zu prüfen"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verificación incierta"
+            "value": "Por verificar"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vérification incertaine"
+            "value": "À vérifier"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verificação incerta"
+            "value": "A verificar"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.caution_note": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — explanation under the verdict word when the voice changed and the change should be verified, for example by comparing the 60-digit safety number",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "C'è un cambiamento da verificare, per esempio con il numero di sicurezza di 60 cifre."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is a change to check, for example with the 60-digit safety number."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es gibt eine Veränderung, die Sie prüfen sollten, zum Beispiel mit der 60-stelligen Sicherheitsnummer."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hay un cambio que conviene comprobar, por ejemplo con el número de seguridad de 60 dígitos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il y a un changement à vérifier, par exemple avec le numéro de sécurité à 60 chiffres."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Há uma mudança a verificar, por exemplo com o número de segurança de 60 dígitos."
           }
         }
       }
@@ -7521,42 +7101,84 @@
     },
     "in_call.voice_guard.highrisk": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word when the voice has changed",
+      "comment": "Call screen voice check card — verdict word when the voice changed in an unusual way",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anomalia rilevata"
+            "value": "Anomalia"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anomaly detected"
+            "value": "Anomaly"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anomalie erkannt"
+            "value": "Anomalie"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anomalía detectada"
+            "value": "Anomalía"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anomalie détectée"
+            "value": "Anomalie"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anomalia detectada"
+            "value": "Anomalia"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.highrisk_note": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — explanation under the verdict word when the voice changed in an unusual way: verify the identity of the person",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voce è cambiata in modo insolito: verifica l'identità della persona."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice changed in an unusual way: verify the person's identity."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme hat sich auf ungewöhnliche Weise verändert: Überprüfen Sie die Identität der Person."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz ha cambiado de forma inusual: verifica la identidad de la persona."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix a changé de façon inhabituelle : vérifie l'identité de la personne."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz mudou de forma incomum: verifique a identidade da pessoa."
           }
         }
       }
@@ -7605,42 +7227,42 @@
     },
     "in_call.voice_guard.learned": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — shown briefly when the voice of the other person has been learned and verified",
+      "comment": "Call screen voice check card — shown briefly when the voice of the other person has been learned; it does not claim the voice was verified as genuine",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voce appresa e verificata"
+            "value": "Voce appresa"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice learned and verified"
+            "value": "Voice learned"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stimme gelernt und verifiziert"
+            "value": "Stimme gelernt"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voz aprendida y verificada"
+            "value": "Voz aprendida"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voix apprise et vérifiée"
+            "value": "Voix apprise"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voz aprendida e verificada"
+            "value": "Voz aprendida"
           }
         }
       }
@@ -7689,42 +7311,84 @@
     },
     "in_call.voice_guard.pending": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word while there is no verdict yet",
+      "comment": "Call screen voice check card — verdict word when there is not enough data to compare the voice yet",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verifica in corso"
+            "value": "Dati insufficienti"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Check in progress"
+            "value": "Not enough data"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Prüfung läuft"
+            "value": "Zu wenig Daten"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verificación en curso"
+            "value": "Datos insuficientes"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vérification en cours"
+            "value": "Données insuffisantes"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verificação em andamento"
+            "value": "Dados insuficientes"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.pending_note": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — explanation under the verdict word when there is not enough data to compare the voice yet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non ci sono ancora abbastanza dati per confrontare la voce."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is not enough data yet to compare the voice."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es liegen noch nicht genug Daten vor, um die Stimme zu vergleichen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Todavía no hay datos suficientes para comparar la voz."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il n'y a pas encore assez de données pour comparer la voix."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ainda não há dados suficientes para comparar a voz."
           }
         }
       }
@@ -7773,84 +7437,84 @@
     },
     "in_call.voice_guard.verified": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word when the voice is still the one the call started with",
+      "comment": "Call screen voice check card — verdict word when the voice shows no unusual change from the one the call started with",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voce riconosciuta"
+            "value": "Voce coerente"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice recognized"
+            "value": "Consistent voice"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stimme erkannt"
+            "value": "Stimme konsistent"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voz reconocida"
+            "value": "Voz coherente"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voix reconnue"
+            "value": "Voix cohérente"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voz reconhecida"
+            "value": "Voz coerente"
           }
         }
       }
     },
-    "in_call.voice_guard.waiting": {
+    "in_call.voice_guard.verified_note": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — shown until the first voice sample of the call has been analysed",
+      "comment": "Call screen voice check card — explanation under the verdict word when the voice shows no unusual change",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "In attesa di dati vocali…"
+            "value": "Nessun cambiamento insolito rispetto alla voce abituale della persona."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Waiting for voice data…"
+            "value": "No unusual change from the person's usual voice."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Warten auf Stimmdaten…"
+            "value": "Keine ungewöhnliche Veränderung gegenüber der gewohnten Stimme der Person."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Esperando datos de voz…"
+            "value": "Ningún cambio inusual respecto a la voz habitual de la persona."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "En attente de données vocales…"
+            "value": "Aucun changement inhabituel par rapport à la voix habituelle de la personne."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aguardando dados de voz…"
+            "value": "Nenhuma mudança incomum em relação à voz habitual da pessoa."
           }
         }
       }
@@ -8229,258 +7893,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Relatado"
-          }
-        }
-      }
-    },
-    "video_call.stress_word_calm": {
-      "extractionState": "manual",
-      "comment": "Video call diagnostics row — interpreted voice-stress band label for a low composite stress score",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "calmo"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "calm"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "tranquilo"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "calme"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ruhig"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "calmo"
-          }
-        }
-      }
-    },
-    "video_call.stress_word_elevated": {
-      "extractionState": "manual",
-      "comment": "Video call diagnostics row — interpreted voice-stress band label for a mid-range composite stress score",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevato"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevated"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevado"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "élevé"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "erhöht"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "elevado"
-          }
-        }
-      }
-    },
-    "video_call.stress_word_agitated": {
-      "extractionState": "manual",
-      "comment": "Video call diagnostics row — interpreted voice-stress band label for a high composite stress score",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "agitato"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "agitated"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "agitado"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "agité"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "unruhig"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "agitado"
-          }
-        }
-      }
-    },
-    "video_call.hnr_word_clear": {
-      "extractionState": "manual",
-      "comment": "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for a clear voice (HNR > 20dB)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chiara"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "clear"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "clara"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "claire"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "klar"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "clara"
-          }
-        }
-      }
-    },
-    "video_call.hnr_word_hoarse": {
-      "extractionState": "manual",
-      "comment": "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for a hoarse voice (HNR < 10dB)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "rauca"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "hoarse"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ronca"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "rauque"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "heiser"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "rouca"
-          }
-        }
-      }
-    },
-    "video_call.hnr_word_medium": {
-      "extractionState": "manual",
-      "comment": "Video call diagnostics row — interpreted voice-breathiness (HNR) band label for the mid-range (10-20dB)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "media"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "medium"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "media"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "moyenne"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "mittel"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "média"
           }
         }
       }
@@ -26842,47 +26254,6 @@
         }
       }
     },
-    "REMOTE VOICE": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "REMOTE VOICE"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "REMOTE VOICE"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "REMOTE VOICE"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "REMOTE VOICE"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "REMOTE VOICE"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "REMOTE VOICE"
-          }
-        }
-      }
-    },
     "REPORT": {
       "extractionState": "manual",
       "localizations": {
@@ -32500,43 +31871,44 @@
         }
       }
     },
-    "online · verified voice": {
+    "online": {
       "extractionState": "manual",
+      "comment": "Call screen presence line under the peer name — the peer is online (nothing is claimed about the voice)",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "online · verified voice"
+            "value": "online"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "online · verified voice"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "online · verified voice"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "en ligne · voix vérifiée"
+            "value": "online"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "online · verifizierte Stimme"
+            "value": "online"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en línea"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en ligne"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "online · verified voice"
+            "value": "online"
           }
         }
       }
