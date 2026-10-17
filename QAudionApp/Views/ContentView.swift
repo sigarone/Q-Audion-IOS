@@ -39,6 +39,8 @@ struct HiddenMPVolumeView: UIViewRepresentable {
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    /// With Reduce Motion on, the swap between the call screen and the "call in progress" bar is not animated.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Tracks whether the SplashScreen has resolved. Mirrors Android's
     /// `SplashViewModel.state: Loading | GoHome | GoOnboarding`.
@@ -98,7 +100,10 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            mainStack
+            VStack(spacing: 0) {
+                callBar
+                mainStack
+            }
             QAudionSnackbarHost(state: snackbarHost)
             // W559 — bug report overlay (volume-gesture or auto-trigger).
             BugReportOverlay()
@@ -480,9 +485,13 @@ struct ContentView: View {
     /// The screens of the call, chosen by the rules above.
     @ViewBuilder
     private var inCallScreens: some View {
+        // The call reduced: the app is on screen (the bar sits above it, at the root: `callBar`). The call screens below
+        // are unchanged.
+        if callSurface == .appWithBar {
+            HomeView()
         // W-OUTGOINGDOT3 — gates on the async-flipped flag, not on
         // appState.callState directly. See showLiveCallScreen's doc.
-        if showLiveCallScreen {
+        } else if showLiveCallScreen {
             let bothCamerasPaused = appState.localVideoPaused && appState.remoteVideoPaused
             if (appState.isVideoCall || appState.peerScreenShareActive) && !bothCamerasPaused {
                 VideoCallView()
@@ -491,6 +500,33 @@ struct ContentView: View {
             }
         } else {
             makeOutgoingScreen()
+        }
+    }
+
+    /// Which surface the call is on: its own screen, or the app with the call reduced to a bar (`CallMinimizePolicy`).
+    private var callSurface: CallSurface {
+        CallMinimizePolicy.surface(
+            isInCall: appState.isInCall, minimized: appState.callScreenMinimized, callState: appState.callState)
+    }
+
+    /// The "call in progress" bar, mounted once at the root (`body`) above whatever screen of the app is up: it shows while the
+    /// call is reduced and connected, so it is on every screen of the app and never on the call screen itself. It takes the
+    /// status bar area and the screen under it fills what is left. The call (audio, CallKit, hang-up) is untouched; a tap on
+    /// the bar brings the call screen back. The bar has no hang-up control and keeps its own one-second clock, so nothing
+    /// else is redrawn every second because of it.
+    @ViewBuilder
+    private var callBar: some View {
+        if callSurface == .appWithBar {
+            CallInProgressBar(
+                contactName: outgoingDisplayName.isEmpty ? nil : outgoingDisplayName,
+                elapsedSeconds: { appState.callService.callDurationSeconds },
+                onReturn: onCallBarTapped)
+        }
+    }
+
+    private func onCallBarTapped() {
+        withAnimation(CallMinimizeAnimation.animation(reduceMotion: reduceMotion)) {
+            appState.returnToCallScreen()
         }
     }
 

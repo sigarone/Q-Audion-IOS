@@ -38,6 +38,7 @@ targets:
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
           - CallMetricsRedactionTests.swift
+          - CallMinimizePolicyTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
           - ConfidenceToneTests.swift

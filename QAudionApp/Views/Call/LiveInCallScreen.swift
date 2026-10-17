@@ -75,6 +75,9 @@ struct LiveInCallScreen: View {
     /// with the video call screen and live in `InCallChatHost` (see `InCallChatCover`); nil = no host or no peer, no button.
     @Environment(\.inCallChat) private var inCallChat
 
+    /// With Reduce Motion on, the swap to the "call in progress" bar is not animated.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// Cached peer display name. Resolved once on appear / on
     /// callContactId change so the contacts-store lookup doesn't run
     /// on every TimelineView tick (OpenRouter review on v1.0.75 flagged
@@ -127,6 +130,8 @@ struct LiveInCallScreen: View {
                     .padding(.trailing, 12)
             }
         }
+        // Reduce the call to the "call in progress" bar on top of the app (audio call, once connected).
+        .overlay(alignment: .topTrailing) { reduceButtonOverlay }
         .onAppear {
             // SECURITY F-3: the in-call screen renders the SAS words +
             // peer identity. Mirror ChatDetailScreen's secure-window
@@ -205,6 +210,30 @@ struct LiveInCallScreen: View {
         }
         // The chat with the peer, over the call, is presented by `InCallChatHost` (above this screen and `VideoCallView`): a cover, so
         // the SAS words and the identity of this screen are not visible behind it, and it survives the swap between the two screens.
+    }
+
+    /// The reduce button, top right, below the status bar.
+    @ViewBuilder
+    private var reduceButtonOverlay: some View {
+        if canReduceCall {
+            MinimizeCallButton(action: reduceCall)
+                .padding(.top, 8)
+                .padding(.trailing, 12)
+        }
+    }
+
+    /// The reduce button shows on the audio call screen once the call is connected (`CallMinimizePolicy`).
+    private var canReduceCall: Bool {
+        CallMinimizePolicy.canMinimize(
+            callState: appState.callState, isVideoCall: appState.isVideoCall,
+            remoteScreenSharing: appState.peerScreenShareActive)
+    }
+
+    /// Reduces the call to the bar on top of the app. The call itself (audio, CallKit, hang-up) is not touched.
+    private func reduceCall() {
+        withAnimation(CallMinimizeAnimation.animation(reduceMotion: reduceMotion)) {
+            appState.minimizeCallScreen()
+        }
     }
 
     /// Opens the chat with the person on the call (it is created empty when there is none yet). nil hides the dock button.
