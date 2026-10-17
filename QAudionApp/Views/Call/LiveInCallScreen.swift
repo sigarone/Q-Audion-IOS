@@ -878,7 +878,8 @@ struct LiveInCallScreen: View {
             f2: result.formants.f2,
             f3: result.formants.f3,
             f4: result.formants.f4,
-            speaking: result.speechRate.isSpeaking && result.pitch.voiced
+            speaking: result.speechRate.isSpeaking && result.pitch.voiced,
+            pitchVoiced: result.pitch.voiced
         )
     }
 

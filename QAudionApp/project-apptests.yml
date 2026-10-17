@@ -48,6 +48,7 @@ targets:
           - PhoneEntryScreenInviteTests.swift
           - RuntimeLogSinkTeeTests.swift
           - TrustEvaluationModelTests.swift
+          - VoiceGuardModelTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
