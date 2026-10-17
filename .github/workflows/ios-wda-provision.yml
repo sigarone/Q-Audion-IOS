@@ -42,6 +42,12 @@ on:
         required: false
         default: 'Q-Audion test iPhone'
 
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# no job here uses GITHUB_TOKEN (no checkout: WebDriverAgent is cloned from its public
+# repository, signing goes through the App Store Connect API key secrets, and artifact
+# upload uses the runner's own token), so the token gets no scope at all.
+permissions: {}
+
 jobs:
   register-device:
     if: ${{ github.event.inputs.device_udid != '' }}
