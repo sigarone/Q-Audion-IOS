@@ -311,6 +311,9 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// `sender.parameters` (a blocking hop to the WebRTC signaling thread), so it is never
     /// taken by `close()` or by anything else the signaling thread runs.
     private let layerLock = NSLock()
+    /// Only the `videoSender` reference. Leaf lock: never held across a WebRTC call or a
+    /// last release, so `close()` may take it on the signaling thread. Order: layerLock -> senderLock.
+    private let senderLock = NSLock()
     /// How many of the three simulcast encodings the CAPTURE can feed: libwebrtc drops
     /// the top layer for a source below ~720p, so a smaller source publishes l,m (or l).
     private var sourceLayerCap = 3
@@ -390,7 +393,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         guard let videoTransceiver = pc.addTransceiver(with: video, init: videoInit) else { throw GroupPeerError.transceiverFailed }
         videoSource = source
         videoTrack = video
-        videoSender = videoTransceiver.sender
+        senderLock.withLock { videoSender = videoTransceiver.sender }
         restrictHeaderExtensions(videoTransceiver)
         guard hub.attachSender(videoTransceiver.sender, participantId: selfPseudonym) else { throw GroupPeerError.cryptorFailed }
     }
@@ -456,14 +459,18 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         audioTrack?.isEnabled = false
         videoTrack?.isEnabled = false
         audioSender?.track = nil
-        videoSender?.track = nil
+        let video: RTCRtpSender? = senderLock.withLock {
+            let sender = videoSender
+            videoSender = nil
+            return sender
+        }
+        video?.track = nil
         closePeerConnection()
         if ownsSenderCryptors { hub.releaseSenders() }
         videoTrack = nil
         audioTrack = nil
         videoSource = nil
         audioSender = nil
-        videoSender = nil
         onLocalVideoTrack = nil
     }
 
@@ -505,7 +512,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         guard started else { return .noCamera }
         capturer = newCapturer
         video.isEnabled = true
-        setActiveLayers(cap)
+        layerLock.withLock { applyActiveLayersLocked() }
         onLocalVideoTrack?(video)
         return .started
         #else
@@ -543,7 +550,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
 
     /// Caller holds `layerLock` (an `NSLock`, not re-entrant).
     private func applyActiveLayersLocked() {
-        guard let sender = videoSender else { return }
+        guard let sender = senderLock.withLock({ videoSender }) else { return }
         let allowed = min(requestedLayerCount, sourceLayerCap, singleLayerFallback ? 1 : Self.simulcast.count)
         let parameters = sender.parameters
         for (index, encoding) in parameters.encodings.enumerated() { encoding.isActive = index < allowed }
