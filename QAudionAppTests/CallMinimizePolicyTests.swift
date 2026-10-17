@@ -128,6 +128,72 @@ final class CallMinimizePolicyTests: XCTestCase {
         XCTAssertFalse(minimized)
     }
 
+    // MARK: - back to the call
+
+    /// A tap on the bar ends on the call screen, whatever the (connected) state of the call is.
+    func testTheBarTapLandsOnTheCallScreen() {
+        let minimized = CallMinimizePolicy.next(minimized: true, event: .barTapped, canMinimize: true)
+        for state in connectedStates {
+            XCTAssertEqual(
+                CallMinimizePolicy.surface(isInCall: true, minimized: minimized, callState: state), .callScreen, "\(state)")
+        }
+    }
+
+    /// A call button tapped while a call is up is refused; with the call reduced the call screen comes back, so the tap is
+    /// never mute.
+    func testARefusedNewCallBringsTheCallScreenBack() {
+        XCTAssertFalse(CallMinimizePolicy.next(minimized: true, event: .newCallRefused, canMinimize: false))
+        XCTAssertFalse(CallMinimizePolicy.next(minimized: true, event: .newCallRefused, canMinimize: true))
+        XCTAssertFalse(CallMinimizePolicy.next(minimized: false, event: .newCallRefused, canMinimize: false),
+                       "an unreduced call stays unreduced")
+        let minimized = CallMinimizePolicy.next(minimized: true, event: .newCallRefused, canMinimize: false)
+        for state in connectedStates {
+            XCTAssertEqual(
+                CallMinimizePolicy.surface(isInCall: true, minimized: minimized, callState: state), .callScreen, "\(state)")
+        }
+    }
+
+    // MARK: - the banner of the home screen
+
+    /// The banner is hidden exactly while the bar is on screen, and in no other case does its condition differ from the
+    /// old one (a call is up and its cover is not open).
+    func testTheHomeBannerIsHiddenOnlyWhileTheBarIsShowing() {
+        let flags = [false, true]
+        let states = connectedStates + notConnectedStates
+        for isInCall in flags {
+            for coverPresented in flags {
+                for minimized in flags {
+                    for state in states {
+                        let barShowing = CallMinimizePolicy.surface(
+                            isInCall: isInCall, minimized: minimized, callState: state) == .appWithBar
+                        let oldCondition = isInCall && !coverPresented
+                        let shown = CallMinimizePolicy.showsHomeBanner(
+                            isInCall: isInCall, coverPresented: coverPresented, minimized: minimized, callState: state)
+                        XCTAssertEqual(
+                            shown, oldCondition && !barShowing,
+                            "call \(isInCall) cover \(coverPresented) reduced \(minimized) state \(state)")
+                    }
+                }
+            }
+        }
+    }
+
+    func testTheHomeBannerCases() {
+        // the bar is showing: the banner is not
+        XCTAssertFalse(CallMinimizePolicy.showsHomeBanner(
+            isInCall: true, coverPresented: false, minimized: true, callState: .active))
+        // the call is not reduced, or not connected: the bar is not showing, the banner keeps its old condition
+        XCTAssertTrue(CallMinimizePolicy.showsHomeBanner(
+            isInCall: true, coverPresented: false, minimized: false, callState: .active))
+        XCTAssertTrue(CallMinimizePolicy.showsHomeBanner(
+            isInCall: true, coverPresented: false, minimized: true, callState: .ringing))
+        // no call, or its cover open: no banner, as before
+        XCTAssertFalse(CallMinimizePolicy.showsHomeBanner(
+            isInCall: false, coverPresented: false, minimized: false, callState: .idle))
+        XCTAssertFalse(CallMinimizePolicy.showsHomeBanner(
+            isInCall: true, coverPresented: true, minimized: false, callState: .active))
+    }
+
     // MARK: - the length of the call
 
     func testElapsedTextIsMinutesAndSecondsBelowOneHour() {

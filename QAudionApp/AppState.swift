@@ -17844,6 +17844,10 @@ final class AppState: ObservableObject {
         guard !isInCall else {
             callStartGate.end()
             RTLog.warn("call", "startCall ignored — already in call (isInCall=true)")
+            // With the call reduced to the bar, a tap on a call button brings the call screen back instead of
+            // doing nothing.
+            callScreenMinimized = CallMinimizePolicy.next(
+                minimized: callScreenMinimized, event: .newCallRefused, canMinimize: false)
             return
         }
         // Rebuilds the engine when logout() released it and nothing has made a

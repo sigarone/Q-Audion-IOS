@@ -157,13 +157,76 @@ final class CallMinimizeWiringTests: XCTestCase {
         XCTAssertTrue(bar.contains(".accessibilityAddTraits(.updatesFrequently)"))
     }
 
-    // MARK: - the old banner
+    // MARK: - the banner of the home screen
 
-    /// The thin banner that lived in the home screen, and that only showed while the home screen was not mounted during a
-    /// call, is replaced by the bar: nothing of it is left to show twice.
-    func testTheHomeScreenHasNoSecondCallBanner() throws {
+    /// The thin banner of the home screen is still there; its one condition now also asks the policy, so it is hidden
+    /// exactly while the bar is on screen (two markers for one call).
+    func testTheHomeBannerStaysAndHidesWhileTheBarShows() throws {
         let home = try code("QAudionApp/Views/HomeView.swift")
-        XCTAssertFalse(home.contains("inCallBanner"))
+        XCTAssertTrue(home.contains("private var inCallBanner: some View {"), "the banner is not removed")
+        XCTAssertTrue(home.contains("Text(\"Tocca per rientrare\")"))
+        XCTAssertTrue(
+            home.contains(
+                "if CallMinimizePolicy.showsHomeBanner( isInCall: appState.isInCall, coverPresented: presentingInCall, minimized: appState.callScreenMinimized, callState: appState.callState) { inCallBanner }"),
+            "one condition, through the policy")
+    }
+
+    // MARK: - back to the call
+
+    /// A tap on the bar only clears the reduced state: the call screen is what is left. It does not choose a tab, a chat or
+    /// anything else of the app.
+    func testTheBarTapOnlyClearsTheReducedState() throws {
+        let content = try code("QAudionApp/Views/ContentView.swift")
+        let tap = try slice(content, from: "private func onCallBarTapped() {", to: "private func callerOutcomeScreen(")
+        XCTAssertTrue(tap.contains("appState.returnToCallScreen()"))
+        for forbidden in ["selectedTab", "chatListOpenRequest", "pendingDeepLinkConversationId"] {
+            XCTAssertFalse(tap.contains(forbidden), "found \(forbidden)")
+        }
+    }
+
+    /// A call button tapped while a call is up (every call button goes through `startCall`) brings the call screen back
+    /// when the call is reduced, from the branch that refuses the second call.
+    func testARefusedStartBringsTheCallScreenBack() throws {
+        let app = try code("QAudionApp/AppState.swift")
+        let admission = try slice(
+            app, from: "func startCall(contactId: String, video: Bool = false) async {",
+            to: "guard let engine = ensureCallEngine(reason: \"startCall\")")
+        let refusal = try slice(admission, from: "guard !isInCall else {", to: "return }")
+        XCTAssertTrue(
+            refusal.contains(
+                "callScreenMinimized = CallMinimizePolicy.next( minimized: callScreenMinimized, event: .newCallRefused, canMinimize: false)"))
+    }
+
+    // MARK: - the security confirmation
+
+    /// The SAS confirmation is not state of the call screen: it is recorded in `SasVerificationStore` (keychain) and the media
+    /// hold is released in `AppState`; the screen reads the store again on every tick. So reducing the call, which unmounts
+    /// the screen, and coming back loses nothing. No `@State` of either screen is about the SAS.
+    func testTheSasConfirmationDoesNotLiveInTheScreen() throws {
+        let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
+        XCTAssertTrue(live.contains("SasVerificationStore.shared.recordVerified("))
+        XCTAssertTrue(live.contains("SasVerificationStore.shared.isVerified("))
+        XCTAssertTrue(live.contains("appState.confirmIdentityAndReleaseMedia()"))
+        for path in ["QAudionApp/Views/Call/LiveInCallScreen.swift", "QAudionApp/Views/Call/InCallScreen.swift"] {
+            let names = try stateVariableNames(in: try code(path))
+            XCTAssertFalse(names.isEmpty, "\(path): the scan found no @State at all")
+            for name in names {
+                XCTAssertFalse(name.lowercased().contains("sas"), "\(path): @State \(name) is about the SAS")
+            }
+        }
+    }
+
+    /// The names of the `@State` variables of a source (comments already stripped, whitespace collapsed).
+    private func stateVariableNames(in source: String) throws -> [String] {
+        let pattern = try NSRegularExpression(pattern: "@State (?:private )?var ([A-Za-z0-9_]+)")
+        let range = NSRange(source.startIndex..., in: source)
+        var names: [String] = []
+        for match in pattern.matches(in: source, range: range) {
+            if match.numberOfRanges > 1, let r = Range(match.range(at: 1), in: source) {
+                names.append(String(source[r]))
+            }
+        }
+        return names
     }
 
     // MARK: - the texts

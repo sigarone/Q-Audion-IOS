@@ -15,6 +15,9 @@ enum CallMinimizeEvent: Equatable {
     case barTapped
     /// A call starts or ends: no call starts reduced and none stays reduced.
     case callBoundary
+    /// A call button was tapped while a call is already up: the new call is refused, and with the call reduced the call
+    /// screen comes back instead of the tap doing nothing.
+    case newCallRefused
 }
 
 /// The rules for reducing a live call to a bar, as pure functions (no views, no `AppState`) so each one can be tested.
@@ -43,6 +46,13 @@ enum CallMinimizePolicy {
         return .appWithBar
     }
 
+    /// The "active call" banner of the home screen shows when a call is up and its cover is not open, except while the
+    /// reduced-call bar is on screen (two markers for one call).
+    static func showsHomeBanner(isInCall: Bool, coverPresented: Bool, minimized: Bool, callState: CallState) -> Bool {
+        guard isInCall, !coverPresented else { return false }
+        return surface(isInCall: isInCall, minimized: minimized, callState: callState) != .appWithBar
+    }
+
     /// The new "call reduced" value after an event. Tapping reduce only counts if the call can be reduced at that moment
     /// (the state may have changed between drawing the button and the tap); going back to the call, and the boundaries of
     /// a call, always clear it.
@@ -50,7 +60,7 @@ enum CallMinimizePolicy {
         switch event {
         case .reduceTapped:
             return canMinimize ? true : minimized
-        case .barTapped, .callBoundary:
+        case .barTapped, .callBoundary, .newCallRefused:
             return false
         }
     }
