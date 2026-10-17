@@ -238,6 +238,7 @@ private struct FeaturePill: View {
 
     var body: some View {
         Text(label)
+            .fixedSize(horizontal: true, vertical: false)
             .qaudionStyle(type.labelSmall)
             .tracking(1.0)
             .foregroundStyle(accent)
