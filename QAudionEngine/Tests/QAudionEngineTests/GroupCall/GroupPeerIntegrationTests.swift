@@ -308,6 +308,19 @@ final class GroupPeerIntegrationTests: XCTestCase {
         peer.close()
     }
 
+    /// `close()` takes the video sender reference out, so the layer controls that still arrive
+    /// afterwards (a policy timer, the encoder watch) find nothing to configure and just return.
+    func testTheLayerControlsAfterCloseReturnWithoutTouchingAnySender() async throws {
+        let factory = await QAudionPeerConnectionFactory.shared.factory()
+        let peer = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),
+                                      selfPseudonym: GroupCallFixtures.pseudoA)
+        try await peer.start()
+        peer.close()
+        peer.setActiveLayers(2)
+        peer.fallBackToSingleLayer()
+        peer.close()    // a second close stays a no-op
+    }
+
     func testAWrapperClosedBeforeItStartedNeverBuildsAPeerConnection() async throws {
         let factory = await QAudionPeerConnectionFactory.shared.factory()
         let publisher = GroupPublisherPeer(factory: factory, iceServers: [], cryptors: fixtureHub(factory),
