@@ -94,7 +94,7 @@ targets:
         # VPN support is compiled only when QAUDION_VPN is set, and it is NOT
         # set by this spec: this spec has no packet-tunnel extension, no
         # WireGuardKit, no NetworkExtension.framework and no Network Extension
-        # entitlement, and the VPN controls are shown greyed out and inactive.
+        # entitlement, and none of the VPN code or controls is compiled.
         # The variant with VPN support is project-vpn.yml, which includes this
         # file and adds all of the above (see its header for the procedure).
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited)

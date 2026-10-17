@@ -39,10 +39,12 @@ struct ChatListScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
+    #if QAUDION_VPN
     /// Distinguishes the iPhone TabView host from the iPad
     /// NavigationSplitView detail pane, which already has a shell-level VPN
     /// chip in its sidebar.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
@@ -181,12 +183,14 @@ struct ChatListScreen: View {
             }
             .accessibilityLabel("Nuova chat")
             markAllMenu
+            #if QAUDION_VPN
             // Compact only — on iPad the sidebar draws one chip for the
             // whole shell, same gate the other three tabs use.
             if horizontalSizeClass != .regular {
                 VpnToggleChip(vpnService: appState.vpnService,
                               accessToken: appState.currentAccessToken ?? "")
             }
+            #endif
         }
         .padding(.horizontal, 16)
         .frame(height: 56)

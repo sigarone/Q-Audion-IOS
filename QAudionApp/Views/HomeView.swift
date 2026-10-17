@@ -258,7 +258,9 @@ struct HomeView: View {
             }
             .navigationTitle("Q-Audion")
             .navigationBarTitleDisplayMode(.inline)
+            #if QAUDION_VPN
             .toolbar { vpnToolbarItem() }
+            #endif
         } detail: {
             // W-BRAND (2026-08-15): no shared safeAreaInset here either —
             // see the kdoc on `tabLayout`'s TabView for why that composes
@@ -334,6 +336,7 @@ struct HomeView: View {
         .listRowBackground(Color.clear)
     }
 
+    #if QAUDION_VPN
     // MARK: - VPN chip helper
 
     /// Trailing toolbar item for the one host that still HAS a navigation
@@ -358,6 +361,7 @@ struct HomeView: View {
             )
         }
     }
+    #endif
 
     // MARK: - Tabs
 

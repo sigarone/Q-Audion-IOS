@@ -38,10 +38,12 @@ struct SettingsScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
+    #if QAUDION_VPN
     /// Distinguishes the iPhone TabView host from the iPad
     /// NavigationSplitView detail pane, which already has a shell-level VPN
     /// chip in its sidebar.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     /// W102: cache-clear feedback alert state.
     @State private var cacheClearedAlertVisible: Bool = false
     @State private var cacheClearedMessage: String = ""
@@ -273,6 +275,7 @@ struct SettingsScreen: View {
                 .qaudionStyle(type.titleLarge)
                 .foregroundStyle(scheme.onSurface)
             Spacer()
+            #if QAUDION_VPN
             // The VPN chip lives here, not in the navigation bar: this
             // screen hides that bar (see below), so the toolbar item the
             // shell used to attach was never drawn. Compact only — on iPad
@@ -282,6 +285,7 @@ struct SettingsScreen: View {
                 VpnToggleChip(vpnService: appState.vpnService,
                               accessToken: appState.currentAccessToken ?? "")
             }
+            #endif
             // W292: replaced the TODO no-op stub with a real Menu of
             // side-effect-only quick actions. Avoids new navigation
             // state plumbing — each item is a single statement that

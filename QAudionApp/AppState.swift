@@ -601,6 +601,7 @@ final class AppState: ObservableObject {
                     self?.replayHeldAcceptAnswer()
                 }
             }
+            #if QAUDION_VPN
             // W-VPNCALLGATE — belt-and-suspenders clear: the controller's own
             // teardown already fires `onActiveCandidatePairRemoteHost(nil)`
             // on every call-end path it owns, but this is the ONE chokepoint
@@ -613,6 +614,7 @@ final class AppState: ObservableObject {
             if callState == .idle || callState == .ended {
                 vpnService.setCallMediaHost(nil)
             }
+            #endif
         }
     }
     @Published var callContactId: String?
@@ -3009,11 +3011,13 @@ final class AppState: ObservableObject {
     /// Started once after WS auth; stopped implicitly when AppState is freed.
     private var kmsPeriodicPoller: KmsPeriodicPoller?
 
+    #if QAUDION_VPN
     /// VPN service — manages WireGuard tunnel lifecycle via NetworkExtension.
     /// Bare `let` because `VpnService` is itself `ObservableObject`; HomeView
     /// passes it directly to `VpnToggleChip(@ObservedObject)` so the chip
     /// subscribes to VpnService.objectWillChange without going through AppState.
     let vpnService = VpnService()
+    #endif
 
     /// The current session access token, for use by VPN sub-operations.
     var currentAccessToken: String? { authService.loadToken() }
@@ -8089,9 +8093,11 @@ final class AppState: ObservableObject {
                 self?.backendType = (pairType == "relay") ? "turn" : "p2p"
             }
         }
+        #if QAUDION_VPN
         controller.onActiveCandidatePairRemoteHost = { [weak self] host in
             Task { @MainActor [weak self] in self?.vpnService.setCallMediaHost(host) }
         }
+        #endif
         // The native video FrameCryptor needs the call's session key (the IKM of the round's
         // directional frame keys) BEFORE the answer.
         controller.pqcCallId = self.activeCallKitId?.uuidString.lowercased() ?? ""
@@ -19093,9 +19099,11 @@ final class AppState: ObservableObject {
                         self?.backendType = (pairType == "relay") ? "turn" : "p2p"
                     }
                 }
+                #if QAUDION_VPN
                 controller.onActiveCandidatePairRemoteHost = { [weak self] host in
                     Task { @MainActor [weak self] in self?.vpnService.setCallMediaHost(host) }
                 }
+                #endif
                 // Same caller-id substitution as the legacy path —
                 // both rails ship the same `caller_display` so the
                 // peer doesn't pick a different label depending on
@@ -27876,9 +27884,11 @@ extension AppState {
                 self?.backendType = (pairType == "relay") ? "turn" : "p2p"
             }
         }
+        #if QAUDION_VPN
         controller.onActiveCandidatePairRemoteHost = { [weak self] host in
             Task { @MainActor [weak self] in self?.vpnService.setCallMediaHost(host) }
         }
+        #endif
         let cid = callerId
         Task { @MainActor [weak self] in
             guard let self = self else { return }

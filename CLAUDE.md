@@ -338,9 +338,12 @@ QAudionEngine/       # Swift package with crypto + audio C libs
 The default build, generated from `QAudionApp/project.yml` (every tag push), has
 no VPN support: no `QAudionPacketTunnel` extension, no WireGuardKit, no
 `NetworkExtension.framework`, no Network Extension entitlement
-(`QAudion.entitlements`), and the VPN controls are shown greyed out and inactive
-(`#if QAUDION_VPN` in `Services/VPN/*`, `VpnToggleChip`, `TransportSettingsScreen`;
-`VpnService` is an empty stand-in). `QAudionApp/project-vpn.yml` includes
+(`QAudion.entitlements`), and none of the VPN code or controls is compiled: the VPN
+code of the app target is inside `#if QAUDION_VPN` (`Services/VPN/*`, `VpnToggleChip`,
+`TransportSettingsScreen`, the VPN chip call sites, `AppState`). What stays in the
+default build is the `vpn` entry of the `Capability` entitlement table and, in the
+engine package, the pure utility code `VpnMlKem` and `CidrExclusion`.
+`QAudionApp/project-vpn.yml` includes
 `project.yml` and adds all of that, with `QAudionVPN.entitlements`; generate it with
 `xcodegen generate --spec project-vpn.yml` (needs Go and a device destination for
 `libwg-go.a`). `ios-testflight.yml`: tag push = default build, gated by
