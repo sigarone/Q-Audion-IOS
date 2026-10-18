@@ -720,7 +720,7 @@ struct LiveInCallScreen: View {
     private var diagPanelFrameCounters: some View {
         let txVal = appState.callService.effectiveAudioTxCount.description
         let rxVal = appState.callService.effectiveAudioRxCount.description
-        let rekeyVal = appState.rekeyCount.description
+        let rekeyVal = "—" // no live re-key counter is published yet
         let latencyVal = Self.latencyString(appState.latencyMs)
         diagRow("TX FRAME CIFRATI",   txVal)
         diagRow("RX FRAME DECIFRATI", rxVal)

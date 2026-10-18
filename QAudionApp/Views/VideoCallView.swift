@@ -750,7 +750,7 @@ struct VideoCallView: View {
     private var videoDiagFrameCounters: some View {
         let hasPipeline = appState.videoPipeline != nil
         let pipelineState = hasPipeline ? "attiva" : "inattiva"
-        let rekeyVal = appState.rekeyCount.description
+        let rekeyVal = "—" // no live re-key counter is published yet
         let latencyVal = Self.videoLatencyString(appState.latencyMs)
         videoDiagRow("PIPELINE VIDEO", pipelineState)
         videoDiagRow("REKEY",          rekeyVal)
