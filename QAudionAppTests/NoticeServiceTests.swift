@@ -46,6 +46,16 @@ final class NoticeServiceTests: XCTestCase {
     }
 
     @MainActor
+    func test_aNoticeWithNoExpiryIsKeptWhateverTheTime() {
+        let out = NoticeService.assemble(
+            envelopes: [envelope("forever", expiresMs: 0)],
+            nowMs: 9_999_999_999_999,
+            previous: [],
+            decrypt: { _ in "plain" })
+        XCTAssertEqual(out.map(\.id), ["forever"])
+    }
+
+    @MainActor
     func test_anEnvelopeThatCannotBeDecryptedIsDroppedWithoutLosingTheOthers() {
         let out = NoticeService.assemble(
             envelopes: [
