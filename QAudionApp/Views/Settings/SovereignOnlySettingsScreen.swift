@@ -64,7 +64,7 @@ struct SovereignOnlySettingsScreen: View {
                         }
 
                         hint(sovereignOnly
-                             ? "Attiva. Questo dispositivo non offre il video cifrato a livello telefono e rifiuta il video in arrivo: con i contatti che non dispongono di chiavi sovrane le chiamate restano solo audio."
+                             ? "Attiva. Questo dispositivo non offre il video cifrato con le chiavi del telefono e rifiuta tutto il video in arrivo, da qualsiasi contatto."
                              : "Non attiva. Il video usa le chiavi derivate dal telefono quando non sono disponibili chiavi sovrane.")
                     }
 
