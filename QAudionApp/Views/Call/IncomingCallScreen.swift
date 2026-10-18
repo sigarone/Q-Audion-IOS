@@ -4,18 +4,27 @@ import SwiftUI
 /// `qaudion-android-new/feature/feature-call/.../IncomingCallScreen.kt`.
 ///
 /// Layout:
-///   - "CHIAMATA IN ARRIVO · SECURE CHANNEL" header (success, 2.0sp)
-///   - Stacked dual halo (240pt success + 200pt pqcAccent) + 160pt avatar
+///   - "CHIAMATA IN ARRIVO" header (success, 2.0sp). It says only that a call
+///     is ringing: this screen reads no key-exchange state, so it does not
+///     call the channel secure.
+///   - 240pt `KeyExchangeRing` (always static and unconfirmed: nothing has
+///     been exchanged yet) + 160pt avatar
 ///   - Caller display name (displaySmall, italic, semibold)
-///   - Subtitle "Chiamata audio sicura" / "Videochiamata sicura"
-///   - `MetaPill` (PQC ACTIVE). The "VOICE VERIFIED" and "LOW RISK · C=0.NN"
-///     pills of the original port are gone: they were fixed values.
-///   - "Hybrid ML-KEM-1024 · E2E" footer line
+///   - Subtitle "Chiamata audio" / "Videochiamata": the kind of call and
+///     nothing about its security (a ringing call has no channel yet), or the
+///     caller's own line for a group call
+///   - No status pills and no PQC / cipher footer line: the "VOICE VERIFIED",
+///     "LOW RISK · C=0.NN" and PQC pills of the original port are gone, because
+///     a ringing call has no voice reading and this screen has no key-exchange
+///     state to show.
 ///   - Bottom action row (3 buttons, SpaceEvenly):
 ///       • Reject  — `CircularAction(72, riskHigh, "phone.down.fill")`
 ///       • Reply   — `CircularAction(56, surfaceVariant, "message.fill")`
 ///       • Accept  — `CircularAction(72, success,  "phone.fill")`
-///   - Footer "dovrai rispondere entro 30s"
+///   - No footer with an answer deadline. The old fixed "answer within 30s"
+///     line matched no timer in the app: a group invite rings for 45 s
+///     (`AppState.armGroupCallRingTimeout`) and a 1:1 ring has no client timer
+///     at all, it ends when the caller hangs up or the server stops the ring.
 struct IncomingCallScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -29,8 +38,9 @@ struct IncomingCallScreen: View {
     /// Numero interno PBX del chiamante (es. "103").
     /// Priorità assoluta nel cerchietto dell'avatar.
     let peerShortNumber: String?
-    /// W-GRPRING — override della riga "Chiamata audio sicura" (es.
-    /// "Chiamata di gruppo · Mario Rossi" per una group call). nil = default.
+    /// W-GRPRING — override della riga sotto il nome ("Chiamata audio" /
+    /// "Videochiamata"), es. "Chiamata di gruppo · Mario Rossi" per una group
+    /// call. nil = default. Una stringa gia' pronta: non viene localizzata qui.
     let subtitle: String?
     /// W-GRPRING — nasconde il bottone centrale "Rispondi" (quick reply) su
     /// superfici dove non esiste una chat 1:1 a cui rispondere (group call).
@@ -73,13 +83,25 @@ struct IncomingCallScreen: View {
         _acceptWithoutVideo = State(initialValue: callType == .video)
     }
 
+    /// The line under the name: the kind of call and nothing about its security,
+    /// because a ringing call has no channel yet. A group call passes its own line.
+    private var subtitleLine: String {
+        if let subtitle = subtitle { return subtitle }
+        if callType == .video {
+            return String(localized: "Videochiamata",
+                          comment: "Call screens (incoming and outgoing) — line under the name: the kind of call, a video call")
+        }
+        return String(localized: "Chiamata audio",
+                      comment: "Call screens (incoming and outgoing) — line under the name: the kind of call, an audio call")
+    }
+
     var body: some View {
         ZStack {
             CallMeshBackground()
 
             VStack(spacing: 0) {
                 Spacer().frame(height: 16)
-                Text("CHIAMATA IN ARRIVO · SECURE CHANNEL")
+                Text("CHIAMATA IN ARRIVO")
                     .qaudionStyle(type.labelSmall)
                     .tracking(2.0)
                     .foregroundStyle(extras.success)
@@ -113,7 +135,7 @@ struct IncomingCallScreen: View {
                 if callType == .video {
                     HStack(spacing: 6) {
                         Image(systemName: "video.fill").font(.system(size: 13, weight: .semibold))
-                        Text(subtitle ?? "Videochiamata sicura").qaudionStyle(type.titleMedium)
+                        Text(subtitleLine).qaudionStyle(type.titleMedium)
                     }
                     .foregroundStyle(extras.trustEnterprise)
                     .padding(.horizontal, 12).padding(.vertical, 6)
@@ -142,23 +164,14 @@ struct IncomingCallScreen: View {
                     .accessibilityValue(acceptWithoutVideo ? "Attivo" : "Non attivo")
                     .padding(.bottom, 24)
                 } else {
-                    Text(subtitle ?? "Chiamata audio sicura")
+                    Text(subtitleLine)
                         .qaudionStyle(type.titleMedium)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.bottom, 24)
                 }
 
-                // No "voice verified" / "low risk · C=…" pills: on a ringing call
-                // nothing has been measured yet, and they were fixed values.
-                HStack(spacing: 8) {
-                    MetaPill("PQC ACTIVE", accent: extras.pqcAccent)
-                }
-                .padding(.bottom, 12)
-
-                Text("Hybrid ML-KEM-1024 · E2E")
-                    .qaudionStyle(type.labelSmall)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-
+                // No status pills and no cipher/PQC claim on a ringing call: this
+                // screen has no voice reading and no key-exchange state to show.
                 Spacer()
 
                 HStack(spacing: 36) {
@@ -192,12 +205,7 @@ struct IncomingCallScreen: View {
                         captionColor: extras.success
                     )
                 }
-                .padding(.bottom, 12)
-
-                Text("dovrai rispondere entro 30s")
-                    .qaudionStyle(type.labelSmall)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                    .padding(.bottom, 16)
+                .padding(.bottom, 32)
             }
             .padding(.horizontal, 24)
         }

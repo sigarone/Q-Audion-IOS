@@ -224,6 +224,12 @@ struct InCallScreen: View {
     let sasWaiting: Bool
     let sasVerified: Bool
     let keyInfo: KeyInfo?
+    /// The call holds a session key of any kind, the transitional one it starts with included. `keyInfo` is narrower
+    /// (it names ML-KEM and prints the fingerprint, so it exists only for the real ML-KEM key), and the "DEMO" badge
+    /// must not come back on a real call while only the transitional key exists: it follows this flag and `keyInfo`
+    /// together (`demoBadgeShown`). The default `false` keeps the screens built without it (previews, showcase) as
+    /// they were: the badge follows `keyInfo` alone.
+    let hasSessionKey: Bool
     let transportMode: TransportMode
     let muted: Bool
     let speakerOn: Bool
@@ -394,8 +400,9 @@ struct InCallScreen: View {
     let onStartVoiceLearning: () -> Void
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
     /// of RAW per-frame Guardian confidence samples driving the wave of
-    /// `VoiceGuardCard`. Empty ⇒ the card shows its "waiting for voice data"
-    /// line. See `AppState.voiceConfidenceHistory`'s doc for the source.
+    /// `VoiceGuardCard`. Empty ⇒ the card shows "Dati insufficienti" with a flat
+    /// trace, whatever level the speaker-change verdict already has. See
+    /// `AppState.voiceConfidenceHistory`'s doc for the source.
     let voiceConfidenceHistory: [Float]
     /// "Voce storica" — the PEER's self-reported
     /// `AppState.peerOwnerContinuityLevel`: does THEIR live voice still
@@ -445,6 +452,7 @@ struct InCallScreen: View {
          sasWaiting: Bool = false,
          sasVerified: Bool = false,
          keyInfo: KeyInfo? = nil,
+         hasSessionKey: Bool = false,
          transportMode: TransportMode = .p2pSrtp,
          muted: Bool = false,
          speakerOn: Bool = false,
@@ -505,6 +513,7 @@ struct InCallScreen: View {
         self.sasWaiting = sasWaiting
         self.sasVerified = sasVerified
         self.keyInfo = keyInfo
+        self.hasSessionKey = hasSessionKey
         self.transportMode = transportMode
         self.muted = muted
         self.speakerOn = speakerOn
@@ -597,7 +606,7 @@ struct InCallScreen: View {
         ) {
             Button("Ho capito") { trustBadgeInfo = nil }
         } message: {
-            Text(trustBadgeInfo?.body ?? "")
+            Text(trustBadgeInfo?.body(pqcActive: pqcActive) ?? "")
         }
     }
 
@@ -962,13 +971,20 @@ struct InCallScreen: View {
             Text("online")
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(scheme.onSurfaceVariant)
-            // W323: tiny "DATI DEMO" badge surfaced when key panel is
-            // not present — heuristic for "engine not yet wired" so
+            // W323: tiny "DATI DEMO" badge surfaced while the call holds no
+            // session key at all — heuristic for "engine not yet wired" so
             // testers know the numbers above are placeholder.
-            if keyInfo == nil {
+            if Self.demoBadgeShown(keyInfoPresent: keyInfo != nil, sessionKeyPresent: hasSessionKey) {
                 stubBadge
             }
         }
+    }
+
+    /// The "DEMO" badge is shown only when neither the key panel nor any session key exists. The panel exists only
+    /// for the real ML-KEM key, so on its own it would bring the badge back on a real call that still holds the
+    /// transitional key (`sessionKeyPresent`): that is the case this decision keeps out.
+    static func demoBadgeShown(keyInfoPresent: Bool, sessionKeyPresent: Bool) -> Bool {
+        !keyInfoPresent && !sessionKeyPresent
     }
 
     /// W323: small italianized "DEMO" pill. Static foreground / no
@@ -1635,7 +1651,17 @@ struct InCallScreen: View {
             }
         }
 
-        var body: String {
+        /// The text under the title. Only the post-quantum shield is drawn in
+        /// every state (grey when the exchange is not active), so only its text
+        /// depends on `pqcActive`: the popup must not say "attivo" under a grey
+        /// shield. Every other shield is drawn only while its fact holds.
+        /// `pqcActive` is true only once the ML-KEM session key exists: the
+        /// caller (`LiveInCallScreen.mlKemKeyActive`) never counts the transitional
+        /// key a call starts with, so "attivo" is said only when it is.
+        /// The two texts of the post-quantum shield come from the catalog (the popup
+        /// shows a plain `String`, which SwiftUI does not localize by itself), so they
+        /// follow the language of the phone; the other popups are still Italian only.
+        func body(pqcActive: Bool) -> String {
             switch self {
             case .voiceKey:
                 return "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
@@ -1648,7 +1674,14 @@ struct InCallScreen: View {
             case .sas:
                 return "La cerimonia di verifica dell'identità per questa chiamata: tu e il contatto confrontate a voce le stesse parole. Il colore indica se è già stata confermata da entrambi o è ancora in sospeso."
             case .pqc:
-                return "Lo scambio di chiavi post-quantistico (ML-KEM) è attivo per questa chiamata: protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato e provasse a decifrarlo più avanti."
+                if pqcActive {
+                    return String(localized: "in_call.trust_info.pqc",
+                                  defaultValue: "Lo scambio di chiavi post-quantistico (ML-KEM) è attivo per questa chiamata: protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato e provasse a decifrarlo più avanti.",
+                                  comment: "Call screen, popup of the post-quantum shield while the ML-KEM key exchange is active for the call")
+                }
+                return String(localized: "in_call.trust_info.pqc_off",
+                              defaultValue: "Lo scambio di chiavi post-quantistico (ML-KEM) non è attivo per questa chiamata: lo scudo resta grigio finché lo scambio di chiavi ML-KEM non è stato completato. Quando è attivo, protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato.",
+                              comment: "Call screen, popup of the post-quantum shield while the ML-KEM key exchange is not active for the call: the shield is grey")
             case .transport:
                 return "Come viaggia l'audio: direttamente tra i due telefoni (P2P), tramite un server di attraversamento NAT (TURN), oppure tramite il relay del server Q-Audion (RELAY) quando non c'è una via diretta. Il contenuto resta cifrato end-to-end su qualunque percorso."
             }

@@ -284,7 +284,13 @@ struct ContentView: View {
                              defaultValue: "Anomalia nella voce: verifica l'identità della persona.",
                              comment: "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action; same wording as the Anomalia state of the voice card"),
                 severity: .error,
-                actionLabel: inCall ? "Termina chiamata" : nil,
+                // A plain String reaches `Button(_:)` verbatim, so the label is
+                // resolved here: the button runs `endCall()` and must say so in
+                // the language of the alert next to it.
+                actionLabel: inCall
+                    ? String(localized: "Termina chiamata",
+                             comment: "Snackbar action next to the voice anomaly alert: ends the current call")
+                    : nil,
                 onAction: inCall ? { appState.endCall() } : nil,
                 durationSeconds: 6
             ))
@@ -568,14 +574,18 @@ struct ContentView: View {
         let name: String = outgoingDisplayName.isEmpty
             ? (appState.callContactId ?? "…")
             : outgoingDisplayName
-        // Key-exchange ring — only non-nil once the real PQC session key
-        // exists (same condition LiveInCallScreen.liveKeyInfo uses), which
-        // in practice is only true for the single .connected render frame
-        // this screen survives — see this plan's design-doc reference for
-        // why these are shown immediately rather than animated in.
+        // Key-exchange ring — only non-nil once the real ML-KEM session key
+        // exists (same condition LiveInCallScreen.liveKeyInfo uses). A call
+        // starts with a transitional key derived from the pairwise secret
+        // (`callSasKeySource == .psk`): its fingerprint is not the session
+        // key's, so it is never printed here. In practice this is only true
+        // for the single .connected render frame this screen survives — see
+        // this plan's design-doc reference for why these are shown
+        // immediately rather than animated in.
         let pskMethodLabel: String? = appState.pskMethod.isEmpty ? nil : appState.pskMethod
         let sessionFingerprint: String? = {
-            guard let key = appState.callPqcSessionKey, !key.isEmpty else { return nil }
+            guard let key = CallSessionKeyShown.realKey(appState.callPqcSessionKey,
+                                                        source: appState.callSasKeySource) else { return nil }
             return LiveInCallScreen.sessionFingerprintFromKey(key)
         }()
         return OutgoingCallScreen(
@@ -586,6 +596,7 @@ struct ContentView: View {
             peerShortNumber: outgoingShortNumber,
             pskMethodLabel: pskMethodLabel,
             sessionFingerprint: sessionFingerprint,
+            isVideo: appState.isVideoCall,
             onHangup: { appState.endCall() }
         )
     }

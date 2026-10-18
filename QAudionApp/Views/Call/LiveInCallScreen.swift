@@ -25,10 +25,18 @@ import QAudionEngine
 ///                              (see `liveTransportMode`) — FIXED: this used
 ///                              to compare `backendType == "PQC"`, a literal
 ///                              backendType never holds, so the chip always
-///                              fell through to `.disconnected`.
+///                              fell through to `.disconnected`. An empty
+///                              `backendType` (no network path reported yet)
+///                              also gives `.disconnected`.
 ///   - `keyInfo`             ← built from `appState.callPqcSessionKey` +
 ///                              `appState.pskActive`/`pskName`/`pskFingerprint`
-///                              when ML-KEM session key is available (W502)
+///                              only once that key is the ML-KEM session key
+///                              (`callSasKeySource == .mlKem`), never for the
+///                              transitional key a call starts with (W502)
+///   - `pqcActive`           ← the same ML-KEM key (`mlKemKeyActive`), never
+///                              the PSK
+///   - `hasSessionKey`       ← any session key, the transitional one included;
+///                              only the "DEMO" badges follow it
 ///   - `voiceBiometrics`     ← built from `appState.voiceAnalysis` (Guardian
 ///                              ribbon + security-sheet biometrics; unified
 ///                              call UI pass — see `liveVoiceBiometrics`)
@@ -122,9 +130,11 @@ struct LiveInCallScreen: View {
         }
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
         // W324: stub disclaimer next to the rekey countdown, shown only
-        // while the engine rekey ETA is not yet surfaced (i.e. keyInfo==nil).
+        // while the call holds no session key at all (`hasSessionKey`). Not
+        // `liveKeyInfo == nil`: that panel exists only for the ML-KEM key, so
+        // the badge would show on a real call that only has the transitional key.
         .overlay(alignment: .topTrailing) {
-            if liveKeyInfo == nil {
+            if !hasSessionKey {
                 stubRekeyDisclaimer
                     .padding(.top, 56)
                     .padding(.trailing, 12)
@@ -328,11 +338,13 @@ struct LiveInCallScreen: View {
                 // W-TRUSTBAR-FIX: backendType is one of "p2p"/"turn"/"relay"
                 // (see AppState.swift ~line 267) — it is NEVER the literal
                 // "PQC". The PQC handshake is a SEPARATE layer from the
-                // media transport; "PQC active" should reflect whether the
-                // ML-KEM session key has actually been established, i.e.
-                // the same live source the trust-bar/key-info panel already
-                // uses (liveKeyInfo != nil), not the transport string.
-                pqcActive: liveKeyInfo != nil,
+                // media transport; "PQC active" reflects whether the ML-KEM
+                // session key has actually been established
+                // (`mlKemKeyActive`), not the transport string and not the
+                // PSK: the shield, its popup, the "Post-quantistico" cell and
+                // the custody verdict never say "attivo" while the call only
+                // holds the transitional key.
+                pqcActive: mlKemKeyActive,
                 // W339: real SAS from ComputeSasUseCase — derived from
                 // appState.callPqcSessionKey when set by the call setup
                 // path. While the key is nil (current state in most
@@ -346,6 +358,9 @@ struct LiveInCallScreen: View {
                 sasVerified: liveSasVerified,
                 // W502: KeyInfo built from live session key when available.
                 keyInfo: liveKeyInfo,
+                // Any session key at all: keeps the "DEMO" badge off a real
+                // call whose only key is still the transitional one.
+                hasSessionKey: hasSessionKey,
                 transportMode: liveTransportMode,
                 muted: liveMuted,
                 speakerOn: speakerOn,
@@ -816,12 +831,32 @@ struct LiveInCallScreen: View {
             peerUserId: peer, currentFingerprint: fp, currentIdentityTag: identityTag)
     }
 
+    /// The call holds the real ML-KEM session key (`callSasKeySource == .mlKem`). This, and nothing about the PSK, is
+    /// what the post-quantum shield, its popup, the "Post-quantistico" cell and the custody verdict stand on.
+    private var mlKemKeyActive: Bool {
+        CallSessionKeyShown.realKey(appState.callPqcSessionKey, source: appState.callSasKeySource) != nil
+    }
+
+    /// The call holds a session key of any kind, the transitional one it starts with included. The "DEMO" and
+    /// "REKEY DEMO" badges follow this ("no key at all yet"), as they did before the panel was narrowed to ML-KEM.
+    private var hasSessionKey: Bool {
+        CallSessionKeyShown.isPresent(appState.callPqcSessionKey)
+    }
+
     /// W502: build a `KeyInfo` panel from the live ML-KEM session key.
-    /// Returns nil while the key is unavailable (panel stays hidden,
-    /// "DEMO" badge remains visible). Mirrors Android's KeyInfoPanel
-    /// which shows algo + session fingerprint + PSK block.
+    /// Returns nil while the real key is unavailable (panel stays hidden).
+    /// The "DEMO" badges do not follow this panel: see `hasSessionKey`.
+    /// Mirrors Android's KeyInfoPanel which shows algo + session fingerprint
+    /// + PSK block.
+    ///
+    /// The key is the ML-KEM one only when `callSasKeySource == .mlKem`: until the
+    /// handshake replaces it, `callPqcSessionKey` holds the transitional key derived
+    /// from the pairwise secret at call start. The panel names "ML-KEM-1024 + X25519"
+    /// and prints a fingerprint of the session key, so it must not appear for that
+    /// transitional key (`CallSessionKeyShown`).
     private var liveKeyInfo: InCallScreen.KeyInfo? {
-        guard let key = appState.callPqcSessionKey, !key.isEmpty else { return nil }
+        guard let key = CallSessionKeyShown.realKey(appState.callPqcSessionKey,
+                                                    source: appState.callSasKeySource) else { return nil }
         let fp = Self.sessionFingerprintFromKey(key)
         // W-UNIFORMKEYINFO — canonical spec: method must always come from the
         // REAL negotiated label ("KMS"/"NFC"/"QR"/"HW"/"SW"/"PSK") resolved by

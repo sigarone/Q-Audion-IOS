@@ -3,6 +3,13 @@ import QAudionEngine
 
 // MARK: - Call Security Badge
 
+/// The compact security chip of the call screens and the details panel it expands to on a tap.
+///
+/// The chip holds a lock, a dot coloured by the Guardian level (grey while the Guardian has no reading), the network
+/// path the call reports (a dash until one is reported) and a "PSK" tag when a pre-shared key was mixed into the
+/// session key. The panel adds the Guardian word and score and one row each for the pre-shared key, the re-keys, the
+/// encryption, the transport and the signalling ping. The PSK, encryption, transport and ping rows print a dash while
+/// they have nothing to report, and the path in the chip does the same.
 struct CallSecurityBadge: View {
     @EnvironmentObject var appState: AppState
     @State private var isExpanded = false
@@ -26,7 +33,11 @@ struct CallSecurityBadge: View {
 
     // MARK: - Compact Badge
 
-    /// Compact pill: [lock] [traffic-light dot] [backend label] [PSK badge] [chevron]
+    /// Compact pill: [lock] [Guardian dot] [network path] [PSK tag] [chevron].
+    ///
+    /// The dot is green, yellow or red with the Guardian level once the Guardian has a reading, and grey before. The
+    /// path is the backend the call reports ("p2p" | "turn" | "relay"), a dash until one is reported. The PSK tag
+    /// appears only when a pre-shared key was mixed into this call's session key.
     private var compactBadge: some View {
         HStack(spacing: 8) {
             Image(systemName: "lock.fill")
@@ -43,11 +54,13 @@ struct CallSecurityBadge: View {
                 .onAppear { startRedPulseIfNeeded() }
                 .onChange(of: appState.confidenceLevel) { _ in startRedPulseIfNeeded() }
 
-            Text(appState.backendType)
+            Text(Self.backendLabel(appState.backendType))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundColor(backendColor)
 
-            if appState.pskActive {
+            // Drawn only on a verified fact: a pre-shared key was mixed into this call's session key. Not on
+            // `pskActive`, which is true from the first second of every call (the transitional key counts for it).
+            if appState.callPskMixedThisCall {
                 Text("PSK")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundColor(.black)
@@ -93,12 +106,14 @@ struct CallSecurityBadge: View {
 
             Divider().background(Color.white.opacity(0.1))
 
-            if appState.pskActive {
-                detailRow(
-                    label: "PSK",
-                    value: "\(appState.pskName)  \u{2022}  \(appState.pskFingerprint)"
-                )
-            }
+            // Same fact as the chip above: the key and its fingerprint are named only when a pre-shared key was mixed
+            // into this call; until then the row shows a dash.
+            detailRow(
+                label: "PSK",
+                value: Self.pskWord(mixed: appState.callPskMixedThisCall,
+                                    name: appState.pskName,
+                                    fingerprint: appState.pskFingerprint)
+            )
 
             // W-L10N-BATCH1 (2026-09-08) — detailRow's `label:` is a plain
             // String (see its signature below), not LocalizedStringKey, so
@@ -109,9 +124,12 @@ struct CallSecurityBadge: View {
             // locale) — not silently rewritten to Italian here, translators
             // pick each language's real equivalent.
             detailRow(label: String(localized: "call_security.label.rekey", defaultValue: "Re-key", comment: "Call security detail panel — field label for key-rotation count"), value: "\(appState.rekeyCount) rotazioni")
-            detailRow(label: String(localized: "call_security.label.encryption", defaultValue: "Cifratura", comment: "Call security detail panel — field label for the active encryption algorithm"), value: appState.encryptionAlgo)
-            detailRow(label: String(localized: "call_security.label.transport", defaultValue: "Trasporto", comment: "Call security detail panel — field label for the media transport type"), value: appState.transportType)
-            detailRow(label: String(localized: "call_security.label.latency", defaultValue: "Latenza", comment: "Call security detail panel — field label for round-trip latency"), value: "\(appState.latencyMs) ms", valueColor: latencyColor)
+            detailRow(label: String(localized: "call_security.label.encryption", defaultValue: "Cifratura", comment: "Call security detail panel — field label for the active encryption algorithm"), value: Self.encryptionWord(algo: appState.encryptionAlgo, hasMlKemKey: CallSessionKeyShown.realKey(appState.callPqcSessionKey, source: appState.callSasKeySource) != nil))
+            detailRow(label: String(localized: "call_security.label.transport", defaultValue: "Trasporto", comment: "Call security detail panel — field label for the media transport type"), value: Self.transportWord(backendType: appState.backendType))
+            // `AppState.latencyMs` is the ping of the signalling socket (this device to the server), not the delay of
+            // the call, so the row is named for what it is and drawn neutral: a green, yellow or red on it would read
+            // as a verdict on the call quality that the number does not support.
+            detailRow(label: String(localized: "call_security.label.signaling_ping", defaultValue: "Ping segnalazione", comment: "Call security detail panel — field label for the last ping round trip of the signalling connection (this device to the server); it is not the delay of the call"), value: Self.pingWord(ms: appState.latencyMs))
         }
         .padding(16)
         .qaudionMaterialBackground()
@@ -122,15 +140,18 @@ struct CallSecurityBadge: View {
 
     // MARK: - Detail Row Helper
 
-    private func detailRow(label: String, value: String, valueColor: Color = .white) -> some View {
+    private func detailRow(label: String, value: String) -> some View {
         HStack {
+            // Wide enough for the longest label ("Signalisierungs-Ping" in German, "Ping de señalización" in
+            // Spanish); a label that still does not fit goes on a second line.
             Text(label)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.gray)
-                .frame(width: 80, alignment: .leading)
+                .lineLimit(2)
+                .frame(width: 112, alignment: .leading)
             Text(value)
                 .font(.system(size: 12, weight: .regular, design: .monospaced))
-                .foregroundColor(valueColor)
+                .foregroundColor(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Spacer()
@@ -158,18 +179,72 @@ struct CallSecurityBadge: View {
         }
     }
 
-    private var latencyColor: Color {
-        if appState.latencyMs < 80 { return .green }
-        if appState.latencyMs < 200 { return .yellow }
-        return .red
+    private var statusLabel: String {
+        Self.statusWord(level: appState.confidenceLevel, score: Double(appState.confidenceScore))
     }
 
-    private var statusLabel: String {
-        switch appState.confidenceLevel {
+    /// The word of the badge for a Guardian level and score. A call starts at level "green" with the -1 "no score
+    /// yet" sentinel (the panel prints a dash, the dot is grey): that is no reading, so the word says there is not
+    /// enough data instead of "Sicuro", a verdict nobody measured. It is the voice card's own key and wording for
+    /// the same situation, so the comment below is the card's (the catalog keeps one comment per key).
+    static func statusWord(level: String, score: Double) -> String {
+        guard ConfidenceThresholds.tone(of: score) != .noReading else {
+            return String(localized: "in_call.voice_guard.pending",
+                          defaultValue: "Dati insufficienti",
+                          comment: "Call screen voice check card — verdict word when there is not enough data to compare the voice yet")
+        }
+        switch level {
         case "yellow": return "Attenzione"
         case "red":    return "Allarme"
         default:       return "Sicuro"
         }
+    }
+
+    // MARK: - Words of the details panel
+
+    /// The transport row: the backend the call reports ("p2p" | "turn" | "relay"), in the words of the transport chip
+    /// of the call screens. It used to print a fixed "P2P Direct" whatever the path, relay included.
+    ///
+    /// `AppState.backendType` is empty until a network path has been reported (there is no default path), and the
+    /// row shows a dash until then: it used to start at "p2p" and print P2P before any path was known.
+    static func transportWord(backendType: String) -> String {
+        switch backendType {
+        case "p2p":   return "P2P"
+        case "turn":  return "TURN"
+        case "relay": return "RELAY"
+        default:      return "\u{2014}"
+        }
+    }
+
+    /// The path word of the compact badge: the reported backend as it is, or a dash while no path was reported.
+    static func backendLabel(_ backendType: String) -> String {
+        backendType.isEmpty ? "\u{2014}" : backendType
+    }
+
+    /// The PSK row. It names the pre-shared key (name and fingerprint) only when a key was mixed into this call, the
+    /// same fact as the PSK chip (`AppState.callPskMixedThisCall`); otherwise it prints a dash, which covers both "no
+    /// key" and "not known yet". A name or a fingerprint alone does not make a key in use. A mixed key whose name and
+    /// fingerprint are both unknown prints the dash too.
+    static func pskWord(mixed: Bool, name: String, fingerprint: String) -> String {
+        guard mixed else { return "\u{2014}" }
+        let parts = [name, fingerprint].filter { !$0.isEmpty }
+        return parts.isEmpty ? "\u{2014}" : parts.joined(separator: "  \u{2022}  ")
+    }
+
+    /// The encryption row: the algorithm text is a fixed announcement ("ML-KEM-1024 + ..."), so it is printed only once
+    /// the call key really is the ML-KEM one; before that there is nothing to announce yet.
+    static func encryptionWord(algo: String, hasMlKemKey: Bool) -> String {
+        hasMlKemKey ? algo : "\u{2014}"
+    }
+
+    /// The "Ping segnalazione" row: the last round trip, in ms, of the keepalive ping on the signalling socket
+    /// (`AppState.latencyMs`), or a dash while nothing was measured (0 is the unset value, not a measurement of "0 ms").
+    ///
+    /// It is the time between this device and the signalling server, not the delay of the call: it says nothing about
+    /// the media path. It is also not reset between calls, and it is refreshed once per keepalive ping (every 20 s on
+    /// Wi-Fi, 30 s on a wired or unknown path, 60 s on cellular), so it can be older than the call it is read in.
+    static func pingWord(ms: Int) -> String {
+        ms > 0 ? String(ms) + " ms" : "\u{2014}"
     }
 
     // MARK: - Red Glow Pulse Animation

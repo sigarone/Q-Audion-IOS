@@ -1477,8 +1477,10 @@ final class AppState: ObservableObject {
     /// "p2p"    — WebRTC ICE direct (host or srflx candidate pair)
     /// "turn"   — WebRTC ICE via TURN relay (TransportGate.forcesRelay or VPN-TURN)
     /// "relay"  — bcrypto server WS relay (fallback when P2P not yet negotiated)
-    /// The LiveInCallScreen maps these to TransportMode for the chip label.
-    @Published var backendType: String = "p2p"  // "p2p" | "turn" | "relay"
+    /// ""       — no network path reported yet (start of a call, before ICE selects one)
+    /// The LiveInCallScreen maps these to TransportMode for the chip label ("" is
+    /// `.disconnected`); the security badge prints a dash for "".
+    @Published var backendType: String = ""  // "" | "p2p" | "turn" | "relay"
     @Published var pskActive: Bool = false
     @Published var pskName: String = ""
     @Published var pskFingerprint: String = ""
@@ -2579,7 +2581,11 @@ final class AppState: ObservableObject {
 
     @Published var rekeyCount: Int = 0
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
-    @Published var transportType: String = "P2P Direct"
+    /// Last round trip, in ms, of the keepalive ping on the signalling socket (this device to the signalling
+    /// server), set by `BCryptoWebSocketClient.onLatencyMeasured`; 0 until the first reading. It is NOT the delay of
+    /// a call: it says nothing about the media path, it keeps its value between calls, and a new reading arrives
+    /// only once per keepalive ping (20 s on Wi-Fi, 30 s on a wired or unknown path, 60 s on cellular). The security
+    /// badge shows it as "Ping segnalazione".
     @Published var latencyMs: Int = 0
     /// Unified call UI — Guardian ribbon voice biometrics (pitch, stress,
     /// voice health, speech rate, confidence). Fed by
@@ -5827,9 +5833,11 @@ final class AppState: ObservableObject {
         // exchange payload.
         let ws = provider.getWebSocketClient()
         // W505: wire ping/pong RTT measurement so CallSecurityBadge and
-        // the call diagnostics panels can show a live relay latency value.
-        // The callback fires on the utility queue every 30 s (ping interval)
-        // so we dispatch to main before writing @Published latencyMs.
+        // the call diagnostics panels can show the last signalling ping
+        // (this device to the server; not the delay of the call).
+        // The callback fires on the utility queue once per keepalive ping
+        // (20 s on Wi-Fi, 30 s wired/unknown, 60 s cellular), so we dispatch
+        // to main before writing @Published latencyMs.
         ws.onLatencyMeasured = { [weak self] rttMs in
             DispatchQueue.main.async { self?.latencyMs = rttMs }
         }
@@ -21485,7 +21493,7 @@ extension AppState {
         callSasKeySource = .none
         // Reset transport indicator so the next call doesn't inherit
         // the previous call's transport type (WS relay vs WebRTC).
-        backendType = "p2p"  // reset — next call starts assuming direct until ICE says otherwise
+        backendType = ""  // reset — next call has no path until ICE (or the relay fallback) reports one
         // Reset audio routing to default (earpiece + proximity sensor) so
         // the next call does NOT inherit a previous overrideOutputAudioPort(.speaker).
         // Without this, if the user activated loudspeaker in the previous call,

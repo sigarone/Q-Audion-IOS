@@ -6,13 +6,33 @@ import QAudionEngine
 /// It only ever shows state, never asks for a tap. In priority order:
 ///  - the brief confirmation (3.5 s) when the voice-learning session ends,
 ///    either "voice learned" or "learning failed, will retry next call";
-///  - the learning progress while the session runs;
-///  - the verdict word with the live wave and a short explanation under it,
-///    coloured by the verdict of "is this still the voice the call started
-///    with". There are exactly four words: "Voce coerente", "Da controllare",
-///    "Anomalia" and "Dati insufficienti" (shown until there is enough to
-///    compare, which includes the first seconds of the call, before the first
-///    sample exists). None of them speaks of emotion, stress, health or coercion.
+///  - the learning progress while the session runs (it starts on its own on a
+///    call with a contact that has no stored voice template yet);
+///  - the verdict word, with the wave and a short explanation under it,
+///    coloured by the verdict.
+///
+/// The verdict is the answer of the speaker-change monitor
+/// (`RemoteSpeakerChangeMonitor`, published as `AppState.speakerChangeVerdict`)
+/// to "is the voice arriving from the far end still the one this call started
+/// with". It compares the call with itself, not with an identity, and it is
+/// informational: nothing is muted, blocked or ended by it. There are exactly
+/// four words: "Voce coerente", "Da controllare", "Anomalia" and "Dati
+/// insufficienti". None of them speaks of emotion, stress, health or coercion.
+///
+/// "Dati insufficienti" has two causes, not one:
+///  - the monitor has no level yet. It needs a warm-up of voice scores
+///    (`SpeakerChangeDetector.defaultWarmupSamples`, about one score every 3 s
+///    of speech in the foreground and every 10 s in the background), which takes
+///    tens of seconds, not the first few seconds of a call;
+///  - the Guardian confidence history that draws the wave has no sample yet.
+///    That is checked first (`VoiceGuard.content`): until the history has its
+///    first sample the card says "Dati insufficienti" even if the monitor
+///    already has a level.
+///
+/// "Da controllare" can also come from the far end's own report alone
+/// (`RemoteSpeakerChangeMonitor.Verdict.peerReportedOnly`). A report from
+/// outside this device never raises the verdict above that word, and the card
+/// does not tell it apart from a change this device heard.
 struct VoiceGuardCard: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -110,8 +130,9 @@ struct VoiceGuardCard: View {
         case .learning(let progress):
             learningView(progress)
         case .waiting:
-            // Nothing to compare yet: the same "Dati insufficienti" word as a
-            // verdict without a level, with a flat trace (no history to draw).
+            // No Guardian history yet: the same "Dati insufficienti" word as a
+            // verdict without a level, with a flat trace (no history to draw),
+            // whatever level the speaker-change monitor already has.
             verdictView(nil)
         case .verdict(let verdictLevel):
             verdictView(verdictLevel)
@@ -196,8 +217,9 @@ struct VoiceGuardCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The four words of the verdict. `pending` is also what the card shows
-    /// before the first voice sample of the call exists.
+    /// The four words of the verdict. `pending` is what the card shows when
+    /// the monitor has no level yet, and also while the Guardian history that
+    /// draws the wave is still empty (see the doc of the card).
     private func verdictWord(_ verdictLevel: VoiceGuardLevel?) -> String {
         switch VoiceGuard.word(for: verdictLevel) {
         case .pending:
@@ -261,9 +283,16 @@ struct VoiceGuardCard: View {
     }
 }
 
-/// The single live trace of the card: the recent confidence samples, centred on
-/// their mean and scaled by their own spread, so that a healthy steady call
-/// shows a calm line and a real change shows as a visible swing. Fewer than two
+/// The single live trace of the card: the recent Guardian confidence samples
+/// (`AppState.voiceConfidenceHistory`, a different measurement from the scores
+/// behind the verdict word), centred on their mean and divided by their own
+/// largest distance from it, never by less than `VoiceGuardWave.minSpread`.
+///
+/// The trace shows the shape of the movement, not its size: a window that moves
+/// by more than the floor always reaches the same full swing, whether it is
+/// ordinary wobble or a real change, and only a window that moves by less than
+/// the floor is drawn proportionally smaller. What carries the verdict is the
+/// colour of the card, not the amplitude of the wave. Fewer than two finite
 /// samples draw a flat line.
 struct VoiceGuardWaveView: View {
     let history: [Float]
