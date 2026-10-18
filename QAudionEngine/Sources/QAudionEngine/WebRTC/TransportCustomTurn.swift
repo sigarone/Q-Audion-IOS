@@ -148,7 +148,8 @@ public struct TransportCustomTurn: Equatable, Sendable, CustomStringConvertible,
         guard let username = decodedCredential(String(credentialParts[0])),
               let credential = decodedCredential(String(credentialParts[1])) else { return .malformed }
 
-        let storedText = parts.scheme + parts.rest
+        var storedText = parts.scheme + parts.rest
+        if storedText.hasSuffix("?") { storedText.removeLast() }
         let iceUrl = parts.iceUrl
         guard URL(string: storedText) != nil, URL(string: iceUrl) != nil else { return .malformed }
         return .server(TransportCustomTurn(iceUrl: iceUrl, username: username, credential: credential,

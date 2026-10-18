@@ -30,6 +30,8 @@ public protocol TransportTurnCredentialStore {
     func save(_ credentials: TransportTurnCredentials, forHost host: String) -> Bool
     /// Forgets the credentials kept for `host`.
     func remove(forHost host: String)
+    /// Removes every stored credential of the service, for every host. Used when the account is wiped.
+    func removeAll()
 }
 
 /// The Keychain store: one generic password item per server, service `qaudion.transport.turn`, account = the host of the
@@ -107,6 +109,17 @@ public struct KeychainTransportTurnCredentialStore: TransportTurnCredentialStore
         #endif
     }
 
+    public func removeAll() {
+        #if canImport(Security)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecUseDataProtectionKeychain as String: true,
+        ]
+        SecItemDelete(query as CFDictionary)
+        #endif
+    }
+
     public func remove(forHost host: String) {
         #if canImport(Security)
         SecItemDelete(query(forHost: host) as CFDictionary)
@@ -153,4 +166,9 @@ public final class InMemoryTransportTurnCredentialStore: TransportTurnCredential
         defer { lock.unlock() }
         return entries.keys.sorted()
     }
+}
+
+/// Stores that keep nothing (tests, previews) have nothing to remove.
+extension TransportTurnCredentialStore {
+    public func removeAll() {}
 }

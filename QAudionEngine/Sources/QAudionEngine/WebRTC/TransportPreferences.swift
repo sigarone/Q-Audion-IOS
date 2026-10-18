@@ -34,6 +34,14 @@ public struct TransportPreferences {
         self.credentialStore = credentials
     }
 
+    /// Forgets the custom server on this device: its address in UserDefaults and every stored credential.
+    /// Called by the account wipe, so the next account on the device does not inherit the server.
+    public func clearAll() {
+        defaults.removeObject(forKey: Self.keyPreferredTurnUrl)
+        defaults.removeObject(forKey: Self.keyPreferredMode)
+        credentialStore.removeAll()
+    }
+
     public var mode: TransportSettingsViewModel.Mode {
         let raw = defaults.string(forKey: Self.keyPreferredMode) ?? ""
         return TransportSettingsViewModel.Mode(rawValue: raw) ?? .auto
