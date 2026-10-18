@@ -79,6 +79,14 @@ final class RecoverySeedContainer: ObservableObject {
                     throw RecoverySeedContainerError.notAuthenticated
                 }
                 _ = try await provider.accountApi.recoverySetup(recoveryHash: hash)
+                // Only inside the success path, never in the catch below —
+                // this is the one write that keeps 100% of freshly-onboarded
+                // users from seeing a false "you're not enrolled" banner
+                // later, since this method is shared with the mandatory
+                // onboarding reveal.
+                if let uid = appState.currentUserId {
+                    RecoveryEnrollmentStatus.markEnrolled(userId: uid)
+                }
                 viewModel.transition(to: .complete)
             } catch {
                 errorMessage = error.localizedDescription
@@ -113,6 +121,11 @@ final class RecoverySeedContainer: ObservableObject {
                 appState.authService.saveCredentials(creds)
                 appState.currentUserId = creds.userId  // saveCredentials already persisted it (TokenVault)
                 appState.activatePendingSession()
+                // Restoring from a mnemonic IS enrolling: the account
+                // already proved it holds one. Without this, an account
+                // that only ever restored (never ran .setup on this
+                // device) would be nagged by the recovery banners forever.
+                RecoveryEnrollmentStatus.markEnrolled(userId: creds.userId)
                 viewModel.transition(to: .complete)
             } catch {
                 errorMessage = error.localizedDescription
