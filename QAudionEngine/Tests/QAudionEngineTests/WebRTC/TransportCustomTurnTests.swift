@@ -197,4 +197,11 @@ final class TransportCustomTurnTests: XCTestCase {
             XCTAssertFalse(printed.contains("alice-user"), "the user name is printed: \(printed)")
         }
     }
+
+    func test_aTrailingEmptyQueryMarkerIsNotStoredSoTheSavedValueMatchesTheReadBackOne() {
+        guard case .server(let server) = TransportCustomTurn.parse("turn:alice:s3cret@host.example:3478?") else {
+            return XCTFail("expected a usable server")
+        }
+        XCTAssertFalse(server.storedText.hasSuffix("?"))
+    }
 }

@@ -235,4 +235,19 @@ final class TransportPreferencesCredentialsTests: XCTestCase {
         store.remove(forHost: testHost)
         XCTAssertNil(store.credentials(forHost: testHost))
     }
+
+    func test_clearAllForgetsTheAddressTheModeTheCredentialsAndTheSettingsCopy() {
+        let defaults = freshDefaults()
+        let prefs = preferences(defaults)
+        XCTAssertTrue(prefs.save(mode: .turn, customTurnUrl: URL(string: server)))
+        defaults.set(storedAddress, forKey: TransportPreferences.keyCopyInSettingsStore)
+        XCTAssertNotNil(credentials.credentials(forHost: host))
+
+        prefs.clearAll()
+
+        XCTAssertNil(defaults.string(forKey: TransportPreferences.keyPreferredTurnUrl))
+        XCTAssertNil(defaults.string(forKey: TransportPreferences.keyPreferredMode))
+        XCTAssertNil(defaults.string(forKey: TransportPreferences.keyCopyInSettingsStore))
+        XCTAssertNil(credentials.credentials(forHost: host))
+    }
 }

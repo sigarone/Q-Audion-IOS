@@ -139,6 +139,12 @@ public final class InMemoryTransportTurnCredentialStore: TransportTurnCredential
 
     public init() {}
 
+    public func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.removeAll()
+    }
+
     public func credentials(forHost host: String) -> TransportTurnCredentials? {
         lock.lock()
         defer { lock.unlock() }

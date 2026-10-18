@@ -24,6 +24,8 @@ public struct TransportPreferences {
 
     public static let keyPreferredTurnUrl = "qaudion.transport.preferred_turn_url"
     public static let keyPreferredMode = "qaudion.transport.preferred_mode"
+    /// The copy the general settings store keeps of the same choice (written by the settings screen). The wipe clears it too.
+    public static let keyCopyInSettingsStore = "qaudion.settings.transport"
 
     private let defaults: UserDefaults
     private let credentialStore: TransportTurnCredentialStore
@@ -39,6 +41,7 @@ public struct TransportPreferences {
     public func clearAll() {
         defaults.removeObject(forKey: Self.keyPreferredTurnUrl)
         defaults.removeObject(forKey: Self.keyPreferredMode)
+        defaults.removeObject(forKey: Self.keyCopyInSettingsStore)
         credentialStore.removeAll()
     }
 
