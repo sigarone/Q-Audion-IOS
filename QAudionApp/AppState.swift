@@ -8,10 +8,11 @@ import BackgroundTasks
 import Intents  // CarPlay/Siri state-of-the-art plan S1 — INStartCallIntent handoff + donation
 import QAudionEngine
 #if canImport(WebRTC)
-// W412: needed by the W411 RTCIceServer references inside the
-// WebRTC bridge code paths. The QAudionEngine extension types
-// (QAudionWebRtcCallController.iceServerOverride: [RTCIceServer]?)
-// require the symbol to be in scope at the call site too.
+// W412: the WebRTC types used inside the WebRTC bridge code paths (video
+// tracks, audio session, the ICE state callbacks of
+// QAudionWebRtcCallController). The Settings > Trasporto choice no longer
+// passes RTCIceServer values: the controller builds them from
+// `transportMode` / `customTurnUrl` through the engine's TransportPlan.
 import WebRTC
 #endif
 
@@ -7955,10 +7956,10 @@ final class AppState: ObservableObject {
         // print()-only ICE/DTLS diagnostics the same way CallKitProvider's
         // were bridged earlier.
         controller.log = { line in RTLog.info("call", line) }
-        if let customUrl = TransportGate.preferredTurnUrl {
-            controller.iceServerOverride = [RTCIceServer(urlStrings: [customUrl.absoluteString])]
-        }
-        if TransportGate.forcesRelay { controller.iceTransportPolicyOverride = .relay }
+        // Settings > Trasporto: the controller builds its ICE policy and servers from
+        // these two through the engine's TransportPlan.
+        controller.transportMode = TransportGate.mode
+        controller.customTurnUrl = TransportGate.preferredTurnUrl
         // D6 (2026-09-28, TURN-stuck-on-P2P fix) — wire the P2P-probe remote
         // kill switch; see `p2pProbeKillSwitchProvider`'s own kdoc for why
         // this indirection exists (QAudionEngine cannot import FeatureFlags).
@@ -18787,16 +18788,10 @@ final class AppState: ObservableObject {
                 controller.log = { [weak self] line in
                     self?.bridgeControllerLogLine(line, role: "caller", callId: nativeSrtpOutgoingCallId, native: outgoingEffectiveNative)
                 }
-                // W411: apply user-configured Transport overrides.
+                // W411: apply user-configured Transport settings (mode + custom TURN address).
                 #if canImport(WebRTC)
-                if let customUrl = TransportGate.preferredTurnUrl {
-                    controller.iceServerOverride = [
-                        RTCIceServer(urlStrings: [customUrl.absoluteString])
-                    ]
-                }
-                if TransportGate.forcesRelay {
-                    controller.iceTransportPolicyOverride = .relay
-                }
+                controller.transportMode = TransportGate.mode
+                controller.customTurnUrl = TransportGate.preferredTurnUrl
                 #endif
                 // D6 (2026-09-28, TURN-stuck-on-P2P fix) — wire the P2P-probe
                 // remote kill switch; see `p2pProbeKillSwitchProvider`'s own
@@ -27594,15 +27589,9 @@ extension AppState {
         controller.log = { [weak self] line in
             self?.bridgeControllerLogLine(line, role: "callee", callId: offerCallId, native: mediaPlaneEffectiveNative)
         }
-        // W411: apply Transport overrides on the responder side too.
-        if let customUrl = TransportGate.preferredTurnUrl {
-            controller.iceServerOverride = [
-                RTCIceServer(urlStrings: [customUrl.absoluteString])
-            ]
-        }
-        if TransportGate.forcesRelay {
-            controller.iceTransportPolicyOverride = .relay
-        }
+        // W411: apply the Transport settings on the responder side too.
+        controller.transportMode = TransportGate.mode
+        controller.customTurnUrl = TransportGate.preferredTurnUrl
         // D6 (2026-09-28, TURN-stuck-on-P2P fix) — wire the P2P-probe remote
         // kill switch; see `p2pProbeKillSwitchProvider`'s own kdoc
         // (QAudionEngine cannot import FeatureFlags directly).

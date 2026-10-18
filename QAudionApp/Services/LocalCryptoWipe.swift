@@ -50,6 +50,8 @@ enum LocalCryptoWipe {
         // device saw the previous account's calls (the encrypted file and its copies, the Keychain
         // key and the legacy UserDefaults copy were all left alone).
         wipeCallHistory()
+        // The custom TURN server of the account that is leaving: its address and its credentials in the Keychain.
+        TransportPreferences().clearAll()
         // XC-2: the identity-key publish confirmed-fingerprint (AppState
         // .publishIdentityKeyWithRetry) must not survive a wipe — a stale
         // entry here would make the next account's first sweep skip
