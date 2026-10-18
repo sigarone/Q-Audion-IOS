@@ -75,8 +75,9 @@ struct SettingsScreen: View {
     /// Drives `recoveryBanner`. Re-read on every `.onAppear` (not just
     /// once) because Settings is exactly where the user goes to run the
     /// enrolment flow and come back — Android's `refreshRecoveryBanner()`
-    /// on route entry is the same idea.
-    @State private var recoveryEnrolled: Bool = true
+    /// on route entry is the same idea. False until the first read, so the
+    /// banner never flashes before the check has run.
+    @State private var recoveryReminderNeeded: Bool = false
 
     /// W118+W134: footer with version + build + uptime tagline.
     /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
@@ -213,7 +214,7 @@ struct SettingsScreen: View {
                     SecurityChipsRow()
                         .padding(.top, 8)
 
-                    if !recoveryEnrolled {
+                    if recoveryReminderNeeded {
                         recoveryBanner
                             .padding(.horizontal, 16)
                             .padding(.top, 12)
@@ -282,7 +283,7 @@ struct SettingsScreen: View {
         // the culprit is that sub-screen's init.
         .onAppear {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
-            recoveryEnrolled = RecoveryEnrollmentStatus.isEnrolled(userId: appState.currentUserId ?? "")
+            recoveryReminderNeeded = RecoveryEnrollmentStatus.needsReminder(userId: appState.currentUserId ?? "")
         }
         // .task rather than inline in sicurezzaSection's body: hasTemplate
         // is a synchronous SecItemCopyMatching and this root re-renders on
@@ -359,14 +360,12 @@ struct SettingsScreen: View {
     /// rather than stranding them. This is the second net for that account.
     /// Not dismissable, on purpose: it stays until enrolment actually
     /// completes, unlike the chat-list banner below it, which is a
-    /// reminder of the same fact and CAN be dismissed.
+    /// reminder of the same fact and CAN be dismissed. That is only safe
+    /// because it shows on positive evidence (`RecoveryEnrollmentStatus
+    /// .needsReminder`), never on the mere absence of a record.
     private var recoveryBanner: some View {
         NavigationLink {
-            LazyView {
-                RecoverySeedContainerView(
-                    container: RecoverySeedContainer(mode: .setup, appState: appState)
-                )
-            }
+            LazyView { RecoverySetupHost(appState: appState) }
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "lock.trianglebadge.exclamationmark")
@@ -563,12 +562,11 @@ struct SettingsScreen: View {
             // RecoveryEnrollRoute. Generates a 12-word BIP-39 mnemonic,
             // computes SHA-256 hash, submits to AccountApi.recoverySetup.
             // RecoverySeedContainer + RecoverySeedView live in QAudionEngine.
+            // RecoverySetupHost keeps ONE container (one phrase) for the
+            // life of the pushed screen; building it in this closure rolled a
+            // new phrase on every re-render of Settings.
             NavigationLink {
-                LazyView {
-                    RecoverySeedContainerView(
-                        container: RecoverySeedContainer(mode: .setup, appState: appState)
-                    )
-                }
+                LazyView { RecoverySetupHost(appState: appState) }
             } label: {
                 SettingsRow(icon: "arrow.counterclockwise.icloud",
                             iconColor: scheme.primary,

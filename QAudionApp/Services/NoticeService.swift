@@ -65,7 +65,15 @@ public final class NoticeService: ObservableObject {
     /// quiet instead of knocking on the per-IP bucket every minute.
     private var pause = UploadPause()
 
-    private init() {}
+    /// Bumped by `resetForAccountChange()`. A poll remembers the value it
+    /// started under and publishes only if it is unchanged: a request already
+    /// in flight when the account leaves must not put the old account's
+    /// notices back after the reset.
+    private var generation: Int = 0
+
+    /// Internal rather than private only so tests can build their own
+    /// instance; the app uses `shared`.
+    init() {}
 
     // ─── Lifecycle ─────────────────────────────────────────────────
 
@@ -101,7 +109,8 @@ public final class NoticeService: ObservableObject {
 
     // ─── Wire types ────────────────────────────────────────────────
 
-    private struct NoticeEnvelope: Codable {
+    /// Internal, not private, so `assemble` can be exercised by tests.
+    struct NoticeEnvelope: Codable {
         let id: String
         let kind: String
         let priority: String
@@ -129,6 +138,7 @@ public final class NoticeService: ObservableObject {
         if pause.isPaused(now: ProcessInfo.processInfo.systemUptime) { return }
         guard !serverUrl.isEmpty, let url = URL(string: serverUrl + "/api/v1/notices/inbox") else { return }
         guard let tok = getToken?(), !tok.isEmpty else { return }
+        let startedUnder = generation
 
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
@@ -143,14 +153,37 @@ public final class NoticeService: ObservableObject {
               let decoded = try? JSONDecoder().decode(InboxResponse.self, from: data) else { return }
 
         let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let incoming = Self.assemble(
+            envelopes: decoded.notices ?? [],
+            nowMs: now,
+            previous: notices,
+            decrypt: decryptBody
+        )
+        publish(incoming, startedUnder: startedUnder)
+    }
+
+    /// The pure core of a poll: what the inbox shows, given what the server
+    /// sent and what was already shown.
+    ///   - an envelope whose `expires_ms` is not strictly after `nowMs` is
+    ///     dropped, so a notice stops appearing the moment it expires;
+    ///   - an envelope `decrypt` cannot open is dropped on its own, without
+    ///     failing the rest;
+    ///   - `read` is carried over by id from `previous`, so a re-poll never
+    ///     un-reads a notice the user already opened; a new id starts unread.
+    /// Order is the server's.
+    static func assemble(
+        envelopes: [NoticeEnvelope],
+        nowMs: Int64,
+        previous: [ServiceNotice],
+        decrypt: (NoticeEnvelope) -> String?
+    ) -> [ServiceNotice] {
         // uniquingKeysWith rather than uniqueKeysWithValues: a duplicate id
         // must never crash the poll, even though it should not occur.
-        let previousById = Dictionary(notices.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
-
-        let incoming: [ServiceNotice] = (decoded.notices ?? [])
-            .filter { $0.expires_ms > now }
+        let previousById = Dictionary(previous.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        return envelopes
+            .filter { $0.expires_ms > nowMs }
             .compactMap { env in
-                guard let body = decryptBody(env) else { return nil }
+                guard let body = decrypt(env) else { return nil }
                 return ServiceNotice(
                     id: env.id,
                     kind: env.kind,
@@ -162,8 +195,32 @@ public final class NoticeService: ObservableObject {
                     read: previousById[env.id]?.read ?? false
                 )
             }
-        self.notices = incoming
-        self.unreadCount = incoming.filter { !$0.read }.count
+    }
+
+    /// Replaces the shown list and the unread count together. Does nothing
+    /// when the account changed since `startedUnder` was read (see
+    /// `generation`). Internal so tests can drive it without a network.
+    func publish(_ incoming: [ServiceNotice], startedUnder: Int) {
+        guard startedUnder == generation else { return }
+        notices = incoming
+        unreadCount = incoming.filter { !$0.read }.count
+    }
+
+    /// The value a poll reads when it starts and hands back to `publish`.
+    /// Internal for the same reason.
+    var currentGeneration: Int { generation }
+
+    /// Empties the inbox. Called when the account leaves (logout, remote
+    /// wipe, account deletion — `AppState.resetAccountScopedRuntimeState`):
+    /// this is a singleton, so without it the next account to sign in on the
+    /// device would see the previous one's notices and unread dot until its
+    /// own first poll replaced them, and an old poll still in flight could
+    /// put them back afterwards. Polling itself keeps running; with no token
+    /// it does nothing until the next sign-in.
+    func resetForAccountChange() {
+        generation += 1
+        notices = []
+        unreadCount = 0
     }
 
     /// Mark a notice read, server-side and locally. The local flip happens

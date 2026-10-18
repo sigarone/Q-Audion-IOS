@@ -227,6 +227,16 @@ final class MeshRuntime: ObservableObject {
     /// No new engine state: this is a read over `peers`, which was already
     /// published with everything it needs.
     func reach(toNodeHex targetNodeHex: String) -> (reachable: Bool, viaBridgeNodeHex: String?) {
+        Self.reach(toNodeHex: targetNodeHex, in: peers)
+    }
+
+    /// The rule behind `reach(toNodeHex:)`, over an explicit peer list so it
+    /// can be tested without the radio. `peers` must be in the order
+    /// `applyKnownPeers` publishes them (strongest signal first).
+    static func reach(
+        toNodeHex targetNodeHex: String,
+        in peers: [MeshRuntimePeer]
+    ) -> (reachable: Bool, viaBridgeNodeHex: String?) {
         if peers.contains(where: { $0.nodeHex == targetNodeHex && $0.connected }) {
             return (true, nil)
         }

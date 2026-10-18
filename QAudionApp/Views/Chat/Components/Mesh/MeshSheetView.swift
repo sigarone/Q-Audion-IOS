@@ -129,7 +129,15 @@ struct MeshSheetView: View {
         case .authorizationDenied:
             return "Permesso Bluetooth negato — tocca per aprire Impostazioni"
         case .poweredOff:
-            return "Bluetooth spento — tocca per aprire Impostazioni"
+            // Says where the switch really is. The button below opens this
+            // app's page in Settings (see `openSettingsLabel`), which has no
+            // Bluetooth on/off switch, so the old "tocca per aprire
+            // Impostazioni" promised something the tap did not deliver.
+            return String(
+                localized: "mesh_sheet.bluetooth_off_hint",
+                defaultValue: "Bluetooth spento — accendilo dal Centro di Controllo o da Impostazioni > Bluetooth",
+                comment: "Bluetooth mesh sheet, antenna row subtitle when the phone's Bluetooth radio is switched off: tells the user where to turn it on."
+            )
         case .ready:
             switch runtime.antennaMode {
             case nil:
@@ -211,6 +219,24 @@ struct MeshSheetView: View {
         .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 14))
     }
 
+    /// Both blockers open the same page: THIS app's page in Settings, the only
+    /// Settings page the public API can open. For a denied permission that is
+    /// exactly where the Bluetooth switch is, so "Apri Impostazioni" is true.
+    /// For a radio that is off it is not: the system Bluetooth switch lives in
+    /// Control Center and Settings > Bluetooth, so the label names the page
+    /// that opens instead of promising the switch (the subtitle says where the
+    /// switch is).
+    private var openSettingsLabel: String {
+        if btProbe.status == .poweredOff {
+            return String(
+                localized: "mesh_sheet.open_app_settings",
+                defaultValue: "Impostazioni dell'app",
+                comment: "Bluetooth mesh sheet: button that opens this app's page in the Settings app (shown while the phone's Bluetooth is off; it does not contain the system Bluetooth switch)."
+            )
+        }
+        return String(localized: "Apri Impostazioni")
+    }
+
     private var openBluetoothSettingsButton: some View {
         Button {
             #if canImport(UIKit)
@@ -219,7 +245,7 @@ struct MeshSheetView: View {
             }
             #endif
         } label: {
-            Text("Apri Impostazioni")
+            Text(openSettingsLabel)
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(scheme.onPrimary)
                 .frame(maxWidth: .infinity)

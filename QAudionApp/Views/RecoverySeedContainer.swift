@@ -80,10 +80,9 @@ final class RecoverySeedContainer: ObservableObject {
                 }
                 _ = try await provider.accountApi.recoverySetup(recoveryHash: hash)
                 // Only inside the success path, never in the catch below —
-                // this is the one write that keeps 100% of freshly-onboarded
-                // users from seeing a false "you're not enrolled" banner
-                // later, since this method is shared with the mandatory
-                // onboarding reveal.
+                // this is the write that answers the "awaiting" record the
+                // mandatory onboarding reveal left (this method is shared
+                // with it), so a user who did enrol is never nagged later.
                 if let uid = appState.currentUserId {
                     RecoveryEnrollmentStatus.markEnrolled(userId: uid)
                 }
@@ -122,9 +121,8 @@ final class RecoverySeedContainer: ObservableObject {
                 appState.currentUserId = creds.userId  // saveCredentials already persisted it (TokenVault)
                 appState.activatePendingSession()
                 // Restoring from a mnemonic IS enrolling: the account
-                // already proved it holds one. Without this, an account
-                // that only ever restored (never ran .setup on this
-                // device) would be nagged by the recovery banners forever.
+                // already proved it holds one, so any "awaiting" record
+                // left for it on this device is answered.
                 RecoveryEnrollmentStatus.markEnrolled(userId: creds.userId)
                 viewModel.transition(to: .complete)
             } catch {
@@ -198,5 +196,35 @@ struct RecoverySeedContainerView: View {
         .onDisappear {
             if container.mode == .setup { ScreenshotLockService.unlock() }
         }
+    }
+}
+
+/// Owns a `.setup` container for as long as the screen that shows it lives.
+///
+/// `RecoverySeedContainer.init(mode: .setup, ...)` generates a NEW mnemonic.
+/// Building the container inline in a view body, a `.sheet` closure or a
+/// `LazyView` closure runs that init on every re-evaluation of the parent, and
+/// `RecoverySeedContainerView` holds the container as `@ObservedObject`, so it
+/// follows the swap: the words on screen change under the user, and the hash
+/// sent to the server on confirm can belong to a different phrase than the one
+/// they wrote down. `@StateObject` makes SwiftUI run the initializer once per
+/// view lifetime (the `wrappedValue` autoclosure is not evaluated again), so
+/// the phrase is fixed from the moment the screen appears until it goes away.
+/// Presenting the screen again starts a new host, and so a new phrase, which
+/// is what a new enrolment wants.
+///
+/// Every `.setup` entry point that is not the onboarding root (which keeps its
+/// container in `@State` for the same reason) goes through this view.
+struct RecoverySetupHost: View {
+    @StateObject private var container: RecoverySeedContainer
+
+    init(appState: AppState, onDismiss: (() -> Void)? = nil) {
+        self._container = StateObject(wrappedValue: RecoverySeedContainer(
+            mode: .setup, appState: appState, onDismiss: onDismiss
+        ))
+    }
+
+    var body: some View {
+        RecoverySeedContainerView(container: container)
     }
 }

@@ -220,9 +220,12 @@ jobs:
             -only-testing:QAudionAppTests/DesignSystemAccessibilityTests \
             -only-testing:QAudionAppTests/DeviceSymbolTests \
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
+            -only-testing:QAudionAppTests/MeshReachTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
+            -only-testing:QAudionAppTests/NoticeServiceTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
             -only-testing:QAudionAppTests/PhoneEntryScreenInviteTests \
+            -only-testing:QAudionAppTests/RecoveryEnrollmentStatusTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -only-testing:QAudionAppTests/VoiceGuardModelTests \

@@ -17319,6 +17319,9 @@ final class AppState: ObservableObject {
         // is already wiped by `LocalCryptoWipe.wipeAll()`; the persisted "seen up to" mark is not, so it starts
         // again from now here, in the one function every wipe path calls.
         MissedCallsBadge.shared.resetForAccountChange()
+        // The service-notice inbox is a singleton polled from boot: its list and unread dot belong to the account
+        // that left and must not show under the next one.
+        NoticeService.shared.resetForAccountChange()
     }
 
     /// Idempotent: returns the live call engine, building it first when there
