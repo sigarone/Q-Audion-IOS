@@ -615,6 +615,20 @@ struct SettingsScreen: View {
     private var infoSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
+
+            // W546+W547 — in-app feedback inbox + compose. Subtitle
+            // dynamically reports the unread maintainer-reply count so
+            // the user notices new messages without opening the screen.
+            //
+            // Lives here and not in SVILUPPATORE, which is reached only
+            // through `#if QAUDION_DEV_TOOLS`. That flag is off in the build
+            // that ships, so with the row in SVILUPPATORE the shipped app had
+            // no in-app support channel: no way to report a problem and no
+            // way to read a reply from the team. Neither FeedbackSettingsLink
+            // nor FeedbackService depends on the flag, so the row is
+            // unconditional in every build type.
+            FeedbackSettingsLink()
+
             NavigationLink {
                 LazyView { LanguageSettingsScreen() }
             } label: {
@@ -712,11 +726,6 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
             #endif
-
-            // W546+W547 — in-app feedback inbox + compose. Subtitle
-            // dynamically reports the unread maintainer-reply count so
-            // the user notices new messages without opening the screen.
-            FeedbackSettingsLink()
 
             NavigationLink {
                 LazyView { CallDesignShowcase() }
