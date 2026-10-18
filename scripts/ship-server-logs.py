@@ -1119,7 +1119,7 @@ def redact_body(orig_line, scope_safe, attrs):
     if RE_KEY_MATERIAL.search(low):
         return False, ""
 
-    if _is_sdp_line(norm):
+    if _is_sdp_line(_strip_format_chars(norm)):
         return False, ""
 
     if not scope_safe:
