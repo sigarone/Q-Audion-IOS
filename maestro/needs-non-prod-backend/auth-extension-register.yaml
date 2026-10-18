@@ -33,6 +33,16 @@ appId: com.qaudion.app
     id: "register-invite-code-field"
 - inputText: ${INVITE_CODE}
 - hideKeyboard
+# The age declaration box is mandatory ("Crea account" stays off until it is ticked) and sits
+# below the name field, so scroll to it first, then to the button.
+- scrollUntilVisible:
+    element:
+      id: "age-declaration-checkbox"
+- tapOn:
+    id: "age-declaration-checkbox"
+- scrollUntilVisible:
+    element:
+      text: "Crea account"
 - tapOn: "Crea account"
 
 # --- Recovery phrase: read the 12 words off screen ---

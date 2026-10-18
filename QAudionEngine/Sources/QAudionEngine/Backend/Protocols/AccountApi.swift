@@ -5,7 +5,10 @@ public protocol AccountApi {
     /// Phone is normalised + SHA-256-hashed and sent on the wire under the
     /// `phone_number` key (Android contract: server treats the hash as an
     /// opaque identifier). Server returns userId.
-    func register(phoneNumber: String, password: String, inviteCode: String?, displayName: String?) async throws -> String
+    /// `ageDeclared` is true when the person ticked the age declaration: the body then carries `age_declaration`
+    /// and `terms_version` (see ``AgeDeclaration``); when false it carries neither.
+    func register(phoneNumber: String, password: String, inviteCode: String?, displayName: String?,
+                  ageDeclared: Bool) async throws -> String
     /// Login with phone hash + password + device name. Returns auth credentials.
     /// The hash value travels on the wire under the `phone_number` key to match
     /// the Android/server contract (`LoginRequest`).
@@ -91,18 +94,23 @@ public protocol AccountApi {
     /// `inviteCode`/`displayName` are only meaningful when
     /// `purpose == .register` (both optional even then). `deviceName`
     /// mirrors the same field on ``login(phoneHash:password:deviceName:)``.
+    /// `ageDeclared` is true when the person ticked the age declaration on the register screen: the body then
+    /// carries `age_declaration` and `terms_version` (see ``AgeDeclaration``). It only applies to
+    /// `purpose == .register`: a login never carries them, whatever the value.
     /// Matches `POST /api/v1/auth/otp/verify`.
     func verifyOtp(phoneNumber: String, code: String, purpose: OtpPurpose, deviceName: String,
-                    inviteCode: String?, displayName: String?) async throws -> OtpAuthResult
+                    inviteCode: String?, displayName: String?, ageDeclared: Bool) async throws -> OtpAuthResult
 
     /// Extension-only registration — no phone number at all, just a PBX
     /// extension the server assigns. Email is REQUIRED (no phone means no
     /// other recovery/support channel for the account). `inviteCode` is
     /// REQUIRED too (the server runs in `registration_mode="invite"`): the
     /// normalised dashed form, see ``InviteCodeInput/wireValue(_:)``. A 403
-    /// about the code surfaces as ``BCryptoInviteCodeError``. Matches
-    /// `POST /api/v1/auth/register/extension`.
-    func registerExtensionOnly(displayName: String?, email: String, inviteCode: String) async throws -> OtpAuthResult
+    /// about the code surfaces as ``BCryptoInviteCodeError``. `ageDeclared` is true when the person ticked the
+    /// age declaration: the body then carries `age_declaration` and `terms_version` (see ``AgeDeclaration``);
+    /// when false it carries neither. Matches `POST /api/v1/auth/register/extension`.
+    func registerExtensionOnly(displayName: String?, email: String, inviteCode: String,
+                               ageDeclared: Bool) async throws -> OtpAuthResult
 
     /// Authenticated — request a verification link/token for the email on
     /// the current account. Matches `POST /api/v1/auth/email/verify-request`.

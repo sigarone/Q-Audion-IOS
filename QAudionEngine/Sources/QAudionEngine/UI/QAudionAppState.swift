@@ -55,14 +55,19 @@ public final class QAudionAppState: ObservableObject {
     }
 
     /// Register with phone number + password.
-    public func register(phoneNumber: String, password: String, inviteCode: String? = nil, displayName: String? = nil) async {
+    /// `ageDeclared` is whether the person ticked the age declaration box, handed on to the server as it is. This
+    /// view-model belongs to the engine's own demo UI, which the shipped app never constructs (see the note on the
+    /// Keychain store below) and which has no such box, so its views leave the default: they declare nothing.
+    public func register(phoneNumber: String, password: String, inviteCode: String? = nil, displayName: String? = nil,
+                         ageDeclared: Bool = false) async {
         do {
             let tempBackend = BCryptoBackendProvider(config: config)
             _ = try await tempBackend.accountApi.register(
                 phoneNumber: phoneNumber,
                 password: password,
                 inviteCode: inviteCode,
-                displayName: displayName
+                displayName: displayName,
+                ageDeclared: ageDeclared
             )
             let phoneHash = try PhoneHash.hash(phoneNumber)
             // Auto-login after registration
@@ -97,13 +102,14 @@ public final class QAudionAppState: ObservableObject {
         }
     }
 
-    /// Sovereign identity registration.
-    public func registerSovereign(displayName: String?) async {
+    /// Sovereign identity registration. `ageDeclared` is handed on to the server as it is, like in `register`.
+    public func registerSovereign(displayName: String?, ageDeclared: Bool = false) async {
         do {
             let mgr = SovereignIdentityManager()
             let identity = mgr.generateIdentity(serverUrl: config.serverUrl, displayName: displayName)
             let tempBackend = BCryptoBackendProvider(config: config)
-            let (userId, challenge) = try await mgr.registerWithServer(identity: identity, rest: tempBackend.getRestClient())
+            let (userId, challenge) = try await mgr.registerWithServer(identity: identity, rest: tempBackend.getRestClient(),
+                                                                       ageDeclared: ageDeclared)
             // Sign challenge
             let challengeData = Data(hex: challenge)
             let updatedIdentity = SovereignIdentityManager.SovereignIdentity(

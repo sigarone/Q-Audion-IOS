@@ -11,7 +11,8 @@ import SwiftUI
 ///   - "Configurazione rapida (QR)" → `FastSetupOnboardingScreen` (the
 ///     original, still-working QR-provisioning path)
 ///   - "Inizia con un codice invito" → `PhoneEntryScreen(mode: .register)`
-///     → `OtpVerificationScreen` (SMS code) → `ProfileSetupScreen`
+///     (invite code + age declaration box, both required) →
+///     `OtpVerificationScreen` (SMS code) → `ProfileSetupScreen`
 ///     (optional display name) → mandatory recovery-phrase reveal
 ///     (`RecoverySeedContainerView(mode: .setup)`)
 ///   - "Accedi con un account esistente" → `PhoneEntryScreen(mode: .login)`
@@ -19,7 +20,8 @@ import SwiftUI
 ///     profile setup / recovery reveal — those only apply to a brand-new
 ///     account)
 ///   - "Registrati senza numero (solo interno + email)" →
-///     `ExtensionOnlyRegisterScreen` → mandatory recovery-phrase reveal
+///     `ExtensionOnlyRegisterScreen` (with the same age declaration box) →
+///     mandatory recovery-phrase reveal
 ///     (display name + email are collected on that screen already, so no
 ///     separate profile-setup step)
 ///   - "Ho già una frase di recupero" → `RecoverySeedContainerView(mode: .verify)`
@@ -48,7 +50,7 @@ struct OnboardingRoot: View {
         case welcome
         case fastSetup
         case phoneEntry(PhoneEntryScreen.Mode)
-        case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, inviteCode: String?)
+        case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, inviteCode: String?, ageDeclared: Bool)
         case profileSetup
         case extensionOnlyRegister
         case extensionLogin
@@ -88,16 +90,17 @@ struct OnboardingRoot: View {
                 PhoneEntryScreen(
                     mode: mode,
                     onBack: { route = .welcome },
-                    onContinue: { _, e164, inviteCode in
-                        route = .otpVerification(e164: e164, mode: mode, inviteCode: inviteCode)
+                    onContinue: { _, e164, inviteCode, ageDeclared in
+                        route = .otpVerification(e164: e164, mode: mode, inviteCode: inviteCode, ageDeclared: ageDeclared)
                     }
                 )
-            case .otpVerification(let e164, let mode, let inviteCode):
+            case .otpVerification(let e164, let mode, let inviteCode, let ageDeclared):
                 OtpVerificationScreen(
                     appState: appState,
                     e164: e164,
                     mode: mode,
                     inviteCode: inviteCode,
+                    ageDeclared: ageDeclared,
                     onBack: { route = .phoneEntry(mode) },
                     onRegistered: { route = .profileSetup },
                     onLoggedIn: { route = .welcome }  // ContentView switches to HomeView on its own
