@@ -46,9 +46,12 @@ targets:
           - DesignSystemAccessibilityTests.swift
           - DeviceSymbolTests.swift
           - FileV2ImageCleanerTests.swift
+          - MeshReachTests.swift
           - MissedCallsBadgeTests.swift
+          - NoticeServiceTests.swift
           - PersistentCallRecordStoreTests.swift
           - PhoneEntryScreenInviteTests.swift
+          - RecoveryEnrollmentStatusTests.swift
           - RuntimeLogSinkTeeTests.swift
           - TrustEvaluationModelTests.swift
           - VoiceGuardModelTests.swift

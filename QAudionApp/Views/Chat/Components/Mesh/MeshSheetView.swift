@@ -1,5 +1,8 @@
 import SwiftUI
 import QAudionEngine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// In-chat BLE-mesh sheet: antenna on/off toggle, the proximity radar, the
 /// reachable-peer list, and a selected-peer detail card offering "transmit
@@ -25,6 +28,7 @@ struct MeshSheetView: View {
 
     @ObservedObject var runtime: MeshRuntime
     @StateObject private var viewModel: MeshSheetViewModel
+    @StateObject private var btProbe = MeshBluetoothCapabilityProbe()
     @State private var routingPreference: MeshRoutingPreference = .default
 
     let onToast: (String) -> Void
@@ -81,6 +85,9 @@ struct MeshSheetView: View {
             if let peer = viewModel.chatPeerUserId {
                 routingPreference = MeshRoutingPreferenceStore().preference(for: peer)
             }
+            // W-MESHDEAD — independent of MeshFeature.enabled on purpose,
+            // see MeshBluetoothCapabilityProbe's kdoc.
+            btProbe.start()
         }
         // Single-parameter onChange on purpose: every other call site in this
         // app uses it, and the two-parameter form is iOS 17+.
@@ -114,47 +121,138 @@ struct MeshSheetView: View {
     }
 
     private var antennaSubtitle: String {
-        switch runtime.antennaMode {
-        case nil:
-            if case .error = runtime.radioState { return "Bluetooth non disponibile" }
-            return antennaOffLabel
-        case .visibleOnly:
-            return "Visibile · raggiungibile dai vicini"
-        case .fullMesh:
-            if case .scanningOnly = runtime.radioState { return "Mesh completa · scansione in corso…" }
-            return "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili"
+        switch btProbe.status {
+        case .checking:
+            return "Verifica del Bluetooth in corso…"
+        case .unsupported:
+            return "Bluetooth non supportato su questo dispositivo"
+        case .authorizationDenied:
+            return "Permesso Bluetooth negato — tocca per aprire Impostazioni"
+        case .poweredOff:
+            // Says where the switch really is. The button below opens this
+            // app's page in Settings (see `openSettingsLabel`), which has no
+            // Bluetooth on/off switch, so the old "tocca per aprire
+            // Impostazioni" promised something the tap did not deliver.
+            return String(
+                localized: "mesh_sheet.bluetooth_off_hint",
+                defaultValue: "Bluetooth spento — accendilo dal Centro di Controllo o da Impostazioni > Bluetooth",
+                comment: "Bluetooth mesh sheet, antenna row subtitle when the phone's Bluetooth radio is switched off: tells the user where to turn it on."
+            )
+        case .ready:
+            switch runtime.antennaMode {
+            case nil:
+                if case .error = runtime.radioState { return "Bluetooth non disponibile" }
+                // W-MESHDEAD — distinguishes "radio is fine, you just haven't
+                // turned it on" from "this account can't use mesh yet at
+                // all", instead of both reading as the same flat "Spenta".
+                return MeshFeature.enabled ? antennaOffLabel : "Funzione mesh non ancora attiva per questo account"
+            case .visibleOnly:
+                return "Visibile · raggiungibile dai vicini"
+            case .fullMesh:
+                if case .scanningOnly = runtime.radioState { return "Mesh completa · scansione in corso…" }
+                return "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili"
+            }
         }
+    }
+
+    /// Whether this row has an unmet BLUETOOTH-LEVEL blocker (denied
+    /// permission or the system radio off) — distinct from the antenna
+    /// simply being off by choice, or the server flag not being on yet.
+    /// Drives whether the row shows the three antenna chips or a single
+    /// "Apri Impostazioni" action.
+    private var hasBluetoothBlocker: Bool {
+        btProbe.status == .authorizationDenied || btProbe.status == .poweredOff
+    }
+
+    private var antennaIconTint: Color {
+        if hasBluetoothBlocker || btProbe.status == .unsupported { return extras.warning }
+        return runtime.antennaMode != nil ? scheme.primary : scheme.onSurfaceVariant
     }
 
     /// Three explicit intents rather than an on/off toggle-of-a-toggle: off,
     /// `.visibleOnly` (reachable — advertise + accept incoming connections,
     /// no scan/connect-out, no relay for others), and `.fullMesh` (the
     /// original behaviour). 1:1 port of the Android sibling's `AntennaRow`.
+    ///
+    /// W-MESHDEAD (2026-08-15) — reported live: tapping "Visibile"/"Mesh
+    /// completa" never selected them, the row always read "Spenta", and
+    /// there was nothing to tap that explained why or fixed it. Root cause:
+    /// this row's three chips were the ONLY thing gating whether
+    /// CoreBluetooth ever got asked its real state at all (`BleMeshTransport`
+    /// only constructs its `CBCentralManager`/`CBPeripheralManager` inside
+    /// `start()`, downstream of the `MeshFeature.enabled` guard in
+    /// `handleAntennaSelect`) — so a denied permission or a powered-off
+    /// radio looked IDENTICAL to a server flag that simply wasn't on yet.
+    /// [btProbe] now reads the real Bluetooth state unconditionally (see its
+    /// kdoc), and this row shows a genuine fix — Settings — for the two
+    /// cases that have one, instead of three dead chips.
     private var antennaRow: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
                 Image(systemName: "dot.radiowaves.left.and.right")
-                    .foregroundStyle(runtime.antennaMode != nil ? scheme.primary : scheme.onSurfaceVariant)
+                    .foregroundStyle(antennaIconTint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Antenna").qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
                     Text(antennaSubtitle).qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
                 }
                 Spacer()
             }
-            HStack(spacing: 8) {
-                antennaModeChip(label: antennaOffLabel, selected: runtime.antennaMode == nil) {
-                    handleAntennaSelect(nil)
-                }
-                antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
-                    handleAntennaSelect(.visibleOnly)
-                }
-                antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
-                    handleAntennaSelect(.fullMesh)
+            if hasBluetoothBlocker {
+                openBluetoothSettingsButton
+            } else if btProbe.status == .unsupported {
+                EmptyView() // nothing tappable fixes this; the subtitle already says so
+            } else {
+                HStack(spacing: 8) {
+                    antennaModeChip(label: antennaOffLabel, selected: runtime.antennaMode == nil) {
+                        handleAntennaSelect(nil)
+                    }
+                    antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
+                        handleAntennaSelect(.visibleOnly)
+                    }
+                    antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
+                        handleAntennaSelect(.fullMesh)
+                    }
                 }
             }
         }
         .padding(12)
         .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    /// Both blockers open the same page: THIS app's page in Settings, the only
+    /// Settings page the public API can open. For a denied permission that is
+    /// exactly where the Bluetooth switch is, so "Apri Impostazioni" is true.
+    /// For a radio that is off it is not: the system Bluetooth switch lives in
+    /// Control Center and Settings > Bluetooth, so the label names the page
+    /// that opens instead of promising the switch (the subtitle says where the
+    /// switch is).
+    private var openSettingsLabel: String {
+        if btProbe.status == .poweredOff {
+            return String(
+                localized: "mesh_sheet.open_app_settings",
+                defaultValue: "Impostazioni dell'app",
+                comment: "Bluetooth mesh sheet: button that opens this app's page in the Settings app (shown while the phone's Bluetooth is off; it does not contain the system Bluetooth switch)."
+            )
+        }
+        return String(localized: "Apri Impostazioni")
+    }
+
+    private var openBluetoothSettingsButton: some View {
+        Button {
+            #if canImport(UIKit)
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+            #endif
+        } label: {
+            Text(openSettingsLabel)
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(scheme.primary, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 
     private func antennaModeChip(label: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -210,9 +308,11 @@ struct MeshSheetView: View {
     @ViewBuilder
     private var routingRow: some View {
         if let peer = viewModel.chatPeerUserId {
-            let reachable = viewModel.currentChatPeerNodeHex.map { hex in
-                runtime.peers.contains { $0.nodeHex == hex && $0.connected }
-            } ?? false
+            let reach: (reachable: Bool, viaBridgeNodeHex: String?) = {
+                guard let hex = viewModel.currentChatPeerNodeHex else { return (false, nil) }
+                return runtime.reach(toNodeHex: hex)
+            }()
+            let bridgeName: String? = reach.viaBridgeNodeHex.map { viewModel.label(forNodeHex: $0).name }
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
                     Image(systemName: "arrow.left.arrow.right")
@@ -220,7 +320,7 @@ struct MeshSheetView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Rete per questo contatto")
                             .qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
-                        Text(routingSubtitle(reachable: reachable))
+                        Text(routingSubtitle(reachable: reach.reachable, bridgeName: bridgeName))
                             .qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
                     }
                     Spacer()
@@ -242,15 +342,25 @@ struct MeshSheetView: View {
         }
     }
 
-    private func routingSubtitle(reachable: Bool) -> String {
+    /// `bridgeName` is non-nil only when the contact is reachable through a
+    /// device in range rather than directly — the case this used to read as
+    /// flatly unreachable, since the old boolean never consulted
+    /// `relayNodeHexes` at all.
+    private func routingSubtitle(reachable: Bool, bridgeName: String?) -> String {
         switch routingPreference {
         case .preferMesh:
+            if let bridgeName {
+                return "Bluetooth quando il contatto è vicino · ora raggiungibile tramite \(bridgeName)"
+            }
             return reachable
                 ? "Bluetooth quando il contatto è vicino · ora è raggiungibile"
                 : "Bluetooth quando il contatto è vicino · ora passa dalla rete"
         case .networkOnly:
             return "Sempre dalla rete pubblica"
         case .meshOnly:
+            if let bridgeName {
+                return "Solo Bluetooth · raggiungibile tramite \(bridgeName)"
+            }
             return reachable
                 ? "Solo Bluetooth · il contatto è raggiungibile"
                 : "Solo Bluetooth · in attesa che il contatto sia vicino"

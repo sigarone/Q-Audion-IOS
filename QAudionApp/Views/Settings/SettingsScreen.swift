@@ -66,6 +66,19 @@ struct SettingsScreen: View {
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
+    /// Gate for the Voice-as-Key reset row. Read once in `.task` rather
+    /// than inline in the section body, because `hasTemplate` is a
+    /// synchronous Keychain query and this root re-renders often. The
+    /// reset itself flips it false, which is what makes the row vanish.
+    @State private var ownerVoiceEnrolled: Bool = false
+    @State private var showVoiceResetConfirm: Bool = false
+    /// Drives `recoveryBanner`. Re-read on every `.onAppear` (not just
+    /// once) because Settings is exactly where the user goes to run the
+    /// enrolment flow and come back — Android's `refreshRecoveryBanner()`
+    /// on route entry is the same idea. False until the first read, so the
+    /// banner never flashes before the check has run.
+    @State private var recoveryReminderNeeded: Bool = false
+
     /// W118+W134: footer with version + build + uptime tagline.
     /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
     /// Uptime is computed from a process-launch timestamp captured
@@ -201,6 +214,12 @@ struct SettingsScreen: View {
                     SecurityChipsRow()
                         .padding(.top, 8)
 
+                    if recoveryReminderNeeded {
+                        recoveryBanner
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                    }
+
                     accountSection
                     sicurezzaSection
                     privacySection
@@ -264,6 +283,14 @@ struct SettingsScreen: View {
         // the culprit is that sub-screen's init.
         .onAppear {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
+            recoveryReminderNeeded = RecoveryEnrollmentStatus.needsReminder(userId: appState.currentUserId ?? "")
+        }
+        // .task rather than inline in sicurezzaSection's body: hasTemplate
+        // is a synchronous SecItemCopyMatching and this root re-renders on
+        // every appState change. .task rather than .onAppear so re-entering
+        // after enrolling in VoiceEnrollmentScreen picks up the new state.
+        .task {
+            ownerVoiceEnrolled = VoiceprintStore().hasTemplate(contactId: VoiceprintStore.deviceOwnerId)
         }
     }
 
@@ -320,6 +347,49 @@ struct SettingsScreen: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 56)
+    }
+
+    // MARK: - Recovery banner
+
+    /// Non-dismissable nudge for an account that reached the app without a
+    /// recovery mnemonic on record. The onboarding reveal is mandatory, so
+    /// most accounts never see this — it exists for the path its own
+    /// `RecoverySeedContainer.confirmSetup` documents as deliberate:
+    /// `recoverySetup` can fail server-side while the account itself is
+    /// already created and usable, and the reveal lets the user in anyway
+    /// rather than stranding them. This is the second net for that account.
+    /// Not dismissable, on purpose: it stays until enrolment actually
+    /// completes, unlike the chat-list banner below it, which is a
+    /// reminder of the same fact and CAN be dismissed. That is only safe
+    /// because it shows on positive evidence (`RecoveryEnrollmentStatus
+    /// .needsReminder`), never on the mere absence of a record.
+    private var recoveryBanner: some View {
+        NavigationLink {
+            LazyView { RecoverySetupHost(appState: appState) }
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "lock.trianglebadge.exclamationmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(extras.riskMedium)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Configura la frase di recupero")
+                        .qaudionStyle(type.labelMedium)
+                        .foregroundStyle(extras.riskMedium)
+                    Text("12 parole · l'unica via per non perdere l'account.")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(extras.riskMedium.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Sections
@@ -420,6 +490,49 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // The only way to discard the device-owner voice key. Until now
+            // there was none: VoiceprintStore.delete has existed and been
+            // implemented down to the Keychain the whole time, with exactly
+            // zero callers, and the enrolment screen offers Inizia /
+            // Registra / Stop / Fatto / Riprova and no discard. A voiceprint
+            // learned from the wrong voice was permanent on this device —
+            // and it is announced to contacts as an identity claim.
+            //
+            // Shown only when a template exists; there is nothing to reset
+            // otherwise, and the row disappearing is what confirms the
+            // reset worked.
+            if ownerVoiceEnrolled {
+                Button {
+                    showVoiceResetConfirm = true
+                } label: {
+                    SettingsRow(icon: "arrow.counterclockwise",
+                                iconColor: .orange,
+                                title: "Reimposta Voice-as-Key",
+                                subtitle: "Cancella il modello vocale registrato su questo dispositivo")
+                }
+                .buttonStyle(.plain)
+                // Anchored to the Button, not the section, so the iPad
+                // popover points at the right row — same shape as the
+                // sign-out confirmation in this file.
+                .confirmationDialog(
+                    "Reimpostare Voice-as-Key?",
+                    isPresented: $showVoiceResetConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reimposta", role: .destructive) {
+                        VoiceprintStore().delete(contactId: VoiceprintStore.deviceOwnerId)
+                        ownerVoiceEnrolled = false
+                        snackbar?.show(.init(
+                            text: "Voice-as-Key reimpostato.",
+                            severity: .info,
+                            durationSeconds: 3))
+                    }
+                    Button("Annulla", role: .cancel) { }
+                } message: {
+                    Text("Il modello vocale salvato su questo dispositivo viene cancellato. Lo sblocco vocale si disattiva e ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.")
+                }
+            }
+
             NavigationLink {
                 LazyView { TransportSettingsScreen(state: appState) }
             } label: {
@@ -430,16 +543,30 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // The sovereign-only video policy had no entry point at all.
+            // Every piece of it — the Keychain flag, the capability filter
+            // that strips vkey-v1, the inbound-video rejection — was already
+            // implemented and consumed, and `setSovereignOnly` had zero
+            // callers, so the flag could never leave its default.
+            NavigationLink {
+                LazyView { SovereignOnlySettingsScreen(appState: appState) }
+            } label: {
+                SettingsRow(icon: "checkmark.shield",
+                            iconColor: scheme.primary,
+                            title: "Modalità Solo-sovrano",
+                            subtitle: "Disabilita il video cifrato sul telefono")
+            }
+            .buttonStyle(.plain)
+
             // W515: Recovery seed enrollment — 1:1 parity with Android
             // RecoveryEnrollRoute. Generates a 12-word BIP-39 mnemonic,
             // computes SHA-256 hash, submits to AccountApi.recoverySetup.
             // RecoverySeedContainer + RecoverySeedView live in QAudionEngine.
+            // RecoverySetupHost keeps ONE container (one phrase) for the
+            // life of the pushed screen; building it in this closure rolled a
+            // new phrase on every re-render of Settings.
             NavigationLink {
-                LazyView {
-                    RecoverySeedContainerView(
-                        container: RecoverySeedContainer(mode: .setup, appState: appState)
-                    )
-                }
+                LazyView { RecoverySetupHost(appState: appState) }
             } label: {
                 SettingsRow(icon: "arrow.counterclockwise.icloud",
                             iconColor: scheme.primary,
@@ -543,6 +670,29 @@ struct SettingsScreen: View {
     private var infoSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
+
+            // Server-pushed service notices. The server side of this
+            // channel (encrypted per-device fan-out, ack endpoint) has
+            // existed the whole time and Android already polls it —
+            // NoticeService.swift ports that reader rather than inventing
+            // a subsystem. First row in INFO, ahead of Feedback, matching
+            // Android's ordering (SettingsScreen.kt). Sub-view with its own
+            // unread-dot observation, see NoticeSettingsLink.
+            NoticeSettingsLink()
+
+            // W546+W547 — in-app feedback inbox + compose. Subtitle
+            // dynamically reports the unread maintainer-reply count so
+            // the user notices new messages without opening the screen.
+            //
+            // Lives here and not in SVILUPPATORE, which is reached only
+            // through `#if QAUDION_DEV_TOOLS`. That flag is off in the build
+            // that ships, so with the row in SVILUPPATORE the shipped app had
+            // no in-app support channel: no way to report a problem and no
+            // way to read a reply from the team. Neither FeedbackSettingsLink
+            // nor FeedbackService depends on the flag, so the row is
+            // unconditional in every build type.
+            FeedbackSettingsLink()
+
             NavigationLink {
                 LazyView { LanguageSettingsScreen() }
             } label: {
@@ -640,11 +790,6 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
             #endif
-
-            // W546+W547 — in-app feedback inbox + compose. Subtitle
-            // dynamically reports the unread maintainer-reply count so
-            // the user notices new messages without opening the screen.
-            FeedbackSettingsLink()
 
             NavigationLink {
                 LazyView { CallDesignShowcase() }

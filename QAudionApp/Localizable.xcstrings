@@ -40968,6 +40968,90 @@
         }
       }
     },
+    "mesh_sheet.bluetooth_off_hint": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, antenna row subtitle when the phone's Bluetooth radio is switched off: tells the user where to turn it on.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth spento — accendilo dal Centro di Controllo o da Impostazioni > Bluetooth"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth is off — turn it on from Control Center or Settings > Bluetooth"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth apagado — actívalo desde el Centro de control o en Ajustes > Bluetooth"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth désactivé — active-le depuis le Centre de contrôle ou dans Réglages > Bluetooth"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth ist aus — schalten Sie es im Kontrollzentrum oder unter Einstellungen > Bluetooth ein"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth desligado — ative-o na Central de Controle ou em Ajustes > Bluetooth"
+          }
+        }
+      }
+    },
+    "mesh_sheet.open_app_settings": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: button that opens this app's page in the Settings app (shown while the phone's Bluetooth is off; it does not contain the system Bluetooth switch).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impostazioni dell'app"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App settings"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajustes de la app"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réglages de l'app"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App-Einstellungen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajustes do app"
+          }
+        }
+      }
+    },
     "%lld caratteri": {
       "extractionState": "manual",
       "localizations": {

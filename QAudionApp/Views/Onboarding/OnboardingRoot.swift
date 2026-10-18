@@ -160,6 +160,17 @@ struct OnboardingRoot: View {
     /// created server-side would be worse than letting them into the app
     /// and retrying enrollment later.
     private func startRecoveryReveal() {
+        // Both callers are brand-new registrations (profile setup after the
+        // SMS-OTP register, and the extension-only register), never a
+        // sign-in. Record that this account starts out without a phrase on
+        // record: it is the only evidence the recovery reminders act on
+        // (`RecoveryEnrollmentStatus`), and a successful `confirmSetup`
+        // answers it. Set before the phrase is shown so that a failed
+        // `recoverySetup`, or the app being closed mid-reveal, leaves it
+        // standing.
+        if let uid = appState.currentUserId {
+            RecoveryEnrollmentStatus.markAwaitingEnrollment(userId: uid)
+        }
         recoveryContainer = RecoverySeedContainer(
             mode: .setup,
             appState: appState,

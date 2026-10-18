@@ -3955,6 +3955,15 @@ final class AppState: ObservableObject {
             self?.handleReachabilityWakeup()
         }
 
+        // Service-notice inbox. Same wiring shape as FeedbackService just
+        // above — the server side and Android's reader both already exist
+        // (see NoticeService.swift's header), this is only the boot call
+        // that was missing.
+        NoticeService.shared.start(
+            serverUrl: serverUrl,
+            getToken: { [weak self] in self?.authService.loadToken() }
+        )
+
         // W559/W561 — cross-platform bug report service. Volume-gesture
         // trigger + auto-detection hook. Primitives-only API per CLAUDE.md
         // rule #16 — `getActiveCallId`/`getDiagSnapshot` do all the
@@ -17311,6 +17320,9 @@ final class AppState: ObservableObject {
         // is already wiped by `LocalCryptoWipe.wipeAll()`; the persisted "seen up to" mark is not, so it starts
         // again from now here, in the one function every wipe path calls.
         MissedCallsBadge.shared.resetForAccountChange()
+        // The service-notice inbox is a singleton polled from boot: its list and unread dot belong to the account
+        // that left and must not show under the next one.
+        NoticeService.shared.resetForAccountChange()
     }
 
     /// Idempotent: returns the live call engine, building it first when there

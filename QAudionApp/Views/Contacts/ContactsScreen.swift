@@ -157,6 +157,9 @@ struct ContactsScreen: View {
         .onChange(of: appState.orphanPeerIds) { _ in
             updateSortedContacts()
         }
+        .onChange(of: blockedIds) { _ in
+            updateSortedContacts()
+        }
         .onChange(of: appState.presenceService.statuses) { _ in
             updateSortedContacts()
         }
@@ -430,6 +433,18 @@ struct ContactsScreen: View {
     private func updateSortedContacts() {
         let unsorted = container.viewModel.filteredItems
             .filter { !shouldHideContact(appState.orphanPeerIds.contains($0.userId)) }
+            // A blocked peer belongs in BLOCCATI and nowhere else. Until
+            // now blocking one from its detail screen left it sitting in
+            // TUTTI as well, rendered with live chat, call and video
+            // buttons (three working ways to reach someone the user just
+            // blocked), and counted in the "ONLINE · n/m" header.
+            //
+            // Read-time, for the same reason the orphan filter above is:
+            // ContactsListContainer builds its view model once and does not
+            // observe the change, so a filter baked in there would keep a
+            // freshly-blocked contact visible. `blockedIds` is @State, and
+            // the .onChange(of: blockedIds) above re-runs this on unblock.
+            .filter { !blockedIds.contains($0.userId) }
 
         switch sortMode {
         case .nameAsc:

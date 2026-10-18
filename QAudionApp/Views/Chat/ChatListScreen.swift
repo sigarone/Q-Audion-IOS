@@ -86,6 +86,21 @@ struct ChatListScreen: View {
     /// cites in its own commit for the full evidence trail.
     @State private var showConnectingBanner = false
     @State private var connectingBannerTask: Task<Void, Never>?
+    /// Whether the recovery reminder applies to this account
+    /// (`RecoveryEnrollmentStatus.needsReminder`); nil = not checked yet.
+    /// Read the first time this screen's `.onAppear` fires and then only
+    /// when the banner's own enrolment sheet closes — this is the SwiftUI
+    /// approximation of "checked when the view model is constructed"
+    /// (`ConversationListContainer` has no `AppState` reference to do the
+    /// check itself). Deliberately NOT re-read on every reappearance:
+    /// Android's `ChatListViewModel` (ChatListViewModel.kt:163-178) checks
+    /// once at construction too, so re-checking here would make the banner
+    /// vanish the instant the user enrols from Settings and taps back —
+    /// behaviour shipped Android does not have.
+    @State private var recoveryReminderNeeded: Bool?
+    @State private var recoveryBannerDismissedLocally = false
+    /// Drives the sheet the banner's own "Configura" button opens.
+    @State private var showingRecoveryFromBanner = false
     /// W40: gruppo creato (non-nil → presenta GroupChatScreen full-screen).
     @State private var openedGroup: OpenedGroup? = nil
     /// W139: pending conversation export — non-nil triggers the share
@@ -318,6 +333,28 @@ struct ChatListScreen: View {
         )
     }
 
+    /// Whether to show the "configura la frase di recupero" nudge. False
+    /// while `recoveryReminderNeeded` is still nil (before the one-time
+    /// check has run) so the banner never flashes on the very first frame.
+    private var recoveryBannerVisible: Bool {
+        guard recoveryReminderNeeded == true else { return false }
+        return !recoveryBannerDismissedLocally
+    }
+
+    /// Re-reads the reminder state for the signed-in account. Called once on
+    /// first appearance and whenever the enrolment sheet closes, by whatever
+    /// means (see the `.sheet(isPresented:onDismiss:)` below).
+    private func refreshRecoveryReminder() {
+        let uid = appState.currentUserId ?? ""
+        recoveryReminderNeeded = RecoveryEnrollmentStatus.needsReminder(userId: uid)
+        recoveryBannerDismissedLocally = RecoveryEnrollmentStatus.isBannerDismissed(userId: uid)
+    }
+
+    private func dismissRecoveryReminder() {
+        RecoveryEnrollmentStatus.dismissBanner(userId: appState.currentUserId ?? "")
+        recoveryBannerDismissedLocally = true
+    }
+
     /// Compact "X min/h fa" formatter — evita di trascinare in
     /// dependency aggiuntive solo per questa label.
     private nonisolated func formatRelative(_ date: Date) -> String {
@@ -364,6 +401,23 @@ struct ChatListScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
                 List {
+                    // Dismissable reminder to set up the recovery phrase; the
+                    // Settings banner is its non-dismissable backstop. See
+                    // `RecoveryReminderBanner` for the look and the button
+                    // styling, `RecoveryEnrollmentStatus` for when it shows.
+                    if recoveryBannerVisible {
+                        Section {
+                            RecoveryReminderBanner(
+                                onConfigure: { showingRecoveryFromBanner = true },
+                                onDismiss: { dismissRecoveryReminder() }
+                            )
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 12,
+                                                      bottom: 8, trailing: 12))
+                        }
+                    }
+
                     if let banner = adminBanner {
                         Section {
                             adminBannerView(banner)
@@ -470,6 +524,14 @@ struct ChatListScreen: View {
             container.setSearchQuery(newValue)
         }
         .refreshable { container.loadFromStore() }
+        // Recovery-nudge check — see the property doc on
+        // `recoveryReminderNeeded` for why this is guarded to run only
+        // once per screen lifetime rather than every reappearance.
+        .onAppear {
+            if recoveryReminderNeeded == nil {
+                refreshRecoveryReminder()
+            }
+        }
         // GAP FIX — app-launch group reconciliation. The chat list is the
         // first screen shown after login/launch; on each appear, best-effort
         // GET /api/v1/groups (every group the server says this account
@@ -530,6 +592,26 @@ struct ChatListScreen: View {
             // Consume the deep link so a stale value doesn't re-fire
             // on the next view re-render.
             appState.pendingDeepLinkConversationId = nil
+        }
+        // `onDismiss` runs for EVERY way the sheet goes away — the Done and
+        // Annulla buttons, but also a swipe down — so the banner follows the
+        // real outcome of the enrolment whichever way the user leaves.
+        // RecoverySetupHost, not an inline container: a container built in
+        // this closure would roll a new phrase on every re-render of the list.
+        .sheet(isPresented: $showingRecoveryFromBanner, onDismiss: {
+            refreshRecoveryReminder()
+        }) {
+            NavigationStack {
+                RecoverySetupHost(
+                    appState: appState,
+                    onDismiss: { showingRecoveryFromBanner = false }
+                )
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Annulla") { showingRecoveryFromBanner = false }
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showingNewConversation) {
             NavigationStack {

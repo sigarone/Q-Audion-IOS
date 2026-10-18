@@ -529,9 +529,19 @@ final class ChatContainer: ObservableObject {
         let nodeHexes = MeshFeature.nodeHexes(forContact: contact)
         guard !nodeHexes.isEmpty else { return nil }
         let preference = MeshRoutingPreferenceStore().preference(for: peerUserId)
-        let reachablePeer = MeshRuntime.shared.peers.first { nodeHexes.contains($0.nodeHex) && $0.connected }
+        // Direct OR a single bridge hop — see `MeshRuntime.reach`'s doc for
+        // why this used to be direct-only. `sendData`'s own
+        // `topology.nextHop(for:)` already knows how to route to a bridged
+        // contact; the auto-routing decision below simply never asked, so a
+        // message under "Preferisci Bluetooth"/"Solo Bluetooth" fell
+        // through to the network (or queued forever, under mesh-only) for
+        // any contact that was one hop away rather than directly visible.
+        // A directly connected hex still wins over a bridged one.
+        let directPeer = MeshRuntime.shared.peers.first { nodeHexes.contains($0.nodeHex) && $0.connected }
+        let bridgedHex: String? = nodeHexes.first(where: { MeshRuntime.shared.reach(toNodeHex: $0).reachable })
+        let reachableHex: String? = directPeer?.nodeHex ?? bridgedHex
         switch meshRoutingDecision(
-            preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachablePeer != nil
+            preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachableHex != nil
         ) {
         case .sendOverMesh, .queueForMesh:
             // queueForMesh only arises from "solo Bluetooth": that choice asks
@@ -547,7 +557,7 @@ final class ChatContainer: ObservableObject {
             // advertising right now (a source may have gone stale); fall
             // back to any known hex when none is currently reachable, same
             // as the original single-source behavior for the queued case.
-            let targetHex = reachablePeer?.nodeHex ?? nodeHexes.first!
+            let targetHex = reachableHex ?? nodeHexes.first!
             return MeshTargetSelection(nodeHex: targetHex, displayName: contact.displayName)
         case .sendOverNetwork:
             return nil
