@@ -12,13 +12,19 @@ or the byte list 1..32) -- never a real key.
                        enum values under ANY key) must not ship.
   Finding 3 (medium)   `secret [..]` / `slat [..]` / `salt [..]` / `raw_key`
                        / `derived_key` lines are dropped whole, whatever the
-                       bracket contains.
+                       bracket contains -- also with a zero-width / format
+                       character hidden inside the key word. The same holds
+                       for the words of the SAS / plaintext DROP-list.
   Finding 4 (low)      identity words are not waived by a measure suffix
                        (peerSessionIdMs).
   + sibling holes found while fixing them (kv carrier keys / empty-value keys /
     short kv values, number+letter tokens, comma-number chunks, homoglyphs,
     1-2 letter blocks, indexed kv bytes).
   + benign, readable lines must still ship (no over-blocking).
+  + compressed IPv6 addresses ('::' form) are scrubbed.
+
+The server leg (scripts/ship-server-logs.py) has its own file:
+test_ship_server_redactor_hardening.py.
 
 Run against the current script:   python scripts/test_ship_ios_redactor_hardening.py
 Run against another version:      python scripts/test_ship_ios_redactor_hardening.py path/to/old-ship-ios-logs.py
@@ -266,12 +272,66 @@ for tag in ("stdout", "crypto", "call"):
                  "state=active DERIVED-KEY [%s] ice=connected" % w1,
                  "state=active session_key [%s] ice=connected" % w1,
                  "state=active root_keys (%s) ice=connected" % w1,
-                 "secret [%s] len 32" % enc(bytes(range(1, 33)), string.ascii_uppercase)[:22]):
+                 "secret [%s] len 32" % enc(bytes(range(1, 33)), string.ascii_uppercase)[:22],
+                 # format characters (zero-width space / joiner, word joiner, BOM)
+                 # inside the key word: NFKC leaves them in, they must not defeat
+                 # the rule.
+                 "state=active sec\u200bret [%s] ice=connected" % w1,
+                 "state=active sa\u200dlt (%s) ice=connected" % w1,
+                 "state=active raw\u200b_key computed ice=connected",
+                 "state=active de\u2060rived_key ok ice=connected",
+                 "state=active sl\ufeffat {ab:cd} ice=connected",
+                 "state=active session_ke\u200by [%s] ice=connected" % w1):
         check(red(line, tag) == "", "F3[%s]: line was not dropped: %r" % (tag, line))
 check(red("state=active ice=connected role=caller") != "", "F3: plain telemetry dropped")
 kvbytes = " ".join("k%d=%d" % (i, b) for i, b in enumerate(bytes(range(1, 33))))
 check(red("state=active " + kvbytes) == "", "F3: indexed key=value bytes shipped")
 check(red("state=active k0=1 k1=2 k2=3 k3=4 k4=5") != "", "F3: 5 indexed tokens must still ship")
+# a byte list with a zero-width character after every separator is still a list
+check(red("state=active " + ",\u200b".join(str(b) for b in range(1, 33))) == "",
+      "F3: zero-width separated byte list shipped")
+
+# ---------------------------------------------------------------------------
+# SAS / plaintext DROP-list words with a format character hidden inside. The DROP-list
+# is matched on the string with the format characters removed, like the key-material
+# rules above: the whole line is DROPPED, not just reduced to its attribute summary
+# (the free-word gate alone would reduce it, and lets "msg<ZWSP>=" and "chat<ZWSP>:"
+# through untouched). The word list is a literal on purpose (not read from the script
+# under test): a word removed from the script fails here.
+# ---------------------------------------------------------------------------
+DROP_WORDS = ["sas", "safety number", "safety-number", "emoji", "plaintext", "cleartext",
+              "decrypted", "transcript", "message body", "messagebody", "chat:", "msg=",
+              "verify words", "verification words", "verify code", "device_name",
+              "devicename", "ssid"]
+FORMAT_CHARS = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", "\u200e"]
+DROP_TEMPLATES = ("state=active %s ice=connected", "%s state=active",
+                  "state=active ice=connected %s")
+for word in DROP_WORDS:
+    # control: written plainly the word drops the line
+    check(red("state=active %s ice=connected" % word) == "",
+          "DROPLIST: %r does not drop the line even written plainly" % word)
+    survived = []
+    for pos in range(1, len(word)):
+        # a zero-width space at every position; every other format character in the middle
+        for fc in (FORMAT_CHARS if pos == len(word) // 2 else FORMAT_CHARS[:1]):
+            split = word[:pos] + fc + word[pos:]
+            for tpl in DROP_TEMPLATES:
+                if red(tpl % split) != "":
+                    survived.append(tpl % split)
+    check(not survived, "DROPLIST: %r split by a format character was not dropped: %r"
+          % (word, survived[:1]))
+check(red("state=active msg\u200b= ice=connected") == "", "DROPLIST: 'msg<ZWSP>=' shipped")
+check(red("state=active ch\u200bat: ice=connected") == "", "DROPLIST: 'chat<ZWSP>:' shipped")
+check(red("state=active ice=connected role=caller") != "", "DROPLIST: plain telemetry dropped")
+
+# ---------------------------------------------------------------------------
+# Compressed IPv6 addresses ('::' form): the full-form rule cannot match them.
+# Documentation-range addresses only (RFC 3849), never real ones.
+# ---------------------------------------------------------------------------
+for ip6 in ("2001:db8::1", "fe80::1", "::1", "2001:db8::", "2001:db8:85a3::8a2e:370:7334"):
+    for tpl in ("ip=%s role=caller", "peer %s state=active", "from %s ice=connected"):
+        body = red(tpl % ip6)
+        check(ip6 not in body, "IPV6: %r survived in %r" % (ip6, body))
 
 # ---------------------------------------------------------------------------
 # Finding 4 (low): identity word before the measure suffix

@@ -8,7 +8,18 @@ base64/base64url/base62/base58/base52/base32/base26, hex, JWT, uuid after id=,
 IPv4/IPv6, e-mail, phone, PSK words, SAS words, decimal/hex byte lists with 14
 separators, indexed key=value bytes, secrets cut into blocks of 3-11 letters
 between structural tokens, kv key/value/empty-value carriers, vtag/version/epoch
-channels, unicode look-alikes (Cyrillic, zero-width, full-width), joined tokens.
+channels, unicode look-alikes (Cyrillic, zero-width, full-width), joined tokens,
+pronounceable consonant-vowel syllable blocks, and key-material words
+(secret / slat / salt / raw_key / ...) followed by a bracket group, and words of the
+whole-record DROP-list (password, pubkey, plaintext, msg=, ...), both also with a
+zero-width / format character hidden inside the word. These families carry ONE or
+two short blocks (see short_blocks()): the free-word gate lets such a block through,
+so a family fails when its rule is bypassed. On the server leg the two format-
+character families leak 55 of 4000 cases (seed 7) when the redactor does not strip
+format characters, and none when it does. The phone leg never ships a bare unknown
+word (MAX_UNKNOWN_BARE_WORDS = 0), so there the same rules are defence in depth that
+this fuzz cannot see: test_ship_ios_redactor_hardening.py checks them (the line is
+dropped, not just reduced to its attribute summary).
 
 A case LEAKS when MORE THAN 50% of its secret-bearing characters survive verbatim
 in the shipped body. Exit 0 = no leak (families in KNOWN_OPEN are only reported).
@@ -119,6 +130,77 @@ def letters_family(alpha, label):
     fams["blocks_" + label] = f
 for alpha, label in ((B26, "b26"), (B26U, "b26U"), (B52, "b52"), (B62, "b62"), (B58, "b58"), (B32, "b32")):
     letters_family(alpha, label)
+
+# consonant-vowel syllables: an encoder whose output is pronounceable, so no
+# lexical rule can tell it from a word; only the per-body caps bound it.
+SYL = [c + v for c in "bdfgklmnprstvz" for v in "aeiou"]
+
+def enc_syl(data):
+    n = int.from_bytes(data, "big"); out = []
+    while n:
+        n, r = divmod(n, len(SYL)); out.append(SYL[r])
+    return "".join(reversed(out))
+
+@fam("syllable_blocks")
+def _(sec):
+    bl = chunks(enc_syl(sec), rnd.choice([6, 8, 9, 10, 11]))
+    mode = rnd.choice(["fill", "kvfill", "plain"])
+    pre = rnd.choice(["", "state=active ", "ice=connected role=caller "])
+    return pre + join_with_fill(bl, mode) + rnd.choice(["", " ice=connected"]), bl
+
+KEY_WORDS = ["secret", "slat", "salt", "raw_key", "session_key", "root_keys", "derived_key", "mac_key"]
+FORMAT_CHARS = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"]
+# structural words around the line under test (they pass every gate)
+PRE_NEUTRAL = ["", "state=active ", "ice=connected ", "ice=connected role=caller ", "peer "]
+SUF_NEUTRAL = ["", " len 32", " ice=connected", " state=active", " ok"]
+
+def short_blocks():
+    """The secret-bearing part of the key-word / DROP-list lines: one or two (mostly
+    lower-case) pronounceable blocks of 3-5 letters. Such a block is a plausible word
+    for the free-word gate and one or two of them stay within its per-body cap of
+    unknown words, so ONLY the key-material rule / the DROP-list stands between the
+    block and the shipped body: when that rule is bypassed (a format character hidden
+    in the word) the block ships. Longer or upper-case blocks are stopped by the gate
+    anyway, which made these families blind to the rules."""
+    case = rnd.choice([str.lower, str.lower, str.lower, str.upper])
+    return [case("".join(rnd.choice(SYL) for _ in range(3))[:rnd.choice([3, 4, 5])])
+            for _ in range(rnd.choice([1, 1, 1, 2]))]
+
+def split_word(w):
+    """w with one format character (ZWSP, ZWNJ, ZWJ, word joiner, BOM, soft hyphen) inside."""
+    j = rnd.randrange(1, len(w))
+    return w[:j] + rnd.choice(FORMAT_CHARS) + w[j:]
+
+def keyword_line(zero_width):
+    w = rnd.choice(KEY_WORDS)
+    if zero_width:
+        w = split_word(w)
+    br = rnd.choice(["[]", "()", "{}", "<>"])
+    words = short_blocks()
+    inner = rnd.choice([":", " ", ","]).join(words)
+    line = "%s%s %s%s%s%s" % (rnd.choice(PRE_NEUTRAL), w, br[0], inner, br[1], rnd.choice(SUF_NEUTRAL))
+    return line, words
+
+@fam("keyword_group")
+def _(sec):
+    return keyword_line(False)
+
+@fam("keyword_group_zerowidth")
+def _(sec):
+    return keyword_line(True)
+
+# words of the whole-record DROP-list of each leg (any hit drops the line), with a
+# format character hidden inside: the word is no longer a substring of the line.
+DROP_WORDS = (["pubkey", "private", "secret", "password", "token=", "identity", "fingerprint",
+               "ciphertext", "plaintext", "decrypted", "transcript", "bearer"] if IS_SERVER else
+              ["plaintext", "cleartext", "decrypted", "transcript", "emoji", "message body",
+               "msg=", "chat:", "ssid", "device_name"])
+
+@fam("droplist_zerowidth")
+def _(sec):
+    words = short_blocks()
+    return "%s%s %s%s" % (rnd.choice(PRE_NEUTRAL), split_word(rnd.choice(DROP_WORDS)),
+                          " ".join(words), rnd.choice(SUF_NEUTRAL)), words
 
 @fam("base64_bare")
 def _(sec):
@@ -359,10 +441,11 @@ def leak_fraction(body, blocks):
 
 KNOWN_OPEN = {"bytes_single_interleaved"}
 if IS_SERVER:
-    # the server leg has never had the key-byte list / compressed-IPv6 rules of the
-    # iOS leg (not part of the 2026-09-24 red-team findings; server lines are
-    # server-authored). Reported, not asserted.
-    KNOWN_OPEN |= {"bytelist_dec", "bytelist_hex", "hex_spaced_pairs", "ipv6"}
+    # the server leg has never had the key-byte list rules of the iOS leg (not part
+    # of the 2026-09-24 red-team findings; server lines are server-authored).
+    # Reported, not asserted. (Compressed IPv6 was in this set until the rule of
+    # the iOS leg was ported.)
+    KNOWN_OPEN |= {"bytelist_dec", "bytelist_hex", "hex_spaced_pairs"}
 THRESH = 0.5001   # a case LEAKS when MORE THAN 50% of its secret-bearing characters survive verbatim
 stats = collections.defaultdict(lambda: [0, 0, 0.0, 0.0])   # n, leaks, max_frac, sum_frac
 leaks = []
@@ -388,6 +471,12 @@ for name in names:
     n, l, mx, sm = stats[name]
     print("%-28s %5d %6d %8.2f %8.3f%s" % (name, n, l, mx, sm / max(n, 1), "   (known-open, not asserted)" if name in KNOWN_OPEN else ""))
 print("TOTAL cases=%d leaks(>%.0f%%)=%d" % (N, THRESH * 100, tot_leaks))
+_open = sorted((k, v[1]) for k, v in stats.items() if k in KNOWN_OPEN and v[1])
+if _open:
+    print("KNOWN-OPEN (reported, NOT asserted) families that leak: "
+          + ", ".join("%s=%d" % kv for kv in _open))
+_worst = max((v[2], k) for k, v in stats.items() if k not in KNOWN_OPEN)
+print("worst asserted family: %s maxfrac=%.2f (a case leaks above %.2f)" % (_worst[1], _worst[0], THRESH - 0.0001))
 if "--show" in sys.argv:
     for name, line, body in leaks[:10]:
         print("  LEAK[%s] line=%r -> body=%r" % (name, line, body))
