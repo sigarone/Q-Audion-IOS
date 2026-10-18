@@ -164,7 +164,7 @@ public final class NoticeService: ObservableObject {
 
     /// The pure core of a poll: what the inbox shows, given what the server
     /// sent and what was already shown.
-    ///   - an envelope whose `expires_ms` is not strictly after `nowMs` is
+    ///   - an envelope whose `expires_ms` is greater than 0 and not after `nowMs` is
     ///     dropped, so a notice stops appearing the moment it expires;
     ///   - an envelope `decrypt` cannot open is dropped on its own, without
     ///     failing the rest;
@@ -181,7 +181,7 @@ public final class NoticeService: ObservableObject {
         // must never crash the poll, even though it should not occur.
         let previousById = Dictionary(previous.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
         return envelopes
-            .filter { $0.expires_ms > nowMs }
+            .filter { $0.expires_ms <= 0 || $0.expires_ms > nowMs }
             .compactMap { env in
                 guard let body = decrypt(env) else { return nil }
                 return ServiceNotice(
