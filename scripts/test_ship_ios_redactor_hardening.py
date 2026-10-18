@@ -13,7 +13,8 @@ or the byte list 1..32) -- never a real key.
   Finding 3 (medium)   `secret [..]` / `slat [..]` / `salt [..]` / `raw_key`
                        / `derived_key` lines are dropped whole, whatever the
                        bracket contains -- also with a zero-width / format
-                       character hidden inside the key word.
+                       character hidden inside the key word. The same holds
+                       for the words of the SAS / plaintext DROP-list.
   Finding 4 (low)      identity words are not waived by a measure suffix
                        (peerSessionIdMs).
   + sibling holes found while fixing them (kv carrier keys / empty-value keys /
@@ -289,6 +290,39 @@ check(red("state=active k0=1 k1=2 k2=3 k3=4 k4=5") != "", "F3: 5 indexed tokens 
 # a byte list with a zero-width character after every separator is still a list
 check(red("state=active " + ",\u200b".join(str(b) for b in range(1, 33))) == "",
       "F3: zero-width separated byte list shipped")
+
+# ---------------------------------------------------------------------------
+# SAS / plaintext DROP-list words with a format character hidden inside. The DROP-list
+# is matched on the string with the format characters removed, like the key-material
+# rules above: the whole line is DROPPED, not just reduced to its attribute summary
+# (the free-word gate alone would reduce it, and lets "msg<ZWSP>=" and "chat<ZWSP>:"
+# through untouched). The word list is a literal on purpose (not read from the script
+# under test): a word removed from the script fails here.
+# ---------------------------------------------------------------------------
+DROP_WORDS = ["sas", "safety number", "safety-number", "emoji", "plaintext", "cleartext",
+              "decrypted", "transcript", "message body", "messagebody", "chat:", "msg=",
+              "verify words", "verification words", "verify code", "device_name",
+              "devicename", "ssid"]
+FORMAT_CHARS = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", "\u200e"]
+DROP_TEMPLATES = ("state=active %s ice=connected", "%s state=active",
+                  "state=active ice=connected %s")
+for word in DROP_WORDS:
+    # control: written plainly the word drops the line
+    check(red("state=active %s ice=connected" % word) == "",
+          "DROPLIST: %r does not drop the line even written plainly" % word)
+    survived = []
+    for pos in range(1, len(word)):
+        # a zero-width space at every position; every other format character in the middle
+        for fc in (FORMAT_CHARS if pos == len(word) // 2 else FORMAT_CHARS[:1]):
+            split = word[:pos] + fc + word[pos:]
+            for tpl in DROP_TEMPLATES:
+                if red(tpl % split) != "":
+                    survived.append(tpl % split)
+    check(not survived, "DROPLIST: %r split by a format character was not dropped: %r"
+          % (word, survived[:1]))
+check(red("state=active msg\u200b= ice=connected") == "", "DROPLIST: 'msg<ZWSP>=' shipped")
+check(red("state=active ch\u200bat: ice=connected") == "", "DROPLIST: 'chat<ZWSP>:' shipped")
+check(red("state=active ice=connected role=caller") != "", "DROPLIST: plain telemetry dropped")
 
 # ---------------------------------------------------------------------------
 # Compressed IPv6 addresses ('::' form): the full-form rule cannot match them.

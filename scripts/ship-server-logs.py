@@ -638,8 +638,8 @@ RE_KEY_MATERIAL = re.compile(
 def _strip_format_chars(s):
     """Drop Unicode format characters (category Cf: zero-width space / joiner /
     word joiner, soft hyphen, bidi marks, BOM). NFKC keeps them, so
-    "sec<U+200B>ret [..]" slipped past the key-material rule above; they mean
-    nothing in a log line, so that rule is matched without them."""
+    "sec<U+200B>ret [..]" slipped past the DROP-list and the key-material rule
+    above; they mean nothing in a log line, so both are matched without them."""
     if s.isascii():
         return s
     return "".join(c for c in s if unicodedata.category(c) != "Cf")
@@ -1093,7 +1093,8 @@ def redact_body(orig_line, scope_safe, attrs):
 
     orig_line is the FULL slog line (so trailing key=value attrs are scrubbed
     too). Steps mirror ship-ios-logs.py:
-      1. NFKC-normalize.
+      1. NFKC-normalize; the copy the DROP-list and the key-material rule are
+         matched on also loses Unicode format characters (zero-width space, ...).
       2. whole-record DROP-list (panics / pubkey / auth / secrets) -> DROP.
       3. SDP / ICE / DTLS (any line) -> DROP.
       4. not call-relevant scope -> DROP body.
@@ -1106,12 +1107,16 @@ def redact_body(orig_line, scope_safe, attrs):
         return False, ""
 
     norm = _nfkc(orig_line)
-    low = norm.lower()
+    # Format characters (zero-width space / joiner, soft hyphen, BOM, ...) are
+    # dropped ONCE, and the same cleaned string feeds the DROP-list and the
+    # key-material rule: a needle split by one of them ("sec<ZWSP>ret=..") must
+    # not slip past either check. `norm` (what gets scrubbed/shipped) is unchanged.
+    low = _strip_format_chars(norm.lower())
 
     for needle in SERVER_DROP_SUBSTRINGS:
         if needle in low:
             return False, ""
-    if RE_KEY_MATERIAL.search(_strip_format_chars(low)):
+    if RE_KEY_MATERIAL.search(low):
         return False, ""
 
     if _is_sdp_line(norm):
@@ -2935,7 +2940,10 @@ def run_selftest():
     for tail in ("derived_key ok", "raw_key [ABCD:EFGH]", "raw key computed",
                  "salt [ab:cd]", "slat (7)", "session_key [x]", "secret {a b}",
                  "sec\u200bret [ABCDEF]", "sa\u200dlt (ABCDEF)", "raw\u200b_key computed",
-                 "de\u2060rived_key ok", "sl\ufeffat {ab:cd}", "session_ke\u200by [x]"):
+                 "de\u2060rived_key ok", "sl\ufeffat {ab:cd}", "session_ke\u200by [x]",
+                 # words of the whole-record DROP-list split by a format character
+                 "sec\u200bret=abc", "pass\u200bword=hunter2", "pub\u200bkey ok",
+                 "pla\u2060intext ok", "tok\u200ben=abc123"):
         _k, _b = redact_body(hd + tail, True, {})
         if _k and _b:
             failures.append("LEAK[key-words]: line was not dropped: %r" % tail)

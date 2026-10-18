@@ -17,6 +17,9 @@ addresses only.
   (W-KEYWORDS)            `derived_key` / `*_key [..]` lines are dropped whole,
                            whatever the bracket contains -- also with a zero-width /
                            format character hidden inside the key word.
+  DROP-list words         pubkey / password / plaintext / ... (whole-record DROP-list) are
+  (format characters)     matched without Unicode format characters too: a zero-width
+                           character inside the word does not let the line through.
   Compressed IPv6         '::' forms (2001:db8::1, fe80::1, ::1) are scrubbed: the
                            full-form rule cannot match them.
   + benign, readable server call lines must still ship (no over-blocking).
@@ -286,6 +289,46 @@ for line in ("(x.cc:1): secret [%s:%s] len 32" % (w1, w2),
              "state=active session_ke\u200by [%s] ice=connected" % w1):
     check(red(HD + line) == "", "KEYWORDS: line was not dropped: %r" % line)
 check(red(HD + "state=active ice=connected role=caller") != "", "KEYWORDS: plain telemetry dropped")
+
+# ---------------------------------------------------------------------------
+# Whole-record DROP-list words with a format character hidden inside. The DROP-list
+# and the key-material rule are matched on ONE string with the format characters
+# removed: "sec<ZWSP>ret=abc" used to ship its value in clear, because only the
+# key-material rule ignored the character. The word list is a literal on purpose
+# (not read from the script under test): a word removed from the script fails here.
+# ---------------------------------------------------------------------------
+DROP_WORDS = ["pubkey", "pubkey_prefix", "mlkem", "ml-kem", "ml_kem", "ciphertext", "private",
+              "privkey", "authorization:", "authorization=", "bearer ", "token=", "secret",
+              "password", "passwd", "-----begin", " pop=", "csr", "fingerprint", "identity",
+              "panic:", "goroutine ", "runtime error", "signal sigsegv", "stack trace",
+              "\tgithub.com", "x25519", "eddsa", "sas", "safety number", "plaintext",
+              "cleartext", "decrypted", "transcript", "ssid", "device_name", "devicename"]
+FORMAT_CHARS = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", "\u200e"]
+DROP_TEMPLATES = ("state=active %s ice=connected", "%s state=active",
+                  "ice=connected role=caller %s ok")
+for word in DROP_WORDS:
+    # control: written plainly the word drops the line
+    check(red(HD + "state=active %s ice=connected" % word) == "",
+          "DROPLIST: %r does not drop the line even written plainly" % word)
+    survived = []
+    for pos in range(1, len(word)):
+        # a zero-width space at every position; every other format character in the middle
+        for fc in (FORMAT_CHARS if pos == len(word) // 2 else FORMAT_CHARS[:1]):
+            split = word[:pos] + fc + word[pos:]
+            for tpl in DROP_TEMPLATES:
+                if red(HD + tpl % split) != "":
+                    survived.append(tpl % split)
+    check(not survived, "DROPLIST: %r split by a format character was not dropped: %r"
+          % (word, survived[:1]))
+# the shape that shipped a value in clear
+for line, value in (("state=active sec\u200bret=abc", "abc"),
+                    ("state=active pass\u200bword=hunter2", "hunter2"),
+                    ("state=active tok\u2060en=abc123", "abc123"),
+                    ("state=active se\u00adcret ok", "secret")):
+    body = red(HD + line)
+    check(body == "" and value not in body, "DROPLIST: %r was not dropped: %r" % (line, body))
+check(red(HD + "state=active ice=connected role=caller") != "",
+      "DROPLIST: plain telemetry dropped")
 
 # ---------------------------------------------------------------------------
 # Compressed IPv6 addresses ('::' form): the full-form rule cannot match them.

@@ -10,8 +10,16 @@ separators, indexed key=value bytes, secrets cut into blocks of 3-11 letters
 between structural tokens, kv key/value/empty-value carriers, vtag/version/epoch
 channels, unicode look-alikes (Cyrillic, zero-width, full-width), joined tokens,
 pronounceable consonant-vowel syllable blocks, and key-material words
-(secret / slat / salt / raw_key / ...) followed by a bracket group, also with a
-zero-width / format character hidden inside the word.
+(secret / slat / salt / raw_key / ...) followed by a bracket group, and words of the
+whole-record DROP-list (password, pubkey, plaintext, msg=, ...), both also with a
+zero-width / format character hidden inside the word. These families carry ONE or
+two short blocks (see short_blocks()): the free-word gate lets such a block through,
+so a family fails when its rule is bypassed. On the server leg the two format-
+character families leak 55 of 4000 cases (seed 7) when the redactor does not strip
+format characters, and none when it does. The phone leg never ships a bare unknown
+word (MAX_UNKNOWN_BARE_WORDS = 0), so there the same rules are defence in depth that
+this fuzz cannot see: test_ship_ios_redactor_hardening.py checks them (the line is
+dropped, not just reduced to its attribute summary).
 
 A case LEAKS when MORE THAN 50% of its secret-bearing characters survive verbatim
 in the shipped body. Exit 0 = no leak (families in KNOWN_OPEN are only reported).
@@ -142,17 +150,35 @@ def _(sec):
 
 KEY_WORDS = ["secret", "slat", "salt", "raw_key", "session_key", "root_keys", "derived_key", "mac_key"]
 FORMAT_CHARS = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"]
+# structural words around the line under test (they pass every gate)
+PRE_NEUTRAL = ["", "state=active ", "ice=connected ", "ice=connected role=caller ", "peer "]
+SUF_NEUTRAL = ["", " len 32", " ice=connected", " state=active", " ok"]
+
+def short_blocks():
+    """The secret-bearing part of the key-word / DROP-list lines: one or two (mostly
+    lower-case) pronounceable blocks of 3-5 letters. Such a block is a plausible word
+    for the free-word gate and one or two of them stay within its per-body cap of
+    unknown words, so ONLY the key-material rule / the DROP-list stands between the
+    block and the shipped body: when that rule is bypassed (a format character hidden
+    in the word) the block ships. Longer or upper-case blocks are stopped by the gate
+    anyway, which made these families blind to the rules."""
+    case = rnd.choice([str.lower, str.lower, str.lower, str.upper])
+    return [case("".join(rnd.choice(SYL) for _ in range(3))[:rnd.choice([3, 4, 5])])
+            for _ in range(rnd.choice([1, 1, 1, 2]))]
+
+def split_word(w):
+    """w with one format character (ZWSP, ZWNJ, ZWJ, word joiner, BOM, soft hyphen) inside."""
+    j = rnd.randrange(1, len(w))
+    return w[:j] + rnd.choice(FORMAT_CHARS) + w[j:]
 
 def keyword_line(zero_width):
     w = rnd.choice(KEY_WORDS)
     if zero_width:
-        j = rnd.randrange(1, len(w))
-        w = w[:j] + rnd.choice(FORMAT_CHARS) + w[j:]
+        w = split_word(w)
     br = rnd.choice(["[]", "()", "{}", "<>"])
-    words = ["".join(rnd.choice(SYL) for _ in range(rnd.choice([2, 3]))).upper() for _ in range(2)]
+    words = short_blocks()
     inner = rnd.choice([":", " ", ","]).join(words)
-    line = "%s%s %s%s%s %s" % (rnd.choice(["", "state=active "]), w, br[0], inner, br[1],
-                               rnd.choice(["len 32", "ice=connected", "state=active"]))
+    line = "%s%s %s%s%s%s" % (rnd.choice(PRE_NEUTRAL), w, br[0], inner, br[1], rnd.choice(SUF_NEUTRAL))
     return line, words
 
 @fam("keyword_group")
@@ -162,6 +188,19 @@ def _(sec):
 @fam("keyword_group_zerowidth")
 def _(sec):
     return keyword_line(True)
+
+# words of the whole-record DROP-list of each leg (any hit drops the line), with a
+# format character hidden inside: the word is no longer a substring of the line.
+DROP_WORDS = (["pubkey", "private", "secret", "password", "token=", "identity", "fingerprint",
+               "ciphertext", "plaintext", "decrypted", "transcript", "bearer"] if IS_SERVER else
+              ["plaintext", "cleartext", "decrypted", "transcript", "emoji", "message body",
+               "msg=", "chat:", "ssid", "device_name"])
+
+@fam("droplist_zerowidth")
+def _(sec):
+    words = short_blocks()
+    return "%s%s %s%s" % (rnd.choice(PRE_NEUTRAL), split_word(rnd.choice(DROP_WORDS)),
+                          " ".join(words), rnd.choice(SUF_NEUTRAL)), words
 
 @fam("base64_bare")
 def _(sec):

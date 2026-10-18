@@ -564,8 +564,9 @@ RE_HEX_BYTE_RUN = re.compile(
 def _strip_format_chars(s):
     """Drop Unicode format characters (category Cf: zero-width space / joiner /
     word joiner, soft hyphen, bidi marks, BOM). NFKC keeps them, so
-    "sec<U+200B>ret [..]" slipped past every key-material rule below; they mean
-    nothing in a log line, so those rules are matched without them."""
+    "sec<U+200B>ret [..]" slipped past every key-material rule below and past
+    the SAS / plaintext DROP-list; they mean nothing in a log line, so those
+    rules are matched without them."""
     if s.isascii():
         return s
     return "".join(c for c in s if unicodedata.category(c) != "Cf")
@@ -2036,7 +2037,9 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
     """FAIL-CLOSED body redaction. Returns (kept: bool, body: str).
 
     A body ships ONLY if it is provably safe. Steps:
-      1. NFKC-normalize (kills full-width / homoglyph bypass).
+      1. NFKC-normalize (kills full-width / homoglyph bypass); the copy the
+         rules of steps 1b and 2 are matched on also loses Unicode format
+         characters (zero-width space, ...).
       1b. KEY-BYTES (derived_key, >=8-number decimal/hex byte lists) -> DROP.
       2. SAS / plaintext DROP-list (pre-scrub) -> DROP.
       3. SDP / ICE / DTLS (any line) -> DROP.
@@ -2061,7 +2064,11 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
         return False, ""
 
     norm = _nfkc(orig_body)
-    low = norm.lower()
+    # Format characters (zero-width space / joiner, soft hyphen, BOM, ...) are
+    # dropped from the matching copy: a needle split by one of them
+    # ("ms<ZWSP>g=..") must not slip past the DROP-list. `norm` (what gets
+    # scrubbed/shipped) is unchanged.
+    low = _strip_format_chars(norm.lower())
 
     # 1b -- KEY-BYTES (derived_key / decimal or hex byte lists) -> DROP, any tag.
     if _has_key_bytes(low):
@@ -3457,6 +3464,11 @@ def run_selftest():
                   "state=active de\u2060rived_key ok ice=connected",
                   "state=active sl\ufeffat {ab:cd} ice=connected",
                   "state=active session_ke\u200by [ABCDEF] ice=connected",
+                  # words of the SAS / plaintext DROP-list split by a format character
+                  "state=active msg\u200b= ice=connected",
+                  "state=active ch\u200bat: ice=connected",
+                  "state=active pla\u2060intext ice=connected",
+                  "state=active de\u200dcrypted ice=connected",
                   # a byte list with a zero-width character after every separator
                   "state=active " + ",\u200b".join(str(b) for b in _syn),
                   "state=active " + " ".join("k%d=%d" % (i, b) for i, b in enumerate(_syn))):
