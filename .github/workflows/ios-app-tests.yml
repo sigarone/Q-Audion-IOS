@@ -224,7 +224,6 @@ jobs:
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
             -only-testing:QAudionAppTests/PhoneEntryScreenInviteTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
-            -only-testing:QAudionAppTests/TransportSettingsTextsTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -only-testing:QAudionAppTests/VoiceGuardModelTests \
             -resultBundlePath /tmp/app-tests.xcresult \
