@@ -5545,44 +5545,44 @@
         }
       }
     },
-    "call_security.label.latency": {
+    "call_security.label.signaling_ping": {
       "extractionState": "manual",
-      "comment": "Call security detail panel — field label for round-trip latency",
+      "comment": "Call security detail panel — field label for the last ping round trip of the signalling connection (this device to the server); it is not the delay of the call",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Latenza"
+            "value": "Ping segnalazione"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Latency"
+            "value": "Signaling ping"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Latencia"
+            "value": "Ping de señalización"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Latence"
+            "value": "Ping de signalisation"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Latenz"
+            "value": "Signalisierungs-Ping"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Latência"
+            "value": "Ping de sinalização"
           }
         }
       }
@@ -6843,6 +6843,90 @@
           "stringUnit": {
             "state": "translated",
             "value": "O microfone fica logo fora da zona protegida: o áudio bruto existe no telefone por um instante antes de ser selado, então um sistema operacional comprometido poderia interceptá-lo antes da criptografia, sem precisar de nenhuma chave."
+          }
+        }
+      }
+    },
+    "in_call.trust_info.pqc": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup of the post-quantum shield while the ML-KEM key exchange is active for the call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo scambio di chiavi post-quantistico (ML-KEM) è attivo per questa chiamata: protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato e provasse a decifrarlo più avanti."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The post-quantum key exchange (ML-KEM) is active for this call: it protects even if a quantum computer of the future intercepted the encrypted traffic today and tried to decrypt it later."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Post-Quanten-Schlüsselaustausch (ML-KEM) ist für diesen Anruf aktiv: Er schützt auch dann, wenn ein Quantencomputer der Zukunft den verschlüsselten Datenverkehr heute abfängt und später zu entschlüsseln versucht."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El intercambio de claves poscuántico (ML-KEM) está activo en esta llamada: protege incluso si un ordenador cuántico del futuro interceptara hoy el tráfico cifrado e intentara descifrarlo más adelante."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'échange de clés post-quantique (ML-KEM) est actif pour cet appel : il protège même si un ordinateur quantique du futur interceptait aujourd'hui le trafic chiffré et tentait de le déchiffrer plus tard."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A troca de chaves pós-quântica (ML-KEM) está ativa nesta chamada: ela protege mesmo que um computador quântico do futuro intercepte hoje o tráfego criptografado e tente descriptografá-lo mais tarde."
+          }
+        }
+      }
+    },
+    "in_call.trust_info.pqc_off": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup of the post-quantum shield while the ML-KEM key exchange is not active for the call: the shield is grey",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo scambio di chiavi post-quantistico (ML-KEM) non è attivo per questa chiamata: lo scudo resta grigio finché lo scambio di chiavi ML-KEM non è stato completato. Quando è attivo, protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The post-quantum key exchange (ML-KEM) is not active for this call: the shield stays grey until the ML-KEM key exchange has completed. When it is active, it protects even if a quantum computer of the future intercepted the encrypted traffic today."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Post-Quanten-Schlüsselaustausch (ML-KEM) ist für diesen Anruf nicht aktiv: Das Schutzschild bleibt grau, bis der ML-KEM-Schlüsselaustausch abgeschlossen ist. Wenn er aktiv ist, schützt er auch dann, wenn ein Quantencomputer der Zukunft den verschlüsselten Datenverkehr heute abfängt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El intercambio de claves poscuántico (ML-KEM) no está activo en esta llamada: el escudo permanece gris hasta que se completa el intercambio de claves ML-KEM. Cuando está activo, protege incluso si un ordenador cuántico del futuro interceptara hoy el tráfico cifrado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'échange de clés post-quantique (ML-KEM) n'est pas actif pour cet appel : le bouclier reste gris tant que l'échange de clés ML-KEM n'est pas terminé. Lorsqu'il est actif, il protège même si un ordinateur quantique du futur interceptait aujourd'hui le trafic chiffré."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A troca de chaves pós-quântica (ML-KEM) não está ativa nesta chamada: o escudo permanece cinza até que a troca de chaves ML-KEM seja concluída. Quando está ativa, ela protege mesmo que um computador quântico do futuro intercepte hoje o tráfego criptografado."
           }
         }
       }
@@ -12398,84 +12482,84 @@
         }
       }
     },
-    "CHIAMANDO · SECURE CHANNEL ACTIVE": {
+    "CHIAMANDO": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "CHIAMANDO · SECURE CHANNEL ACTIVE"
+            "value": "CHIAMANDO"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "CALLING · SECURE CHANNEL ACTIVE"
+            "value": "CALLING"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "LLAMANDO · SECURE CHANNEL ACTIVE"
+            "value": "LLAMANDO"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "APPEL EN COURS · SECURE CHANNEL ACTIVE"
+            "value": "APPEL EN COURS…"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "RUFT AN · SECURE CHANNEL ACTIVE"
+            "value": "WIRD ANGERUFEN…"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "CHAMANDO · SECURE CHANNEL ACTIVE"
+            "value": "CHAMANDO"
           }
         }
       }
     },
-    "CHIAMATA IN ARRIVO · SECURE CHANNEL": {
+    "CHIAMATA IN ARRIVO": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "CHIAMATA IN ARRIVO · SECURE CHANNEL"
+            "value": "CHIAMATA IN ARRIVO"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "INCOMING CALL · SECURE CHANNEL"
+            "value": "INCOMING CALL"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "LLAMADA ENTRANTE · SECURE CHANNEL"
+            "value": "LLAMADA ENTRANTE"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "APPEL ENTRANT · SECURE CHANNEL"
+            "value": "APPEL ENTRANT"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "EINGEHENDER ANRUF · SECURE CHANNEL"
+            "value": "EINGEHENDER ANRUF"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "CHAMADA RECEBIDA · SECURE CHANNEL"
+            "value": "CHAMADA RECEBIDA"
           }
         }
       }
@@ -13706,47 +13790,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Chamada de áudio"
-          }
-        }
-      }
-    },
-    "Chiamata audio sicura": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chiamata audio sicura"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Secure audio call"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Llamada de audio segura"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Appel audio sécurisé"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sicherer Audioanruf"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chamada de áudio segura"
           }
         }
       }
@@ -18462,47 +18505,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Entendi"
-          }
-        }
-      }
-    },
-    "Hybrid ML-KEM-1024 · E2E": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hybrid ML-KEM-1024 · E2E"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hybrid ML-KEM-1024 · E2E"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hybrid ML-KEM-1024 · E2E"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hybrid ML-KEM-1024 · E2E"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hybrid ML-KEM-1024 · E2E"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hybrid ML-KEM-1024 · E2E"
           }
         }
       }
@@ -31912,47 +31914,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Wipe de todo o estado local não relacionado a credenciais (UserDefaults). Útil para QA do TestFlight: limpa números, opt-in do beta, banners dispensados, sem fazer logout. A sessão e os tokens permanecem intactos."
-          }
-        }
-      }
-    },
-    "dovrai rispondere entro 30s": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "dovrai rispondere entro 30s"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "you'll need to respond within 30s"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "tendrás que responder en 30s"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "tu devras répondre dans les 30s"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "muss innerhalb von 30s beantwortet werden"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "você vai precisar responder em até 30s"
           }
         }
       }

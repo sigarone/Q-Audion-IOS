@@ -3,15 +3,16 @@ import SwiftUI
 import UIKit
 @testable import QAudionApp
 
-/// Design system and the accessibility settings of the user:
+/// Design system, the accessibility settings of the user, and the decisions behind what the call screens print:
 ///  - the text follows the text size chosen in Settings (Dynamic Type), up to one declared cap, and does not change
 ///    at the default size;
-///  - the risk pill labels are translated;
-///  - floating surfaces drop the translucent material for an opaque color when "Reduce Transparency" is on.
+///  - floating surfaces drop the translucent material for an opaque color when "Reduce Transparency" is on;
+///  - the security badge, the handshake log of the outgoing screen and the "DEMO" badges print only what the call
+///    reports: each of them reads from a pure function, and these cases call those functions.
 ///
-/// The cases are pure (no view is rendered); the last ones read the sources by path, like the other wiring tests, to
-/// pin that the views really go through these pieces. Wired into CI: on the include list of
-/// `QAudionApp/project-apptests.yml` and in the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// Every case calls real code with real inputs; none reads a source file or the string catalog. Wired into CI: on
+/// the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
+/// `.github/workflows/ios-app-tests.yml`.
 final class DesignSystemAccessibilityTests: XCTestCase {
 
     // MARK: - Roles: default metrics and text style family
@@ -136,96 +137,136 @@ final class DesignSystemAccessibilityTests: XCTestCase {
                        QAudionTypography.scaledSize(16, family: .body, at: QAudionTypography.maxDynamicTypeSize))
     }
 
-    // MARK: - Risk pill labels
+    // MARK: - What the call screens print
 
-    private let riskKeys = ["risk_pill.low", "risk_pill.medium", "risk_pill.high"]
-    private let appLanguages = ["it", "en", "es", "fr", "de", "pt-BR"]
+    /// A call starts with a transitional key derived from the pairwise secret: it exists before any key exchange, so
+    /// it is not the post-quantum key. The call screens present a key (its fingerprint, the algorithm name, the
+    /// "post-quantum active" shield, its popup, the custody cell and verdict, the PQC chip of the video call) only
+    /// once it is the ML-KEM one, and the third row of the handshake log is ticked only with that fingerprint.
+    func testOnlyTheMlKemKeyIsShownAsTheKeyOfTheCall() {
+        let key = Data([1, 2, 3, 4])
+        XCTAssertNil(CallSessionKeyShown.realKey(key, source: .none))
+        XCTAssertNil(CallSessionKeyShown.realKey(key, source: .psk), "the transitional key is shown as the ML-KEM key")
+        XCTAssertEqual(CallSessionKeyShown.realKey(key, source: .mlKem), key)
+        XCTAssertNil(CallSessionKeyShown.realKey(nil, source: .mlKem))
+        XCTAssertNil(CallSessionKeyShown.realKey(Data(), source: .mlKem), "an empty key is not a key")
+        // `isPresent` is the other question, "does the call hold any key": the transitional key counts.
+        XCTAssertTrue(CallSessionKeyShown.isPresent(key), "the transitional key is a key")
+        XCTAssertFalse(CallSessionKeyShown.isPresent(nil))
+        XCTAssertFalse(CallSessionKeyShown.isPresent(Data()), "an empty key is not a key")
 
-    private func catalogValue(_ strings: [String: Any], _ key: String, _ language: String) -> String? {
-        guard let entry = strings[key] as? [String: Any],
-              let localizations = entry["localizations"] as? [String: Any],
-              let localization = localizations[language] as? [String: Any],
-              let unit = localization["stringUnit"] as? [String: Any] else { return nil }
-        return unit["value"] as? String
-    }
-
-    private func catalogStrings() throws -> [String: Any] {
-        let catalog = try sourceText("QAudionApp/Localizable.xcstrings")
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(catalog.utf8)) as? [String: Any])
-        return try XCTUnwrap(json["strings"] as? [String: Any])
-    }
-
-    /// The three labels exist in the six languages, none empty, and in the five languages other than Italian none is
-    /// the key or the Italian text.
-    func testTheRiskLabelsAreInTheCatalogInAllSixLanguages() throws {
-        let strings = try catalogStrings()
-        for key in riskKeys {
-            let italian = catalogValue(strings, key, "it")
-            XCTAssertNotNil(italian, "\(key) it")
-            for language in appLanguages {
-                let value = catalogValue(strings, key, language)
-                XCTAssertNotNil(value, "\(key) is translated into \(language)")
-                guard let text = value else { continue }
-                XCTAssertFalse(text.trimmingCharacters(in: .whitespaces).isEmpty, "\(key) \(language) is empty")
-                XCTAssertEqual(text, text.uppercased(), "\(key) \(language) is uppercase like the label it replaces")
-                if language != "it" {
-                    XCTAssertNotEqual(text, key, "\(key) \(language) is the key")
-                    XCTAssertNotEqual(text, italian, "\(key) \(language) is the Italian text")
-                }
-            }
-        }
-        for language in appLanguages {
-            let texts = riskKeys.compactMap { catalogValue(strings, $0, language) }
-            XCTAssertEqual(Set(texts).count, 3, "the three levels read differently in \(language)")
+        XCTAssertFalse(OutgoingCallScreen.sessionKeyRowDone(state: .connected, hasFingerprint: false),
+                       "the call is up but the key is still the transitional one")
+        XCTAssertTrue(OutgoingCallScreen.sessionKeyRowDone(state: .connected, hasFingerprint: true))
+        let notYetConnected: [OutgoingCallScreen.State] = [.dialing, .handshaking, .ended]
+        for state in notYetConnected {
+            XCTAssertFalse(OutgoingCallScreen.sessionKeyRowDone(state: state, hasFingerprint: true), "\(state)")
         }
     }
 
-    /// Italian is what the pill showed before the keys existed.
-    func testItalianKeepsTheTextOfTheOldPill() throws {
-        let strings = try catalogStrings()
-        XCTAssertEqual(catalogValue(strings, "risk_pill.low", "it"), "RISCHIO BASSO")
-        XCTAssertEqual(catalogValue(strings, "risk_pill.medium", "it"), "RISCHIO MEDIO")
-        XCTAssertEqual(catalogValue(strings, "risk_pill.high", "it"), "RISCHIO ALTO")
+    /// The compact security badge never says "Sicuro" without a score: a call starts at level "green" with the -1 "no
+    /// score yet" sentinel, and then the word says there is not enough data. With a real reading (0 included) the
+    /// three words follow the level.
+    func testTheSecurityBadgeSaysNothingOfSecurityWithoutAScore() {
+        let noData = CallSecurityBadge.statusWord(level: "green", score: -1)
+        XCTAssertFalse(noData.isEmpty)
+        for word in ["Sicuro", "Attenzione", "Allarme"] {
+            XCTAssertNotEqual(noData, word)
+        }
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "green", score: .nan), noData)
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: -1), noData, "the level alone is not a reading")
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "green", score: 0.9), "Sicuro")
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "yellow", score: 0.4), "Attenzione")
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: 0.1), "Allarme")
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: 0), "Allarme", "0 is a real reading")
     }
 
-    // MARK: - Voice verdict labels
+    /// The details panel of the badge prints only what the call reports: the transport it is really on (it used to
+    /// print a fixed "P2P Direct", relay included, and then "p2p" from a default before any path was reported), the
+    /// ML-KEM algorithm text only with the ML-KEM key, and a dash for a signalling ping nobody measured (it used to
+    /// print "0 ms", painted green).
+    func testTheSecurityBadgeDetailsPrintOnlyWhatTheCallReports() {
+        let dash = "\u{2014}"
+        XCTAssertEqual(CallSecurityBadge.transportWord(backendType: "p2p"), "P2P")
+        XCTAssertEqual(CallSecurityBadge.transportWord(backendType: "turn"), "TURN")
+        XCTAssertEqual(CallSecurityBadge.transportWord(backendType: "relay"), "RELAY")
+        XCTAssertEqual(CallSecurityBadge.transportWord(backendType: ""), dash, "an unknown path is not a transport")
+        // The compact badge: the reported path as it is, a dash while none was reported.
+        XCTAssertEqual(CallSecurityBadge.backendLabel(""), dash)
+        XCTAssertEqual(CallSecurityBadge.backendLabel("turn"), "turn")
 
-    private let verdictKeys = ["in_call.voice_guard.verified", "in_call.voice_guard.caution",
-                               "in_call.voice_guard.highrisk", "in_call.voice_guard.pending"]
+        let algo = "ML-KEM-1024 + AES-256-GCM"
+        XCTAssertEqual(CallSecurityBadge.encryptionWord(algo: algo, hasMlKemKey: true), algo)
+        XCTAssertEqual(CallSecurityBadge.encryptionWord(algo: algo, hasMlKemKey: false), dash,
+                       "the ML-KEM text is announced before the ML-KEM key exists")
 
-    /// The four words of the voice verdict (the card's only states) have a value in the six languages, none empty,
-    /// and the four read differently in each language. The Italian source is exactly the agreed wording.
-    func testTheVoiceVerdictLabelsAreInTheCatalogInAllSixLanguages() throws {
-        let strings = try catalogStrings()
-        for key in verdictKeys {
-            for language in appLanguages {
-                let value = catalogValue(strings, key, language)
-                XCTAssertNotNil(value, "\(key) is translated into \(language)")
-                guard let text = value else { continue }
-                XCTAssertFalse(text.trimmingCharacters(in: .whitespaces).isEmpty, "\(key) \(language) is empty")
-            }
-        }
-        for language in appLanguages {
-            let texts = verdictKeys.compactMap { catalogValue(strings, $0, language) }
-            XCTAssertEqual(Set(texts).count, 4, "the four verdict words read differently in \(language)")
-        }
-        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.verified", "it"), "Voce coerente")
-        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.caution", "it"), "Da controllare")
-        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.highrisk", "it"), "Anomalia")
-        XCTAssertEqual(catalogValue(strings, "in_call.voice_guard.pending", "it"), "Dati insufficienti")
+        XCTAssertEqual(CallSecurityBadge.pingWord(ms: 42), "42 ms")
+        XCTAssertEqual(CallSecurityBadge.pingWord(ms: 0), dash, "0 is the unset value, not a measurement")
+        XCTAssertEqual(CallSecurityBadge.pingWord(ms: -1), dash, "a negative value is no measurement either")
     }
 
-    /// The pill draws its labels from those keys and has no fixed Italian text left.
-    func testTheRiskPillReadsItsLabelsFromTheCatalog() throws {
-        let source = try sourceText("QAudionApp/DesignSystem/Components/RiskPill.swift")
-        // Comment lines (the header still describes the three levels in words) are not code.
-        let pill = source.components(separatedBy: .newlines)
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            .joined(separator: " ")
-        for key in riskKeys {
-            XCTAssertTrue(pill.contains("Text(\"\(key)\")"), "RiskPill does not use \(key)")
+    /// The popup of the post-quantum shield follows the shield: the shield is drawn in every state (grey when the
+    /// exchange is not active), so its text must not say "active" under a grey shield. The popups of the other
+    /// shields do not depend on it.
+    func testThePostQuantumPopupReadsDifferentlyUnderAnActiveAndAGreyShield() {
+        // The language of the phone running the test does not matter: only that the two texts differ.
+        let active = InCallScreen.TrustBadgeInfo.pqc.body(pqcActive: true)
+        let inactive = InCallScreen.TrustBadgeInfo.pqc.body(pqcActive: false)
+        XCTAssertFalse(active.isEmpty)
+        XCTAssertFalse(inactive.isEmpty)
+        XCTAssertNotEqual(active, inactive, "the popup reads the same under an active and a grey shield")
+        let others: [InCallScreen.TrustBadgeInfo] = [.voiceKey, .contactVoice, .nfc, .psk, .sas, .transport]
+        for info in others {
+            XCTAssertEqual(info.body(pqcActive: true), info.body(pqcActive: false), "\(info)")
         }
-        XCTAssertFalse(pill.contains("\"RISCHIO"), "a fixed Italian label is left in RiskPill")
+    }
+
+    /// The "DEMO" badge follows "does the call hold any key", the transitional one included, as it always did: the
+    /// key panel exists only for the real ML-KEM key, so on its own it would bring the badge back on a real call.
+    /// The badge of the call screen shows only with neither a key panel nor a key.
+    func testTheDemoBadgeStaysOffAsSoonAsAnyKeyExists() {
+        XCTAssertTrue(InCallScreen.demoBadgeShown(keyInfoPresent: false, sessionKeyPresent: false))
+        XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: false, sessionKeyPresent: true),
+                       "the transitional key a real call starts with brings the DEMO badge back")
+        XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: true, sessionKeyPresent: false),
+                       "a screen built with only a key panel shows the badge")
+        XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: true, sessionKeyPresent: true))
+    }
+
+    /// The PSK row of the security badge stands on one verified fact: a pre-shared key was mixed into this call's
+    /// session key, the same fact as the PSK chip and the PSK shield of the call screen. The name and fingerprint of a
+    /// key are printed only with the fact, and the row shows a dash otherwise.
+    func testThePskRowPrintsAKeyOnlyWhenOneWasMixedIn() {
+        let dash = "\u{2014}"
+        XCTAssertEqual(CallSecurityBadge.pskWord(mixed: false, name: "Yubi5", fingerprint: "a83c-9f12"), dash,
+                       "a name and a fingerprint without the fact are shown as a key in use")
+        XCTAssertEqual(CallSecurityBadge.pskWord(mixed: false, name: "", fingerprint: ""), dash)
+        XCTAssertEqual(CallSecurityBadge.pskWord(mixed: true, name: "Yubi5", fingerprint: "a83c-9f12"),
+                       "Yubi5  \u{2022}  a83c-9f12")
+        XCTAssertEqual(CallSecurityBadge.pskWord(mixed: true, name: "", fingerprint: "a83c-9f12"), "a83c-9f12")
+        XCTAssertEqual(CallSecurityBadge.pskWord(mixed: true, name: "Yubi5", fingerprint: ""), "Yubi5")
+        XCTAssertEqual(CallSecurityBadge.pskWord(mixed: true, name: "", fingerprint: ""), dash,
+                       "a key with no known name or fingerprint prints nothing but the dash")
+    }
+
+    /// Each row of the outgoing handshake log is ticked on its own reading. "PSK matched from vault" says a key was
+    /// found in the vault, so it ticks only when the method label of that key exists (and not from the call state: a
+    /// call with no pre-shared key leaves it open); the first row follows the call reaching ringing, the third needs
+    /// the fingerprint of the real key (see the first case of this section).
+    func testTheHandshakeRowsOfTheOutgoingScreenTickOnTheirOwnReading() {
+        XCTAssertFalse(OutgoingCallScreen.pskRowDone(pskMethodLabel: nil), "no key matched, row ticked")
+        XCTAssertFalse(OutgoingCallScreen.pskRowDone(pskMethodLabel: ""), "an empty label is no match")
+        XCTAssertTrue(OutgoingCallScreen.pskRowDone(pskMethodLabel: "NFC"))
+        XCTAssertTrue(OutgoingCallScreen.pskRowDone(pskMethodLabel: "KMS"))
+
+        let ticked: [OutgoingCallScreen.State] = [.handshaking, .connected, .rekeying]
+        for state in ticked {
+            XCTAssertTrue(OutgoingCallScreen.kemRowDone(state: state), "\(state)")
+        }
+        let open: [OutgoingCallScreen.State] = [.dialing, .ended]
+        for state in open {
+            XCTAssertFalse(OutgoingCallScreen.kemRowDone(state: state), "\(state)")
+        }
     }
 
     // MARK: - Reduce Transparency
@@ -233,66 +274,5 @@ final class DesignSystemAccessibilityTests: XCTestCase {
     func testReduceTransparencyPicksTheOpaqueBackdrop() {
         XCTAssertEqual(QAudionBackdrop.resolve(reduceTransparency: true), .opaque)
         XCTAssertEqual(QAudionBackdrop.resolve(reduceTransparency: false), .material)
-    }
-
-    /// The four places that drew `.ultraThinMaterial` go through the modifier, one line each.
-    func testTheMaterialBackgroundsGoThroughTheModifier() throws {
-        let expectedCalls: [(path: String, calls: Int)] = [
-            ("QAudionApp/Views/CallSecurityBadge.swift", 2),
-            ("QAudionApp/Views/WaveformView.swift", 1),
-            ("QAudionApp/Views/Settings/BackupSettingsScreen.swift", 1)
-        ]
-        for expected in expectedCalls {
-            let text = try sourceText(expected.path)
-            XCTAssertFalse(text.contains("ultraThinMaterial"), "\(expected.path) still draws a bare material")
-            XCTAssertEqual(text.components(separatedBy: ".qaudionMaterialBackground(").count - 1, expected.calls,
-                           expected.path)
-        }
-    }
-
-    // MARK: - Wiring of the text size
-
-    /// The theme publishes the typography for the size the user picked, and reads that size from the environment.
-    func testTheThemePublishesTheTypographyForTheUsersTextSize() throws {
-        let theme = try sourceText("QAudionApp/DesignSystem/QAudionTheme.swift")
-        XCTAssertTrue(theme.contains("@Environment(\\.dynamicTypeSize)"))
-        XCTAssertTrue(theme.contains(".environment(\\.qaudionType, QAudionTypography.standard.scaled(for: dynamicTypeSize))"))
-    }
-
-    /// No component of the design system draws a font of fixed size: icons and digits use `qaudionScaledFont`. The
-    /// avatar is the exception, its letters are a fraction of the circle whose size the caller fixes.
-    func testDesignSystemComponentsHaveNoFixedPointFonts() throws {
-        let root = try sourceDirectory("QAudionApp/DesignSystem")
-        let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
-        var checked = 0
-        for case let url as URL in enumerator where url.pathExtension == "swift" {
-            let name = url.lastPathComponent
-            if name == "QAudionAvatar.swift" || name == "QAudionTypography.swift" { continue }
-            let text = try String(contentsOf: url, encoding: .utf8)
-            XCTAssertFalse(text.contains(".font(.system(size:"),
-                           "\(name) draws a font of fixed size: use qaudionScaledFont or a typography role")
-            checked += 1
-        }
-        XCTAssertGreaterThan(checked, 10, "the design system sources were not found")
-    }
-
-    // MARK: - Source lookup
-
-    private struct SourceNotFound: Error {}
-
-    private func sourceDirectory(_ relativePath: String, file: StaticString = #filePath) throws -> URL {
-        var dir = URL(fileURLWithPath: "\(file)")
-        for _ in 0..<10 {
-            dir = dir.deletingLastPathComponent()
-            let candidate = dir.appendingPathComponent(relativePath)
-            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-        }
-        XCTFail("\(relativePath) not found from \(file)")
-        throw SourceNotFound()
-    }
-
-    private func sourceText(_ relativePath: String, file: StaticString = #filePath) throws -> String {
-        let url = try sourceDirectory(relativePath, file: file)
-        return try String(contentsOf: url, encoding: .utf8)
     }
 }

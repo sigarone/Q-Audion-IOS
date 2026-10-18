@@ -403,7 +403,7 @@ struct VideoCallView: View {
             if sasVerified {
                 trustChip(icon: "checkmark", label: "SAS ✓", color: .green, filled: true)
             }
-            if appState.callPqcSessionKey != nil && !(appState.callPqcSessionKey?.isEmpty ?? true) {
+            if realSessionKey != nil {
                 trustChip(icon: "lock.shield.fill", label: "PQC", color: .purple, filled: false)
             }
             trustChip(icon: nil, label: transportChipLabel, color: .white.opacity(0.75), filled: false)
@@ -750,7 +750,7 @@ struct VideoCallView: View {
     private var videoDiagFrameCounters: some View {
         let hasPipeline = appState.videoPipeline != nil
         let pipelineState = hasPipeline ? "attiva" : "inattiva"
-        let rekeyVal = appState.rekeyCount.description
+        let rekeyVal = "—" // no live re-key counter is published yet
         let latencyVal = Self.videoLatencyString(appState.latencyMs)
         videoDiagRow("PIPELINE VIDEO", pipelineState)
         videoDiagRow("REKEY",          rekeyVal)
@@ -759,7 +759,7 @@ struct VideoCallView: View {
 
     @ViewBuilder
     private var videoDiagSessionKey: some View {
-        if let key = appState.callPqcSessionKey, !key.isEmpty {
+        if let key = realSessionKey {
             let fp = Self.sessionFingerprintForDiag(key)
             videoDiagRow("SESSIONE ML-KEM", fp)
         } else {
@@ -793,6 +793,13 @@ struct VideoCallView: View {
     }
 
     // MARK: - Derived state
+
+    /// The ML-KEM session key of this call, or nil while the call only holds the transitional key it starts with
+    /// (`callSasKeySource` is not `.mlKem` yet). The "PQC" chip and the "SESSIONE ML-KEM" row name ML-KEM, so they
+    /// read this and not `callPqcSessionKey` directly.
+    private var realSessionKey: Data? {
+        CallSessionKeyShown.realKey(appState.callPqcSessionKey, source: appState.callSasKeySource)
+    }
 
     // D11 fix — same bug as LiveInCallScreen.sasIdentityTag: commitTofuPinForDevice
     // pins under the composite "<peer>|<deviceId>" account whenever the server

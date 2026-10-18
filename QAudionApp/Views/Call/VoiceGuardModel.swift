@@ -277,6 +277,29 @@ enum VoiceCustody {
     }
 }
 
+// MARK: - Which session key the call screens may show
+
+/// The session key the call screens may present as the key of the call: its fingerprint, the algorithm name, the
+/// "post-quantum active" shield and cell, and the custody verdict that names ML-KEM.
+///
+/// A call starts with a transitional key derived from the pairwise secret (`callSasKeySource == .psk`). It exists
+/// before any key exchange happened, so it is not the post-quantum key and nothing may be presented as such. Only the
+/// key that replaced it (`.mlKem`) may be shown; before that, and when the key is empty, there is nothing to show.
+enum CallSessionKeyShown {
+    static func realKey(_ key: Data?, source: AppState.CallSasKeySource) -> Data? {
+        guard source == .mlKem, let key = key, !key.isEmpty else { return nil }
+        return key
+    }
+
+    /// Whether the call holds a session key of any kind, the transitional one a call starts with included. It is not
+    /// an answer about the post-quantum exchange (that is `realKey`): it is the answer the "DEMO" and "REKEY DEMO"
+    /// badges of the in-call screen have always followed, "no key at all yet", so they stay on it.
+    static func isPresent(_ key: Data?) -> Bool {
+        guard let key = key else { return false }
+        return !key.isEmpty
+    }
+}
+
 // MARK: - Single-trace wave
 
 enum VoiceGuardWave {

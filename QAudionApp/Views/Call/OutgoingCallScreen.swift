@@ -6,20 +6,32 @@ import SwiftUI
 /// Shown while we are dialing a peer and the PQC handshake is happening
 /// in the background. Layout (top → bottom):
 ///
-///   - "CHIAMANDO · SECURE CHANNEL ACTIVE" header (success, 2.0sp tracking)
-///   - 240pt `AvatarHalo` (pqcAccent) + 160pt avatar circle
+///   - "CHIAMANDO" header (success, 2.0sp tracking). It says only that the
+///     call is being placed: while dialing there is no channel to call secure
+///     or active, that is what the handshake log below is for.
+///   - 240pt `KeyExchangeRing` (its phase follows `state`) + 160pt avatar circle
+///   - session-key fingerprint, only once the real ML-KEM key exists (never
+///     the transitional key a call starts with)
 ///   - peer display name (displaySmall, italic, semibold)
-///   - "Chiamata audio sicura" subtitle
-///   - `MetaPill`s (PQC NEGOTIATING / LOW LATENCY; the "VOICE TRUST · ENROLLED"
-///     pill of the original port is gone: it had no reading behind it)
-///   - **Handshake log** — 3 rows that tick from circle → check as the
-///     state machine advances:
-///        1. "KEM encap generated"           (≥ handshaking)
-///        2. "PSK matched from vault"        (≥ handshaking)
-///        3. "HKDF session key derived"      (≥ connected)
+///   - "Chiamata audio" / "Videochiamata" subtitle: the kind of call, nothing
+///     about its security, because no channel exists yet. Not shown once the
+///     call ended (the kind of call is no longer known there).
+///   - `MetaPill`s (PQC NEGOTIATING; the "VOICE TRUST · ENROLLED" and
+///     latency pills of the original port are gone: fixed values with no
+///     reading behind them)
+///   - **Handshake log** — 3 rows that tick from circle → check, each on
+///     its own reading:
+///        1. "KEM encap generated"           (≥ handshaking: the callee
+///                                            acknowledged the offer)
+///        2. "PSK matched from vault"        (only when the PSK method label
+///                                            exists: the key was found in the
+///                                            vault; never from the state)
+///        3. "HKDF session key derived"      (connected AND the session-key
+///                                            fingerprint exists)
 ///   - hangup `CircularAction` (riskHigh, 80) + "Ring MM:SS" label
 ///
-/// `state` drives the handshake checklist. `errorMessage` non-nil shows
+/// `state`, `pskMethodLabel` and `sessionFingerprint` drive the handshake
+/// checklist, row by row as listed above. `errorMessage` non-nil shows
 /// the riskHigh banner instead of the third action.
 struct OutgoingCallScreen: View {
     @Environment(\.qaudionScheme) private var scheme
@@ -49,9 +61,14 @@ struct OutgoingCallScreen: View {
     /// note on `currentRingPhase` below for why.
     let pskMethodLabel: String?
     /// Session-key fingerprint, formatted like `LiveInCallScreen
-    /// .sessionFingerprintFromKey` — non-nil only once the real PQC session
-    /// key exists. Shown as an immediate `Text`, not an animated reveal.
+    /// .sessionFingerprintFromKey` — non-nil only once the real ML-KEM
+    /// session key exists. The caller must pass nil while the call only
+    /// holds the transitional key derived from the pairwise secret at call
+    /// start (`CallSessionKeyShown`). Shown as an immediate `Text`, not an
+    /// animated reveal; it also decides the third handshake row.
     let sessionFingerprint: String?
+    /// True for a video call. Only the line under the name depends on it.
+    let isVideo: Bool
     let onHangup: () -> Void
 
     init(peerDisplayName: String,
@@ -62,6 +79,7 @@ struct OutgoingCallScreen: View {
          peerShortNumber: String? = nil,
          pskMethodLabel: String? = nil,
          sessionFingerprint: String? = nil,
+         isVideo: Bool = false,
          onHangup: @escaping () -> Void) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
@@ -71,7 +89,18 @@ struct OutgoingCallScreen: View {
         self.peerShortNumber = peerShortNumber
         self.pskMethodLabel = pskMethodLabel
         self.sessionFingerprint = sessionFingerprint
+        self.isVideo = isVideo
         self.onHangup = onHangup
+    }
+
+    /// The line under the name: the kind of call being placed and nothing about
+    /// its security, because while dialing there is no channel to call secure.
+    private var kindLine: String {
+        isVideo
+            ? String(localized: "Videochiamata",
+                     comment: "Call screens (incoming and outgoing) — line under the name: the kind of call, a video call")
+            : String(localized: "Chiamata audio",
+                     comment: "Call screens (incoming and outgoing) — line under the name: the kind of call, an audio call")
     }
 
     /// Pure function of `state` — no local timer, see the implementation
@@ -124,7 +153,7 @@ struct OutgoingCallScreen: View {
                             Text(String(localized: "call.outgoing.header.ended", defaultValue: "CHIAMATA TERMINATA",
                                         comment: "Outgoing call screen header once the call ended before it connected (callee busy or unreachable)"))
                         } else {
-                            Text("CHIAMANDO · SECURE CHANNEL ACTIVE")
+                            Text("CHIAMANDO")
                         }
                     }
                         .qaudionStyle(type.labelSmall)
@@ -157,19 +186,22 @@ struct OutgoingCallScreen: View {
                         .multilineTextAlignment(.center)
                         .padding(.bottom, 4)
 
-                    Text("Chiamata audio sicura")
-                        .qaudionStyle(type.bodyLarge)
-                        .italic()
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                        .padding(.bottom, 20)
-
                     // W-CALLERBUSY — nothing is negotiating once the call ended before it connected.
                     if state != .ended {
+                        // Says what kind of call it is, not that it is secure: nothing is
+                        // established yet. Absent on the ended screen, which has no call to
+                        // describe (a failed video call would read "Chiamata audio" there).
+                        Text(kindLine)
+                            .qaudionStyle(type.bodyLarge)
+                            .italic()
+                            .foregroundStyle(scheme.onSurfaceVariant)
+                            .padding(.bottom, 20)
+
                         HStack(spacing: 8) {
                             MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
                             // No "VOICE TRUST · ENROLLED" pill: it was shown on every
-                            // outgoing call with no voice reading behind it.
-                            MetaPill("LOW LATENCY · 48ms", accent: extras.warning)
+                            // outgoing call with no voice reading behind it. Same for the
+                            // latency pill: the value it showed was a fixed number.
                             if let method = pskMethodLabel {
                                 MetaPill("PSK · \(method)", accent: pskPillColor, filled: true)
                             }
@@ -214,14 +246,38 @@ struct OutgoingCallScreen: View {
 
     // MARK: - Handshake log
 
+    /// The first row ("KEM encap generated") follows the call state, which is the only reading the caller has of it:
+    /// `.handshaking` is what `ContentView.makeOutgoingScreen` builds for a call that reached ringing, and the caller
+    /// enters ringing on the callee's `call_ready`, sent once the callee's ACCEPT (the one carrying the encapsulation)
+    /// is on the wire. Before that (`.dialing`, `.ended`) the row stays open.
+    static func kemRowDone(state: State) -> Bool {
+        state == .handshaking || state == .connected || state == .rekeying
+    }
+
+    /// The second row ("PSK matched from vault") is ticked only when a pre-shared key was really matched in the
+    /// vault: the method label exists only once the fingerprint of the key mixed into this call was found there
+    /// (`AppState.resolvePskDisplayMeta`; it is cleared at the start of every call). The call state says nothing
+    /// about it, so it takes no part: a call with no pre-shared key leaves the row open.
+    static func pskRowDone(pskMethodLabel: String?) -> Bool {
+        guard let label = pskMethodLabel else { return false }
+        return !label.isEmpty
+    }
+
+    /// The third row ("HKDF session key derived") is ticked only when the call is up AND the fingerprint of the real
+    /// ML-KEM key exists. `.connected` alone can come first, while the call still holds the transitional key it
+    /// starts with, and that key is not derived by the handshake.
+    static func sessionKeyRowDone(state: State, hasFingerprint: Bool) -> Bool {
+        (state == .connected || state == .rekeying) && hasFingerprint
+    }
+
     private var handshakeLog: some View {
         VStack(alignment: .leading, spacing: 8) {
             handshakeRow("KEM encap generated",
-                         done: state == .handshaking || state == .connected || state == .rekeying)
+                         done: Self.kemRowDone(state: state))
             handshakeRow("PSK matched from vault",
-                         done: state == .handshaking || state == .connected || state == .rekeying)
+                         done: Self.pskRowDone(pskMethodLabel: pskMethodLabel))
             handshakeRow("HKDF session key derived",
-                         done: state == .connected || state == .rekeying)
+                         done: Self.sessionKeyRowDone(state: state, hasFingerprint: sessionFingerprint != nil))
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
