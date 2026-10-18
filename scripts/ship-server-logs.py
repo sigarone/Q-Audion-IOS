@@ -582,6 +582,12 @@ RE_SECRET_KV = re.compile(
     r"\s*[=:]\s*\S+")
 RE_MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
 RE_IPV6 = re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")
+# compressed IPv6 (contains '::'): 2001:db8::1, fe80::1, ::1, 2001:db8:: -- the
+# full-form rule above cannot match these (same rule as ship-ios-logs.py).
+RE_IPV6_COMPRESSED = re.compile(
+    r"(?<![\w:])(?:"
+    r"(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?"
+    r"|::[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})(?![\w:])")
 RE_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 RE_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 RE_PHONE = re.compile(r"(?<!\d)\+?\d[\d\s().\-/]{6,}\d(?!\d)")
@@ -600,6 +606,7 @@ STRENGTHEN_RULES = [
     ("mac", RE_MAC),
     ("email", RE_EMAIL),
     ("ipv6", RE_IPV6),
+    ("ipv6", RE_IPV6_COMPRESSED),
     ("hex", RE_SPACED_HEX),
     ("ipv4", RE_IPV4),
     ("phone", RE_PHONE),
@@ -626,6 +633,17 @@ SERVER_DROP_SUBSTRINGS = [
 # characters by an opening bracket, drop the WHOLE line whatever the group holds.
 RE_KEY_MATERIAL = re.compile(
     r"(?:derived|raw)[\s_\-]*key|(?:secret|slat|salt|\w*keys?)\W{0,8}[\[({<]")
+
+
+def _strip_format_chars(s):
+    """Drop Unicode format characters (category Cf: zero-width space / joiner /
+    word joiner, soft hyphen, bidi marks, BOM). NFKC keeps them, so
+    "sec<U+200B>ret [..]" slipped past the key-material rule above; they mean
+    nothing in a log line, so that rule is matched without them."""
+    if s.isascii():
+        return s
+    return "".join(c for c in s if unicodedata.category(c) != "Cf")
+
 
 RE_RESIDUAL_B64 = re.compile(r"[A-Za-z0-9+/=_\-]{12,}")
 RE_RESIDUAL_HEX = re.compile(r"\b[0-9a-fA-F]{12,}\b")
@@ -1093,7 +1111,7 @@ def redact_body(orig_line, scope_safe, attrs):
     for needle in SERVER_DROP_SUBSTRINGS:
         if needle in low:
             return False, ""
-    if RE_KEY_MATERIAL.search(low):
+    if RE_KEY_MATERIAL.search(_strip_format_chars(low)):
         return False, ""
 
     if _is_sdp_line(norm):
@@ -2915,7 +2933,9 @@ def run_selftest():
     #     + W-FREEWORD). Every value is SYNTHETIC (the bytes 1..32 / letter runs).
     hd = 'level=INFO msg="call status: active" call_id=91fe5cf7 '
     for tail in ("derived_key ok", "raw_key [ABCD:EFGH]", "raw key computed",
-                 "salt [ab:cd]", "slat (7)", "session_key [x]", "secret {a b}"):
+                 "salt [ab:cd]", "slat (7)", "session_key [x]", "secret {a b}",
+                 "sec\u200bret [ABCDEF]", "sa\u200dlt (ABCDEF)", "raw\u200b_key computed",
+                 "de\u2060rived_key ok", "sl\ufeffat {ab:cd}", "session_ke\u200by [x]"):
         _k, _b = redact_body(hd + tail, True, {})
         if _k and _b:
             failures.append("LEAK[key-words]: line was not dropped: %r" % tail)
@@ -2940,6 +2960,11 @@ def run_selftest():
     _kk, _bb = redact_body(hd + "x=abcdefghi y=jklmnopqr z=stuvwxyza w=bcdefghij", True, {})
     if _kk and sum(1 for v in ("abcdefghi", "jklmnopqr", "stuvwxyza", "bcdefghij") if v in _bb) > MAX_UNKNOWN_WORDS:
         failures.append("LEAK[freeword/kv]: kv value carriers survived")
+    for _ip6 in ("2001:db8::1", "fe80::1", "::1", "2001:db8:85a3::8a2e:370:7334"):
+        for _tpl in ("ip=%s seq=12", "peer %s state=active"):
+            _kk, _bb = redact_body(hd + _tpl % _ip6, True, {})
+            if _kk and _ip6 in _bb:
+                failures.append("LEAK[ipv6-compressed]: %r survived" % _ip6)
     _kk, _bb = redact_body(hd + "seq=12 rtt=35ms", True, {})
     if not _kk or "[summary]" in _bb or "seq=12" not in _bb:
         failures.append("REGRESS[freeword]: plain structured call line altered: %r" % _bb)
@@ -2977,7 +3002,9 @@ def run_selftest():
     out("  shape-only (no body/value leak).")
     out("  key-material words (derived/raw key, secret/slat/salt/*key + a bracket")
     out("  group) drop the whole line; free-word letter blocks / mixed-case blocks /")
-    out("  number+letter tokens / kv value carriers are capped (W-FREEWORD).")
+    out("  number+letter tokens / kv value carriers are capped (W-FREEWORD); the")
+    out("  key-material rule ignores Unicode format characters; compressed IPv6")
+    out("  addresses ('::' form) are scrubbed.")
     out("  VPS host key pinned (vps_known_hosts = the verified prod ED25519 key),")
     out("  client is a RejectPolicy that rejects unknown hosts, no script uses")
     out("  trust-on-first-use.")

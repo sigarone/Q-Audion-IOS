@@ -1,7 +1,9 @@
 # Test del filtro dei log
 #
-# Esegue i test Python del filtro dei log (scripts/ship-ios-logs.py): ogni
-# scripts/test_ship_ios_*.py e il fuzz scripts/test_ship_redactor_fuzz.py.
+# Esegue i test Python del filtro dei log (scripts/ship-ios-logs.py e, per il
+# lato server, scripts/ship-server-logs.py): ogni scripts/test_ship_ios_*.py,
+# ogni scripts/test_ship_server_*.py e il fuzz scripts/test_ship_redactor_fuzz.py
+# (una volta sul filtro del telefono, una con --server sul filtro del server).
 # Il filtro lascia passare solo le righe di un vocabolario noto e scarta il
 # resto senza alcun errore, quindi una modifica puo' far sparire righe valide
 # (o lasciarne passare di troppo) senza che nessun altro controllo se ne
@@ -29,6 +31,7 @@ on:
     branches: [main]
     paths:
       - 'scripts/ship-ios-logs.py'
+      - 'scripts/ship-server-logs.py'
       - 'scripts/test_ship_*'
       - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift'
       - '.github/workflows/shipper-tests.yml'
@@ -36,6 +39,7 @@ on:
     branches: [main]
     paths:
       - 'scripts/ship-ios-logs.py'
+      - 'scripts/ship-server-logs.py'
       - 'scripts/test_ship_*'
       - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift'
       - '.github/workflows/shipper-tests.yml'
@@ -69,7 +73,7 @@ jobs:
           # almeno uno e' uscito con codice diverso da 0.
           status=0
           n=0
-          for t in scripts/test_ship_ios_*.py scripts/test_ship_redactor_fuzz.py; do
+          for t in scripts/test_ship_ios_*.py scripts/test_ship_server_*.py scripts/test_ship_redactor_fuzz.py; do
             if [ ! -f "$t" ]; then
               echo "::error::test non trovato: $t"
               status=1
@@ -82,5 +86,12 @@ jobs:
               status=1
             fi
           done
+          # Il fuzz sul filtro del server (stesso file, opzione --server).
+          n=$((n + 1))
+          echo "=== scripts/test_ship_redactor_fuzz.py --server"
+          if ! python -I scripts/test_ship_redactor_fuzz.py 4000 7 --server; then
+            echo "::error file=scripts/test_ship_redactor_fuzz.py::il fuzz --server e' uscito con codice diverso da 0"
+            status=1
+          fi
           echo "test eseguiti: $n"
           exit $status

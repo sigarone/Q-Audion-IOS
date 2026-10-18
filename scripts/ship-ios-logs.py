@@ -561,6 +561,16 @@ RE_HEX_BYTE_RUN = re.compile(
     r"(?![0-9a-f])" % _KB_N)
 
 
+def _strip_format_chars(s):
+    """Drop Unicode format characters (category Cf: zero-width space / joiner /
+    word joiner, soft hyphen, bidi marks, BOM). NFKC keeps them, so
+    "sec<U+200B>ret [..]" slipped past every key-material rule below; they mean
+    nothing in a log line, so those rules are matched without them."""
+    if s.isascii():
+        return s
+    return "".join(c for c in s if unicodedata.category(c) != "Cf")
+
+
 def _has_indexed_kv_run(low):
     """True if 6+ key=value tokens of one body share the same alphabetic stem
     and end in an index (k0=.. k1=.. k2=..): raw bytes printed one per pair."""
@@ -576,7 +586,8 @@ def _has_indexed_kv_run(low):
 def _has_key_bytes(low):
     """True if the (NFKC-folded, lowercased) body looks like printed key bytes
     or names key material (derived/raw key, secret/slat/salt + a bracket
-    group). See the 1c-bis block above."""
+    group), ignoring Unicode format characters. See the 1c-bis block above."""
+    low = _strip_format_chars(low)
     return bool(RE_KEY_WORDS.search(low)
                 or RE_SECRET_GROUP.search(low)
                 or RE_DEC_BYTE_LIST_BARE.search(low)
@@ -3439,6 +3450,15 @@ def run_selftest():
                   "state=active slat (7) ice=connected",
                   "state=active derived_key ok ice=connected",
                   "state=active raw key computed ice=connected",
+                  # Unicode format characters inside the key word (NFKC keeps them)
+                  "state=active sec\u200bret [ABCDEF] ice=connected",
+                  "state=active sa\u200dlt (ABCDEF) ice=connected",
+                  "state=active raw\u200b_key computed ice=connected",
+                  "state=active de\u2060rived_key ok ice=connected",
+                  "state=active sl\ufeffat {ab:cd} ice=connected",
+                  "state=active session_ke\u200by [ABCDEF] ice=connected",
+                  # a byte list with a zero-width character after every separator
+                  "state=active " + ",\u200b".join(str(b) for b in _syn),
                   "state=active " + " ".join("k%d=%d" % (i, b) for i, b in enumerate(_syn))):
         if _body(_line):
             failures.append("LEAK[key-words]: line was not dropped: %r" % _line[:60])

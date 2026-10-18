@@ -8,7 +8,10 @@ base64/base64url/base62/base58/base52/base32/base26, hex, JWT, uuid after id=,
 IPv4/IPv6, e-mail, phone, PSK words, SAS words, decimal/hex byte lists with 14
 separators, indexed key=value bytes, secrets cut into blocks of 3-11 letters
 between structural tokens, kv key/value/empty-value carriers, vtag/version/epoch
-channels, unicode look-alikes (Cyrillic, zero-width, full-width), joined tokens.
+channels, unicode look-alikes (Cyrillic, zero-width, full-width), joined tokens,
+pronounceable consonant-vowel syllable blocks, and key-material words
+(secret / slat / salt / raw_key / ...) followed by a bracket group, also with a
+zero-width / format character hidden inside the word.
 
 A case LEAKS when MORE THAN 50% of its secret-bearing characters survive verbatim
 in the shipped body. Exit 0 = no leak (families in KNOWN_OPEN are only reported).
@@ -119,6 +122,46 @@ def letters_family(alpha, label):
     fams["blocks_" + label] = f
 for alpha, label in ((B26, "b26"), (B26U, "b26U"), (B52, "b52"), (B62, "b62"), (B58, "b58"), (B32, "b32")):
     letters_family(alpha, label)
+
+# consonant-vowel syllables: an encoder whose output is pronounceable, so no
+# lexical rule can tell it from a word; only the per-body caps bound it.
+SYL = [c + v for c in "bdfgklmnprstvz" for v in "aeiou"]
+
+def enc_syl(data):
+    n = int.from_bytes(data, "big"); out = []
+    while n:
+        n, r = divmod(n, len(SYL)); out.append(SYL[r])
+    return "".join(reversed(out))
+
+@fam("syllable_blocks")
+def _(sec):
+    bl = chunks(enc_syl(sec), rnd.choice([6, 8, 9, 10, 11]))
+    mode = rnd.choice(["fill", "kvfill", "plain"])
+    pre = rnd.choice(["", "state=active ", "ice=connected role=caller "])
+    return pre + join_with_fill(bl, mode) + rnd.choice(["", " ice=connected"]), bl
+
+KEY_WORDS = ["secret", "slat", "salt", "raw_key", "session_key", "root_keys", "derived_key", "mac_key"]
+FORMAT_CHARS = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"]
+
+def keyword_line(zero_width):
+    w = rnd.choice(KEY_WORDS)
+    if zero_width:
+        j = rnd.randrange(1, len(w))
+        w = w[:j] + rnd.choice(FORMAT_CHARS) + w[j:]
+    br = rnd.choice(["[]", "()", "{}", "<>"])
+    words = ["".join(rnd.choice(SYL) for _ in range(rnd.choice([2, 3]))).upper() for _ in range(2)]
+    inner = rnd.choice([":", " ", ","]).join(words)
+    line = "%s%s %s%s%s %s" % (rnd.choice(["", "state=active "]), w, br[0], inner, br[1],
+                               rnd.choice(["len 32", "ice=connected", "state=active"]))
+    return line, words
+
+@fam("keyword_group")
+def _(sec):
+    return keyword_line(False)
+
+@fam("keyword_group_zerowidth")
+def _(sec):
+    return keyword_line(True)
 
 @fam("base64_bare")
 def _(sec):
@@ -359,10 +402,11 @@ def leak_fraction(body, blocks):
 
 KNOWN_OPEN = {"bytes_single_interleaved"}
 if IS_SERVER:
-    # the server leg has never had the key-byte list / compressed-IPv6 rules of the
-    # iOS leg (not part of the 2026-09-24 red-team findings; server lines are
-    # server-authored). Reported, not asserted.
-    KNOWN_OPEN |= {"bytelist_dec", "bytelist_hex", "hex_spaced_pairs", "ipv6"}
+    # the server leg has never had the key-byte list rules of the iOS leg (not part
+    # of the 2026-09-24 red-team findings; server lines are server-authored).
+    # Reported, not asserted. (Compressed IPv6 was in this set until the rule of
+    # the iOS leg was ported.)
+    KNOWN_OPEN |= {"bytelist_dec", "bytelist_hex", "hex_spaced_pairs"}
 THRESH = 0.5001   # a case LEAKS when MORE THAN 50% of its secret-bearing characters survive verbatim
 stats = collections.defaultdict(lambda: [0, 0, 0.0, 0.0])   # n, leaks, max_frac, sum_frac
 leaks = []
@@ -388,6 +432,12 @@ for name in names:
     n, l, mx, sm = stats[name]
     print("%-28s %5d %6d %8.2f %8.3f%s" % (name, n, l, mx, sm / max(n, 1), "   (known-open, not asserted)" if name in KNOWN_OPEN else ""))
 print("TOTAL cases=%d leaks(>%.0f%%)=%d" % (N, THRESH * 100, tot_leaks))
+_open = sorted((k, v[1]) for k, v in stats.items() if k in KNOWN_OPEN and v[1])
+if _open:
+    print("KNOWN-OPEN (reported, NOT asserted) families that leak: "
+          + ", ".join("%s=%d" % kv for kv in _open))
+_worst = max((v[2], k) for k, v in stats.items() if k not in KNOWN_OPEN)
+print("worst asserted family: %s maxfrac=%.2f (a case leaks above %.2f)" % (_worst[1], _worst[0], THRESH - 0.0001))
 if "--show" in sys.argv:
     for name, line, body in leaks[:10]:
         print("  LEAK[%s] line=%r -> body=%r" % (name, line, body))
