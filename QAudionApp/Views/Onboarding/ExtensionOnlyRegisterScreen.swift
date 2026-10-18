@@ -24,6 +24,7 @@ struct ExtensionOnlyRegisterScreen: View {
     @State private var displayName: String = ""
     @State private var email: String = ""
     @State private var inviteCode: String = ""
+    @State private var ageDeclared = false
     @State private var isSubmitting = false
     @State private var errorText: String?
 
@@ -42,8 +43,14 @@ struct ExtensionOnlyRegisterScreen: View {
     /// The invite code is mandatory (server `registration_mode="invite"`):
     /// the form is submittable only with a well-formed email AND a code whose
     /// format and checksum pass the same local check the phone flow uses.
+    /// The age declaration box has to be ticked as well, like on the phone flow.
     private var canSubmit: Bool {
-        isValidEmail && InviteCodeInput.isValid(inviteCode)
+        Self.isSubmittable(emailValid: isValidEmail, inviteCode: inviteCode, ageDeclared: ageDeclared)
+    }
+
+    /// The form's gate without the view: all three conditions have to hold.
+    static func isSubmittable(emailValid: Bool, inviteCode: String, ageDeclared: Bool) -> Bool {
+        emailValid && InviteCodeInput.isValid(inviteCode) && ageDeclared
     }
 
     var body: some View {
@@ -122,6 +129,11 @@ struct ExtensionOnlyRegisterScreen: View {
                     }
                     .padding(.horizontal, 24)
 
+                    Spacer().frame(height: 16)
+
+                    AgeDeclarationSection(declared: $ageDeclared)
+                        .padding(.horizontal, 24)
+
                     if let err = errorText {
                         Text(err)
                             .font(.caption)
@@ -164,7 +176,8 @@ struct ExtensionOnlyRegisterScreen: View {
             let result = try await provider.accountApi.registerExtensionOnly(
                 displayName: trimmedName.isEmpty ? nil : trimmedName,
                 email: trimmedEmail,
-                inviteCode: wireInviteCode
+                inviteCode: wireInviteCode,
+                ageDeclared: ageDeclared
             )
             appState.completeOtpAuth(result)
             onRegistered()

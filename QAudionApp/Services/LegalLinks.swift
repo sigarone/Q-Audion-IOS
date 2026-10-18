@@ -32,6 +32,23 @@ enum LegalLinks {
         page("delete-account", languageCode: languageCode)
     }
 
+    /// The Terms and the Privacy Policy linked from the age declaration at registration. Same pages and same
+    /// rule as Android: Italian is served under `/it`, every other language from the route without a prefix.
+    static func appTerms(languageCode: String = AppLanguageManager.effectiveLanguageCode) -> URL {
+        appDocument("qaudion-terms", languageCode: languageCode)
+    }
+
+    static func appPrivacy(languageCode: String = AppLanguageManager.effectiveLanguageCode) -> URL {
+        appDocument("qaudion-privacy", languageCode: languageCode)
+    }
+
+    private static func appDocument(_ section: String, languageCode: String) -> URL {
+        let base = languageCode.split(separator: "-").first.map(String.init)?.lowercased() ?? ""
+        let prefix = base == "it" ? "/it" : ""
+        // Constant host and path segments: the force-unwrap can only fail on a typo in this file.
+        return URL(string: "https://bcrypto.com" + prefix + "/legal/" + section)!
+    }
+
     private static func page(_ section: String, languageCode: String) -> URL {
         let base = languageCode.split(separator: "-").first.map(String.init)?.lowercased() ?? "en"
         let locale = siteLocales.contains(base) ? base : "en"

@@ -19,6 +19,9 @@ struct OtpVerificationScreen: View {
     let mode: PhoneEntryScreen.Mode
     /// Only meaningful for `.register`; always nil for `.login`.
     let inviteCode: String?
+    /// True when the person ticked the age declaration box on `PhoneEntryScreen`
+    /// (`.register` only; always false for `.login`). Sent with the code on verify.
+    let ageDeclared: Bool
     let onBack: () -> Void
     /// Fired after a successful REGISTER verify. Credentials are already
     /// saved (via `appState.completeOtpAuth`) but deliberately NOT yet
@@ -200,7 +203,8 @@ struct OtpVerificationScreen: View {
                 purpose: purpose,
                 deviceName: deviceName,
                 inviteCode: inviteCode,
-                displayName: nil
+                displayName: nil,
+                ageDeclared: ageDeclared
             )
             appState.completeOtpAuth(result)
             if mode == .register {

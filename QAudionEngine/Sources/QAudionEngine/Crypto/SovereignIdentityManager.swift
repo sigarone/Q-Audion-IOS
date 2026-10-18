@@ -147,13 +147,20 @@ public final class SovereignIdentityManager {
 
     /// Register sovereign identity with server.
     /// POST /api/v1/register/sovereign
-    public func registerWithServer(identity: SovereignIdentity, rest: BCryptoRestClient) async throws -> (userId: String, challenge: String) {
-        let dict: [String: Any] = [
+    ///
+    /// `ageDeclared` is whether the person ticked the age declaration box. When true the body carries
+    /// `age_declaration: true` and `terms_version`; when false (the default) it carries neither key, never
+    /// `age_declaration: false` (see `AgeDeclaration`). The caller passes on what its screen holds: no box exists
+    /// in the engine's own demo UI, which relies on the default.
+    public func registerWithServer(identity: SovereignIdentity, rest: BCryptoRestClient,
+                                   ageDeclared: Bool = false) async throws -> (userId: String, challenge: String) {
+        var dict: [String: Any] = [
             "signing_pub_key": identity.signingPublic.map { String(format: "%02x", $0) }.joined(),
             "encryption_pub_key": identity.encryptionPublic.map { String(format: "%02x", $0) }.joined(),
             "display_name": identity.displayName ?? "",
             "server_url": identity.serverUrl
         ]
+        AgeDeclaration.add(to: &dict, declared: ageDeclared)
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/register/sovereign", body: body)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

@@ -20229,6 +20229,48 @@
         }
       }
     },
+    "Informativa sulla Privacy": {
+      "extractionState": "manual",
+      "comment": "Registration screens, age declaration box. Link to the Privacy Policy page.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informativa sulla Privacy"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy Policy"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datenschutzerklärung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Política de Privacidad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Politique de Confidentialité"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Política de Privacidade"
+          }
+        }
+      }
+    },
     "Informazioni": {
       "extractionState": "manual",
       "localizations": {
@@ -29942,6 +29984,48 @@
           "stringUnit": {
             "state": "translated",
             "value": "Encerrar chamada"
+          }
+        }
+      }
+    },
+    "Termini e Condizioni d'Uso": {
+      "extractionState": "manual",
+      "comment": "Registration screens, age declaration box. Link to the Terms page.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termini e Condizioni d'Uso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terms and Conditions of Use"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nutzungsbedingungen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Términos y Condiciones de Uso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conditions Générales d'Utilisation"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termos e Condições de Uso"
           }
         }
       }
@@ -40849,6 +40933,48 @@
         }
       }
     },
+    "Dichiaro di avere almeno %lld anni e accetto i Termini e condizioni d'uso.": {
+      "extractionState": "manual",
+      "comment": "Registration screens, age declaration box. %lld is the minimum age (18).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dichiaro di avere almeno %lld anni e accetto i Termini e condizioni d'uso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I declare that I am at least %lld years old and I accept the Terms and Conditions of Use."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich erkläre, dass ich mindestens %lld Jahre alt bin, und akzeptiere die Nutzungsbedingungen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declaro que tengo al menos %lld años y acepto los Términos y condiciones de uso."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je déclare avoir au moins %lld ans et j'accepte les Conditions générales d'utilisation."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declaro que tenho pelo menos %lld anos e aceito os Termos e condições de uso."
+          }
+        }
+      }
+    },
     "DISPOSITIVI ATTIVI · %lld": {
       "extractionState": "manual",
       "localizations": {
@@ -42613,6 +42739,48 @@
         }
       }
     },
+    "Prima di creare l'account": {
+      "extractionState": "manual",
+      "comment": "Registration screens, age declaration box. Heading.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prima di creare l'account"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Before you create an account"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bevor du ein Konto erstellst"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antes de crear la cuenta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avant de créer le compte"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antes de criar a conta"
+          }
+        }
+      }
+    },
     "Prossimo re-key tra %lld secondi": {
       "extractionState": "manual",
       "localizations": {
@@ -42732,6 +42900,48 @@
           "stringUnit": {
             "state": "translated",
             "value": "Você pode solicitar um novo código em %llds"
+          }
+        }
+      }
+    },
+    "Q-Audion è riservato a chi ha almeno %lld anni. Non verifichiamo l'età: ci basiamo su quello che dichiari qui.": {
+      "extractionState": "manual",
+      "comment": "Registration screens, age declaration box. %lld is the minimum age (18).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion è riservato a chi ha almeno %lld anni. Non verifichiamo l'età: ci basiamo su quello che dichiari qui."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion is for people aged %lld or over. We do not verify your age: we rely on what you declare here."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion ist nur für Personen ab %lld Jahren. Wir prüfen dein Alter nicht: Wir verlassen uns auf das, was du hier angibst."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion está reservado a mayores de %lld años. No verificamos tu edad: nos basamos en lo que declaras aquí."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion est réservé aux personnes âgées d'au moins %lld ans. Nous ne vérifions pas votre âge : nous nous fions à ce que vous déclarez ici."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion é destinado a pessoas com %lld anos ou mais. Não verificamos sua idade: confiamos no que você declara aqui."
           }
         }
       }

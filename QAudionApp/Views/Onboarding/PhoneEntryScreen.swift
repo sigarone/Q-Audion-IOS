@@ -35,15 +35,17 @@ struct PhoneEntryScreen: View {
 
     let mode: Mode
     let onBack: () -> Void
-    /// Receives `(phoneHash, e164, inviteCode)` once the user submits a
-    /// valid number. `inviteCode` is always nil for `.login`; for
-    /// `.register` it's nil unless the user typed one. `OnboardingRoot`
-    /// routes this to `OtpVerificationScreen` to request + verify the SMS
-    /// code and complete registration/login.
-    let onContinue: (_ phoneHash: String, _ e164: String, _ inviteCode: String?) -> Void
+    /// Receives `(phoneHash, e164, inviteCode, ageDeclared)` once the user
+    /// submits a valid number. `inviteCode` is always nil for `.login`; for
+    /// `.register` it's nil unless the user typed one. `ageDeclared` is true
+    /// only for `.register` with the age declaration box ticked, and false
+    /// for `.login`. `OnboardingRoot` routes this to `OtpVerificationScreen`
+    /// to request + verify the SMS code and complete registration/login.
+    let onContinue: (_ phoneHash: String, _ e164: String, _ inviteCode: String?, _ ageDeclared: Bool) -> Void
 
     @State private var raw: String = "+39 "
     @State private var inviteCode: String = ""
+    @State private var ageDeclared = false
     @State private var validationError: String?
     // W315 — track last submit attempt to give the user feedback that
     // their tap was registered (server flow is stubbed today).
@@ -76,132 +78,161 @@ struct PhoneEntryScreen: View {
         mode == .register ? InviteCodeInput.wireValue(inviteCode) : nil
     }
 
+    /// Registration needs the age declaration box ticked, so the button stays off
+    /// until it is; login does not show the box and never needs it.
+    static func ageOk(mode: Mode, ageDeclared: Bool) -> Bool {
+        mode != .register || ageDeclared
+    }
+
+    /// The `ageDeclared` handed to the OTP step: true only for `.register` with the
+    /// box ticked. A login never carries the declaration.
+    static func ageWireValue(mode: Mode, ageDeclared: Bool) -> Bool {
+        mode == .register && ageDeclared
+    }
+
+    /// The whole gate of the submit button without the view: the number has to be
+    /// valid, and for `.register` the invite code and the age box as well.
+    static func isSubmittable(phoneValid: Bool, mode: Mode, inviteCode: String, ageDeclared: Bool) -> Bool {
+        phoneValid
+            && inviteOk(mode: mode, inviteCode: inviteCode)
+            && ageOk(mode: mode, ageDeclared: ageDeclared)
+    }
+
     private var isValid: Bool {
-        PhoneHashHelper.isValid(raw) && Self.inviteOk(mode: mode, inviteCode: inviteCode)
+        Self.isSubmittable(phoneValid: PhoneHashHelper.isValid(raw), mode: mode, inviteCode: inviteCode, ageDeclared: ageDeclared)
     }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
 
-                // Custom top bar
-                HStack {
-                    Button(action: onBack) {
-                        Image(systemName: "chevron.left")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(8)
-                    }
-                    Text(mode.title)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-
-                Spacer().frame(height: 16)
-
-                Text("Inserisci il tuo numero")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 24)
-
-                Spacer().frame(height: 8)
-
-                Text("Lo useremo solo per identificare l'account: non lo mostreremo mai ad altri utenti.")
-                    .font(.body)
-                    .foregroundStyle(.white.opacity(0.65))
-                    .padding(.horizontal, 24)
-
-                Spacer().frame(height: 24)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Numero di telefono")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.7))
-                    TextField("+39 333 1234567", text: $raw)
-                        .keyboardType(.phonePad)
-                        .textContentType(.telephoneNumber)
-                        .foregroundStyle(.white)
-                        .padding(14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(validationError != nil ? Color.red : .white.opacity(0.3),
-                                        lineWidth: 1.2)
-                        )
-                        .onChange(of: raw) { _ in
-                            validationError = nil
+                    // Custom top bar
+                    HStack {
+                        Button(action: onBack) {
+                            Image(systemName: "chevron.left")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(8)
                         }
-                    if let err = validationError {
-                        Text(err)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    } else {
-                        Text("Formato E.164: deve iniziare con + e il prefisso paese.")
+                        Text(mode.title)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+
+                    Spacer().frame(height: 16)
+
+                    Text("Inserisci il tuo numero")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 24)
+
+                    Spacer().frame(height: 8)
+
+                    Text("Lo useremo solo per identificare l'account: non lo mostreremo mai ad altri utenti.")
+                        .font(.body)
+                        .foregroundStyle(.white.opacity(0.65))
+                        .padding(.horizontal, 24)
+
+                    Spacer().frame(height: 24)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Numero di telefono")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.7))
+                        TextField("+39 333 1234567", text: $raw)
+                            .keyboardType(.phonePad)
+                            .textContentType(.telephoneNumber)
+                            .foregroundStyle(.white)
+                            .padding(14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(validationError != nil ? Color.red : .white.opacity(0.3),
+                                            lineWidth: 1.2)
+                            )
+                            .onChange(of: raw) { _ in
+                                validationError = nil
+                            }
+                        if let err = validationError {
+                            Text(err)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("Formato E.164: deve iniziare con + e il prefisso paese.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                    }
+                    .padding(.horizontal, 24)
+
+                    if mode == .register {
+                        Spacer().frame(height: 16)
+                        InviteCodeField(code: $inviteCode, isInvalid: InviteCodeInput.isCompleteButInvalid(inviteCode))
+                        .padding(.horizontal, 24)
+                        Spacer().frame(height: 16)
+                        AgeDeclarationSection(declared: $ageDeclared)
+                            .padding(.horizontal, 24)
+                    }
+
+                    Spacer().frame(height: 32)
+
+                    Button {
+                        submit()
+                    } label: {
+                        Text(mode.ctaLabel)
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .foregroundStyle(isValid ? .black : .white.opacity(0.4))
+                            .background(isValid ? Color.white : Color.white.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                    }
+                    .disabled(!isValid)
+                    .padding(.horizontal, 24)
+
+                    // W315 — last-attempt timestamp (helps testers verify the
+                    // tap landed even though server OTP isn't wired).
+                    if let last = lastAttemptAt {
+                        Text(Self.formatLastAttempt(last))
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.5))
+                            .padding(.horizontal, 24)
+                            .padding(.top, 8)
                     }
-                }
-                .padding(.horizontal, 24)
 
-                if mode == .register {
                     Spacer().frame(height: 16)
-                    InviteCodeField(code: $inviteCode, isInvalid: InviteCodeInput.isCompleteButInvalid(inviteCode))
+
+                    // Info banner — explains what happens next (SMS code),
+                    // not a "not implemented yet" disclaimer anymore.
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "message.fill")
+                            .foregroundStyle(.blue)
+                        Text("Ti invieremo un codice via SMS per verificare questo numero.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(.white.opacity(0.05))
+                    )
                     .padding(.horizontal, 24)
+
+                    Spacer()
                 }
-
-                Spacer().frame(height: 32)
-
-                Button {
-                    submit()
-                } label: {
-                    Text(mode.ctaLabel)
-                        .font(.body.weight(.semibold))
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .foregroundStyle(isValid ? .black : .white.opacity(0.4))
-                        .background(isValid ? Color.white : Color.white.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-                .disabled(!isValid)
-                .padding(.horizontal, 24)
-
-                // W315 — last-attempt timestamp (helps testers verify the
-                // tap landed even though server OTP isn't wired).
-                if let last = lastAttemptAt {
-                    Text(Self.formatLastAttempt(last))
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .padding(.horizontal, 24)
-                        .padding(.top, 8)
-                }
-
-                Spacer().frame(height: 16)
-
-                // Info banner — explains what happens next (SMS code),
-                // not a "not implemented yet" disclaimer anymore.
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "message.fill")
-                        .foregroundStyle(.blue)
-                    Text("Ti invieremo un codice via SMS per verificare questo numero.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.white.opacity(0.05))
-                )
-                .padding(.horizontal, 24)
-
-                Spacer()
             }
         }
     }
 
     private func submit() {
+        // Same gate as `.disabled(!isValid)` on the button: without a valid number,
+        // invite code and (for `.register`) the ticked age box nothing may start,
+        // even if the button were reachable by some other route.
+        guard isValid else { return }
         // W315 — record attempt so the user sees visible feedback that
         // their tap registered before the OTP screen's own network call
         // resolves.
@@ -210,7 +241,7 @@ struct PhoneEntryScreen: View {
             let e164 = try PhoneHashHelper.normalizeE164(raw)
             let hash = PhoneHashHelper.sha256Hex(e164)
             let invite = Self.inviteWireValue(mode: mode, inviteCode: inviteCode)
-            onContinue(hash, e164, invite)
+            onContinue(hash, e164, invite, Self.ageWireValue(mode: mode, ageDeclared: ageDeclared))
         } catch {
             validationError = error.localizedDescription
         }
@@ -218,5 +249,5 @@ struct PhoneEntryScreen: View {
 }
 
 #Preview {
-    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _, _ in })
+    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _, _, _ in })
 }
