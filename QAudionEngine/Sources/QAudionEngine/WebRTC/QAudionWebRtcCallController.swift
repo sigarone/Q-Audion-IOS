@@ -1404,23 +1404,42 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
-    /// W411 — optional override for the ICE server list. When set
-    /// (typically by AppState reading TransportGate.preferredTurnUrl),
-    /// the controller skips the relay-pool fetch and uses ONLY these
-    /// servers. Useful for self-hosted TURN deployments + QA. Set
-    /// before startOutgoingCall / acceptIncomingCall.
-    public var iceServerOverride: [RTCIceServer]?
+    /// Settings > Trasporto, mode (AppState copies `TransportGate.mode` here
+    /// before startOutgoingCall / acceptIncomingCall). Together with
+    /// `customTurnUrl` it fully decides the ICE configuration of this call
+    /// through `TransportPlan`: the ICE transport policy, which servers of the
+    /// relay pool go to libwebrtc and whether the WSS-TURN bridge is started.
+    /// `.auto` (the default) is the behaviour every call had before the
+    /// screen did anything: policy `.all`, STUN and TURN of the pool.
+    public var transportMode: TransportSettingsViewModel.Mode = .auto
 
-    /// W411 — optional override for the ICE transport policy. When
-    /// `.relay` is forced, WebRTC bypasses host candidates and
-    /// requires all media to flow through the relay. Maps from
-    /// TransportGate.preferredMode: turn/relay → .relay,
-    /// otherwise default `.all`.
-    public var iceTransportPolicyOverride: RTCIceTransportPolicy?
+    /// Settings > Trasporto, custom TURN server (`TransportGate`): the saved
+    /// server with its own user name and password, as one text
+    /// (`turn:user:password@host:port`; `TransportPreferences` puts it together
+    /// from the address in UserDefaults and the credentials in the Keychain, and
+    /// it only lives in memory). When the mode can use it (not p2p) it
+    /// replaces the whole relay pool: no pool server, no bridge, and the pool
+    /// is not even requested. The server gets the credentials the user wrote,
+    /// never the temporary ones of the BCrypto server. An address without
+    /// credentials reads as none here (libwebrtc rejects a TURN server
+    /// without them). See `TransportPlan` and `TransportCustomTurn`.
+    public var customTurnUrl: URL?
+
+    /// The plan of this call before any bridge exists: what the settings
+    /// above say. `relayIceServers` asks again with the real bridge answer.
+    private var transportPlan: TransportPlan {
+        TransportPlan.make(mode: transportMode, customTurnUrl: customTurnUrl, bridgeAvailable: false)
+    }
+
+    /// The ICE transport policy of this call, for the PeerConnection:
+    /// `.relay` for the turn and relay modes, `.all` for auto and p2p.
+    private var callIceTransportPolicy: RTCIceTransportPolicy {
+        transportPlan.icePolicy == .relay ? .relay : .all
+    }
 
     /// D6 (2026-09-28, TURN-stuck-on-P2P fix, owner-requested) — remote
     /// kill switch getter for the P2P-probe ICE restart, wired by AppState
-    /// the same way `iceTransportPolicyOverride` is (this engine target
+    /// the same way `transportMode` is (this engine target
     /// cannot import `FeatureFlags`, which lives in the app target — see
     /// that property's own wiring sites in `AppState.swift`). AppState sets
     /// this to a closure that reads `FeatureFlags.bool("calls.p2p_probe_kill",
@@ -1924,7 +1943,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             factory: factory,
             audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
-            iceTransportPolicy: iceTransportPolicyOverride ?? .all,
+            iceTransportPolicy: callIceTransportPolicy,
             delegate: self,
             dtlsContext: dtlsContext,
             dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
@@ -2079,7 +2098,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             factory: factory,
             audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
-            iceTransportPolicy: iceTransportPolicyOverride ?? .all,
+            iceTransportPolicy: callIceTransportPolicy,
             delegate: self,
             dtlsContext: dtlsContext,
             dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
@@ -2227,7 +2246,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             factory: factory,
             audioProcessingModule: audioProcessingModule,
             iceServers: iceServers,
-            iceTransportPolicy: iceTransportPolicyOverride ?? .all,
+            iceTransportPolicy: callIceTransportPolicy,
             delegate: self,
             dtlsContext: dtlsContext,
             dtlsPqcRequiredProvider: dtlsPqcRequiredProvider,
@@ -3785,7 +3804,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             nowMs: nowMs,
             peerSentNonRelayCandidate: peerSentNonRelayCandidateThisCall,
             lastDisconnectOrFailedAtMs: lastIceBadAtMs,
-            transportForcesTurn: iceTransportPolicyOverride == .relay,
+            transportForcesTurn: transportPlan.icePolicy == .relay,
             transportForcesWs: false,
             renegotiationInProgress: renegotiating,
             callActive: !intentionalShutdown,
@@ -4803,14 +4822,30 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     private func fetchIceServers() async -> [RTCIceServer] {
         // W411: when the user has explicitly configured a custom TURN
-        // server in TransportSettings, bypass the server-side relay
-        // pool fetch and use the override directly.
-        if let override = iceServerOverride, !override.isEmpty {
-            return override
+        // server in TransportSettings (and the mode can use it: not p2p),
+        // that server is the whole list: no pool server, no latency probe,
+        // no bridge. It carries the user name and password the user wrote
+        // (libwebrtc rejects the whole configuration for a TURN server
+        // without them), so the relay list of the BCrypto server is not
+        // requested and its temporary credentials never go to that server.
+        // The list comes from the same TransportPlan the transport check in
+        // Settings builds, so the check measures this list.
+        if transportPlan.customTurn != nil {
+            return assembleIceServers(pool: [], bridgeIceUrl: nil)
         }
         guard let provider = relayProvider else { return [] }
         guard let bundle = await provider.currentOrRefresh() else { return [] }
         return await relayIceServers(from: bundle, reuseRunningBridge: false).servers
+    }
+
+    /// The ICE servers of this call for a given pool order and bridge answer,
+    /// from the one `TransportPlan` of the Settings choice (the plan decides
+    /// which pool URLs survive and whether the bridge entry is listed).
+    private func assembleIceServers(pool: [RelayServer], bridgeIceUrl: String?) -> [RTCIceServer] {
+        let plan = TransportPlan.make(
+            mode: transportMode, customTurnUrl: customTurnUrl, bridgeAvailable: bridgeIceUrl != nil)
+        return QAudionPeerConnectionFactory.iceServers(
+            from: plan.servers(pool: pool, bridgeIceUrl: bridgeIceUrl))
     }
 
     /// N6 review fix — the ICE-restart half of the relay re-evaluation
@@ -4826,14 +4861,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     ///    background refresh for the NEXT attempt and leaves the live list.
     ///  - A running WSS-TURN bridge is reused, never replaced (see
     ///    `wssTurnBridgeIceUrl`).
-    ///  - A manual TURN override (W411) is already exactly what the
+    ///  - A custom TURN address (W411) is already exactly what the
     ///    PeerConnection holds: nothing to refresh.
+    ///  - The list goes through the same `TransportPlan` as call setup, so a
+    ///    restart in p2p mode never adds a TURN server or the bridge, and a
+    ///    restart in relay mode keeps the bridge route.
     /// Worst case is therefore the probe's own `RelayOrderingConstants
     /// .overallBudgetSec` (~1.2 s, only when some relay does not answer —
     /// i.e. exactly when re-deciding the relay set/bridge matters); on a
     /// healthy network it is one STUN round trip to the slowest relay.
     private func refreshIceServersForRestart(on liveConnection: QAudionPeerConnection) async {
-        if let override = iceServerOverride, !override.isEmpty { return }
+        if transportPlan.customTurn != nil { return }
         guard let provider = relayProvider else { return }
         guard let bundle = await provider.cachedOrNil() else {
             Task.detached(priority: .utility) { _ = await provider.currentOrRefresh() }
@@ -4863,9 +4901,24 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // `RelayOrdering.order`'s empty-map short-circuit). Does not
         // change which relay ICE ultimately SELECTS, only which candidates
         // it tries first.
-        let relayRttByUrl = await RelayLatencyProbe().measureAll(bundle.servers)
+        //
+        // Settings > Trasporto: what goes into the list, and whether the
+        // WSS-TURN bridge is wanted, is decided by `TransportPlan` (the same
+        // function the transport check in Settings uses). `wantPlan` asks
+        // what the chosen mode wants if a bridge could start; the real
+        // answer (bridge started or not) is given to the plan again at the
+        // end, in `assembleIceServers`.
+        //
+        // relay mode skips the RTT probe: its route is the bridge alone, the
+        // order of the pool matters only for the fallback, and relay mode is
+        // for networks where UDP is blocked, where the probe would burn its
+        // whole budget on every call and every restart for nothing.
+        let wantPlan = TransportPlan.make(mode: transportMode, customTurnUrl: customTurnUrl, bridgeAvailable: true)
+        var relayRttByUrl: [String: Double] = [:]
+        if wantPlan.bridgeRole != .always {
+            relayRttByUrl = await RelayLatencyProbe().measureAll(bundle.servers)
+        }
         let orderedRelays = RelayOrdering.order(bundle.servers, rttMsByFirstUrl: relayRttByUrl)
-        var servers = QAudionPeerConnectionFactory.iceServers(from: orderedRelays)
 
         // WSS-TURN bridge — last-resort bypass for corporate firewalls
         // that block UDP 3478, TCP 3478, and TURNS 5349. The server
@@ -4875,103 +4928,103 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // turn:127.0.0.1:<port>?transport=udp entry.
         // Mirrors Android WssTurnBridge.kt and Desktop WssTurnBridge.ts.
         //
-        // W-RELAYGATE (2026-08-26, P2 audit item 3) — this used to allocate
-        // and insert the bridge UNCONDITIONALLY on every call that had TURN
-        // credentials, ahead of the plain STUN/TURN entries `servers`
-        // already carries. That is backwards for a "last-resort bypass":
-        // the bridge was never actually gated behind any evidence the
-        // direct UDP path needed bypassing.
+        // W-RELAYGATE (2026-08-26, P2 audit item 3) — in auto mode this used
+        // to allocate and insert the bridge UNCONDITIONALLY on every call
+        // that had TURN credentials, ahead of the plain STUN/TURN entries.
+        // That is backwards for a "last-resort bypass": the bridge was never
+        // actually gated behind any evidence the direct UDP path needed
+        // bypassing.
         //
         // `relayRttByUrl` above is exactly that evidence, already paid for:
         // it is the real UDP STUN Binding round trip (`StunClient
         // .measureRttMs`, RFC 5389) to every relay's `turn:`/`stun:` URL,
-        // run two lines up for latency ORDERING. A non-empty result means
-        // at least one relay in OUR OWN fleet answered a raw UDP packet on
-        // its STUN/TURN port — i.e. outbound UDP to this exact service
-        // class is not blocked on this network, so the corporate-firewall
-        // scenario the bridge exists for is, on this call's own measured
-        // evidence, not what's happening. An EMPTY result — every probe in
-        // the round timed out or the round itself hit its own overall
-        // budget (`RelayLatencyProbe.measureAll`'s doc) — is the
+        // run for latency ORDERING. A non-empty result means at least one
+        // relay in OUR OWN fleet answered a raw UDP packet on its STUN/TURN
+        // port — i.e. outbound UDP to this exact service class is not
+        // blocked on this network, so the corporate-firewall scenario the
+        // bridge exists for is, on this call's own measured evidence, not
+        // what's happening. An EMPTY result — every probe in the round timed
+        // out or the round itself hit its own overall budget
+        // (`RelayLatencyProbe.measureAll`'s doc) — is the
         // "connectivity-check failure signal" the bridge should actually be
         // gated behind: no positive evidence direct UDP works, so fail
         // toward allocating the bypass exactly like before this change.
         // This adds no new network round trip and never makes call setup
         // slower than the ordering probe already made it.
-        if relayRttByUrl.isEmpty,
+        //
+        // The gate lives in `TransportPlan.wantsBridge(udpReachable:)`:
+        // auto asks for the bridge only when the probe came back empty,
+        // relay always asks for it (it is that mode's only route), p2p and
+        // turn never do.
+        var bridgeIceUrl: String?
+        var reusedBridge = false
+        if wantPlan.wantsBridge(udpReachable: !relayRttByUrl.isEmpty),
            let wssUrlStr = bundle.wssTurnUrl,
            let wssUrl = URL(string: wssUrlStr),
            // Skip if bundle has no TURN entry with credentials — libwebrtc
            // needs real credentials inside the TURN ALLOCATE request.
-           let firstTurn = bundle.servers.first(where: { s in
-               s.urls.contains { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }
-           }),
-           firstTurn.username != nil,
-           firstTurn.credential != nil {
+           let bridgeCreds = TransportPlan.poolTurnCredentials(in: bundle.servers) {
             // N6 review fix — a restart on a network that still shows no
             // UDP evidence keeps the bridge it already has: same loopback
             // port, same WSS slot, and the relay pair the current ICE
             // generation may still be using stays alive (make-before-break).
             if reuseRunningBridge, wssTurnBridge != nil, let runningIceUrl = wssTurnBridgeIceUrl {
-                servers.insert(
-                    RTCIceServer(
-                        urlStrings: [runningIceUrl],
-                        username: firstTurn.username ?? "",
-                        credential: firstTurn.credential ?? ""
-                    ),
-                    at: 0
+                bridgeIceUrl = runningIceUrl
+                reusedBridge = true
+            } else if !intentionalShutdown {
+                // Bug-C discipline — never dial a bridge for a call that was torn
+                // down while the probe above was in flight.
+                //
+                // W-AUXPIN (2026-09-02, B11) — reuse callingApi's already
+                // cert-pinned REST session for this bridge's WSS-TURN handshake
+                // instead of URLSession.shared (no pin). nil for any CallingApi
+                // that doesn't override pinnedUrlSession() (test stubs) —
+                // WssTurnBridge then falls back to `.shared` exactly as before.
+                let bridge = WssTurnBridge(
+                    wssUrl: wssUrl,
+                    username: bridgeCreds.username,
+                    credential: bridgeCreds.credential,
+                    accessToken: accessToken,
+                    pinnedSession: callingApi.pinnedUrlSession()
                 )
-                return (servers, true, true)
-            }
-            // Bug-C discipline — never dial a bridge for a call that was torn
-            // down while the probe above was in flight.
-            guard !intentionalShutdown else { return (servers, false, false) }
-            // W-AUXPIN (2026-09-02, B11) — reuse callingApi's already
-            // cert-pinned REST session for this bridge's WSS-TURN handshake
-            // instead of URLSession.shared (no pin). nil for any CallingApi
-            // that doesn't override pinnedUrlSession() (test stubs) —
-            // WssTurnBridge then falls back to `.shared` exactly as before.
-            let bridge = WssTurnBridge(
-                wssUrl: wssUrl,
-                username: firstTurn.username,
-                credential: firstTurn.credential,
-                accessToken: accessToken,
-                pinnedSession: callingApi.pinnedUrlSession()
-            )
-            // W-SIGSWALLOW (2026-09-01) — was `try?`: a WSS-TURN bridge that
-            // failed to start silently left the call without its last-resort
-            // relay path and no line said so (audit memory
-            // reference_ios_stability_audit_2026_09_01, P1 item 7).
-            let bridgeResult: WssTurnBridge.BridgeResult?
-            do {
-                bridgeResult = try await bridge.start()
-            } catch {
-                print("[WebRtcCallController] wssturn bridge start fail err=\(error)")
-                bridgeResult = nil
-            }
-            if let result = bridgeResult {
-                // Bug-C discipline — a teardown that landed during the start
-                // must not be left holding a live bridge nobody will stop.
-                guard !intentionalShutdown else {
-                    bridge.stop()
-                    return (servers, false, false)
+                // W-SIGSWALLOW (2026-09-01) — was `try?`: a WSS-TURN bridge that
+                // failed to start silently left the call without its last-resort
+                // relay path and no line said so (audit memory
+                // reference_ios_stability_audit_2026_09_01, P1 item 7).
+                let bridgeResult: WssTurnBridge.BridgeResult?
+                do {
+                    bridgeResult = try await bridge.start()
+                } catch {
+                    print("[WebRtcCallController] wssturn bridge start fail err=\(error)")
+                    bridgeResult = nil
                 }
-                wssTurnBridge?.stop()
-                wssTurnBridge = bridge
-                wssTurnBridgeIceUrl = result.iceUrl
-                servers.insert(
-                    RTCIceServer(
-                        urlStrings: [result.iceUrl],
-                        username: firstTurn.username ?? "",
-                        credential: firstTurn.credential ?? ""
-                    ),
-                    at: 0
-                )
-                return (servers, true, false)
+                if let result = bridgeResult {
+                    // Bug-C discipline — a teardown that landed during the start
+                    // must not be left holding a live bridge nobody will stop.
+                    guard !intentionalShutdown else {
+                        bridge.stop()
+                        return (assembleIceServers(pool: orderedRelays, bridgeIceUrl: nil), false, false)
+                    }
+                    wssTurnBridge?.stop()
+                    wssTurnBridge = bridge
+                    wssTurnBridgeIceUrl = result.iceUrl
+                    bridgeIceUrl = result.iceUrl
+                }
             }
         }
 
-        return (servers, false, false)
+        // relay mode: with the bridge up the list is the bridge alone; without
+        // it (no WSS URL from the server, no TURN credentials, or the start
+        // failed) the plan falls back to the TURN servers of the pool, and the
+        // policy stays `.relay`, so the call never goes direct. "Started" is
+        // what `WssTurnBridge.start()` reports: the loopback UDP socket is
+        // bound. The WebSocket handshake is asynchronous and self-heals by
+        // reconnecting (W-WSSTURNHEAL), so a WSS endpoint that never answers
+        // is NOT a fallback case; the Settings text for relay says "cannot be
+        // started" for that reason, and the transport check shows the
+        // missing relay candidate.
+        let servers = assembleIceServers(pool: orderedRelays, bridgeIceUrl: bridgeIceUrl)
+        return (servers, bridgeIceUrl != nil, reusedBridge)
     }
 
     public enum ControllerError: Error, Equatable {

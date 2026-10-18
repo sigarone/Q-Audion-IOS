@@ -50,6 +50,7 @@ targets:
           - PersistentCallRecordStoreTests.swift
           - PhoneEntryScreenInviteTests.swift
           - RuntimeLogSinkTeeTests.swift
+          - TransportSettingsTextsTests.swift
           - TrustEvaluationModelTests.swift
           - VoiceGuardModelTests.swift
     settings:

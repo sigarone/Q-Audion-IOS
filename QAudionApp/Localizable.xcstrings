@@ -8443,6 +8443,1728 @@
         }
       }
     },
+    "transport_settings.mode.auto.explanation": {
+      "extractionState": "manual",
+      "comment": "Transport settings — explanation under the mode picker, Auto: policy all, STUN and TURN servers of the pool, the WSS link only when UDP looks blocked; it applies to 1-to-1 calls",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per le chiamate 1 a 1 sceglie automaticamente la rotta migliore (P2P preferito, relay fallback)."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For 1-to-1 calls it picks the best route automatically (direct P2P preferred, relay as fallback)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wählt bei 1:1-Anrufen automatisch die beste Route (direkte P2P-Verbindung bevorzugt, Relay als Rückfall)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En las llamadas 1 a 1 elige automáticamente la mejor ruta (P2P directo preferido, relay como respaldo)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pour les appels 1 à 1, choisit automatiquement le meilleur chemin (P2P direct privilégié, relais en secours)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nas chamadas 1 a 1, escolhe automaticamente a melhor rota (P2P direto preferido, relay como alternativa)."
+          }
+        }
+      }
+    },
+    "transport_settings.mode.p2p.explanation": {
+      "extractionState": "manual",
+      "comment": "Transport settings — explanation under the mode picker, P2P: looks for a direct connection; no TURN servers and no relay candidates on this phone, STUN allowed; a relay offered by the other phone can still carry the call; the voice goes encrypted through the server if the connection does not come up or drops; it applies to 1-to-1 calls",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per le chiamate 1 a 1 cerca una connessione diretta tra i due telefoni: il tuo telefono non usa server TURN né relay (restano ammessi i server STUN del server BCrypto) e l'altro telefono vede il tuo indirizzo IP. Se l'altro telefono offre un relay, la chiamata può comunque passare dal suo relay. Se la connessione non si stabilisce o si interrompe, la voce passa dal server BCrypto, cifrata, finché la connessione non è attiva."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For 1-to-1 calls it looks for a direct connection between the two phones: your phone uses no TURN servers and no relay (the STUN servers of the BCrypto server are still allowed) and the other phone can see your IP address. If the other phone offers a relay, the call can still go through its relay. If the connection cannot be established or drops, the voice goes through the BCrypto server, encrypted, until the connection is active."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sucht bei 1:1-Anrufen eine direkte Verbindung zwischen den beiden Telefonen: Ihr Telefon nutzt weder TURN-Server noch Relay (die STUN-Server des BCrypto-Servers bleiben erlaubt), und das andere Telefon sieht Ihre IP-Adresse. Bietet das andere Telefon ein Relay an, kann der Anruf trotzdem über dessen Relay laufen. Kommt die Verbindung nicht zustande oder bricht sie ab, läuft die Stimme verschlüsselt über den BCrypto-Server, bis die Verbindung aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En las llamadas 1 a 1 busca una conexión directa entre los dos teléfonos: tu teléfono no usa servidores TURN ni relay (siguen permitidos los servidores STUN del servidor BCrypto) y el otro teléfono ve tu dirección IP. Si el otro teléfono ofrece un relay, la llamada puede pasar igualmente por su relay. Si la conexión no se establece o se interrumpe, la voz pasa cifrada por el servidor BCrypto hasta que la conexión está activa."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pour les appels 1 à 1, cherche une connexion directe entre les deux téléphones : ton téléphone n'utilise ni serveur TURN ni relais (les serveurs STUN du serveur BCrypto restent autorisés) et l'autre téléphone voit ton adresse IP. Si l'autre téléphone propose un relais, l'appel peut quand même passer par son relais. Si la connexion ne s'établit pas ou s'interrompt, la voix passe chiffrée par le serveur BCrypto jusqu'à ce que la connexion soit active."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nas chamadas 1 a 1, procura uma conexão direta entre os dois telefones: o seu telefone não usa servidores TURN nem relay (os servidores STUN do servidor BCrypto continuam permitidos) e o outro telefone vê o seu endereço IP. Se o outro telefone oferecer um relay, a chamada ainda pode passar pelo relay dele. Se a conexão não for estabelecida ou cair, a voz passa criptografada pelo servidor BCrypto até a conexão ficar ativa."
+          }
+        }
+      }
+    },
+    "transport_settings.mode.turn.explanation": {
+      "extractionState": "manual",
+      "comment": "Transport settings — explanation under the mode picker, TURN: relay-only policy with the TURN servers of the pool, no WSS link; the voice goes encrypted through the server if the connection does not come up or drops; it applies to 1-to-1 calls",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Instrada le chiamate 1 a 1 solo tramite un server TURN del pool di relay predefinito, senza connessione diretta: l'altro telefono non vede il tuo indirizzo IP. Aumenta la latenza ma migliora il NAT traversal. Non usa il collegamento WSS. Se la connessione non si stabilisce o si interrompe, la voce passa invece dal server BCrypto, cifrata, finché la connessione non è attiva."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Routes 1-to-1 calls only through a TURN server of the default relay pool, with no direct connection: the other phone does not see your IP address. Adds latency but improves NAT traversal. It does not use the WSS link. If the connection cannot be established or drops, the voice goes through the BCrypto server instead, encrypted, until the connection is active."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leitet 1:1-Anrufe ausschließlich über einen TURN-Server des Standard-Relay-Pools, ohne direkte Verbindung: Das andere Telefon sieht Ihre IP-Adresse nicht. Erhöht die Latenz, verbessert aber den NAT-Durchgang. Die WSS-Verbindung wird nicht genutzt. Kommt die Verbindung nicht zustande oder bricht sie ab, läuft die Stimme stattdessen verschlüsselt über den BCrypto-Server, bis die Verbindung aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encamina las llamadas 1 a 1 solo a través de un servidor TURN del pool de relay predeterminado, sin conexión directa: el otro teléfono no ve tu dirección IP. Aumenta la latencia pero mejora el NAT traversal. No usa el enlace WSS. Si la conexión no se establece o se interrumpe, la voz pasa en su lugar cifrada por el servidor BCrypto hasta que la conexión está activa."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fait passer les appels 1 à 1 uniquement par un serveur TURN du pool de relais par défaut, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Augmente la latence mais améliore le franchissement du NAT. N'utilise pas la liaison WSS. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encaminha as chamadas 1 a 1 somente por um servidor TURN do pool de relay padrão, sem conexão direta: o outro telefone não vê o seu endereço IP. Aumenta a latência, mas melhora a travessia de NAT. Não usa o link WSS. Se a conexão não for estabelecida ou cair, a voz passa então criptografada pelo servidor BCrypto até a conexão ficar ativa."
+          }
+        }
+      }
+    },
+    "transport_settings.mode.relay.explanation": {
+      "extractionState": "manual",
+      "comment": "Transport settings — explanation under the mode picker, Relay: relay-only policy through the WSS link; if the link does not open, the TURN servers of the pool; the voice goes encrypted through the server if the connection does not come up or drops; it applies to 1-to-1 calls",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Instrada le chiamate 1 a 1 solo tramite il collegamento WSS (WebSocket sicuro) al server BCrypto, senza connessione diretta: l'altro telefono non vede il tuo indirizzo IP. Funziona anche dove UDP e le porte TURN sono bloccati, a costo di latenza maggiore. Se il collegamento WSS non può essere avviato, usa i server TURN del pool di relay predefinito: la chiamata resta comunque su un relay. Se la connessione non si stabilisce o si interrompe, la voce passa invece dal server BCrypto, cifrata, finché la connessione non è attiva."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Routes 1-to-1 calls only through the WSS link (secure WebSocket) to the BCrypto server, with no direct connection: the other phone does not see your IP address. It also works where UDP and the TURN ports are blocked, at the cost of higher latency. If the WSS link cannot be started, it uses the TURN servers of the default relay pool: the call still stays on a relay. If the connection cannot be established or drops, the voice goes through the BCrypto server instead, encrypted, until the connection is active."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leitet 1:1-Anrufe ausschließlich über die WSS-Verbindung (sicherer WebSocket) zum BCrypto-Server, ohne direkte Verbindung: Das andere Telefon sieht Ihre IP-Adresse nicht. Funktioniert auch dort, wo UDP und die TURN-Ports gesperrt sind, bei höherer Latenz. Lässt sich die WSS-Verbindung nicht starten, werden die TURN-Server des Standard-Relay-Pools genutzt: Der Anruf bleibt trotzdem auf einem Relay. Kommt die Verbindung nicht zustande oder bricht sie ab, läuft die Stimme stattdessen verschlüsselt über den BCrypto-Server, bis die Verbindung aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encamina las llamadas 1 a 1 solo a través del enlace WSS (WebSocket seguro) con el servidor BCrypto, sin conexión directa: el otro teléfono no ve tu dirección IP. Funciona también donde UDP y los puertos TURN están bloqueados, con más latencia. Si el enlace WSS no se puede iniciar, usa los servidores TURN del pool de relay predeterminado: la llamada sigue pasando por un relay. Si la conexión no se establece o se interrumpe, la voz pasa en su lugar cifrada por el servidor BCrypto hasta que la conexión está activa."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fait passer les appels 1 à 1 uniquement par la liaison WSS (WebSocket sécurisé) vers le serveur BCrypto, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Fonctionne aussi là où UDP et les ports TURN sont bloqués, au prix d'une latence plus élevée. Si la liaison WSS ne peut pas être démarrée, les serveurs TURN du pool de relais par défaut sont utilisés : l'appel reste malgré tout sur un relais. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encaminha as chamadas 1 a 1 somente pelo link WSS (WebSocket seguro) com o servidor BCrypto, sem conexão direta: o outro telefone não vê o seu endereço IP. Funciona também onde o UDP e as portas TURN estão bloqueados, com mais latência. Se o link WSS não puder ser iniciado, usa os servidores TURN do pool de relay padrão: a chamada continua em um relay. Se a conexão não for estabelecida ou cair, a voz passa então criptografada pelo servidor BCrypto até a conexão ficar ativa."
+          }
+        }
+      }
+    },
+    "transport_settings.mode.custom_server.explanation": {
+      "extractionState": "manual",
+      "comment": "Transport settings — explanation under the mode picker, TURN or Relay with a valid custom server typed: relay-only policy through that server alone, no pool, no WSS link; the voice goes encrypted through the server if the connection does not come up or drops",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Instrada le chiamate 1 a 1 solo tramite il server TURN scritto nel campo qui sotto, senza connessione diretta: l'altro telefono non vede il tuo indirizzo IP. Il pool di relay predefinito e il collegamento WSS non vengono usati. Se la connessione non si stabilisce o si interrompe, la voce passa invece dal server BCrypto, cifrata, finché la connessione non è attiva."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Routes 1-to-1 calls only through the TURN server entered below, with no direct connection: the other phone does not see your IP address. The default relay pool and the WSS link are not used. If the connection cannot be established or drops, the voice goes through the BCrypto server instead, encrypted, until the connection is active."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leitet 1:1-Anrufe ausschließlich über den unten eingegebenen TURN-Server, ohne direkte Verbindung: Das andere Telefon sieht Ihre IP-Adresse nicht. Der Standard-Relay-Pool und die WSS-Verbindung werden nicht genutzt. Kommt die Verbindung nicht zustande oder bricht sie ab, läuft die Stimme stattdessen verschlüsselt über den BCrypto-Server, bis die Verbindung aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encamina las llamadas 1 a 1 solo a través del servidor TURN escrito abajo, sin conexión directa: el otro teléfono no ve tu dirección IP. El pool de relay predeterminado y el enlace WSS no se usan. Si la conexión no se establece o se interrumpe, la voz pasa en su lugar cifrada por el servidor BCrypto hasta que la conexión está activa."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fait passer les appels 1 à 1 uniquement par le serveur TURN saisi ci-dessous, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Le pool de relais par défaut et la liaison WSS ne sont pas utilisés. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encaminha as chamadas 1 a 1 somente pelo servidor TURN informado abaixo, sem conexão direta: o outro telefone não vê o seu endereço IP. O pool de relay padrão e o link WSS não são usados. Se a conexão não for estabelecida ou cair, a voz passa então criptografada pelo servidor BCrypto até a conexão ficar ativa."
+          }
+        }
+      }
+    },
+    "transport_settings.address.note.invalid": {
+      "extractionState": "manual",
+      "comment": "Transport settings — note under the TURN server fields when the address is not a usable turn:/turns: address, or has the user name and password written inside it; they go in their own fields",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indirizzo non valido: deve essere turn: o turns:, poi il nome del server e la porta (per esempio turn:hostname:3478), senza utente e password, che vanno nei campi Utente e Password. Finché non lo correggi non si può salvare né verificare la modalità."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid address: it must be turn: or turns:, then the server name and port (for example turn:hostname:3478), with no user name or password, which go in the User name and Password fields. Until you fix it, the mode cannot be saved or checked."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültige Adresse: Sie muss turn: oder turns: lauten, danach Servername und Port (zum Beispiel turn:hostname:3478), ohne Benutzername und Passwort, die in die Felder Benutzername und Passwort gehören. Solange sie nicht korrigiert ist, lässt sich der Modus weder speichern noch prüfen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dirección no válida: debe ser turn: o turns:, luego el nombre del servidor y el puerto (por ejemplo turn:hostname:3478), sin usuario ni contraseña, que van en los campos Usuario y Contraseña. Hasta que la corrijas no se puede guardar ni comprobar el modo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adresse non valide : elle doit être turn: ou turns:, puis le nom du serveur et le port (par exemple turn:hostname:3478), sans utilisateur ni mot de passe, qui vont dans les champs Utilisateur et Mot de passe. Tant qu'elle n'est pas corrigée, le mode ne peut être ni enregistré ni vérifié."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Endereço inválido: deve ser turn: ou turns:, depois o nome do servidor e a porta (por exemplo turn:hostname:3478), sem usuário nem senha, que vão nos campos Usuário e Senha. Enquanto não for corrigido, não é possível salvar nem verificar o modo."
+          }
+        }
+      }
+    },
+    "transport_settings.address.note.needs_credentials": {
+      "extractionState": "manual",
+      "comment": "Transport settings — note under the TURN server fields when the address is well formed but the user name or the password is empty: it cannot be saved or checked, and the BCrypto temporary credentials are not given to it",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servono utente e password: il server che scrivi non riceve le credenziali temporanee del server BCrypto, quindi compila i campi Utente e Password. Finché non li aggiungi non si può salvare né verificare la modalità."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A user name and a password are needed: the server you enter does not receive the temporary credentials of the BCrypto server, so fill in the User name and Password fields. Until you add them, the mode cannot be saved or checked."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benutzername und Passwort sind erforderlich: Der eingegebene Server erhält nicht die temporären Zugangsdaten des BCrypto-Servers, füllen Sie also die Felder Benutzername und Passwort aus. Solange sie fehlen, lässt sich der Modus weder speichern noch prüfen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hacen falta usuario y contraseña: el servidor que escribas no recibe las credenciales temporales del servidor BCrypto, así que rellena los campos Usuario y Contraseña. Hasta que los añadas no se puede guardar ni comprobar el modo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il faut un utilisateur et un mot de passe : le serveur que tu saisis ne reçoit pas les identifiants temporaires du serveur BCrypto, remplis donc les champs Utilisateur et Mot de passe. Tant qu'ils manquent, le mode ne peut être ni enregistré ni vérifié."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "São necessários usuário e senha: o servidor que você informar não recebe as credenciais temporárias do servidor BCrypto, então preencha os campos Usuário e Senha. Enquanto não forem adicionados, não é possível salvar nem verificar o modo."
+          }
+        }
+      }
+    },
+    "transport_settings.field.username": {
+      "extractionState": "manual",
+      "comment": "Transport settings — placeholder of the user name field of the custom TURN server",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utente"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "User name"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benutzername"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usuario"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilisateur"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usuário"
+          }
+        }
+      }
+    },
+    "transport_settings.address.note.p2p": {
+      "extractionState": "manual",
+      "comment": "Transport settings — note under the TURN address field in P2P mode, where this phone never uses a relay",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In modalità P2P il tuo telefono non usa nessun relay: l'indirizzo TURN non ha effetto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In P2P mode your phone uses no relay: the TURN address has no effect."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Im P2P-Modus nutzt Ihr Telefon kein Relay: Die TURN-Adresse hat keine Wirkung."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En modo P2P tu teléfono no usa ningún relay: la dirección TURN no tiene efecto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En mode P2P, ton téléphone n'utilise aucun relais : l'adresse TURN n'a aucun effet."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No modo P2P o seu telefone não usa nenhum relay: o endereço TURN não tem efeito."
+          }
+        }
+      }
+    },
+    "transport_settings.address.note.custom": {
+      "extractionState": "manual",
+      "comment": "Transport settings — note under the TURN address field in TURN or Relay mode when a valid address is typed: it replaces the default servers and gets the credentials the user wrote; the voice goes encrypted through the server if the connection does not come up or drops",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le chiamate 1 a 1 useranno solo questo server TURN, con l'utente e la password che hai scritto; le credenziali temporanee del server BCrypto non gli vengono date. I server predefiniti (STUN e relay) e il collegamento WSS non vengono usati. Se la connessione non si stabilisce o si interrompe, la voce passa invece dal server BCrypto, cifrata, finché la connessione non è attiva."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1-to-1 calls will use only this TURN server, with the user name and password you wrote; the temporary credentials of the BCrypto server are not given to it. The default servers (STUN and relay) and the WSS link are not used. If the connection cannot be established or drops, the voice goes through the BCrypto server instead, encrypted, until the connection is active."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1:1-Anrufe nutzen nur diesen TURN-Server, mit dem Benutzernamen und dem Passwort, die Sie eingegeben haben; die temporären Zugangsdaten des BCrypto-Servers erhält er nicht. Die Standardserver (STUN und Relay) und die WSS-Verbindung werden nicht genutzt. Kommt die Verbindung nicht zustande oder bricht sie ab, läuft die Stimme stattdessen verschlüsselt über den BCrypto-Server, bis die Verbindung aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las llamadas 1 a 1 usarán solo este servidor TURN, con el usuario y la contraseña que has escrito; las credenciales temporales del servidor BCrypto no se le dan. Los servidores predeterminados (STUN y relay) y el enlace WSS no se usan. Si la conexión no se establece o se interrumpe, la voz pasa en su lugar cifrada por el servidor BCrypto hasta que la conexión está activa."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les appels 1 à 1 utiliseront uniquement ce serveur TURN, avec l'utilisateur et le mot de passe que tu as saisis ; les identifiants temporaires du serveur BCrypto ne lui sont pas donnés. Les serveurs par défaut (STUN et relais) et la liaison WSS ne sont pas utilisés. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As chamadas 1 a 1 usarão somente este servidor TURN, com o usuário e a senha que você informou; as credenciais temporárias do servidor BCrypto não são dadas a ele. Os servidores padrão (STUN e relay) e o link WSS não são usados. Se a conexão não for estabelecida ou cair, a voz passa então criptografada pelo servidor BCrypto até a conexão ficar ativa."
+          }
+        }
+      }
+    },
+    "transport_settings.address.note.custom_auto": {
+      "extractionState": "manual",
+      "comment": "Transport settings — note under the TURN address field in Auto mode when a valid address is typed: it is the only server (the policy stays all, so a direct connection stays possible), with the credentials the user wrote; the voice goes encrypted through the server if the connection does not come up or drops",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Come server, le chiamate 1 a 1 useranno solo questo server TURN, con l'utente e la password che hai scritto; le credenziali temporanee del server BCrypto non gli vengono date. I server predefiniti (STUN e relay) e il collegamento WSS non vengono usati. Una connessione diretta tra i due telefoni resta possibile. Se la connessione non si stabilisce o si interrompe, la voce passa dal server BCrypto, cifrata, finché la connessione non è attiva."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As servers, 1-to-1 calls will use only this TURN server, with the user name and password you wrote; the temporary credentials of the BCrypto server are not given to it. The default servers (STUN and relay) and the WSS link are not used. A direct connection between the two phones remains possible. If the connection cannot be established or drops, the voice goes through the BCrypto server, encrypted, until the connection is active."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Als Server nutzen 1:1-Anrufe nur diesen TURN-Server, mit dem Benutzernamen und dem Passwort, die Sie eingegeben haben; die temporären Zugangsdaten des BCrypto-Servers erhält er nicht. Die Standardserver (STUN und Relay) und die WSS-Verbindung werden nicht genutzt. Eine direkte Verbindung zwischen den beiden Telefonen bleibt möglich. Kommt die Verbindung nicht zustande oder bricht sie ab, läuft die Stimme verschlüsselt über den BCrypto-Server, bis die Verbindung aktiv ist."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Como servidores, las llamadas 1 a 1 usarán solo este servidor TURN, con el usuario y la contraseña que has escrito; las credenciales temporales del servidor BCrypto no se le dan. Los servidores predeterminados (STUN y relay) y el enlace WSS no se usan. Sigue siendo posible una conexión directa entre los dos teléfonos. Si la conexión no se establece o se interrumpe, la voz pasa cifrada por el servidor BCrypto hasta que la conexión está activa."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Côté serveurs, les appels 1 à 1 utiliseront uniquement ce serveur TURN, avec l'utilisateur et le mot de passe que tu as saisis ; les identifiants temporaires du serveur BCrypto ne lui sont pas donnés. Les serveurs par défaut (STUN et relais) et la liaison WSS ne sont pas utilisés. Une connexion directe entre les deux téléphones reste possible. Si la connexion ne s'établit pas ou s'interrompt, la voix passe chiffrée par le serveur BCrypto jusqu'à ce que la connexion soit active."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Como servidores, as chamadas 1 a 1 usarão somente este servidor TURN, com o usuário e a senha que você informou; as credenciais temporárias do servidor BCrypto não são dadas a ele. Os servidores padrão (STUN e relay) e o link WSS não são usados. Uma conexão direta entre os dois telefones continua possível. Se a conexão não for estabelecida ou cair, a voz passa criptografada pelo servidor BCrypto até a conexão ficar ativa."
+          }
+        }
+      }
+    },
+    "transport_settings.check.button": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check button: it checks the mode selected in the picker, not only the server",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica la modalità scelta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the selected mode"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gewählten Modus prüfen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobar el modo elegido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier le mode choisi"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar o modo escolhido"
+          }
+        }
+      }
+    },
+    "transport_settings.check.running": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check button label while the check runs",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfung läuft …"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification en cours…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando…"
+          }
+        }
+      }
+    },
+    "transport_settings.check.row.mode": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check result row label: which mode was checked",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modalità controllata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode checked"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geprüfter Modus"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modo comprobado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode vérifié"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modo verificado"
+          }
+        }
+      }
+    },
+    "transport_settings.check.row.route": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check result row label: which servers the mode used",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percorso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Route"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Route"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ruta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chemin"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rota"
+          }
+        }
+      }
+    },
+    "transport_settings.check.row.candidates": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check result row label: how many ICE candidates of each type were found",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Candidati trovati"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Candidates found"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gefundene Kandidaten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Candidatos encontrados"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Candidats trouvés"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Candidatos encontrados"
+          }
+        }
+      }
+    },
+    "transport_settings.route.direct_only": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check route: P2P, this phone gathers with STUN servers only and no TURN or relay; it does not promise a direct connection (the other phone may offer a relay)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo server STUN su questo telefono, nessun TURN né relay"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "STUN servers only on this phone, no TURN or relay"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auf diesem Telefon nur STUN-Server, kein TURN und kein Relay"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo servidores STUN en este teléfono, sin TURN ni relay"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serveurs STUN uniquement sur ce téléphone, ni TURN ni relais"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Somente servidores STUN neste telefone, sem TURN nem relay"
+          }
+        }
+      }
+    },
+    "transport_settings.route.server_pool": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check route: Auto, the default STUN and relay servers",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server STUN e relay predefiniti"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default STUN and relay servers"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standard-STUN- und Relay-Server"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores STUN y relay predeterminados"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serveurs STUN et relais par défaut"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores STUN e relay padrão"
+          }
+        }
+      }
+    },
+    "transport_settings.route.server_pool_bridge": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check route: Auto with UDP blocked, the default servers plus the WSS link",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server STUN e relay predefiniti, più il collegamento WSS"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default STUN and relay servers, plus the WSS link"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standard-STUN- und Relay-Server, zusätzlich die WSS-Verbindung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores STUN y relay predeterminados, más el enlace WSS"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serveurs STUN et relais par défaut, plus la liaison WSS"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores STUN e relay padrão, mais o link WSS"
+          }
+        }
+      }
+    },
+    "transport_settings.route.pool_turn": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check route: TURN mode, the TURN servers of the default relay pool",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server TURN del pool di relay predefinito"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TURN servers of the default relay pool"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TURN-Server des Standard-Relay-Pools"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores TURN del pool de relay predeterminado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serveurs TURN du pool de relais par défaut"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores TURN do pool de relay padrão"
+          }
+        }
+      }
+    },
+    "transport_settings.route.wss_bridge": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check route: Relay mode, the WSS link to the server",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collegamento WSS al server BCrypto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WSS link to the BCrypto server"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WSS-Verbindung zum BCrypto-Server"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enlace WSS con el servidor BCrypto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Liaison WSS vers le serveur BCrypto"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link WSS com o servidor BCrypto"
+          }
+        }
+      }
+    },
+    "transport_settings.route.pool_turn_fallback": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check route: Relay mode when the WSS link could not be used, so the TURN servers of the pool",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server TURN del pool di relay predefinito (il collegamento WSS non è disponibile)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TURN servers of the default relay pool (the WSS link is not available)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TURN-Server des Standard-Relay-Pools (die WSS-Verbindung ist nicht verfügbar)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores TURN del pool de relay predeterminado (el enlace WSS no está disponible)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serveurs TURN du pool de relais par défaut (la liaison WSS n'est pas disponible)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servidores TURN do pool de relay padrão (o link WSS não está disponível)"
+          }
+        }
+      }
+    },
+    "transport_settings.route.custom_server": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check route: the custom TURN address typed by the user",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il server TURN che hai inserito"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The TURN server you entered"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der von Ihnen eingegebene TURN-Server"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servidor TURN que has introducido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le serveur TURN que tu as saisi"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O servidor TURN que você informou"
+          }
+        }
+      }
+    },
+    "transport_settings.candidates.counts": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check result: number of ICE candidates by type (host = local network, srflx = public address seen by a STUN server, relay = through a relay); three whole numbers in this order",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Locali (host) %lld · Pubblici (srflx) %lld · Relay %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local (host) %lld · Public (srflx) %lld · Relay %lld"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lokal (host) %lld · Öffentlich (srflx) %lld · Relay %lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Locales (host) %lld · Públicos (srflx) %lld · Relay %lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Locaux (host) %lld · Publics (srflx) %lld · Relais %lld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Locais (host) %lld · Públicos (srflx) %lld · Relay %lld"
+          }
+        }
+      }
+    },
+    "transport_settings.outcome.ok_p2p": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check verdict: P2P with candidates found on this phone and none of them relay",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: il tuo telefono non ha prodotto candidati relay, come previsto in modalità P2P."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: your phone produced no relay candidate, as expected in P2P mode."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: Ihr Telefon hat keinen Relay-Kandidaten erzeugt, wie im P2P-Modus vorgesehen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: tu teléfono no ha generado ningún candidato relay, como se espera en modo P2P."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK : ton téléphone n'a produit aucun candidat relais, comme prévu en mode P2P."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: o seu telefone não gerou nenhum candidato relay, como esperado no modo P2P."
+          }
+        }
+      }
+    },
+    "transport_settings.outcome.ok_auto": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check verdict: Auto with candidates found",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: la rete ha prodotto candidati di connessione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: the network produced connection candidates."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: Das Netzwerk hat Verbindungskandidaten geliefert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: la red ha generado candidatos de conexión."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK : le réseau a produit des candidats de connexion."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: a rede gerou candidatos de conexão."
+          }
+        }
+      }
+    },
+    "transport_settings.outcome.ok_relay": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check verdict: TURN or Relay mode with at least one relay candidate",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: trovato almeno un candidato relay."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: at least one relay candidate was found."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: Mindestens ein Relay-Kandidat wurde gefunden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: se encontró al menos un candidato relay."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK : au moins un candidat relais a été trouvé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK: foi encontrado pelo menos um candidato relay."
+          }
+        }
+      }
+    },
+    "transport_settings.outcome.unexpected_relay": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check verdict: a relay candidate appeared in P2P mode",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NON OK: è comparso un candidato relay, ma in modalità P2P non dovrebbe esserci."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOT OK: a relay candidate appeared, but there must be none in P2P mode."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NICHT OK: Es erschien ein Relay-Kandidat, im P2P-Modus darf es keinen geben."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NO OK: apareció un candidato relay, pero en modo P2P no debería haber ninguno."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAS OK : un candidat relais est apparu, alors qu'il ne doit y en avoir aucun en mode P2P."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NÃO OK: apareceu um candidato relay, mas no modo P2P não deveria haver nenhum."
+          }
+        }
+      }
+    },
+    "transport_settings.outcome.no_relay_candidate": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check verdict: TURN or Relay mode and no relay candidate came out",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NON OK: nessun candidato relay trovato, da questa rete il relay non risulta raggiungibile."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOT OK: no relay candidate found, the relay does not seem reachable from this network."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NICHT OK: Kein Relay-Kandidat gefunden, das Relay scheint von diesem Netzwerk aus nicht erreichbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NO OK: no se encontró ningún candidato relay, el relay no parece accesible desde esta red."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAS OK : aucun candidat relais trouvé, le relais ne semble pas joignable depuis ce réseau."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NÃO OK: nenhum candidato relay encontrado, o relay não parece acessível a partir desta rede."
+          }
+        }
+      }
+    },
+    "transport_settings.outcome.no_candidates": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check verdict: not a single candidate, so no usable network",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NON OK: nessun candidato trovato, controlla la connessione di rete."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOT OK: no candidate found, check the network connection."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NICHT OK: Kein Kandidat gefunden, prüfen Sie die Netzwerkverbindung."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NO OK: no se encontró ningún candidato, comprueba la conexión de red."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAS OK : aucun candidat trouvé, vérifie la connexion réseau."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NÃO OK: nenhum candidato encontrado, verifique a conexão de rede."
+          }
+        }
+      }
+    },
+    "transport_settings.outcome.server_list_unavailable": {
+      "extractionState": "manual",
+      "comment": "Transport settings — check verdict: no server to try for the mode, in any mode: the list did not arrive from the server, or nothing in it can be used by the mode",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NON OK: per questa modalità non c'era nessun server da provare, perché dal server BCrypto non è arrivato l'elenco o non contiene nulla che la modalità possa usare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOT OK: there was no server to try for this mode, because the list from the BCrypto server did not arrive or has nothing this mode can use."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NICHT OK: Für diesen Modus gab es keinen Server zum Testen, weil die Liste des BCrypto-Servers nicht angekommen ist oder nichts enthält, was dieser Modus nutzen kann."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NO OK: no había ningún servidor que probar en este modo, porque la lista del servidor BCrypto no llegó o no contiene nada que este modo pueda usar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAS OK : il n'y avait aucun serveur à tester pour ce mode, car la liste du serveur BCrypto n'est pas arrivée ou ne contient rien que ce mode puisse utiliser."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NÃO OK: não havia nenhum servidor para testar neste modo, porque a lista do servidor BCrypto não chegou ou não tem nada que este modo possa usar."
+          }
+        }
+      }
+    },
+    "transport_settings.check.confirm": {
+      "extractionState": "manual",
+      "comment": "Transport settings — button after a check: the user confirms the result; the mode and the date are remembered",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confermo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I confirm"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätigen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je confirme"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmo"
+          }
+        }
+      }
+    },
+    "transport_settings.check.report": {
+      "extractionState": "manual",
+      "comment": "Transport settings — button after a check: copies a technical summary (mode, candidate types, result; no IP addresses) to the clipboard",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Segnala problema"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report a problem"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Problem melden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informar de un problema"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signaler un problème"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relatar problema"
+          }
+        }
+      }
+    },
+    "transport_settings.check.report_copied": {
+      "extractionState": "manual",
+      "comment": "Transport settings — shown after the report button copied the technical summary",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riepilogo tecnico copiato negli appunti, senza indirizzi IP."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Technical summary copied to the clipboard, without IP addresses."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Technische Zusammenfassung in die Zwischenablage kopiert, ohne IP-Adressen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resumen técnico copiado al portapapeles, sin direcciones IP."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Résumé technique copié dans le presse-papiers, sans adresses IP."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resumo técnico copiado para a área de transferência, sem endereços IP."
+          }
+        }
+      }
+    },
+    "transport_settings.check.confirmed": {
+      "extractionState": "manual",
+      "comment": "Transport settings — the last confirmation of a check that was OK: first the mode name, then the date and time",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ultima conferma: %@ con esito OK il %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last confirmed: %@ with result OK on %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuletzt bestätigt: %@ mit Ergebnis OK am %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última confirmación: %@ con resultado OK el %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernière confirmation : %@ avec résultat OK le %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última confirmação: %@ com resultado OK em %@"
+          }
+        }
+      }
+    },
+    "transport_settings.check.confirmed_not_ok": {
+      "extractionState": "manual",
+      "comment": "Transport settings — the last confirmation of a check that was NOT OK: first the mode name, then the date and time",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ultima conferma: %@ con esito NON OK il %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last confirmed: %@ with result NOT OK on %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zuletzt bestätigt: %@ mit Ergebnis NICHT OK am %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última confirmación: %@ con resultado NO OK el %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernière confirmation : %@ avec résultat PAS OK le %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última confirmação: %@ com resultado NÃO OK em %@"
+          }
+        }
+      }
+    },
+    "transport_settings.check.not_saved": {
+      "extractionState": "manual",
+      "comment": "Transport settings — shown under a check result when the checked mode or the checked address (or both) differs from the saved one",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il controllo è stato fatto con una modalità o un indirizzo non ancora salvati: premi Salva per usarli nelle chiamate 1 a 1."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This check ran with a mode or an address that is not saved yet: tap Save to use them in 1-to-1 calls."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Prüfung lief mit einem Modus oder einer Adresse, die noch nicht gespeichert sind: Tippen Sie auf Speichern, um sie in 1:1-Anrufen zu verwenden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta comprobación se hizo con un modo o una dirección que todavía no están guardados: pulsa Guardar para usarlos en las llamadas 1 a 1."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette vérification a été faite avec un mode ou une adresse pas encore enregistrés : appuie sur Enregistrer pour les utiliser dans les appels 1 à 1."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta verificação foi feita com um modo ou um endereço que ainda não foram salvos: toque em Salvar para usá-los nas chamadas 1 a 1."
+          }
+        }
+      }
+    },
+    "transport_settings.saved.note": {
+      "extractionState": "manual",
+      "comment": "Transport settings — shown after Save: a call already running keeps the mode it started with; group calls do not read this setting",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvato. Vale dalla prossima chiamata 1 a 1."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved. It applies from the next 1-to-1 call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gespeichert. Gilt ab dem nächsten 1:1-Anruf."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guardado. Vale desde la próxima llamada 1 a 1."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistré. S'applique dès le prochain appel 1 à 1."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvo. Vale a partir da próxima chamada 1 a 1."
+          }
+        }
+      }
+    },
+    "transport_settings.save.failed": {
+      "extractionState": "manual",
+      "comment": "Transport settings — shown when Save could not keep the user name and password of the custom TURN server in the Keychain; the previous settings stay in effect",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile salvare utente e password nel Keychain del telefono: le impostazioni precedenti restano valide. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The user name and password could not be saved in the phone's Keychain: the previous settings stay in effect. Try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benutzername und Passwort konnten nicht im Schlüsselbund des Telefons gespeichert werden: Die bisherigen Einstellungen bleiben gültig. Versuchen Sie es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudieron guardar el usuario y la contraseña en el llavero del teléfono: los ajustes anteriores siguen vigentes. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'utilisateur et le mot de passe n'ont pas pu être enregistrés dans le trousseau du téléphone : les réglages précédents restent en vigueur. Réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível salvar usuário e senha no Keychain do telefone: as configurações anteriores continuam valendo. Tente novamente."
+          }
+        }
+      }
+    },
+    "transport_settings.rtt.last_label": {
+      "extractionState": "manual",
+      "comment": "Transport settings, DIAGNOSTICA — row label: how long the server took to answer the relay list request in the last check (not a TURN round trip)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Risposta elenco relay"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relay list response"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antwort Relay-Liste"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respuesta de la lista de relays"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réponse liste de relais"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resposta da lista de relays"
+          }
+        }
+      }
+    },
+    "transport_settings.rtt.saved_label": {
+      "extractionState": "manual",
+      "comment": "Transport settings, DIAGNOSTICA — row label: the relay list response time stored by the last Save",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Risposta elenco relay salvata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved relay list response"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gespeicherte Antwort Relay-Liste"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respuesta de la lista de relays guardada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réponse liste de relais enregistrée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resposta da lista de relays salva"
+          }
+        }
+      }
+    },
     "my_phones.error.number_empty": {
       "extractionState": "manual",
       "comment": "Error banner — user tapped add/verify without typing a phone number",

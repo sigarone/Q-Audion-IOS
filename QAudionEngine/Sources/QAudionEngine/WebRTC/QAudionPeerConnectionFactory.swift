@@ -669,5 +669,15 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
                           credential: rs.credential ?? "")
         }
     }
+
+    /// The list a `TransportPlan` produced, as libwebrtc wants it. Same conversion as the one above (empty strings for
+    /// missing credentials), so a STUN entry of the pool reaches libwebrtc exactly as it always did.
+    public static func iceServers(from planned: [TransportIceServer]) -> [RTCIceServer] {
+        return planned.map { entry in
+            RTCIceServer(urlStrings: entry.urls,
+                         username: entry.username ?? "",
+                         credential: entry.credential ?? "")
+        }
+    }
 }
 #endif
