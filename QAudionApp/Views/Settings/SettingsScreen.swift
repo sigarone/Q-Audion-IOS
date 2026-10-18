@@ -673,6 +673,15 @@ struct SettingsScreen: View {
         VStack(spacing: 8) {
             SettingsSectionHeader("INFO")
 
+            // Server-pushed service notices. The server side of this
+            // channel (encrypted per-device fan-out, ack endpoint) has
+            // existed the whole time and Android already polls it —
+            // NoticeService.swift ports that reader rather than inventing
+            // a subsystem. First row in INFO, ahead of Feedback, matching
+            // Android's ordering (SettingsScreen.kt). Sub-view with its own
+            // unread-dot observation, see NoticeSettingsLink.
+            NoticeSettingsLink()
+
             // W546+W547 — in-app feedback inbox + compose. Subtitle
             // dynamically reports the unread maintainer-reply count so
             // the user notices new messages without opening the screen.
