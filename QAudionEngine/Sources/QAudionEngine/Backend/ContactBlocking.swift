@@ -4,8 +4,9 @@ import Foundation
 ///
 /// Blocking is directional. When the user (R) has blocked a contact (S), nothing S starts reaches R: private
 /// messages, call offers and the pushes for them, private file announcements, group invites, key-exchange
-/// offers, and the group calls S creates. The server is the first line (it never delivers S's traffic to R, and
-/// it keeps R out of the groups and the group calls S creates or manages); the rules below are the second,
+/// offers, and the group calls S creates. The server is the first line (it delivers none of S's traffic to R
+/// except the few frames listed below, and it keeps R out of the groups and the group calls S creates or
+/// manages); the rules below are the second,
 /// applied on the device to whatever still arrives (frames queued before the block, mesh packets, a push that
 /// was already on its way).
 ///
@@ -25,8 +26,8 @@ import Foundation
 /// A group call S created never rings on the device, whether or not the two share a group
 /// (`ringsForGroupCall`); a group call created by someone else in which S takes part works as usual.
 ///
-/// The device never tells S about the block: a dropped call is simply not rung and not answered, exactly as
-/// when the phone is off; no "blocked" reply exists.
+/// The device never tells S about the block: a dropped call is simply not rung and not answered, as when the
+/// app does not answer; no "blocked" reply exists.
 public enum BlockPolicy {
 
     /// `qa_grp.t` of the two group envelopes that carry key material: the only group-layer envelopes a blocked
