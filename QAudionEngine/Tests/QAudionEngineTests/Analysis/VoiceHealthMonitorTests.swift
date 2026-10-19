@@ -9,57 +9,103 @@ final class VoiceHealthMonitorTests: XCTestCase {
         monitor = VoiceHealthMonitor()
     }
 
-    func testUnvoicedPitchReturnsDefaultHealth() {
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 0, voiced: false, rms: 0)
-        let pcm = TestAudioHelpers.makeSilentPCM(sampleCount: 960)
-        let result = monitor.analyze(pitch: pitch, pcmFrame: pcm)
-        XCTAssertEqual(result.hnr, 0, "HNR should be zero for unvoiced input")
-        XCTAssertEqual(result.breathiness, 1.0, "Breathiness should be 1.0 for unvoiced input")
+    private func analyze(_ x: [Double], f0: Double = 120, voiced: Bool = true, end: Int? = nil)
+        -> VoiceAnalysisResult.VoiceHealth {
+        monitor.analyze(window: SyntheticVoice.window(of: x, endingAt: end), voiced: voiced, f0Hz: voiced ? f0 : 0)
     }
 
-    func testVoicedSineProducesPositiveHNR() {
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.5)
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        let result = monitor.analyze(pitch: pitch, pcmFrame: pcm)
-        XCTAssertGreaterThan(result.hnr, 0, "A clean sine wave should have positive HNR")
+    private func instant(_ x: [Double], f0: Double = 120) -> Double {
+        monitor.instantHnr(SyntheticVoice.window(of: x).linear, f0Hz: f0).hnr
     }
 
-    func testBreathinessRange() {
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 150, voiced: true, rms: 0.4)
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 150, sampleCount: 960)
-        let result = monitor.analyze(pitch: pitch, pcmFrame: pcm)
-        XCTAssertGreaterThanOrEqual(result.breathiness, 0, "Breathiness should be >= 0")
-        XCTAssertLessThanOrEqual(result.breathiness, 1.0, "Breathiness should be <= 1.0")
+    func testUnvoicedStepBeforeAnyVoiceIsNotAReading() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.3)
+        let h = analyze(x, voiced: false)
+        XCTAssertEqual(h.hnr, 0)
+        XCTAssertEqual(h.breathiness, 0, "breathiness is 0 while there is no reading, not 1")
+        XCTAssertFalse(h.hnrValid)
     }
 
-    func testNoiseInputHealth() {
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 120, voiced: true, rms: 0.3)
-        let pcm = TestAudioHelpers.makeRandomPCM(sampleCount: 960)
-        let result = monitor.analyze(pitch: pitch, pcmFrame: pcm)
-        // Noise should have lower HNR than a clean sine
-        XCTAssertGreaterThanOrEqual(result.breathiness, 0)
-        XCTAssertLessThanOrEqual(result.breathiness, 1.0)
+    func testNotValidUntilThreeVoicedReadings() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.5)
+        XCTAssertFalse(analyze(x, end: 4_000).hnrValid)
+        XCTAssertFalse(analyze(x, end: 5_000).hnrValid)
+        let third = analyze(x, end: 6_000)
+        XCTAssertTrue(third.hnrValid)
+        XCTAssertGreaterThan(third.hnr, 20)
+        XCTAssertLessThanOrEqual(third.hnr, 40, "capped at 40 dB")
+        XCTAssertGreaterThanOrEqual(third.breathiness, 0)
+        XCTAssertLessThanOrEqual(third.breathiness, 1.0)
     }
 
-    func testShortFrameWithVoicedPitch() {
-        // Fewer than 100 samples should cause estimateHNR to return 0
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.5)
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 40)
-        let result = monitor.analyze(pitch: pitch, pcmFrame: pcm)
-        XCTAssertEqual(result.hnr, 0, "HNR should be zero for frames shorter than 100 samples")
-        XCTAssertEqual(result.breathiness, 1.0, "Breathiness should be 1.0 when HNR is zero")
+    func testTheValueIsHeldForOneSecondAfterTheLastVoicedStep() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.5)
+        var last = VoiceAnalysisResult.VoiceHealth()
+        for end in [4_000, 5_000, 6_000, 7_000] { last = analyze(x, end: end) }
+        XCTAssertTrue(last.hnrValid)
+        // Ten unvoiced steps: still the value of the last voiced readings...
+        for step in 1...10 {
+            let h = analyze(x, voiced: false, end: 8_000)
+            XCTAssertTrue(h.hnrValid, "unvoiced step \(step) of 10 is inside the hold")
+            XCTAssertEqual(h.hnr, last.hnr, "the held value, not a made-up one")
+        }
+        // ...and the eleventh blanks it.
+        let expired = analyze(x, voiced: false, end: 8_000)
+        XCTAssertFalse(expired.hnrValid)
+        XCTAssertEqual(expired.hnr, 0)
+        XCTAssertEqual(expired.breathiness, 0)
     }
 
-    func testCleanSineLessBreathyThanNoise() {
-        let voicedPitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.5)
+    func testAVoicedStepAfterTheHoldHasExpiredIsValidAgainAtOnce() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.5)
+        for end in [4_000, 5_000, 6_000] { _ = analyze(x, end: end) }
+        for _ in 0..<12 { _ = analyze(x, voiced: false, end: 8_000) }
+        XCTAssertTrue(analyze(x, end: 7_000).hnrValid, "three voiced readings were already counted")
+    }
 
-        let sinePCM = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        let sineResult = monitor.analyze(pitch: voicedPitch, pcmFrame: sinePCM)
+    func testInstantHnrFallsWithNoiseAndTracksTheSnr() {
+        let clean = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.3)
+        let hc = instant(clean)
+        XCTAssertGreaterThan(hc, 20)
+        for snr in [20.0, 10.0, 0.0] {
+            let h = instant(SyntheticVoice.addNoise(clean, snrDb: snr))
+            XCTAssertEqual(h, snr, accuracy: 2.0, "white noise at \(snr) dB SNR reads about that in a 48 kHz window")
+        }
+    }
 
-        let noisePCM = TestAudioHelpers.makeRandomPCM(sampleCount: 960)
-        let noiseResult = monitor.analyze(pitch: voicedPitch, pcmFrame: noisePCM)
+    func testInstantHnrIsIndependentOfAmplitude() {
+        let loud = SyntheticVoice.addNoise(SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.3, rms: 0.2), snrDb: 10)
+        let quiet = loud.map { $0 * 0.1 }
+        XCTAssertEqual(instant(loud), instant(quiet), accuracy: 0.5)
+    }
 
-        XCTAssertLessThanOrEqual(sineResult.breathiness, noiseResult.breathiness,
-                                 "A clean sine should be less breathy than random noise")
+    func testNoiseHasAVeryLowHnr() {
+        let h = instant(SyntheticVoice.whiteNoise(seconds: 0.3, rms: 0.1))
+        XCTAssertLessThan(h, 3)
+    }
+
+    func testBreathinessIsTheMeanOfOneMinusRAndStaysInRange() {
+        let clean = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.5)
+        let noisy = SyntheticVoice.addNoise(clean, snrDb: -5)
+        var noisyHealth = VoiceAnalysisResult.VoiceHealth()
+        for end in [4_000, 5_000, 6_000, 7_000] { noisyHealth = analyze(noisy, end: end) }
+        XCTAssertTrue(noisyHealth.hnrValid)
+        XCTAssertGreaterThanOrEqual(noisyHealth.breathiness, 0)
+        XCTAssertLessThanOrEqual(noisyHealth.breathiness, 1.0)
+        let cleanMonitor = VoiceHealthMonitor()
+        var cleanHealth = VoiceAnalysisResult.VoiceHealth()
+        for end in [4_000, 5_000, 6_000, 7_000] {
+            cleanHealth = cleanMonitor.analyze(window: SyntheticVoice.window(of: clean, endingAt: end),
+                                               voiced: true, f0Hz: 120)
+        }
+        XCTAssertLessThan(cleanHealth.breathiness, noisyHealth.breathiness, "a clean vowel is less breathy than a noisy one")
+        XCTAssertLessThan(cleanHealth.breathiness, 0.01)
+    }
+
+    func testResetForgetsTheReadings() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.5)
+        for end in [4_000, 5_000, 6_000] { _ = analyze(x, end: end) }
+        monitor.reset()
+        XCTAssertFalse(analyze(x, end: 7_000).hnrValid)
     }
 }

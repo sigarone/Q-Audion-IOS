@@ -706,15 +706,15 @@ struct VideoCallView: View {
     /// the technical-data block of InCallScreen's security sheet).
     @ViewBuilder
     private var videoDiagVoiceBiometrics: some View {
-        if let bio = appState.voiceAnalysis {
+        if appState.voiceAnalysis != nil {
             DisclosureGroup(isExpanded: $showVoiceTechnicalData) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(VoiceTechnicalCopy.note)
                         .font(.system(size: 9))
                         .foregroundColor(.gray)
                         .fixedSize(horizontal: false, vertical: true)
-                    videoDiagRow("HNR", VoiceBiometricsFormat.hnr(bio.voiceHealth.hnr))
-                    videoDiagRow("PITCH f0", "\(Int(bio.pitch.f0Hz.rounded())) Hz")
+                    videoDiagRow("HNR", videoDiagHnrText)
+                    videoDiagRow("PITCH f0", videoDiagPitchText)
                 }
                 .padding(.top, 6)
             } label: {
@@ -725,6 +725,21 @@ struct VideoCallView: View {
             }
             .tint(.green)
         }
+    }
+
+    // The two rows of the technical block, built outside the @ViewBuilder like the helpers below: they follow
+    // the validity flag of their own measurement (a dash while it is not a reading), and a `.nan` ternary
+    // inside a ViewBuilder is a type-check-time risk on Xcode 26.4. The mapping is the one of the security
+    // sheet (`InCallScreen.VoiceBiometrics`), and the formats are those of the specification
+    // (docs/voice-analysis-spec.md, section 12): f0 and HNR are whole numbers rounded half away from zero.
+    private var videoDiagHnrText: String {
+        guard let result = appState.voiceAnalysis else { return VoiceGauges.noValue }
+        return VoiceBiometricsFormat.hnr(InCallScreen.VoiceBiometrics(result).hnr)
+    }
+
+    private var videoDiagPitchText: String {
+        guard let result = appState.voiceAnalysis else { return VoiceGauges.noValue }
+        return VoiceBiometricsFormat.pitch(hz: InCallScreen.VoiceBiometrics(result).pitchHz)
     }
 
     @ViewBuilder

@@ -120,16 +120,21 @@ struct InCallScreen: View {
     /// `stressScore`, `breathiness` and `confidence` are carried from the engine
     /// but no longer shown anywhere: stress, breath/hoarseness and authenticity
     /// are not validated for phone-quality speech, so the UI makes no claim
-    /// from them. What is shown: the pitch (`pitchHz`, `pitchVoiced`), the
-    /// spectrum, and the raw numbers in the collapsed technical-data block.
+    /// from them. What is shown: the pitch (`pitchHz`, `pitchVoiced`), the first
+    /// two formants, the speech rate and the HNR on the tone row, the spectrum,
+    /// and the raw numbers in the collapsed technical-data block.
+    ///
+    /// A measurement that is not valid right now is NaN in `jitter`, `shimmer`,
+    /// `hnr`, `pitchHz`, `syllablesPerSec`, `f1` and `f2` (a zero there would be a
+    /// measured zero), and every consumer prints a dash for it.
     struct VoiceBiometrics: Equatable {
         let stressScore: Float        // 0...1 (VoiceAnalysisResult.Stress.score)
         let jitter: Float             // 0...1 fraction (not yet ×100)
         let shimmer: Float            // 0...1 fraction
-        let hnr: Float                // dB (VoiceAnalysisResult.VoiceHealth.hnr)
+        let hnr: Float                // dB (VoiceAnalysisResult.VoiceHealth.hnr), NaN if not valid
         let breathiness: Float        // 0...1
-        let pitchHz: Float            // VoiceAnalysisResult.Pitch.f0Hz
-        let syllablesPerSec: Float    // VoiceAnalysisResult.SpeechRate.syllablesPerSec
+        let pitchHz: Float            // VoiceAnalysisResult.Pitch.f0Hz, NaN if not valid
+        let syllablesPerSec: Float    // VoiceAnalysisResult.SpeechRate.syllablesPerSec, NaN if not valid
         let confidence: Float         // 0...1 (VoiceAnalysisResult.confidence)
         // Unified call UI — f1…f4 are the REAL vocal-resonance peak
         // frequencies (Hz) from VoiceAnalysisResult.Formants. As of the
@@ -140,8 +145,8 @@ struct InCallScreen: View {
         // `speaking` still gates the MiniSpectrum's cyan→green "active"
         // tint (VoiceAnalysisResult.speechRate.isSpeaking && .pitch.voiced).
         // Defaulted so preview/test call sites keep compiling.
-        let f1: Float                 // VoiceAnalysisResult.Formants.f1 (Hz)
-        let f2: Float                 // .f2 (Hz)
+        let f1: Float                 // VoiceAnalysisResult.Formants.f1 (Hz), NaN if not found
+        let f2: Float                 // .f2 (Hz), NaN if not found
         let f3: Float                 // .f3 (Hz)
         let f4: Float                 // .f4 (Hz)
         let speaking: Bool            // .speechRate.isSpeaking && .pitch.voiced
@@ -2479,7 +2484,7 @@ struct InCallScreen: View {
                     }
 
                     securitySection(title: voiceSectionTitle, isLast: true) {
-                        VoiceBiometricsSection(biometrics: voiceBiometrics, confidence: confidence)
+                        VoiceBiometricsSection(biometrics: voiceBiometrics)
                     }
                 }
                 .padding(.vertical, 4)

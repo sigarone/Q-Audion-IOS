@@ -5,7 +5,7 @@ import Foundation
 ///
 /// ## Why this exists (bug W-VOICEZERO follow-on, 2026-07-21)
 ///
-/// Once the voicing gate is fixed (see `VoicedDecisionPolicy`) the old iOS
+/// Once the voicing gate is fixed (see `PitchExtractor`) the old iOS
 /// composite would immediately peg the STRESS gauge to "agitated" on normal
 /// conversational speech. Old formula:
 ///
@@ -29,9 +29,9 @@ import Foundation
 /// percent conversion happens inside `compositeScore` only.
 public enum StressScorePolicy {
 
-    /// Frames of voiced history kept for the jitter/shimmer/σ statistics.
-    /// 25 analysed frames ≈ 2.5 s at the default `analysisRate = 5`
-    /// (100 ms per analysed frame) — same window as Android's
+    /// Voiced analysis steps kept for the jitter/shimmer/σ statistics (the f0 and
+    /// the window RMS of voiced steps only). 25 steps = 2.5 s of voiced audio at
+    /// one step per 100 ms of audio — same window as Android's
     /// `PitchExtractor` history ring, so the calibrated ranges below mean
     /// the same thing on both platforms.
     public static let historyWindow = 25

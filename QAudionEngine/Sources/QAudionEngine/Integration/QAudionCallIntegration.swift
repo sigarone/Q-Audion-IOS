@@ -381,6 +381,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private var capabilityExchange: QAudionCapabilityExchange?
     private let guardianMode = GuardianMode()
     private let voiceAnalysis = VoiceAnalysisEngine()
+    /// Samples (48 kHz) of RX audio that were skipped for the voice analysis because
+    /// the app was in the background (see `analyze`), since the last one it was fed.
+    /// Touched only on `rxAnalysisQueue`.
+    private var voiceAnalysisSkippedSamples = 0
     /// Unified call UI — REAL remote-voice spectrum extractor (40 log-spaced
     /// bands over the decoded RX PCM, port of Android's SpectrumExtractor.kt).
     /// Fed inside `processIncomingAudio` on the SAME thread that already runs
@@ -455,6 +459,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// analysis queue, shallow enough that analysis can never lag the call by
     /// a perceptible amount and start reporting stale state.
     private let rxRingCapacity = 10
+    /// Samples (48 kHz) of RX audio the ring has dropped (drop-oldest) since the
+    /// analysis queue last took a buffer from it: the audio that is missing in
+    /// front of the next buffer it analyses. Guarded by `rxRingLock`; taken (and
+    /// cleared) together with that buffer, so the gap is reported to the voice
+    /// analysis before the audio that follows it.
+    private var rxRingDroppedSamples = 0
     /// True while a drain is already scheduled — keeps the queue from being
     /// flooded with 50 no-op work items per second.
     private var rxDrainScheduled = false
@@ -4241,7 +4251,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         rxRingLock.lock()
         rxRing.append(pcm)
         if rxRing.count > rxRingCapacity {
-            rxRing.removeFirst(rxRing.count - rxRingCapacity)
+            // The dropped buffers are audio the voice analysis will never see: count
+            // them (16-bit samples, so two bytes each) so the gap can be reported.
+            let dropped = rxRing.count - rxRingCapacity
+            for index in 0..<dropped { rxRingDroppedSamples += rxRing[index].count / 2 }
+            rxRing.removeFirst(dropped)
         }
         if !rxDrainScheduled {
             rxDrainScheduled = true
@@ -4267,8 +4281,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 return
             }
             rxRing.removeFirst()
+            // What the ring dropped since the last buffer lies exactly in front of
+            // this one: the drop removes the OLDEST buffers, which come right before
+            // the first one that is left.
+            let missingBefore = rxRingDroppedSamples
+            rxRingDroppedSamples = 0
             rxRingLock.unlock()
-            analyze(pcm)
+            analyze(pcm, missingSamplesBefore: missingBefore)
         }
     }
 
@@ -4279,7 +4298,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     /// The former body of `processIncomingAudio`, now off the audio path.
-    private func analyze(_ pcm: Data) {
+    /// `missingSamplesBefore` is the audio (48 kHz samples) that the ring dropped
+    /// between the previous buffer and this one.
+    private func analyze(_ pcm: Data, missingSamplesBefore: Int) {
         guardianMode.processFrame(pcm)
         // Tier 2 ("voce remota") — cheap continuous feed, safe to call
         // unconditionally (a no-op unless `activateContactVoiceVerification`
@@ -4312,7 +4333,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // analyze the TX mic (YOUR OWN voice), while the Guardian ribbon
         // gauges are explicitly about the INTERLOCUTOR — Android has always
         // analyzed the decoded RX path (CallAudioBridge → feedVoiceAnalysis).
-        // The engine self-throttles (analysisRate) and runs synchronously.
+        // The engine runs one analysis per 100 ms of audio and runs synchronously.
         //
         // Display-only: its results reach the Guardian ribbon gauges and a
         // diagnostic counter, and nothing that scores or decides (the
@@ -4320,8 +4341,25 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // own instances above). Skipped while the app is in the background,
         // where no ribbon is on screen.
         let inBackground = backgroundFlag.isInBackground
+        // Audio the RX ring dropped in front of this buffer is missing for the voice
+        // analysis too, whether the app is in the foreground or not.
+        voiceAnalysisSkippedSamples += missingSamplesBefore
         if !inBackground {
+            // Audio was skipped while the app was in the background, or dropped by the
+            // RX ring under load: tell the engine how much, because its 60 ms window
+            // and its 10 ms envelope frames would otherwise splice the audio from
+            // before that gap onto the audio from after it. The skipped buffers are
+            // counted exactly, so no clock is involved. A gap shorter than 2 s only
+            // restarts the analysis grid (the histories survive; missing audio is not
+            // time); a gap of 2 s or more clears everything, and the readings are not
+            // valid for a couple of seconds, which is the honest answer after a long gap.
+            if voiceAnalysisSkippedSamples > 0 {
+                voiceAnalysis.markDiscontinuity(missingSamples: voiceAnalysisSkippedSamples)
+                voiceAnalysisSkippedSamples = 0
+            }
             voiceAnalysis.processFrame(pcm)
+        } else {
+            voiceAnalysisSkippedSamples += pcm.count / 2
         }
         // Unified call UI — REAL remote-voice spectrum, ≤15 Hz (66 ms
         // monotonic throttle). Skipped entirely while nothing is wired to
@@ -4350,6 +4388,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // contact would be wrong anyway.
         rxRingLock.lock()
         rxRing.removeAll()
+        rxRingDroppedSamples = 0
         rxRingLock.unlock()
         // Feature B — drop any in-flight per-contact voice-learning session
         // so a straggling reference never bleeds into the next call (which
@@ -4357,6 +4396,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // owns this object — see startVoiceLearning's note.
         rxAnalysisQueue.async { [weak self] in
             self?.voiceLearningSession = nil
+            // The voice-analysis engine keeps a 60 ms audio window and several
+            // trackers that belong to the call that just ended, and this instance
+            // can be reused: clear them here, on the queue that owns them, so the
+            // next call never inherits a reading from this one.
+            self?.voiceAnalysis.reset()
+            self?.voiceAnalysisSkippedSamples = 0
         }
         // Tier 1/Tier 2 — this integration instance can be REUSED for a
         // later call (see M-11 comment below), so neither monitor gets a

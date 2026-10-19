@@ -33,15 +33,65 @@ struct VoiceToneReading: Equatable {
     let voiced: Bool
 }
 
+// MARK: - Number formats (docs/voice-analysis-spec.md, section 12)
+
+/// The number formats of the voice analysis, the same on iOS and Android and shared by the tone row, the
+/// technical-data block and the video diagnostics: rounded half away from zero by an explicit rule (never by
+/// a printf-style format, which rounds an exact binary tie to even), a decimal separator that comes from the
+/// language of the app, and a dash for a value that is not a reading. Everything is computed in binary64, in
+/// the order docs/voice-analysis-spec.md (section 12) writes it, so the two apps print the same string for
+/// the same value.
+enum VoiceNumberFormat {
+    /// A magnitude above this is not a reading either; it keeps the integer conversions below safe. No
+    /// measurement of the voice gets anywhere near it.
+    static let magnitudeLimit = 1_000_000_000.0
+
+    /// Round half away from zero (docs/voice-analysis-spec.md, section 12.1): 142.5 gives 143 and -2.5 gives -3.
+    static func roundHalfAwayFromZero(_ t: Double) -> Double {
+        if t < 0 { return -roundHalfAwayFromZero(-t) }
+        let whole: Double = t.rounded(.down)
+        return t - whole >= 0.5 ? whole + 1 : whole
+    }
+
+    /// A whole number of the value ("143"), or nil when it is not finite or out of range.
+    static func whole(_ x: Double) -> String? {
+        guard x.isFinite, abs(x) < magnitudeLimit else { return nil }
+        return String(Int(roundHalfAwayFromZero(x)))
+    }
+
+    /// The value to the nearest 10, as a whole number ("1480" for 1475), or nil.
+    static func nearestTen(_ x: Double) -> String? {
+        guard x.isFinite, abs(x) < magnitudeLimit else { return nil }
+        return String(Int(roundHalfAwayFromZero(x / 10)) * 10)
+    }
+
+    /// The value with exactly one decimal ("4,3" in Italian, "4.3" in English for 4.25), or nil: `x * 10` is
+    /// rounded to a whole number and the last digit is printed after the separator of `locale`. A value that
+    /// rounds to zero never shows a minus sign.
+    static func oneDecimal(_ x: Double, locale: Locale) -> String? {
+        guard x.isFinite, abs(x) < magnitudeLimit else { return nil }
+        let tenths: Int = Int(roundHalfAwayFromZero(x * 10))
+        let magnitude: Int = tenths < 0 ? -tenths : tenths
+        let sign: String = tenths < 0 ? "-" : ""
+        return sign + String(magnitude / 10) + decimalSeparator(of: locale) + String(magnitude % 10)
+    }
+
+    /// The decimal separator of the language of `locale`.
+    static func decimalSeparator(of locale: Locale) -> String {
+        locale.decimalSeparator ?? "."
+    }
+}
+
 enum VoiceGauges {
     /// Printed where a measurement does not exist.
     static let noValue = "—"
 
-    /// The whole part of a measurement, cut towards zero (not rounded): 44.9
-    /// reads "44". A value that is not a finite number reads as `noValue`.
+    /// The pitch as a whole number of Hz, rounded half away from zero (142.5 reads "143"; it is never cut
+    /// towards zero). A pitch that is not a reading, which is NaN, infinite, zero or negative, reads as
+    /// `noValue`.
     static func wholeNumber(_ value: Float) -> String {
-        guard value.isFinite, abs(value) < 1_000_000 else { return noValue }
-        return Int(value).description
+        guard value > 0, let text = VoiceNumberFormat.whole(Double(value)) else { return noValue }
+        return text
     }
 
     /// The tone reading: the f0 as a whole number, "Hz", and whether the
@@ -52,12 +102,18 @@ enum VoiceGauges {
 
     /// What a screen reader says for the whole row: the label, the value with
     /// its unit, the voice word and, when there are any, the details with their
-    /// separators turned into pauses.
-    static func spokenTone(label: String, reading: VoiceToneReading, voiceWord: String, details: String?) -> String {
-        let measure: String = reading.value + " " + reading.unit
+    /// separators turned into pauses. A dash (a value that does not exist) is
+    /// read as `unavailable`, never as a symbol.
+    static func spokenTone(label: String,
+                           reading: VoiceToneReading,
+                           voiceWord: String,
+                           details: String?,
+                           unavailable: String = VoiceToneCopy.unavailable) -> String {
+        let measure: String = reading.value == noValue ? unavailable : reading.value + " " + reading.unit
         var parts: [String] = [label, measure, voiceWord]
         if let details = details, !details.isEmpty {
-            parts.append(details.replacingOccurrences(of: VoiceSpectralDetails.separator, with: ", "))
+            let paused: String = details.replacingOccurrences(of: VoiceSpectralDetails.separator, with: ", ")
+            parts.append(paused.replacingOccurrences(of: noValue, with: unavailable))
         }
         return parts.joined(separator: ", ")
     }
@@ -76,26 +132,35 @@ enum VoiceToneCopy {
                       defaultValue: "silenzio",
                       comment: "Call screen voice ribbon, tone row — word after the pitch value when there is no voice in the audio being measured")
     }
+
+    /// What a screen reader says where the row prints a dash: a measurement that
+    /// does not exist right now.
+    static var unavailable: String {
+        String(localized: "in_call.gauge.a11y_unavailable",
+               defaultValue: "non disponibile",
+               comment: "Call screen voice ribbon, tone row — spoken by a screen reader in place of the dash printed where a measurement (pitch, formant, speech rate, harmonic-to-noise ratio) does not exist right now")
+    }
 }
 
 // MARK: - Spectral details of the tone row
 
-/// The details printed to the right of the tone, as neutral acoustic
-/// measurements from the voice analysis result: the first two formants, the
-/// speech rate and the harmonic-to-noise ratio, in this order, joined by " · ":
+/// The details printed to the right of the tone, on the same row, as neutral
+/// acoustic measurements from the voice analysis result: the first two formants,
+/// the speech rate and the harmonic-to-noise ratio, in this order, joined by " · ":
 ///
 ///     F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB
 ///
 /// Formants are rounded to the nearest 10 Hz, the rate has one decimal in the
-/// separator of the device locale, the HNR is a whole number of dB. Without a
-/// voice in the segment F1, F2 and HNR print a dash (they do not exist for
-/// silence); the rate still prints. Never colour them, and never add a score,
-/// jitter, shimmer or any word about emotion, stress, health or the state of
-/// the person: they are values of the signal and nothing else.
-///
-/// Which of the four are printed is `measured`. A field is listed there only
-/// when the extractor behind it returns the quantity its label names; the
-/// default is none (see `measured`).
+/// decimal separator of the language of the app (not of the device region), the
+/// HNR is a whole number of dB; all of it rounded half away from zero (see
+/// `VoiceNumberFormat`). Every one of the four follows the validity flag of its
+/// own measurement: the caller passes NaN for a formant that was not found, a
+/// speech rate that is not a reading yet and an HNR that is not valid, and a dash
+/// is printed in its place ("F1 —", "— sill/s", "HNR —"). A zero is only ever
+/// printed for a measured zero.
+/// Never colour the details, and never add a score, jitter, shimmer or any word
+/// about emotion, stress, health or the state of the person: they are values of
+/// the signal and nothing else.
 enum VoiceSpectralDetails {
     enum Field: CaseIterable {
         case formant1
@@ -107,34 +172,31 @@ enum VoiceSpectralDetails {
     /// Between two details.
     static let separator = " · "
 
-    /// The details that are printed. Empty, on purpose, until the extractors
-    /// are fixed. Replaying them on a clean synthetic vowel with known formants
-    /// at several levels: the formant tracker returns a first peak thousands of
-    /// Hz away from the real F1 and no second one; the HNR moves with the
-    /// loudness of the very same vowel (0 dB when quiet, over 20 dB when loud);
-    /// and the syllable count is never windowed, so the rate of a steady talker
-    /// climbs for the whole call instead of staying near its real value.
-    /// Printing them would show invented numbers on a security screen. Add a
-    /// field here only after its extractor passes such a check; the formatting
-    /// below is ready for all four.
-    static let measured: Set<Field> = []
+    /// The details that are printed: all four. The extractors behind them are the
+    /// ones of the specification of the remote-voice analysis
+    /// (docs/voice-analysis-spec.md), and are checked against its reference vectors
+    /// (see `VoiceDspVectorTests`): formants
+    /// from an order-18 LPC fit on the 16 kHz view, withheld where the harmonics
+    /// cannot resolve them; an HNR measured on the 48 kHz window, independent of
+    /// the loudness; a speech rate counted from syllable nuclei over the last 6 s.
+    static let measured: Set<Field> = Set(Field.allCases)
 
-    /// The text of the details, or nil when `fields` selects none.
+    /// The text of the details, or nil when `fields` selects none. `locale` is the locale of the language of
+    /// the app (`VoiceDisplayLocale.app`); it only decides the decimal separator of the rate.
     static func text(formant1Hz: Float,
                      formant2Hz: Float,
                      syllablesPerSecond: Float,
                      hnrDecibels: Float,
-                     voiced: Bool,
                      rateUnit: String,
                      fields: Set<Field> = VoiceSpectralDetails.measured,
-                     locale: Locale = .current) -> String? {
+                     locale: Locale) -> String? {
         var parts: [String] = []
         if fields.contains(.formant1) {
-            let first: String = "F1 " + formant(formant1Hz, voiced: voiced)
+            let first: String = "F1 " + formant(formant1Hz)
             parts.append(first)
         }
         if fields.contains(.formant2) {
-            let second: String = "F2 " + formant(formant2Hz, voiced: voiced)
+            let second: String = "F2 " + formant(formant2Hz)
             parts.append(second)
         }
         if fields.contains(.speechRate) {
@@ -142,77 +204,118 @@ enum VoiceSpectralDetails {
             parts.append(speed)
         }
         if fields.contains(.hnr) {
-            let noise: String = "HNR " + hnr(hnrDecibels, voiced: voiced)
+            let noise: String = "HNR " + hnr(hnrDecibels)
             parts.append(noise)
         }
         if parts.isEmpty { return nil }
         return parts.joined(separator: separator)
     }
 
-    /// A formant in Hz, rounded to the nearest 10, or a dash for a segment
-    /// without a voice or a formant that was not found.
-    static func formant(_ hertz: Float, voiced: Bool) -> String {
-        guard voiced, hertz.isFinite, hertz > 0, hertz < 100_000 else { return VoiceGauges.noValue }
-        let rounded: Float = (hertz / 10).rounded() * 10
-        return Int(rounded).description
+    /// A formant in Hz, rounded to the nearest 10 (half away from zero: 1475 reads
+    /// "1480"), or a dash for a formant that was not found (NaN, or the 0 of a
+    /// result without one).
+    static func formant(_ hertz: Float) -> String {
+        guard hertz > 0, let text = VoiceNumberFormat.nearestTen(Double(hertz)) else { return VoiceGauges.noValue }
+        return text
     }
 
-    /// The speech rate with one decimal, in the separator of `locale`, and the
-    /// unit. It is printed for silence too: a window without speech has a rate.
+    /// The speech rate with one decimal, in the decimal separator of `locale`, and
+    /// the unit; a dash and the unit while it is not a reading.
     static func rate(_ syllablesPerSecond: Float, unit: String, locale: Locale) -> String {
-        guard syllablesPerSecond.isFinite, syllablesPerSecond >= 0, syllablesPerSecond < 1000 else {
+        guard syllablesPerSecond >= 0,
+              let number = VoiceNumberFormat.oneDecimal(Double(syllablesPerSecond), locale: locale) else {
             return VoiceGauges.noValue + " " + unit
         }
-        let number: String = String(format: "%.1f", locale: locale, Double(syllablesPerSecond))
         return number + " " + unit
     }
 
-    /// The harmonic-to-noise ratio in whole dB, or a dash for a segment
-    /// without a voice.
-    static func hnr(_ decibels: Float, voiced: Bool) -> String {
-        guard voiced, decibels.isFinite, abs(decibels) < 1000 else { return VoiceGauges.noValue }
-        let rounded: Float = decibels.rounded()
-        return Int(rounded).description + " dB"
+    /// The harmonic-to-noise ratio in whole dB, rounded half away from zero (-2.5
+    /// reads "-3 dB"), or a dash while it is not valid.
+    static func hnr(_ decibels: Float) -> String {
+        guard let text = VoiceNumberFormat.whole(Double(decibels)) else { return VoiceGauges.noValue }
+        return text + " dB"
+    }
+}
+
+// MARK: - From a display value to what the screens show
+
+extension InCallScreen.VoiceBiometrics {
+    /// The snapshot the call screens draw, from the display value of the voice
+    /// analysis (`AppState.voiceAnalysis`). Every measurement carries its own
+    /// validity flag, and one that is not a reading right now is passed as NaN,
+    /// which every consumer prints as a dash, instead of as a measured 0: the
+    /// pitch (`f0Valid`), the first two formants (`f1Found`, `f2Found`), the
+    /// speech rate (`speechRate.valid`), the HNR (`hnrValid`) and jitter and
+    /// shimmer (`stress.valid`). The voiced flag only chooses the word of the tone
+    /// row ("voce" / "silenzio") and the tint of the spectrum.
+    init(_ result: VoiceAnalysisResult) {
+        self.init(
+            stressScore: result.stress.score,
+            jitter: result.stress.valid ? result.stress.jitter : .nan,
+            shimmer: result.stress.valid ? result.stress.shimmer : .nan,
+            hnr: result.voiceHealth.hnrValid ? result.voiceHealth.hnr : .nan,
+            breathiness: result.voiceHealth.breathiness,
+            pitchHz: result.pitch.f0Valid ? result.pitch.f0Hz : .nan,
+            syllablesPerSec: result.speechRate.valid ? result.speechRate.syllablesPerSec : .nan,
+            confidence: result.confidence,
+            f1: result.formants.f1Found ? result.formants.f1 : .nan,
+            f2: result.formants.f2Found ? result.formants.f2 : .nan,
+            f3: result.formants.f3,
+            f4: result.formants.f4,
+            speaking: result.speechRate.isSpeaking && result.pitch.voiced,
+            pitchVoiced: result.pitch.voiced)
     }
 }
 
 // MARK: - Technical data of the security sheet
 
 /// The measures that are left once nothing is read as a claim about the
-/// person. They are plain numbers, never coloured, and the view puts them in a
-/// section titled as not validated.
+/// person: jitter and shimmer, the pitch with the speech rate, and the
+/// harmonic-to-noise ratio. They are plain numbers, never coloured, and the view
+/// puts them in a section titled as not validated. Each one follows the validity
+/// flag of its measurement: the caller passes NaN where there is none, and a dash
+/// is printed. (The Guardian confidence number is not among them: it is computed
+/// by a different algorithm on each platform, so the two screens could not show
+/// the same figure.)
 enum VoiceBiometricsFormat {
-    /// Jitter and shimmer arrive as ratios (0.03 = 3 %); shown as percentages
-    /// with one decimal: "3.0% / 8.5%".
-    static func jitterShimmer(jitter: Float, shimmer: Float) -> String {
-        guard jitter.isFinite, shimmer.isFinite else { return VoiceGauges.noValue }
-        return oneDecimal(jitter * 100) + "% / " + oneDecimal(shimmer * 100) + "%"
+    /// Jitter and shimmer as PERCENTAGES (3.0 = 3 %; the screens pass the engine's ratio times 100), with one
+    /// decimal, in the decimal separator of `locale` (the language of the app): "3,0% / 8,5%". One dash for the
+    /// whole row while they are not readings (both follow the same flag).
+    static func jitterShimmer(jitterPercent: Float, shimmerPercent: Float, locale: Locale) -> String {
+        guard jitterPercent >= 0, shimmerPercent >= 0,
+              let jitterText = VoiceNumberFormat.oneDecimal(Double(jitterPercent), locale: locale),
+              let shimmerText = VoiceNumberFormat.oneDecimal(Double(shimmerPercent), locale: locale) else {
+            return VoiceGauges.noValue
+        }
+        return jitterText + "% / " + shimmerText + "%"
     }
 
-    /// Guardian confidence as plain text: "C=0.87", or "C=—" when no real score
-    /// exists (a negative value is the "no score yet" sentinel; a NaN is no
-    /// score either). It is a number and nothing more: no colour, no band, no
-    /// word, because the score is not validated for phone-quality speech.
-    static func confidence(_ value: Double) -> String {
-        guard value >= 0 else { return "C=" + VoiceGauges.noValue }
-        return String(format: "C=%.2f", min(1.0, max(0.0, value)))
+    /// The pitch in whole Hz, rounded half away from zero: "143 Hz" for 142.5, or a
+    /// dash while it is not a reading (the analysis hands it over as NaN then).
+    static func pitch(hz: Float) -> String {
+        guard hz > 0, let text = VoiceNumberFormat.whole(Double(hz)) else { return VoiceGauges.noValue }
+        return text + " Hz"
     }
 
-    /// Harmonic-to-noise ratio in whole dB: "21 dB".
+    /// Harmonic-to-noise ratio in whole dB: "21 dB", or a dash while it is not valid.
     static func hnr(_ decibels: Float) -> String {
-        guard decibels.isFinite else { return VoiceGauges.noValue }
-        return String(format: "%.0f", Double(decibels)) + " dB"
+        VoiceSpectralDetails.hnr(decibels)
     }
 
-    /// Pitch and speech rate: "142 Hz · 4.1 <unit>", where the unit (syllables
-    /// per second) is the localized abbreviation the caller passes in.
-    static func pitchRate(hz: Float, syllablesPerSecond: Float, syllableUnit: String) -> String {
-        guard hz.isFinite, syllablesPerSecond.isFinite else { return VoiceGauges.noValue }
-        return String(format: "%.0f", Double(hz)) + " Hz · " + oneDecimal(syllablesPerSecond) + " " + syllableUnit
-    }
-
-    private static func oneDecimal(_ value: Float) -> String {
-        String(format: "%.1f", Double(value))
+    /// Pitch and speech rate: "142 Hz · 4,1 <unit>", where the unit (syllables per
+    /// second) is the localized abbreviation the caller passes in and the decimal
+    /// separator is the one of `locale`. Each part that is not a reading is a dash
+    /// of its own, with no unit: "— · 4,1 <unit>", "142 Hz · —", "— · —". The speech
+    /// rate is not a reading for the first seconds of speech (the analysis hands it
+    /// over as NaN until it is): then the pitch still shows and the rate is a dash.
+    static func pitchRate(hz: Float, syllablesPerSecond: Float, syllableUnit: String, locale: Locale) -> String {
+        let pitchText: String = pitch(hz: hz)
+        var rateText: String = VoiceGauges.noValue
+        if syllablesPerSecond >= 0,
+           let number = VoiceNumberFormat.oneDecimal(Double(syllablesPerSecond), locale: locale) {
+            rateText = number + " " + syllableUnit
+        }
+        return pitchText + VoiceSpectralDetails.separator + rateText
     }
 }
 

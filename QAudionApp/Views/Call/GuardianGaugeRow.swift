@@ -2,10 +2,12 @@ import SwiftUI
 
 /// The tone row under the spectrum of the voice ribbon, on a single line: a
 /// small label ("Tono"), the whole-number pitch with its unit, and the word for
-/// a voice being present or not ("voce" / "silenzio"). Spectral details, when
-/// there are any (see `VoiceSpectralDetails`), follow on the same line and give
-/// way first on a narrow screen: they shrink, then are cut from the right, and
-/// never wrap.
+/// a voice being present or not ("voce" / "silenzio"). The spectral details (see
+/// `VoiceSpectralDetails`: "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB") follow on
+/// the same line and give way first on a narrow screen: they shrink, then are cut
+/// from the right, and never wrap. A value that is not a reading is NaN here and
+/// prints as a dash; the pitch, the formants, the speech rate and the HNR are all
+/// that way.
 ///
 /// It carries no sentence and no colour: a pitch moves with what is being said
 /// and says nothing about the person, so it is a measurement, never a verdict.
@@ -15,7 +17,8 @@ struct GuardianGaugeRow: View {
     private let reading: VoiceToneReading
     private let details: String?
 
-    /// Builds the row from the values of one analysis result.
+    /// Builds the row from the values of one analysis result (NaN where a value
+    /// is not valid).
     init(pitchHz: Float,
          pitchVoiced: Bool,
          formant1Hz: Float,
@@ -27,8 +30,8 @@ struct GuardianGaugeRow: View {
                                                  formant2Hz: formant2Hz,
                                                  syllablesPerSecond: syllablesPerSecond,
                                                  hnrDecibels: hnrDecibels,
-                                                 voiced: pitchVoiced,
-                                                 rateUnit: VoiceTechnicalCopy.syllableUnit)
+                                                 rateUnit: VoiceTechnicalCopy.syllableUnit,
+                                                 locale: VoiceDisplayLocale.app)
     }
 
     private var label: String {

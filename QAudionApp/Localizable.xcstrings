@@ -6175,48 +6175,6 @@
         }
       }
     },
-    "in_call.bio.confidence": {
-      "extractionState": "manual",
-      "comment": "Call security sheet, voice biometrics — row label for the Guardian confidence number (C=0.NN), shown as plain text with no colour and no verdict",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confidenza"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confidence"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Konfidenz"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confianza"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confiance"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Confiança"
-          }
-        }
-      }
-    },
     "in_call.custody.boundary": {
       "extractionState": "manual",
       "comment": "Call security sheet, custody of the voice card — label on the edge of the protected zone of the diagram",
@@ -7095,6 +7053,48 @@
           "stringUnit": {
             "state": "translated",
             "value": "silêncio"
+          }
+        }
+      }
+    },
+    "in_call.gauge.a11y_unavailable": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon, tone row — spoken by a screen reader in place of the dash printed where a measurement (pitch, formant, speech rate, harmonic-to-noise ratio) does not exist right now",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "unavailable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "indisponible"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "indisponível"
           }
         }
       }

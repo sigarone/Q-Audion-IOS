@@ -84,6 +84,11 @@ final class CallService: @unchecked Sendable {
     /// 2026-07-04). Gated on `EngineConfig.production().enableVoiceAnalysis`
     /// at the wiring call site (not here) — mirrors how `VoiceAnalysisEngine`
     /// itself gates processing via its own internal `enabled` flag.
+    ///
+    /// It carries the value to SHOW, once per 100 ms analysis: the mean over the
+    /// last 10 results (1 s of audio) by the display rule of
+    /// `VoiceAnalysisSmoothing`, which the engine keeps itself. The raw results
+    /// go to `recordVoiceAnalysisSample` only.
     var onVoiceAnalysis: ((VoiceAnalysisResult) -> Void)?
     /// Unified call UI — REAL remote-voice spectrum: 40 log-spaced bands
     /// (0..1), ≤15 Hz (66 ms throttle at the source — see
@@ -814,7 +819,8 @@ final class CallService: @unchecked Sendable {
     // why "STRESS/RESPIRO/TONO are always zero" survived unnoticed from the
     // feature's first commit: the RX pipeline reported healthy audio while
     // `PitchExtractor` declared every single frame unvoiced (un-normalised
-    // autocorrelation vs a normalised threshold — see VoicedDecisionPolicy).
+    // autocorrelation vs a normalised threshold: the pitch gate compared a raw
+    // product with a coefficient's threshold).
     // These two counters make the failure visible in call.audio.diag as
     // va_results / va_voiced_pct: a call with va_results > 0 and
     // va_voiced_pct == 0 IS the bug, unambiguously.
@@ -2229,15 +2235,20 @@ final class CallService: @unchecked Sendable {
         // (not currently selected anywhere) has it false — this check keeps
         // the wiring inert automatically if/when the app switches profiles,
         // without adding a second gate that could drift from the engine's
-        // own config. VoiceAnalysisEngine.processFrame() ALSO internally
-        // throttles itself to a ~100ms time budget (2026-08-27 fix — was a
-        // frame-count gate that drifted with frame size, see
-        // VoiceAnalysisEngine.analysisIntervalMs), so this wiring does not
-        // run the full analysis pipeline unconditionally.
+        // own config. VoiceAnalysisEngine.processFrame() ALSO runs only one
+        // analysis per 100 ms of received audio (at the exact sample, whatever
+        // the buffer size), so this wiring does not run the full analysis
+        // pipeline unconditionally.
+        //
+        // `onResult` is the raw result of each analysis (the diagnostic
+        // counters); `onDisplay` is the value to show, already averaged over
+        // the last second of audio by the engine.
         if EngineConfig.production().enableVoiceAnalysis {
             integration.getVoiceAnalysis().onResult = { [weak self] result in
                 self?.recordVoiceAnalysisSample(result)
-                self?.onVoiceAnalysis?(result)
+            }
+            integration.getVoiceAnalysis().onDisplay = { [weak self] shown in
+                self?.onVoiceAnalysis?(shown)
             }
             // Unified call UI — REAL RX spectrum for the Guardian ribbon's
             // MiniSpectrum. Same battery gate as the gauges above; the
@@ -2559,7 +2570,9 @@ final class CallService: @unchecked Sendable {
         if EngineConfig.production().enableVoiceAnalysis {
             integration.getVoiceAnalysis().onResult = { [weak self] result in
                 self?.recordVoiceAnalysisSample(result)
-                self?.onVoiceAnalysis?(result)
+            }
+            integration.getVoiceAnalysis().onDisplay = { [weak self] shown in
+                self?.onVoiceAnalysis?(shown)
             }
             integration.onVoiceSpectrum = { [weak self] bands in
                 self?.onVoiceSpectrum?(bands)
@@ -2884,8 +2897,11 @@ final class CallService: @unchecked Sendable {
 
     /// W-VOICEZERO — accumulate the per-call Guardian-analyzer health counters
     /// summarised in `call.audio.diag`. Two adds, called at most ~10 Hz
-    /// (`VoiceAnalysisEngine` analyses every 5th 20 ms frame), on the same
-    /// main-queue RX branch as the rx level accumulators.
+    /// (`VoiceAnalysisEngine` runs one analysis per 100 ms of received audio, on
+    /// its last 60 ms), on the same main-queue RX branch as the rx level
+    /// accumulators. `va_voiced_pct` reads the voicing of that 60 ms window, so it
+    /// is higher than it was when each 10-20 ms buffer was analysed alone (a male
+    /// voice could not be found in a buffer that short).
     ///
     /// PRIVACY — counts ONLY. The measured values (f0, stress) are deliberately
     /// NOT accumulated: they would end up in plaintext server telemetry, and a

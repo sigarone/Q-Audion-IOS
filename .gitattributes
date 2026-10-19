@@ -13,3 +13,11 @@ QAudionEngine/Tests/QAudionEngineTests/Resources/kat/file-v2-server-transcript.j
 # The message reply (WIRE_SPEC section 13) known-answer vectors are a byte-for-byte copy of the server repository's file
 # (test/kat/reply_v1/reply-kat.json) and the tests pin its SHA-256: git must never rewrite its line endings.
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/reply-kat.json -text
+
+# The remote-voice analysis vectors are a byte-for-byte copy of the file that ships with the specification and the
+# Android tests (the expected output of the reference implementation): git must never rewrite its line endings.
+QAudionEngine/Tests/QAudionEngineTests/Analysis/Resources/voicedsp-vectors.json -text
+
+# The display-formatting cases (docs/voice-analysis-spec.md, section 12) are a byte-for-byte copy of the file that the
+# Android tests run too (the same inputs and the same expected strings on both apps): git must never rewrite its line endings.
+QAudionAppTests/voice-analysis/display-format-cases.tsv -text

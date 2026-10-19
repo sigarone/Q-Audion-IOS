@@ -9,52 +9,36 @@ final class VoiceAnalysisEngineTests: XCTestCase {
         engine = VoiceAnalysisEngine()
     }
 
-    func testCallbackFiringOnNthFrame() {
-        // Gate is time-based now (>= 100 ms of accumulated audio, see
-        // VoiceAnalysisEngine.analysisIntervalMs): each frame here is 20 ms
-        // (960 samples @ 48 kHz), so 5 frames = 100 ms is still the point
-        // the callback fires — same real-world cadence as the old
-        // `frameCount % 5` gate produced at this frame size.
-        let expectation = expectation(description: "onResult called")
+    private func sine(_ samples: Int) -> Data {
+        TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: samples)
+    }
+
+    // MARK: - Cadence: one analysis per 100 ms of audio, at the exact sample
+
+    func testCallbackFiresAfter100msOfAudio() {
         var receivedResult: VoiceAnalysisResult?
-
-        engine.onResult = { result in
-            receivedResult = result
-            expectation.fulfill()
-        }
-
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        for _ in 0..<5 {
-            engine.processFrame(pcm)
-        }
-
-        wait(for: [expectation], timeout: 1.0)
+        engine.onResult = { receivedResult = $0 }
+        for _ in 0..<5 { engine.processFrame(sine(960)) }          // 5 x 20 ms
         XCTAssertNotNil(receivedResult, "Should receive a result after 100ms of 20ms frames")
     }
 
-    func testCallbackNotFiredBeforeRate() {
+    func testCallbackNotFiredBeforeTheFirst100ms() {
         var callbackCount = 0
         engine.onResult = { _ in callbackCount += 1 }
-
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        // 4 frames of 20ms = 80ms, short of the 100ms analysis budget
-        for _ in 0..<4 {
-            engine.processFrame(pcm)
-        }
-
-        XCTAssertEqual(callbackCount, 0, "Callback should not fire before reaching the analysis time budget")
+        for _ in 0..<4 { engine.processFrame(sine(960)) }          // 80 ms
+        XCTAssertEqual(callbackCount, 0, "Callback should not fire before 100 ms of audio")
+        engine.processFrame(sine(959))                              // 99.98 ms
+        XCTAssertEqual(callbackCount, 0, "one sample short of 100 ms")
+        engine.processFrame(sine(1))
+        XCTAssertEqual(callbackCount, 1, "exactly 4800 samples")
     }
 
     func testDisabledEngineDoesNotCallback() {
         var callbackCount = 0
         engine.onResult = { _ in callbackCount += 1 }
+        engine.onDisplay = { _ in callbackCount += 1 }
         engine.setEnabled(false)
-
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        for _ in 0..<20 {
-            engine.processFrame(pcm)
-        }
-
+        for _ in 0..<20 { engine.processFrame(sine(960)) }
         XCTAssertEqual(callbackCount, 0, "Disabled engine should never fire callback")
     }
 
@@ -66,163 +50,241 @@ final class VoiceAnalysisEngineTests: XCTestCase {
         XCTAssertTrue(engine.isEnabled)
     }
 
-    func testAnalysisRateNoLongerGatesStandardFrames() {
-        // Post-fix: analysisRate only drives the frame-count FALLBACK path
-        // (used when a frame's byte length isn't a whole number of ms — see
-        // VoiceAnalysisEngine.processFrame). For standard whole-ms PCM like
-        // this 20ms frame, the 100ms time budget is what decides cadence,
-        // regardless of what analysisRate is set to. This replaces the old
-        // testSetAnalysisRateChangesFrequency, which asserted a
-        // frame-count-driven cadence that no longer exists for this input.
-        engine.setAnalysisRate(2)
-
+    func testTenCallsOf20msGiveTwoAnalyses() {
         var callbackCount = 0
         engine.onResult = { _ in callbackCount += 1 }
-
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960) // 20ms
-        for _ in 0..<10 {
-            engine.processFrame(pcm)
-        }
-
-        // 10 frames * 20ms = 200ms of audio -> fires at the 100ms and 200ms
-        // marks (frame 5 and frame 10), same as with the default rate of 5.
-        XCTAssertEqual(callbackCount, 2, "Time budget, not analysisRate, governs cadence for whole-ms PCM")
+        for _ in 0..<10 { engine.processFrame(sine(960)) }          // 200 ms
+        XCTAssertEqual(callbackCount, 2, "at the 100 ms and the 200 ms marks")
     }
 
-    func testAnalysisRateStillAppliesToFallbackPath() {
-        // The frame-count fallback only engages when pcmFrame.count / 96 == 0,
-        // i.e. a frame representing less than 1ms of 48kHz mono Int16 audio —
-        // an edge case, but the analysisRate clamp-to-1 (rate=0 -> 1) still
-        // has to work there since it's the only place it still matters.
-        engine.setAnalysisRate(0)
-
+    func test60msChunksFireAtTheExact100msMarks() {
+        // 60 ms buffers land on 60, 120, 180, 240 ms: the 100 ms and 200 ms analyses fall INSIDE the
+        // second and the fourth buffer, and run at their exact sample (not at the end of the buffer).
         var callbackCount = 0
         engine.onResult = { _ in callbackCount += 1 }
-
-        let tinyPcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 4) // 8 bytes, < 96
-        for _ in 0..<5 {
-            engine.processFrame(tinyPcm)
-        }
-
-        XCTAssertEqual(callbackCount, 5, "Rate clamped to 1 should fire on every frame in the fallback path")
+        engine.processFrame(sine(2_880))
+        XCTAssertEqual(callbackCount, 0, "60 ms is short of the 100 ms mark")
+        engine.processFrame(sine(2_880))
+        XCTAssertEqual(callbackCount, 1, "the 100 ms mark is inside the second buffer")
+        engine.processFrame(sine(2_880))
+        XCTAssertEqual(callbackCount, 1)
+        engine.processFrame(sine(2_880))
+        XCTAssertEqual(callbackCount, 2, "the 200 ms mark is inside the fourth buffer")
     }
 
-    func testAnalysisRateFallbackHonorsConfiguredRate() {
-        engine.setAnalysisRate(3)
-
+    func test10msChunksFireOnceper100ms() {
         var callbackCount = 0
         engine.onResult = { _ in callbackCount += 1 }
-
-        let tinyPcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 4) // 8 bytes, < 96
-        for _ in 0..<9 {
-            engine.processFrame(tinyPcm)
-        }
-
-        XCTAssertEqual(callbackCount, 3, "With rate=3 in the fallback path, 9 frames should yield 3 callbacks")
+        for _ in 0..<9 { engine.processFrame(sine(480)) }
+        XCTAssertEqual(callbackCount, 0)
+        engine.processFrame(sine(480))
+        XCTAssertEqual(callbackCount, 1)
     }
 
-    func test60msProfileFiresNearTheSame100msTargetInsteadOf300ms() {
-        // The bug this fix addresses: under the 60ms audio profile
-        // (project default, see AUDIO_BANDWIDTH_OPTIMISATION_PLAN /
-        // AudioProfileTests), the OLD frameCount % 5 gate did not fire until
-        // the 5th frame - 300ms of real audio time, 3x slower than the
-        // intended ~100ms cadence GuardianMode was fixed to restore for the
-        // exact same input stream (QAudionCallIntegration.analyze feeds both
-        // guardianMode and voiceAnalysis the same pcm).
-        var callbackCount = 0
-        engine.onResult = { _ in callbackCount += 1 }
-
-        let pcm60ms = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 2880) // 60ms
-
-        engine.processFrame(pcm60ms) // 60ms elapsed
-        XCTAssertEqual(callbackCount, 0, "Single 60ms frame is short of the 100ms budget")
-
-        engine.processFrame(pcm60ms) // 120ms elapsed - crosses the 100ms budget
-        XCTAssertEqual(callbackCount, 1,
-            "Fixed gate fires once cumulative audio time reaches 100ms (2nd 60ms frame), " +
-            "not after 5 frames / 300ms like the old frame-count gate")
+    func testAChunkOfSeveralStepsDeliversEveryResultInOrder() {
+        var results: [VoiceAnalysisResult] = []
+        var displays: [VoiceAnalysisResult] = []
+        engine.onResult = { results.append($0) }
+        engine.onDisplay = { displays.append($0) }
+        // 520 ms in one buffer: the analyses at 100, 200, 300, 400 and 500 ms.
+        engine.processFrame(sine(24_960))
+        XCTAssertEqual(results.count, 5)
+        XCTAssertEqual(displays.count, 5)
+        XCTAssertTrue(results.last?.pitch.voiced ?? false)
     }
 
-    func testNativeSrtp10msChunksNoLongerFireTooFast() {
-        // The native-SRTP audio tap (NativeAudioPcmTap -> QAudionCallIntegration
-        // .analyze -> voiceAnalysis.processFrame) delivers ~10ms chunks. Under
-        // the OLD frameCount % 5 gate that fired every 50ms of real audio -
-        // 2x faster than the intended 100ms target, and 6x faster than the
-        // 300ms cadence the 60ms-profile default was actually shipping
-        // (300ms / 50ms = 6). The fixed gate must land on the same ~100ms
-        // real-world cadence regardless of chunk size.
-        var callbackCount = 0
-        engine.onResult = { _ in callbackCount += 1 }
-
-        let pcm10ms = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 480) // 10ms
-
-        for _ in 0..<5 { engine.processFrame(pcm10ms) } // 50ms elapsed
-        XCTAssertEqual(callbackCount, 0,
-            "50ms of audio must not fire yet - the old gate would already have fired here (frame 5)")
-
-        for _ in 0..<5 { engine.processFrame(pcm10ms) } // 100ms elapsed
-        XCTAssertEqual(callbackCount, 1, "Fires once cumulative audio time reaches the 100ms budget")
+    func testSingleSampleChunksWork() {
+        var count = 0
+        engine.onResult = { _ in count += 1 }
+        let one = sine(1)
+        for _ in 0..<4_800 { engine.processFrame(one) }
+        XCTAssertEqual(count, 1)
     }
+
+    func testAnOddTrailingByteIsIgnored() {
+        var results: [VoiceAnalysisResult] = []
+        engine.onResult = { results.append($0) }
+        var pcm = sine(4_800)
+        pcm.append(0x7F)
+        engine.processFrame(pcm)
+        XCTAssertEqual(results.count, 1)
+        engine.processFrame(Data([0x01]))
+        XCTAssertEqual(results.count, 1)
+    }
+
+    func testEmptyBufferIsIgnored() {
+        var count = 0
+        engine.onResult = { _ in count += 1 }
+        engine.processFrame(Data())
+        XCTAssertEqual(count, 0)
+    }
+
+    // MARK: - Content of a result
 
     func testResultContainsAllFields() {
-        // NOTE: setAnalysisRate(1) alone no longer makes a single 20ms frame
-        // fire immediately — the time budget requires 100ms of accumulated
-        // audio regardless of analysisRate for standard whole-ms PCM (see
-        // testAnalysisRateNoLongerGatesStandardFrames). 5 frames of 20ms
-        // crosses that budget.
-        let expectation = expectation(description: "onResult called")
         var receivedResult: VoiceAnalysisResult?
-
-        engine.onResult = { result in
-            receivedResult = result
-            expectation.fulfill()
-        }
-
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        for _ in 0..<5 {
-            engine.processFrame(pcm)
-        }
-
-        wait(for: [expectation], timeout: 1.0)
-
-        guard let result = receivedResult else {
-            XCTFail("Expected a result")
-            return
-        }
-
-        // Verify all fields are populated (pitch should be detected for a 200Hz sine)
+        engine.onResult = { receivedResult = $0 }
+        for _ in 0..<5 { engine.processFrame(sine(960)) }
+        guard let result = receivedResult else { return XCTFail("Expected a result") }
         XCTAssertGreaterThan(result.pitch.rms, 0, "RMS should be positive")
-        // Confidence should be in range [0, 1]
         XCTAssertGreaterThanOrEqual(result.confidence, 0)
         XCTAssertLessThanOrEqual(result.confidence, 1.0)
+        XCTAssertTrue(result.pitch.voiced)
+        XCTAssertEqual(result.pitch.voiced, result.pitch.f0Valid, "one flag")
+        XCTAssertGreaterThan(result.pitch.periodicity, 0.9)
     }
 
     func testNoCallbackWhenNoneSet() {
-        // Ensure no crash when onResult is nil and the gate actually fires
-        // (5 frames of 20ms = 100ms crosses the time-based analysis budget).
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        for _ in 0..<5 {
-            engine.processFrame(pcm)
-        }
+        for _ in 0..<5 { engine.processFrame(sine(960)) }
         // Should not crash
     }
 
-    func testReEnableEngineResumesCallbacks() {
-        engine.setAnalysisRate(1)
+    func testTheResultOfALiveVoiceIsAMeasurement() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 1.0)
+        guard let last = SyntheticVoice.run(x, chunkMs: 10).results.last else { return XCTFail("no result") }
+        XCTAssertTrue(last.pitch.f0Valid)
+        XCTAssertEqual(Double(last.pitch.f0Hz), 120, accuracy: 3.6)
+        XCTAssertTrue(last.formants.f1Found)
+        XCTAssertTrue(last.formants.f2Found)
+        XCTAssertTrue(last.voiceHealth.hnrValid)
+        XCTAssertFalse(last.speechRate.valid, "one second of a steady vowel is not two seconds of speaking time")
+        XCTAssertTrue(last.stress.valid, "ten voiced steps are enough history for jitter and shimmer")
+    }
+
+    func testJitterAndShimmerAreNotAReadingUntilThreeVoicedSteps() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 0.6)
+        let results = SyntheticVoice.run(x, chunkMs: 10).results
+        XCTAssertGreaterThanOrEqual(results.count, 5)
+        for r in results.prefix(2) {
+            XCTAssertFalse(r.stress.valid)
+            XCTAssertEqual(r.stress.jitter, 0)
+            XCTAssertEqual(r.stress.shimmer, 0)
+        }
+        XCTAssertTrue(results[2].stress.valid)
+    }
+
+    /// For every step the raw result comes first and the value to show second (a consumer that pairs them, or
+    /// that reads the raw counters before it draws, relies on it).
+    func testTheRawResultIsDeliveredBeforeTheDisplayValueOfTheSameStep() {
+        var order: [String] = []
+        engine.onResult = { _ in order.append("result") }
+        engine.onDisplay = { _ in order.append("display") }
+        engine.processFrame(sine(24_000))                           // 5 steps in one buffer
+        XCTAssertEqual(order, ["result", "display", "result", "display", "result", "display",
+                               "result", "display", "result", "display"])
+    }
+
+    // MARK: - Display window
+
+    func testTheDisplayValueIsTheMeanOfTheLastTenResults() {
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 2.0)
+        var raw: [VoiceAnalysisResult] = []
+        var shown: [VoiceAnalysisResult] = []
+        engine.onResult = { raw.append($0) }
+        engine.onDisplay = { shown.append($0) }
+        var offset = 0
+        while offset + 480 <= x.count {
+            engine.processFrame(SyntheticVoice.pcm(x, from: offset, count: 480))
+            offset += 480
+        }
+        XCTAssertEqual(raw.count, shown.count)
+        XCTAssertGreaterThan(raw.count, 15)
+        for i in [0, 4, 9, 14, raw.count - 1] {
+            let window = Array(raw[max(0, i - 9)...i])
+            let expected = VoiceAnalysisSmoothing.average(of: window)
+            XCTAssertEqual(shown[i].pitch.f0Hz, expected?.pitch.f0Hz)
+            XCTAssertEqual(shown[i].voiceHealth.hnr, expected?.voiceHealth.hnr)
+            XCTAssertEqual(shown[i].pitch.rms, expected?.pitch.rms)
+        }
+    }
+
+    // MARK: - Reset, gaps and re-enabling
+
+    func testResetDropsTheAudioWindowAndRestartsTheCadence() {
+        var results: [VoiceAnalysisResult] = []
+        engine.onResult = { results.append($0) }
+        engine.processFrame(sine(4_800))
+        XCTAssertEqual(results.count, 1)
+        XCTAssertTrue(results.last?.pitch.voiced ?? false, "voiced before the reset")
+
+        engine.reset()
+        results.removeAll()
+        engine.processFrame(sine(4_799))
+        XCTAssertEqual(results.count, 0, "100 ms after the reset, not sooner")
+        engine.processFrame(sine(1))
+        XCTAssertEqual(results.count, 1)
+        XCTAssertFalse(results[0].voiceHealth.hnrValid, "nothing of the previous call survives the reset")
+    }
+
+    func testAShortGapRestartsTheGridButKeepsTheHistories() {
+        var results: [VoiceAnalysisResult] = []
+        engine.onResult = { results.append($0) }
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 1.0)
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 4_800 * 3 + 2_000))   // 3 steps + 2000 samples
+        XCTAssertEqual(results.count, 3)
+        XCTAssertTrue(results.last?.voiceHealth.hnrValid ?? false)
+
+        engine.markDiscontinuity(missingSamples: 24_000)          // 500 ms missing
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 4_799))
+        XCTAssertEqual(results.count, 3, "the next analysis comes 100 ms after the audio resumes")
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 1))
+        XCTAssertEqual(results.count, 4)
+        XCTAssertTrue(results[3].voiceHealth.hnrValid, "the HNR history survived a gap shorter than 2 s")
+    }
+
+    func testAGapOfTwoSecondsOrMoreClearsEverything() {
+        var results: [VoiceAnalysisResult] = []
+        engine.onResult = { results.append($0) }
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 1.0)
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 4_800 * 3))
+        XCTAssertTrue(results.last?.voiceHealth.hnrValid ?? false)
+
+        // The literals of the specification (docs/voice-analysis-spec.md, section 2), not the engine's own
+        // constant: changing the constant must fail here. (VoiceAnalysisGapTests checks every history on both
+        // sides of the line.)
+        engine.markDiscontinuity(missingSamples: 95_999)
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 4_800))
+        XCTAssertEqual(results.count, 4)
+        XCTAssertTrue(results[3].voiceHealth.hnrValid, "1.99998 s is still a short gap")
+
+        engine.markDiscontinuity(missingSamples: 96_000)
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 4_800))
+        XCTAssertEqual(results.count, 5)
+        XCTAssertFalse(results[4].voiceHealth.hnrValid, "2 s or more: HNR history cleared")
+    }
+
+    func testADiscontinuityOfUnknownLengthCountsAsShort() {
+        var results: [VoiceAnalysisResult] = []
+        engine.onResult = { results.append($0) }
+        let x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 1.0)
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 4_800 * 3))
+        engine.markDiscontinuity(missingSamples: 0)
+        engine.processFrame(SyntheticVoice.pcm(x, from: 0, count: 4_800))
+        XCTAssertEqual(results.count, 4)
+        XCTAssertTrue(results[3].voiceHealth.hnrValid)
+    }
+
+    func testADiscontinuityBeforeAnyAudioChangesNothing() {
+        var results: [VoiceAnalysisResult] = []
+        engine.onResult = { results.append($0) }
+        engine.markDiscontinuity(missingSamples: 0)
+        engine.markDiscontinuity(missingSamples: 1_000_000)
+        engine.processFrame(sine(4_800))
+        XCTAssertEqual(results.count, 1)
+    }
+
+    func testReEnablingTheEngineResumesCallbacksOnAFreshGrid() {
         var callbackCount = 0
         engine.onResult = { _ in callbackCount += 1 }
-
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-
+        engine.processFrame(sine(3_000))
         engine.setEnabled(false)
-        for _ in 0..<5 { engine.processFrame(pcm) }
+        for _ in 0..<5 { engine.processFrame(sine(960)) }
         XCTAssertEqual(callbackCount, 0)
 
         engine.setEnabled(true)
-        engine.processFrame(pcm)
-        // The internal frame counter kept incrementing, so a callback may or may not fire
-        // depending on the counter. We just verify it does not crash and eventually fires.
-        for _ in 0..<5 { engine.processFrame(pcm) }
-        XCTAssertGreaterThan(callbackCount, 0, "Re-enabled engine should resume callbacks")
+        engine.processFrame(sine(4_799))
+        XCTAssertEqual(callbackCount, 0, "audio that was not consumed while disabled does not count")
+        engine.processFrame(sine(1))
+        XCTAssertEqual(callbackCount, 1, "Re-enabled engine should resume callbacks")
     }
 }

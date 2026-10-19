@@ -1,7 +1,9 @@
 import Foundation
 
 /// Vocal-stress indicators (jitter, shimmer, composite score) over the
-/// voiced-frame history.
+/// voiced-step history: the f0 and the mean-removed window RMS of the last 25
+/// VOICED analysis steps (unvoiced steps add nothing). The history is cleared with
+/// the engine and kept across a short gap in the audio.
 ///
 /// The composite scoring lives in `StressScorePolicy` — see its doc comment
 /// for why the old inline `min(1, (jitter*10 + shimmer*5)/2)` had to go
@@ -20,7 +22,7 @@ public final class StressDetector {
     public func analyze(pitch: VoiceAnalysisResult.Pitch) -> VoiceAnalysisResult.Stress {
         guard pitch.voiced else {
             smoothedScore *= StressScorePolicy.unvoicedDecay
-            return VoiceAnalysisResult.Stress(score: smoothedScore, jitter: 0, shimmer: 0)
+            return VoiceAnalysisResult.Stress(score: smoothedScore, jitter: 0, shimmer: 0, valid: false)
         }
 
         pitchHistory.append(pitch.f0Hz)
@@ -33,10 +35,10 @@ public final class StressDetector {
         let jitter = StressScorePolicy.relativeMeanAbsDiff(pitchHistory)
         let shimmer = StressScorePolicy.relativeMeanAbsDiff(amplitudeHistory)
 
-        // Too little history for a meaningful statistic — report the metrics
-        // but hold the previous smoothed score (Android does the same).
+        // Too little history for a meaningful statistic: no reading yet (the
+        // metrics are 0 and not valid) and the previous smoothed score is held.
         guard pitchHistory.count >= 3 else {
-            return VoiceAnalysisResult.Stress(score: smoothedScore, jitter: jitter, shimmer: shimmer)
+            return VoiceAnalysisResult.Stress(score: smoothedScore, jitter: 0, shimmer: 0, valid: false)
         }
 
         let raw = StressScorePolicy.compositeScore(
@@ -46,7 +48,7 @@ public final class StressDetector {
             tremor: StressScorePolicy.tremor(pitchHistory)
         )
         smoothedScore = StressScorePolicy.smooth(previous: smoothedScore, raw: raw)
-        return VoiceAnalysisResult.Stress(score: smoothedScore, jitter: jitter, shimmer: shimmer)
+        return VoiceAnalysisResult.Stress(score: smoothedScore, jitter: jitter, shimmer: shimmer, valid: true)
     }
 
     public func reset() {

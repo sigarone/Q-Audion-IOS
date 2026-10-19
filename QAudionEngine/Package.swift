@@ -367,7 +367,13 @@ let package = Package(
                 // test/kat/reply_v1/reply-kat.json at commit a7f1b138 (generated there by tools/katgen/reply, standard library only).
                 // MessageReplyKatTests pins its SHA-256 and .gitattributes marks it -text so a CRLF checkout cannot change it.
                 // Re-copy it, never edit it.
-                .copy("Resources/kat/reply-kat.json")
+                .copy("Resources/kat/reply-kat.json"),
+                // Remote-voice analysis: the expected output of the reference implementation of the
+                // specification in docs/voice-analysis-spec.md (28 synthetic cases, 804 steps, the input of each
+                // described by generator parameters). A BYTE-FOR-BYTE copy of the file that ships with the
+                // specification and with the Android tests; VoiceDspVectorTests runs every case through the real
+                // engine. Re-copy it, never edit it.
+                .copy("Analysis/Resources/voicedsp-vectors.json")
             ]
         )
     ]
