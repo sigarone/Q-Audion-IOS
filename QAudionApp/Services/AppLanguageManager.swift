@@ -77,8 +77,14 @@ public final class AppLanguageManager {
     /// [ja-JP, en-US] the text is English, not Italian); otherwise the first
     /// supported language of that list; otherwise the app's own base language.
     public nonisolated static var effectiveLanguageCode: String {
-        languageCode(override: currentOverride,
-                     preferredLanguages: Bundle.main.preferredLocalizations + Locale.preferredLanguages)
+        // The override is checked first so that the swizzled bundle, which reads this for every
+        // string, never pays for the system's localization lists.
+        let override = currentOverride
+        if let override, supportedLanguages.contains(where: { $0.code == override }) {
+            return override
+        }
+        return languageCode(override: nil,
+                            preferredLanguages: Bundle.main.preferredLocalizations + Locale.preferredLanguages)
     }
 
     /// The choice behind `effectiveLanguageCode`, for a given override and a given
