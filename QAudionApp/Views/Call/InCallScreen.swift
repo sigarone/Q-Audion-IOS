@@ -1016,7 +1016,7 @@ struct InCallScreen: View {
     /// per SWIFT6_PATTERNS §1 / §6.
     private static let stubBadgeText: String = "DEMO"
 
-    // MARK: - Stats band (DURATA / CODEC / FLUSSO / RITARDO · RE-KEY)
+    // MARK: - Stats band (DURATA / CODEC / FLUSSO / RITARDO)
 
     /// Unified stats band under the peer name — 1:1 port of Android
     /// InCallScreen.kt's W-NETVIS stats box (InCallScreen.kt:913-991): ONE

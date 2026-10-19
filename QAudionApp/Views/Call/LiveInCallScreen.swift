@@ -36,7 +36,7 @@ import QAudionEngine
 ///   - `pqcActive`           ← the same ML-KEM key (`mlKemKeyActive`), never
 ///                              the PSK
 ///   - `hasSessionKey`       ← any session key, the transitional one included;
-///                              only the "DEMO" badges follow it
+///                              only the "DEMO" badge follows it
 ///   - `voiceBiometrics`     ← built from `appState.voiceAnalysis` (Guardian
 ///                              ribbon + security-sheet biometrics; unified
 ///                              call UI pass — see `liveVoiceBiometrics`)
@@ -816,7 +816,7 @@ struct LiveInCallScreen: View {
 
     /// W502: build a `KeyInfo` panel from the live ML-KEM session key.
     /// Returns nil while the real key is unavailable (panel stays hidden).
-    /// The "DEMO" badges do not follow this panel: see `hasSessionKey`.
+    /// The "DEMO" badge does not follow this panel: see `hasSessionKey`.
     /// Mirrors Android's KeyInfoPanel which shows algo + session fingerprint
     /// + PSK block.
     ///

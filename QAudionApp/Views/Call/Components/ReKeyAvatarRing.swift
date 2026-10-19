@@ -102,7 +102,7 @@ struct ReKeyAvatarRing: View {
     private func pill(_ text: String) -> some View {
         Text(text)
             .scaledMono(11, weight: .semibold)
-            .foregroundStyle(scheme.onSurface)
+            .foregroundStyle(scheme.primary)
             .lineLimit(1)
             .fixedSize()
             .padding(.horizontal, 8)
@@ -115,6 +115,6 @@ struct ReKeyAvatarRing: View {
         if let secondsLeft = state.secondsLeft {
             return Text("Prossimo re-key tra \(secondsLeft) secondi")
         }
-        return Text("RE-KEY")
+        return Text("Re-key in corso")
     }
 }

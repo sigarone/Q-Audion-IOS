@@ -4499,10 +4499,12 @@ final class AppState: ObservableObject {
                 let armedPeriodMs = self.reKeyScheduler.currentStatus.periodMs
                 // The tick fires on both devices, but only the caller runs the round: on the callee, or
                 // while the call is held, the engine skips it, and the ring must not flash "re-keying".
-                if integration.canInitiateReKey(callId: cid) { self.reKeyInFlightCallId = cid }
+                // A tick that finds a round already in flight does not own the mark and leaves it alone.
+                let ownsRound = integration.canInitiateReKey(callId: cid)
+                if ownsRound { self.reKeyInFlightCallId = cid }
                 let ok = await integration.performPqcReKey(callId: cid, peerId: peerId, armedPeriodMs: armedPeriodMs)
                 // Another call may have begun while the round was awaiting its ACCEPT: clear only our own mark.
-                if self.reKeyInFlightCallId == cid { self.reKeyInFlightCallId = nil }
+                if ownsRound && self.reKeyInFlightCallId == cid { self.reKeyInFlightCallId = nil }
                 RTLog.info("rekey", "tick #" + seq + " performPqcReKey result=" + String(ok))
             }
         }

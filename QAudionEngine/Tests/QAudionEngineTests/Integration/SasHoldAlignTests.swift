@@ -177,6 +177,21 @@ final class SasHoldAlignTests: XCTestCase {
         XCTAssertFalse(integ.releaseHold(callId: F.callId), "reported once")
     }
 
+    /// `canInitiateReKey` answers by the rule `performPqcReKey` applies, and asking changes nothing.
+    func testCanInitiateReKeyFollowsTheRekeyRoleRuleWithoutSideEffects() {
+        let caller = QAudionCallIntegration()
+        caller.configureAsActiveCallerForTesting()
+        XCTAssertTrue(caller.canInitiateReKey(callId: F.callId), "an active caller starts rekeys")
+
+        caller.markHeld(callId: F.callId)
+        XCTAssertFalse(caller.canInitiateReKey(callId: F.callId.uppercased()), "not while the call is held")
+        XCTAssertFalse(caller.releaseHold(callId: F.callId), "asking does not record a deferred rekey")
+        XCTAssertTrue(caller.canInitiateReKey(callId: F.callId), "again once the hold is released")
+
+        let callee = QAudionCallIntegration()   // never sent an offer: not the caller
+        XCTAssertFalse(callee.canInitiateReKey(callId: F.callId), "the callee never starts rekeys")
+    }
+
     /// Nothing was deferred when no rekey was due: releasing a hold must not invent one.
     func testReleasingAHoldWithNoSkippedRekeyReportsNothing() {
         let integ = QAudionCallIntegration()

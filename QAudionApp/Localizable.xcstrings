@@ -28391,47 +28391,6 @@
         }
       }
     },
-    "Rekey demo, contatore non collegato al motore": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rekey demo, contatore non collegato al motore"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rekey demo, counter not wired to the engine"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Demo de rekey, contador no conectado al motor"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rekey démo, compteur non connecté au moteur"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rekey-Demo, Zähler nicht mit der Engine verbunden"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Demonstração de rekey, contador não conectado ao motor"
-          }
-        }
-      }
-    },
     "Reset": {
       "extractionState": "manual",
       "localizations": {
@@ -44552,39 +44511,171 @@
       "extractionState": "manual",
       "localizations": {
         "it": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Prossimo re-key tra %lld secondo"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Prossimo re-key tra %lld secondi"
+                }
+              }
+            }
+          }
+        },
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Next re-key in %lld second"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Next re-key in %lld seconds"
+                }
+              }
+            }
+          }
+        },
+        "de": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Nächster Re-Key in %lld Sekunde"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Nächster Re-Key in %lld Sekunden"
+                }
+              }
+            }
+          }
+        },
+        "es": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Próximo re-key en %lld segundo"
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Próximo re-key en %lld de segundos"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Próximo re-key en %lld segundos"
+                }
+              }
+            }
+          }
+        },
+        "fr": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Prochain re-key dans %lld seconde"
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Prochain re-key dans %lld de secondes"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Prochain re-key dans %lld secondes"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Próximo re-key em %lld segundo"
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Próximo re-key em %lld de segundos"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Próximo re-key em %lld segundos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Re-key in corso": {
+      "comment": "Call screen avatar ring — accessibility text while a re-key round is running on this device",
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Prossimo re-key tra %lld secondi"
+            "value": "Re-key in corso"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Next re-key in %lld seconds"
+            "value": "Re-key in progress"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nächster Re-Key in %lld Sekunden"
+            "value": "Re-Key läuft"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Próximo re-key en %lld segundos"
+            "value": "Re-key en curso"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Prochain re-key dans %lld secondes"
+            "value": "Re-key en cours"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Próximo re-key em %lld segundos"
+            "value": "Re-key em andamento"
           }
         }
       }
