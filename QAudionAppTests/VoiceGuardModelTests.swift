@@ -2,8 +2,8 @@ import XCTest
 @testable import QAudionApp
 import QAudionEngine
 
-/// The voice analysis of the call screen: pitch reading of the ribbon, "voice
-/// check" card and technical-data rows. The decisions live in
+/// The voice analysis of the call screen: tone row of the ribbon, "voice
+/// check" card with its wave, and technical-data rows. The decisions live in
 /// `VoiceGuardModel.swift` as pure functions (value in, word / colour role /
 /// text out), so the thresholds, the wording and the number formats are pinned
 /// here without any UI. Stress, breath and authenticity readings are gone on
@@ -13,37 +13,146 @@ import QAudionEngine
 /// the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
 final class VoiceGuardModelTests: XCTestCase {
 
-    // MARK: - Pitch reading
+    // MARK: - Tone row
 
-    func testPitchHasNoStatusWordWhileVoicedAndADashWhenNot() {
-        XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).status, .none)
-        XCTAssertEqual(VoiceGauges.pitch(hz: 0, voiced: false).status, .dash)
-        XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).value, "142")
-        XCTAssertEqual(VoiceGauges.pitch(hz: 142.7, voiced: true).unit, "Hz")
+    func testToneReadingIsTheWholeNumberInHertzAndTheVoicedFlag() {
+        let voiced = VoiceGauges.pitch(hz: 142.7, voiced: true)
+        XCTAssertEqual(voiced.value, "142", "cut towards zero, not rounded")
+        XCTAssertEqual(voiced.unit, "Hz")
+        XCTAssertTrue(voiced.voiced)
+        let silent = VoiceGauges.pitch(hz: 0, voiced: false)
+        XCTAssertEqual(silent.value, "0")
+        XCTAssertFalse(silent.voiced)
     }
 
-    func testPitchIsNeverColoured() {
-        XCTAssertEqual(VoiceGauges.pitch(hz: 142, voiced: true).tone, .neutral)
-        XCTAssertEqual(VoiceGauges.pitch(hz: 0, voiced: false).tone, .neutral)
+    func testToneValueWithoutANumberReadsAsTheDash() {
+        XCTAssertEqual(VoiceGauges.pitch(hz: .nan, voiced: true).value, "—")
+        XCTAssertEqual(VoiceGauges.pitch(hz: .infinity, voiced: false).value, "—")
     }
 
-    func testPitchHasOnlyTheTwoStates() {
-        XCTAssertEqual(VoiceGauges.pitch(hz: 120, voiced: true).status, .none)
-        XCTAssertEqual(VoiceGauges.pitch(hz: 120, voiced: false).status, .dash)
-    }
-
-    /// The dash printed for a missing value or an unvoiced pitch is the only
-    /// status text that is not a word, so it needs no translation.
+    /// The dash printed for a missing value is not a word, so it needs no translation.
     func testTheDashIsNotLanguage() {
-        XCTAssertEqual(VoiceGaugeStatus.dash.localizedText, "—")
-        XCTAssertEqual(VoiceGaugeStatus.none.localizedText, "")
+        XCTAssertEqual(VoiceGauges.noValue, "—")
     }
 
-    /// The pitch reading has no status word beyond the dash: the two states it
-    /// can have print nothing and a dash, never a word about the speaker.
-    func testPitchStatusHasNoWordsOfItsOwn() {
-        let all: [VoiceGaugeStatus] = [.none, .dash]
-        XCTAssertEqual(all.map { $0.localizedText }, ["", "—"])
+    /// The row says what was heard in two words, "voice" and "silence", and they
+    /// must not be the same word nor empty (a missing catalog entry falls back to
+    /// the Italian default, never to an empty string).
+    func testTheTwoVoiceWordsDiffer() {
+        let voice = VoiceToneCopy.voiceWord(voiced: true)
+        let silence = VoiceToneCopy.voiceWord(voiced: false)
+        XCTAssertFalse(voice.isEmpty)
+        XCTAssertFalse(silence.isEmpty)
+        XCTAssertNotEqual(voice, silence)
+    }
+
+    func testTheSpokenToneReadsLabelValueUnitAndWord() {
+        let reading = VoiceGauges.pitch(hz: 142.7, voiced: true)
+        XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "voce", details: nil),
+                       "Tono, 142 Hz, voce")
+        XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "voce", details: ""),
+                       "Tono, 142 Hz, voce")
+    }
+
+    /// The details are read as pauses, not as the middle dot of the screen.
+    func testTheSpokenToneReadsTheDetailsWithPauses() {
+        let reading = VoiceGauges.pitch(hz: 120, voiced: true)
+        let spoken = VoiceGauges.spokenTone(label: "Tono",
+                                            reading: reading,
+                                            voiceWord: "voce",
+                                            details: "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB")
+        XCTAssertEqual(spoken, "Tono, 120 Hz, voce, F1 520, F2 1480, 4,2 sill/s, HNR 18 dB")
+        XCTAssertFalse(spoken.contains("·"))
+    }
+
+    // MARK: - Spectral details of the tone row
+
+    private let allDetails = Set(VoiceSpectralDetails.Field.allCases)
+    private let italian = Locale(identifier: "it_IT")
+    private let english = Locale(identifier: "en_US")
+
+    private func details(f1: Float = 524,
+                         f2: Float = 1478,
+                         rate: Float = 4.24,
+                         hnr: Float = 18.4,
+                         voiced: Bool = true,
+                         fields: Set<VoiceSpectralDetails.Field>? = nil,
+                         locale: Locale) -> String? {
+        VoiceSpectralDetails.text(formant1Hz: f1,
+                                  formant2Hz: f2,
+                                  syllablesPerSecond: rate,
+                                  hnrDecibels: hnr,
+                                  voiced: voiced,
+                                  rateUnit: "sill/s",
+                                  fields: fields ?? allDetails,
+                                  locale: locale)
+    }
+
+    func testDetailsHaveTheFixedFormat() {
+        XCTAssertEqual(details(locale: italian), "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB")
+        XCTAssertEqual(VoiceSpectralDetails.separator, " · ")
+    }
+
+    func testFormantsAreRoundedToTheNearestTenHertz() {
+        XCTAssertEqual(VoiceSpectralDetails.formant(524, voiced: true), "520")
+        XCTAssertEqual(VoiceSpectralDetails.formant(525, voiced: true), "530")
+        XCTAssertEqual(VoiceSpectralDetails.formant(1474.9, voiced: true), "1470")
+        XCTAssertEqual(VoiceSpectralDetails.formant(1475, voiced: true), "1480")
+        XCTAssertEqual(VoiceSpectralDetails.formant(3004, voiced: true), "3000", "no thousands separator")
+    }
+
+    func testHnrIsAWholeNumberOfDecibels() {
+        XCTAssertEqual(VoiceSpectralDetails.hnr(18.4, voiced: true), "18 dB")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(17.5, voiced: true), "18 dB")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(0.2, voiced: true), "0 dB")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(-3.6, voiced: true), "-4 dB", "a noisy segment can be below zero")
+    }
+
+    /// Without a voice, F1, F2 and HNR do not exist and print the dash; the rate
+    /// still prints, because a window without speech has a rate.
+    func testWithoutAVoiceTheDashReplacesF1F2AndHnrButNotTheRate() {
+        XCTAssertEqual(details(voiced: false, locale: italian), "F1 — · F2 — · 4,2 sill/s · HNR —")
+    }
+
+    func testAFormantThatWasNotFoundPrintsTheDash() {
+        XCTAssertEqual(VoiceSpectralDetails.formant(0, voiced: true), "—")
+        XCTAssertEqual(VoiceSpectralDetails.formant(-5, voiced: true), "—")
+        XCTAssertEqual(VoiceSpectralDetails.formant(.nan, voiced: true), "—")
+        XCTAssertEqual(VoiceSpectralDetails.formant(.infinity, voiced: true), "—")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(.nan, voiced: true), "—")
+    }
+
+    func testTheRateUsesTheDecimalSeparatorOfTheLocale() {
+        XCTAssertEqual(VoiceSpectralDetails.rate(4.24, unit: "sill/s", locale: italian), "4,2 sill/s")
+        XCTAssertEqual(VoiceSpectralDetails.rate(4.24, unit: "syl/s", locale: english), "4.2 syl/s")
+        XCTAssertEqual(details(locale: english), "F1 520 · F2 1480 · 4.2 sill/s · HNR 18 dB")
+    }
+
+    func testTheRateHasOneDecimalAndIsRoundedNotCut() {
+        XCTAssertEqual(VoiceSpectralDetails.rate(4.26, unit: "u", locale: english), "4.3 u")
+        XCTAssertEqual(VoiceSpectralDetails.rate(4, unit: "u", locale: english), "4.0 u")
+        XCTAssertEqual(VoiceSpectralDetails.rate(0, unit: "u", locale: italian), "0,0 u")
+        XCTAssertEqual(VoiceSpectralDetails.rate(.nan, unit: "u", locale: english), "— u")
+    }
+
+    func testOnlyTheSelectedDetailsArePrintedInTheFixedOrder() {
+        XCTAssertEqual(details(fields: [.hnr, .formant1], locale: italian), "F1 520 · HNR 18 dB")
+        XCTAssertEqual(details(fields: [.speechRate], locale: italian), "4,2 sill/s")
+        XCTAssertNil(details(fields: [], locale: italian), "nothing selected, nothing printed")
+    }
+
+    /// Printed details are listed here once their extractor returns the quantity
+    /// its label names (see the doc of `VoiceSpectralDetails.measured`). Until
+    /// then the tone row shows the tone alone; this test is the place to change
+    /// when a field is switched on.
+    func testNoDetailIsPrintedUntilItsExtractorIsTrusted() {
+        XCTAssertTrue(VoiceSpectralDetails.measured.isEmpty)
+        XCTAssertNil(VoiceSpectralDetails.text(formant1Hz: 524,
+                                               formant2Hz: 1478,
+                                               syllablesPerSecond: 4.2,
+                                               hnrDecibels: 18,
+                                               voiced: true,
+                                               rateUnit: "sill/s"))
     }
 
     // MARK: - Technical-data rows
@@ -143,12 +252,13 @@ final class VoiceGuardModelTests: XCTestCase {
                        .learning(progress: 0.4))
     }
 
-    /// Before the first sample there is nothing to compare: the card then shows
-    /// the same "Dati insufficienti" word as a verdict without a level.
-    func testWaitsForVoiceDataUntilTheFirstSample() {
+    /// With no level and no sample there is nothing to compare: the card then
+    /// shows just the "Dati insufficienti" word, whatever a finished or idle
+    /// learning session says.
+    func testWaitsForVoiceDataUntilThereIsALevelOrASample() {
         let states: [VoiceLearningSession.State?] = [nil, .idle, .failed, .completed(contactId: "c1")]
         for state in states {
-            XCTAssertEqual(VoiceGuard.content(banner: nil, learning: state, hasHistory: false, level: .verified),
+            XCTAssertEqual(VoiceGuard.content(banner: nil, learning: state, hasHistory: false, level: nil),
                            .waiting)
         }
     }
@@ -235,7 +345,7 @@ final class VoiceGuardModelTests: XCTestCase {
         }
     }
 
-    // MARK: - Single-trace wave
+    // MARK: - Wave: the trend
 
     func testWaveHasNothingToDrawBelowTwoSamples() {
         XCTAssertTrue(VoiceGuardWave.deviations(of: []).isEmpty)
@@ -262,5 +372,182 @@ final class VoiceGuardModelTests: XCTestCase {
         for value in VoiceGuardWave.deviations(of: [0, 5, -3, 40]) {
             XCTAssertLessThanOrEqual(abs(value), 1)
         }
+    }
+
+    // MARK: - Wave: which picture it draws
+
+    /// The 40 log-spaced bands of the analyser. A literal on purpose: this bundle keeps to pure value tests
+    /// (see project-apptests.yml).
+    private let bands = 40
+
+    private func spectrum(_ value: Float, count: Int? = nil) -> [Float] {
+        [Float](repeating: value, count: count ?? bands)
+    }
+
+    /// The wave overlays the live spectrum on the reference of the call only
+    /// when it has both, with the same number of bands.
+    func testTheWaveOverlaysOnlyWithBothSpectraOfTheSameSize() {
+        XCTAssertTrue(VoiceGuardWave.overlaysReference(live: spectrum(0.5), reference: spectrum(0.4)))
+        XCTAssertFalse(VoiceGuardWave.overlaysReference(live: nil, reference: spectrum(0.4)))
+        XCTAssertFalse(VoiceGuardWave.overlaysReference(live: spectrum(0.5), reference: nil))
+        XCTAssertFalse(VoiceGuardWave.overlaysReference(live: nil, reference: nil))
+        XCTAssertFalse(VoiceGuardWave.overlaysReference(live: spectrum(0.5, count: 39), reference: spectrum(0.4)))
+        XCTAssertFalse(VoiceGuardWave.overlaysReference(live: spectrum(0.5), reference: spectrum(0.4, count: 41)))
+    }
+
+    func testThePictureFollowsTheSameTest() {
+        XCTAssertEqual(VoiceGuardWave.picture(live: spectrum(0.5), reference: spectrum(0.4)), .overlay)
+        XCTAssertEqual(VoiceGuardWave.picture(live: spectrum(0.5), reference: nil), .trend, "opening seconds of a call")
+        XCTAssertEqual(VoiceGuardWave.picture(live: nil, reference: nil), .trend)
+        XCTAssertEqual(VoiceGuardWave.picture(live: spectrum(0.5, count: 10), reference: spectrum(0.4)), .trend)
+    }
+
+    /// The words read aloud must describe the picture on screen: the two
+    /// pictures have two different labels, and swapping them would fail here.
+    func testEachPictureHasItsOwnSpokenLabel() {
+        let overlay = VoiceWaveCopy.accessibilityLabel(for: .overlay)
+        let trend = VoiceWaveCopy.accessibilityLabel(for: .trend)
+        XCTAssertFalse(overlay.isEmpty)
+        XCTAssertFalse(trend.isEmpty)
+        XCTAssertNotEqual(overlay, trend)
+        let picture = VoiceGuardWave.picture(live: spectrum(0.5), reference: spectrum(0.4))
+        XCTAssertEqual(VoiceWaveCopy.accessibilityLabel(for: picture), overlay)
+        let opening = VoiceGuardWave.picture(live: spectrum(0.5), reference: nil)
+        XCTAssertEqual(VoiceWaveCopy.accessibilityLabel(for: opening), trend)
+    }
+
+    // MARK: - Wave: the overlay
+
+    /// A louder band is shown at once; a quieter one falls by steps, keeping
+    /// 78 % of the old height each time.
+    func testTheLiveOutlineRisesAtOnceAndFallsBySteps() {
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.2, target: 0.9), 0.9)
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.5, target: 0.5), 0.5, accuracy: 1e-6)
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 1.0, target: 0.0), 0.78, accuracy: 1e-6)
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.5, target: 0.1),
+                       0.5 * 0.78 + 0.1 * 0.22, accuracy: 1e-6)
+        var shown: Float = 1
+        for _ in 0..<40 {
+            shown = VoiceGuardWave.nextDisplay(previous: shown, target: 0)
+        }
+        XCTAssertLessThan(shown, 0.001, "silence lets the outline settle")
+    }
+
+    /// The fall is counted in spectrum frames and measured on the clock: a frame
+    /// is 1/15 s, and a stretch of time that is not positive is worth nothing.
+    func testTimeIsCountedInSpectrumFrames() {
+        XCTAssertEqual(VoiceGuardWave.framesPerSecond, 15)
+        XCTAssertEqual(VoiceGuardWave.frameSteps(elapsed: 1.0 / 15.0), 1, accuracy: 1e-5)
+        XCTAssertEqual(VoiceGuardWave.frameSteps(elapsed: 1), 15, accuracy: 1e-5)
+        XCTAssertEqual(VoiceGuardWave.frameSteps(elapsed: 0.5 / 15.0), 0.5, accuracy: 1e-5)
+        XCTAssertEqual(VoiceGuardWave.frameSteps(elapsed: 0), 0)
+        XCTAssertEqual(VoiceGuardWave.frameSteps(elapsed: -0.2), 0, "a clock that ran backwards changes nothing")
+        XCTAssertEqual(VoiceGuardWave.frameSteps(elapsed: .nan), 0)
+        XCTAssertEqual(VoiceGuardWave.frameSteps(elapsed: .infinity), 0)
+    }
+
+    /// One whole frame is the old fixed step; no time leaves the height as it
+    /// was; a rise is never slowed down by the time that passed.
+    func testTheFallFollowsTheNumberOfFramesThatPassed() {
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 1, target: 0, steps: 1), 0.78, accuracy: 1e-6)
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 1, target: 0, steps: 2), 0.78 * 0.78, accuracy: 1e-6)
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.6, target: 0.2, steps: 0), 0.6, "a draw in the same instant steps nothing")
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.6, target: 0.2, steps: .nan), 0.6)
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.2, target: 0.9, steps: 0), 0.9, "a louder band is shown at once")
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.2, target: 0.9, steps: 5), 0.9)
+        XCTAssertEqual(VoiceGuardWave.nextDisplay(previous: 0.8, target: 0.2, steps: 1_000_000), 0.2, accuracy: 1e-6,
+                       "a long gap settles on the target")
+    }
+
+    /// The point of the clock: the same second of silence leaves the same height
+    /// whether the wave was redrawn 15 times, 60 times or twice in it. The old
+    /// step per draw made the outline fall four times as fast at 60 draws a
+    /// second as at 15.
+    func testTheFallDoesNotDependOnHowOftenTheWaveIsDrawn() {
+        func height(afterDrawsPerSecond draws: Int) -> Float {
+            var shown: Float = 1
+            for _ in 0..<draws {
+                let steps = VoiceGuardWave.frameSteps(elapsed: 1.0 / Double(draws))
+                shown = VoiceGuardWave.nextDisplay(previous: shown, target: 0, steps: steps)
+            }
+            return shown
+        }
+        let atFrameRate = height(afterDrawsPerSecond: 15)
+        XCTAssertEqual(atFrameRate, Float(pow(0.78, 15.0)), accuracy: 1e-5)
+        XCTAssertEqual(height(afterDrawsPerSecond: 60), atFrameRate, accuracy: 1e-5)
+        XCTAssertEqual(height(afterDrawsPerSecond: 120), atFrameRate, accuracy: 1e-5)
+        XCTAssertEqual(height(afterDrawsPerSecond: 2), atFrameRate, accuracy: 1e-5)
+    }
+
+    /// Both curves share ONE scale, the peak of either of them: scaling each on
+    /// its own would make them agree even when they do not.
+    func testBothCurvesAreScaledByTheSamePeak() {
+        let reference: [Float] = [0.2, 0.4, 0.1]
+        let live: [Float] = [0.1, 0.8, 0.1]
+        guard let overlay = VoiceGuardWave.overlay(display: live, reference: reference) else {
+            return XCTFail("two non-zero curves can be overlaid")
+        }
+        let expectedLive: [Float] = [0.125, 1.0, 0.125]
+        let expectedReference: [Float] = [0.25, 0.5, 0.125]
+        XCTAssertEqual(overlay.live.count, 3)
+        XCTAssertEqual(overlay.reference.count, 3)
+        for index in 0..<3 {
+            XCTAssertEqual(overlay.live[index], expectedLive[index], accuracy: 1e-6)
+            XCTAssertEqual(overlay.reference[index], expectedReference[index], accuracy: 1e-6)
+        }
+    }
+
+    func testAnIdenticalPairOfCurvesCoincidesExactly() {
+        let curve: [Float] = [0.1, 0.6, 0.3, 0.05]
+        guard let overlay = VoiceGuardWave.overlay(display: curve, reference: curve) else {
+            return XCTFail("a non-zero curve can be overlaid")
+        }
+        XCTAssertEqual(overlay.live, overlay.reference)
+        XCTAssertEqual(overlay.live.max() ?? 0, 1, accuracy: 1e-6, "the larger curve fills the box")
+    }
+
+    /// Digital silence in the opening seconds, together with live bands that
+    /// have decayed to zero, leaves nothing to scale by: the wave falls back to
+    /// the trend instead of dividing by zero.
+    func testAllZeroCurvesFallBackToTheTrend() {
+        XCTAssertNil(VoiceGuardWave.overlay(display: spectrum(0), reference: spectrum(0)))
+        XCTAssertNil(VoiceGuardWave.overlay(display: [], reference: []))
+        XCTAssertNil(VoiceGuardWave.overlay(display: [.nan, .nan], reference: [0, 0]))
+    }
+
+    func testAQuietReferenceStillOverlaysWithALoudLiveVoice() {
+        guard let overlay = VoiceGuardWave.overlay(display: [0.9, 0.9], reference: [0, 0]) else {
+            return XCTFail("a flat reference can still be overlaid")
+        }
+        XCTAssertEqual(overlay.reference, [0, 0])
+        XCTAssertEqual(overlay.live.count, 2)
+        XCTAssertEqual(overlay.live[0], 1, accuracy: 1e-6)
+        XCTAssertEqual(overlay.live[1], 1, accuracy: 1e-6)
+    }
+
+    func testTheOverlayNeverExceedsTheBox() {
+        guard let overlay = VoiceGuardWave.overlay(display: [3, 0.2, 7], reference: [5, 9, 0.1]) else {
+            return XCTFail("non-zero curves can be overlaid")
+        }
+        for value in overlay.live + overlay.reference {
+            XCTAssertGreaterThanOrEqual(value, 0)
+            XCTAssertLessThanOrEqual(value, 1)
+        }
+    }
+
+    // MARK: - Voice check card: when the wave is shown
+
+    /// The level, when known, always wins: it is shown even while the confidence
+    /// history is still empty (the wave then has a spectrum overlay or a flat
+    /// trace to draw). "Dati insufficienti" alone is for no level and no sample.
+    func testALevelIsShownEvenBeforeTheFirstConfidenceSample() {
+        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: .verified),
+                       .verdict(level: .verified))
+        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: .highRisk),
+                       .verdict(level: .highRisk))
+    }
+
+    func testNoLevelAndNoSampleIsTheBareInsufficientDataLine() {
+        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: nil), .waiting)
     }
 }

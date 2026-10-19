@@ -8,8 +8,11 @@ import QAudionEngine
 ///    either "voice learned" or "learning failed, will retry next call";
 ///  - the learning progress while the session runs (it starts on its own on a
 ///    call with a contact that has no stored voice template yet);
-///  - the verdict word, with the wave and a short explanation under it,
-///    coloured by the verdict.
+///  - the bare "Dati insufficienti" word with its note, while there is neither
+///    a verdict level nor a single Guardian confidence sample;
+///  - otherwise the verdict word, with the wave and a short explanation under
+///    it, coloured by the verdict. The level, when known, always wins: it is
+///    shown even while the confidence history is still empty.
 ///
 /// The verdict is the answer of the speaker-change monitor
 /// (`RemoteSpeakerChangeMonitor`, published as `AppState.speakerChangeVerdict`)
@@ -19,15 +22,12 @@ import QAudionEngine
 /// four words: "Voce coerente", "Da controllare", "Anomalia" and "Dati
 /// insufficienti". None of them speaks of emotion, stress, health or coercion.
 ///
-/// "Dati insufficienti" has two causes, not one:
-///  - the monitor has no level yet. It needs a warm-up of voice scores
-///    (`SpeakerChangeDetector.defaultWarmupSamples`, about one score every 3 s
-///    of speech in the foreground and every 10 s in the background), which takes
-///    tens of seconds, not the first few seconds of a call;
-///  - the Guardian confidence history that draws the wave has no sample yet.
-///    That is checked first (`VoiceGuard.content`): until the history has its
-///    first sample the card says "Dati insufficienti" even if the monitor
-///    already has a level.
+/// "Dati insufficienti" means the monitor has no level yet. It needs a warm-up
+/// of voice scores (`SpeakerChangeDetector.defaultWarmupSamples`, about one
+/// score every 3 s of speech in the foreground and every 10 s in the
+/// background), which takes tens of seconds, not the first few seconds of a
+/// call. Once the Guardian confidence history has a sample the word is shown
+/// with the wave; before that, alone.
 ///
 /// "Da controllare" can also come from the far end's own report alone
 /// (`RemoteSpeakerChangeMonitor.Verdict.peerReportedOnly`). A report from
@@ -41,6 +41,11 @@ struct VoiceGuardCard: View {
     let learningState: VoiceLearningSession.State?
     let confidenceHistory: [Float]
     let speakerChange: RemoteSpeakerChangeMonitor.Verdict
+    /// The live spectrum of the far end (40 bands, 0...1), or nil before the
+    /// first decoded frame. The wave draws it over `voiceReference`.
+    var voiceSpectrum: [Float]? = nil
+    /// The frozen opening spectrum of this call, or nil until it exists.
+    var voiceReference: [Float]? = nil
 
     @State private var banner: VoiceGuardBanner?
     @State private var bannerTask: Task<Void, Never>?
@@ -60,6 +65,12 @@ struct VoiceGuardCard: View {
     /// Colour role of the icon, and of the whole card while a banner shows.
     private var iconTone: VoiceTone {
         VoiceGuard.bannerTone(of: banner) ?? VoiceGuard.tone(of: level)
+    }
+
+    /// The picture the wave draws right now. The words read aloud for the wave
+    /// follow it, so they cannot describe the other picture.
+    private var wavePicture: VoiceWavePicture {
+        VoiceGuardWave.picture(live: voiceSpectrum, reference: voiceReference)
     }
 
     private func color(_ tone: VoiceTone) -> Color {
@@ -130,10 +141,9 @@ struct VoiceGuardCard: View {
         case .learning(let progress):
             learningView(progress)
         case .waiting:
-            // No Guardian history yet: the same "Dati insufficienti" word as a
-            // verdict without a level, with a flat trace (no history to draw),
-            // whatever level the speaker-change monitor already has.
-            verdictView(nil)
+            // Neither a verdict level nor a Guardian sample yet: just the
+            // "Dati insufficienti" word and its note, no title and no wave.
+            waitingView
         case .verdict(let verdictLevel):
             verdictView(verdictLevel)
         }
@@ -183,6 +193,21 @@ struct VoiceGuardCard: View {
         .frame(height: 4)
     }
 
+    private var waitingView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(verdictWord(nil))
+                .foregroundStyle(color(VoiceGuard.tone(of: nil)))
+                .scaledMono(11, weight: .semibold)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(verdictNote(nil))
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .scaledMono(11)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func verdictView(_ verdictLevel: VoiceGuardLevel?) -> some View {
         let tone = VoiceGuard.tone(of: verdictLevel)
         return VStack(alignment: .leading, spacing: 4) {
@@ -201,12 +226,13 @@ struct VoiceGuardCard: View {
                         .lineLimit(2)
                 }
                 .frame(width: verdictColumnWidth, alignment: .leading)
-                VoiceGuardWaveView(history: confidenceHistory, color: color(tone))
+                VoiceGuardWaveView(history: confidenceHistory,
+                                   live: voiceSpectrum,
+                                   reference: voiceReference,
+                                   color: color(tone))
                     .frame(maxWidth: .infinity)
                     .frame(height: 30)
-                    .accessibilityLabel(Text(String(localized: "in_call.voice_guard.curve_a11y",
-                                                    defaultValue: "Andamento della verifica vocale in questa chiamata",
-                                                    comment: "Accessibility label of the live wave on the call screen voice check card")))
+                    .accessibilityLabel(Text(VoiceWaveCopy.accessibilityLabel(for: wavePicture)))
             }
             Text(verdictNote(verdictLevel))
                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -218,8 +244,7 @@ struct VoiceGuardCard: View {
     }
 
     /// The four words of the verdict. `pending` is what the card shows when
-    /// the monitor has no level yet, and also while the Guardian history that
-    /// draws the wave is still empty (see the doc of the card).
+    /// the monitor has no level yet (see the doc of the card).
     private func verdictWord(_ verdictLevel: VoiceGuardLevel?) -> String {
         switch VoiceGuard.word(for: verdictLevel) {
         case .pending:
@@ -283,29 +308,130 @@ struct VoiceGuardCard: View {
     }
 }
 
-/// The single live trace of the card: the recent Guardian confidence samples
-/// (`AppState.voiceConfidenceHistory`, a different measurement from the scores
-/// behind the verdict word), centred on their mean and divided by their own
-/// largest distance from it, never by less than `VoiceGuardWave.minSpread`.
+/// The per-band heights the overlay is drawn from. A plain class kept in
+/// `@State` so the same buffer survives re-renders, while stepping it during the
+/// draw never invalidates the view tree (same pattern as the spectrum analyser
+/// of the ribbon).
+private final class VoiceWaveDisplay {
+    var levels = [Float](repeating: 0, count: VoiceReferenceEnvelope.bandCount)
+    /// Uptime (seconds) when the levels were last brought forward; nil before
+    /// the first time. The fall is measured from it, so it does not depend on
+    /// how many draws happen.
+    var steppedAt: TimeInterval?
+}
+
+/// The wave of the card. It has two pictures, chosen by
+/// `VoiceGuardWave.overlaysReference`:
 ///
-/// The trace shows the shape of the movement, not its size: a window that moves
-/// by more than the floor always reaches the same full swing, whether it is
-/// ordinary wobble or a real change, and only a window that moves by less than
-/// the floor is drawn proportionally smaller. What carries the verdict is the
-/// colour of the card, not the amplitude of the wave. Fewer than two finite
-/// samples draw a flat line.
+///  - once the reference of this call exists (the average of its opening
+///    seconds, frozen), the live spectrum of the far end is drawn over it: the
+///    reference as a filled symmetric wave, the live spectrum as an outline on
+///    top. The same voice keeps the outline riding the fill; a different voice
+///    pulls the two apart across whole regions of the spectrum. Both are real
+///    measurements of this call and are scaled by the one peak of the two, so
+///    they can coincide only when they really do;
+///  - before that (the opening seconds, or after the reference was dropped), or
+///    when the two spectra cannot be told apart (all zero), the trend of the
+///    Guardian confidence score (`AppState.voiceConfidenceHistory`, a different
+///    measurement from the scores behind the verdict word): the recent samples
+///    centred on their mean and divided by their own largest distance from it,
+///    never by less than `VoiceGuardWave.minSpread`. It shows the shape of the
+///    movement, not its size. Fewer than two finite samples draw a flat line.
+///
+/// Either way the picture is a companion of the verdict, never the verdict: the
+/// colour of the card carries it, not the shape of the wave.
 struct VoiceGuardWaveView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let history: [Float]
+    let live: [Float]?
+    let reference: [Float]?
     let color: Color
 
+    @State private var display = VoiceWaveDisplay()
+
+    /// The live outline eases down between spectrum frames, so it needs a clock
+    /// of its own at the rate the frames come (about 15 Hz): silence arrives as
+    /// the same all-zero frame again and again, which would not redraw the wave.
+    /// Paused for the trend, which changes only with new samples, and under
+    /// Reduce Motion, where the outline moves only when a frame arrives (by the
+    /// time that passed since the last draw, like everywhere else).
+    private var clockPaused: Bool {
+        reduceMotion || !VoiceGuardWave.overlaysReference(live: live, reference: reference)
+    }
+
     var body: some View {
-        Canvas { ctx, size in
-            draw(ctx: &ctx, size: size)
+        TimelineView(.animation(minimumInterval: 1.0 / 15.0, paused: clockPaused)) { timeline in
+            Canvas { ctx, size in
+                // Read the timeline date so each tick is a real dependency of
+                // this draw: the outline keeps easing down between frames. How
+                // far it eases is measured on the clock inside `draw`, not
+                // counted per tick.
+                _ = timeline.date
+                draw(ctx: &ctx, size: size)
+            }
         }
     }
 
     private func draw(ctx: inout GraphicsContext, size: CGSize) {
         let midY = size.height / 2
+        guard VoiceGuardWave.overlaysReference(live: live, reference: reference),
+              let live = live, let reference = reference else {
+            drawTrend(ctx: &ctx, size: size, midY: midY)
+            return
+        }
+        let count = min(display.levels.count, live.count)
+        // The fall of 0.78 is per spectrum frame (about 15 a second), so it is
+        // applied for the time that passed since the last draw, whatever
+        // triggered this one (a tick, a new frame, a layout pass): a second
+        // draw in the same instant steps nothing. The very first draw counts
+        // as one frame.
+        let now = ProcessInfo.processInfo.systemUptime
+        var steps: Float = 1
+        if let last = display.steppedAt {
+            steps = VoiceGuardWave.frameSteps(elapsed: now - last)
+        }
+        display.steppedAt = now
+        for index in 0..<count {
+            display.levels[index] = VoiceGuardWave.nextDisplay(previous: display.levels[index],
+                                                              target: live[index],
+                                                              steps: steps)
+        }
+        let shown = Array(display.levels[0..<count])
+        let base = Array(reference[0..<count])
+        guard let overlay = VoiceGuardWave.overlay(display: shown, reference: base) else {
+            drawTrend(ctx: &ctx, size: size, midY: midY)
+            return
+        }
+        let stepX = count > 1 ? size.width / CGFloat(count - 1) : size.width
+        let amplitude = midY * 0.92
+        ctx.fill(outline(overlay.reference, stepX: stepX, midY: midY, amplitude: amplitude),
+                 with: .color(color.opacity(0.18)))
+        ctx.stroke(outline(overlay.live, stepX: stepX, midY: midY, amplitude: amplitude),
+                   with: .color(color),
+                   lineWidth: 1.6)
+    }
+
+    /// A closed symmetric shape: the levels above the centre line from left to
+    /// right, then the same levels mirrored below it from right to left.
+    private func outline(_ levels: [Float], stepX: CGFloat, midY: CGFloat, amplitude: CGFloat) -> Path {
+        var path = Path()
+        for (index, level) in levels.enumerated() {
+            let point = CGPoint(x: CGFloat(index) * stepX, y: midY - CGFloat(level) * amplitude)
+            if index == 0 {
+                path.move(to: point)
+            } else {
+                path.addLine(to: point)
+            }
+        }
+        for index in stride(from: levels.count - 1, through: 0, by: -1) {
+            path.addLine(to: CGPoint(x: CGFloat(index) * stepX, y: midY + CGFloat(levels[index]) * amplitude))
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    private func drawTrend(ctx: inout GraphicsContext, size: CGSize, midY: CGFloat) {
         let deviations = VoiceGuardWave.deviations(of: history)
         guard deviations.count >= 2 else {
             var flat = Path()

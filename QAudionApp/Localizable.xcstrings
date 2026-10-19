@@ -6973,44 +6973,86 @@
         }
       }
     },
-    "in_call.gauge.pitch_note": {
+    "in_call.gauge.pitch_voiced": {
       "extractionState": "manual",
-      "comment": "Call screen voice ribbon — one-line explanation under the pitch reading: how high or low the voice of the other person (the received audio) is right now; it states what the number is, with no conclusion about the person",
+      "comment": "Call screen voice ribbon, tone row — word after the pitch value when a voice is present in the audio being measured",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quanto è alta o bassa la voce dell'altra persona in questo momento."
+            "value": "voce"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "How high or low the other person's voice is right now."
+            "value": "voice"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wie hoch oder tief die Stimme der anderen Person gerade ist."
+            "value": "Stimme"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qué tan aguda o grave es la voz de la otra persona en este momento."
+            "value": "voz"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "À quel point la voix de l'autre personne est aiguë ou grave en ce moment."
+            "value": "voix"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quão aguda ou grave é a voz da outra pessoa neste momento."
+            "value": "voz"
+          }
+        }
+      }
+    },
+    "in_call.gauge.pitch_silent": {
+      "extractionState": "manual",
+      "comment": "Call screen voice ribbon, tone row — word after the pitch value when there is no voice in the audio being measured",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "silenzio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "silence"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stille"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "silencio"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "silence"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "silêncio"
           }
         }
       }
@@ -7183,44 +7225,86 @@
         }
       }
     },
-    "in_call.voice_guard.curve_a11y": {
+    "in_call.voice_guard.wave_a11y_overlay": {
       "extractionState": "manual",
-      "comment": "Accessibility label of the live wave on the call screen voice check card",
+      "comment": "Accessibility label of the wave on the call screen voice check card while it draws the live spectrum of the voice over the reference spectrum taken in this call",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Andamento della verifica vocale in questa chiamata"
+            "value": "Spettro della voce attuale sovrapposto a quello del riferimento preso in questa chiamata"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Trend of the voice check during this call"
+            "value": "Spectrum of the current voice overlaid on the reference taken in this call"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verlauf der Stimmprüfung in diesem Anruf"
+            "value": "Spektrum der aktuellen Stimme über dem Spektrum der Referenz aus diesem Anruf"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Evolución de la verificación de voz en esta llamada"
+            "value": "Espectro de la voz actual sobre el de la referencia tomada en esta llamada"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Évolution de la vérification vocale pendant cet appel"
+            "value": "Spectre de la voix actuelle superposé à celui de la référence prise pendant cet appel"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Evolução da verificação de voz nesta chamada"
+            "value": "Espectro da voz atual sobreposto ao da referência tomada nesta chamada"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.wave_a11y_trend": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the wave on the call screen voice check card while it draws the trend of the combined confidence score of this call as a variation around its average",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Andamento del punteggio di confidenza combinato in questa chiamata, come variazione rispetto alla media"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trend of the combined confidence score during this call, shown as variation around its average"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verlauf des kombinierten Zuversichtswerts in diesem Anruf, als Abweichung vom Durchschnitt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evolución de la puntuación de confianza combinada durante esta llamada, como variación respecto a la media"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Évolution du score de confiance combiné pendant cet appel, en écart par rapport à sa moyenne"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evolução da pontuação de confiança combinada durante esta chamada, como variação em relação à média"
           }
         }
       }

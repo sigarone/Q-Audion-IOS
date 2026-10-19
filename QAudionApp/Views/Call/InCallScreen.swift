@@ -14,8 +14,9 @@ import QAudionEngine
 /// Layout (top → bottom) — mirrors the Android InCallScreen ceremony
 /// column 1:1 (2026-07-04 dedup pass: the old SessionStatusStrip call and
 /// the old synthetic "VOCE RICEVUTA"/"CIFRATURA" oscilloscopes were
-/// DELETED — the Guardian ribbon's real-FFT MiniSpectrum + real-ops/s
-/// CipherFlowTube are their one honest replacement):
+/// DELETED — the Guardian ribbon's real-FFT MiniSpectrum and the real-ops/s
+/// CipherFlowTube under the voice check card are their one honest
+/// replacement):
 ///   1. **Hero avatar** — a 120pt avatar with the per-name gradient,
 ///      wrapped by the re-key countdown ring: a faint track, the remaining
 ///      share of the period as an arc from 12 o'clock, and a "RE-KEY 117s"
@@ -28,14 +29,17 @@ import QAudionEngine
 ///      the security sheet.
 ///   4. **Trust bar** — SAS ✓ / PQC / transport chips + shield-to-expand.
 ///   5. **Guardian ribbon** — real-FFT MiniSpectrum + cipher-seal chip +
-///      pitch reading (Tono) + ENGINE CipherFlowTube.
-///   6. **TrustChainCard** — Mic→Seal→Air custody visual (iOS-only card,
+///      tone row (Tono).
+///   6. **Voice check card** ("Verifica vocale") and, right below it, the
+///      ENGINE CipherFlowTube — shown only while the crypto engine is doing
+///      real work (`cryptoOpsPerSec > 0`).
+///   7. **TrustChainCard** — Mic→Seal→Air custody visual (iOS-only card,
 ///      honest data).
-///   7. **SAS verification panel** — visible only when `sasWords.count == 6`.
-///   8. **Key info panel** — visible only when `keyInfo != nil`.
-///   9. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
+///   8. **SAS verification panel** — visible only when `sasWords.count == 6`.
+///   9. **Key info panel** — visible only when `keyInfo != nil`.
+///  10. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
 ///      optional analytics toggle (`onToggleDiagnostics`).
-///  10. **Pinned bottom action row** — 2-row dock: mute / speaker /
+///  11. **Pinned bottom action row** — 2-row dock: mute / speaker /
 ///      video / screen-share · enhance / add-participant / hangup.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
@@ -259,6 +263,12 @@ struct InCallScreen: View {
     /// fake. nil ⇒ no decoded frame yet / between calls ⇒ the bars decay
     /// to rest rather than animating fabricated motion.
     let voiceSpectrum: [Float]?
+    /// The frozen opening spectrum of the remote voice in THIS call (same 40
+    /// bands as `voiceSpectrum`: the average of the first ~4 s, then fixed), or
+    /// nil until it exists (the opening seconds, and between calls). The voice
+    /// check wave overlays the live spectrum on it; without it the wave draws
+    /// the confidence trend instead. See `AppState.voiceReference`.
+    let voiceReference: [Float]?
     /// Unified call UI — KMS key epoch counter (0-based count of rekeys
     /// this call has performed so far). nil when no live rekey-count
     /// source is available; the security sheet then shows the static
@@ -403,10 +413,16 @@ struct InCallScreen: View {
     /// any more since item 5 removed the manual CTA — see `VoiceGuardCard`.
     let onStartVoiceLearning: () -> Void
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
-    /// of RAW per-frame Guardian confidence samples driving the wave of
-    /// `VoiceGuardCard`. Empty ⇒ the card shows "Dati insufficienti" with a flat
-    /// trace, whatever level the speaker-change verdict already has. See
-    /// `AppState.voiceConfidenceHistory`'s doc for the source.
+    /// of RAW per-frame Guardian confidence samples. It draws the wave of
+    /// `VoiceGuardCard` as a trend, but only while the wave has no reference
+    /// spectrum to overlay the live one on (the opening seconds of a call, or
+    /// after the reference was dropped). Once the call has a reference the wave
+    /// is the overlay of the two spectra, whatever this history holds, so an
+    /// empty history is not a flat trace any more. With no history and no
+    /// verdict level yet the card shows "Dati insufficienti"; with a level it
+    /// shows the verdict (and the overlay, or a flat trace when there is
+    /// nothing to overlay either). See `AppState.voiceConfidenceHistory`'s doc
+    /// for the source.
     let voiceConfidenceHistory: [Float]
     /// "Voce storica" — the PEER's self-reported
     /// `AppState.peerOwnerContinuityLevel`: does THEIR live voice still
@@ -467,6 +483,7 @@ struct InCallScreen: View {
          peerShortNumber: String? = nil,
          voiceBiometrics: VoiceBiometrics? = nil,
          voiceSpectrum: [Float]? = nil,
+         voiceReference: [Float]? = nil,
          keyEpoch: Int? = nil,
          cryptoOpsPerSec: Int = 0,
          onToggleMute: @escaping () -> Void = {},
@@ -529,6 +546,7 @@ struct InCallScreen: View {
         self.peerShortNumber = peerShortNumber
         self.voiceBiometrics = voiceBiometrics
         self.voiceSpectrum = voiceSpectrum
+        self.voiceReference = voiceReference
         self.keyEpoch = keyEpoch
         self.cryptoOpsPerSec = cryptoOpsPerSec
         self.onToggleMute = onToggleMute
@@ -919,8 +937,20 @@ struct InCallScreen: View {
 
                 VoiceGuardCard(learningState: voiceLearningState,
                                confidenceHistory: voiceConfidenceHistory,
-                               speakerChange: speakerChange)
+                               speakerChange: speakerChange,
+                               voiceSpectrum: voiceSpectrum,
+                               voiceReference: voiceReference)
                     .padding(.horizontal, 20)
+
+                // Live crypto-engine meter (the ENGINE cipher tube), right
+                // below the voice check card: real AES-256-GCM frame ops/s
+                // pulsing. Shown only while the engine is doing work
+                // (ops > 0), i.e. once frames are actually flowing on an
+                // active call; nothing, not even a spacer, otherwise.
+                if cryptoOpsPerSec > 0 {
+                    Spacer().frame(height: 4)
+                    cryptoEngineMeterRow.padding(.horizontal, 20)
+                }
 
                 // D11 / W-NOBRICK — non-blocking security advisory. Shown when the
                 // peer's identity key changed and is NOT in the server-published
@@ -1653,12 +1683,14 @@ struct InCallScreen: View {
 
     /// Compact Guardian strip: a small live remote-voice spectrum on the
     /// left (neutral label "Spettro", no verdict), a cipher/seal visual on the
-    /// right, the pitch reading below ("Tono" with a line saying what it is —
-    /// no stress, breath or authenticity reading, none of them validated for
-    /// phone-quality speech), and — when the crypto engine is doing real work
-    /// (ops/s > 0) — a thin cipher-flow tube at the bottom. Additive and small
-    /// per spec — NOT the full decorative canvas spectrum-analyzer from the
-    /// HTML reference.
+    /// right, and the pitch reading below (one row: "Tono", the value in Hz
+    /// and whether a voice is present — no sentence, no stress, breath or
+    /// authenticity reading, none of them validated for phone-quality speech).
+    /// The cipher-flow tube (ENGINE) is NOT part of the ribbon: it is drawn
+    /// right below the voice check card (see `scrollContent`), when the crypto
+    /// engine is doing real work (ops/s > 0). Additive and small per spec —
+    /// NOT the full decorative canvas spectrum-analyzer from the HTML
+    /// reference.
     /// The mini-spectrum shows the REAL RX FFT bands (see `miniSpectrum`),
     /// for parity with Android's `MiniSpectrum`. When `voiceBiometrics == nil`
     /// (engine flag off, or no result yet) the pitch reading is replaced by a
@@ -1694,19 +1726,13 @@ struct InCallScreen: View {
 
             if let bio = voiceBiometrics {
                 GuardianGaugeRow(pitchHz: bio.pitchHz,
-                                 pitchVoiced: bio.pitchVoiced)
+                                 pitchVoiced: bio.pitchVoiced,
+                                 formant1Hz: bio.f1,
+                                 formant2Hz: bio.f2,
+                                 syllablesPerSecond: bio.syllablesPerSec,
+                                 hnrDecibels: bio.hnr)
             } else {
                 GuardianWaitingForVoice()
-            }
-
-            // Live crypto-engine meter — real AES-256-GCM frame ops/s
-            // pulsing. Shown only while the engine is doing work (ops > 0),
-            // i.e. once frames are actually flowing on an active call.
-            if cryptoOpsPerSec > 0 {
-                Rectangle()
-                    .fill(scheme.outline.opacity(0.3))
-                    .frame(height: 1)
-                cryptoEngineMeterRow
             }
         }
         .background(
@@ -2239,6 +2265,12 @@ struct InCallScreen: View {
     /// byte rate is shown rather than fabricating one from an assumed frame
     /// size. The TimelineView is PAUSED under Reduce Motion or while the
     /// engine is idle (ops == 0): only the static tube walls render then.
+    ///
+    /// Placement: a row of its own right BELOW the voice check card (the card
+    /// above is the last thing of the voice section), not inside the ribbon.
+    /// The 12 pt side padding is the one of the card's content, so the
+    /// label lines up with the card's icon and the readout with its right
+    /// edge. The caller shows it only while `cryptoOpsPerSec > 0`.
     private var cryptoEngineMeterRow: some View {
         HStack(spacing: 8) {
             Text("ENGINE")
@@ -2257,7 +2289,7 @@ struct InCallScreen: View {
                 .font(.system(size: 8, design: .monospaced))
                 .foregroundStyle(extras.pqcAccent)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 5)
     }
 

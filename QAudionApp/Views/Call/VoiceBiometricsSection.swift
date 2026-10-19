@@ -58,7 +58,9 @@ struct VoiceBiometricsSection: View {
 }
 
 /// The title and the note of the technical-data block, shared with the video
-/// call diagnostics so both say the same thing.
+/// call diagnostics so both say the same thing. It also holds the abbreviation
+/// of syllables per second, which the security sheet and the tone row of the
+/// ribbon both print next to the speech rate.
 enum VoiceTechnicalCopy {
     static var title: String {
         String(localized: "in_call.bio.technical_title",
@@ -70,6 +72,11 @@ enum VoiceTechnicalCopy {
                defaultValue: "Misure non ancora validate per la voce al telefono. Non indicano lo stato di una persona.",
                comment: "Call security sheet and video diagnostics — note inside the technical-data block: the raw voice measures are not validated for phone-quality speech and say nothing about the state of a person")
     }
+    static var syllableUnit: String {
+        String(localized: "in_call.bio.syllables_unit",
+               defaultValue: "sill/s",
+               comment: "Call security sheet, voice biometrics — abbreviation of syllables per second, next to the speech rate")
+    }
 }
 
 /// The texts of the section, kept apart from the layout.
@@ -80,9 +87,7 @@ private enum BioCopy {
                comment: "Call security sheet, voice section — shown when no voice analysis is available for the call")
     }
     static var syllableUnit: String {
-        String(localized: "in_call.bio.syllables_unit",
-               defaultValue: "sill/s",
-               comment: "Call security sheet, voice biometrics — abbreviation of syllables per second, next to the speech rate")
+        VoiceTechnicalCopy.syllableUnit
     }
     static var jitterShimmer: String {
         String(localized: "in_call.bio.jitter_shimmer",

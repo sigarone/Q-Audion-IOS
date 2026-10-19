@@ -1,84 +1,89 @@
 import SwiftUI
 
-/// The pitch reading under the spectrum of the voice ribbon: a neutral label
-/// ("Tono"), the whole-number value with its unit, and a line saying what the
-/// number is. It makes no claim about the person: a pitch is a measurement,
-/// never a verdict, so it is never coloured and never carries a status word.
+/// The tone row under the spectrum of the voice ribbon, on a single line: a
+/// small label ("Tono"), the whole-number pitch with its unit, and the word for
+/// a voice being present or not ("voce" / "silenzio"). Spectral details, when
+/// there are any (see `VoiceSpectralDetails`), follow on the same line and give
+/// way first on a narrow screen: they shrink, then are cut from the right, and
+/// never wrap.
+///
+/// It carries no sentence and no colour: a pitch moves with what is being said
+/// and says nothing about the person, so it is a measurement, never a verdict.
 struct GuardianGaugeRow: View {
     @Environment(\.qaudionScheme) private var scheme
 
-    let pitch: VoiceGaugeReading
+    private let reading: VoiceToneReading
+    private let details: String?
 
-    /// Builds the reading from the values of one analysis result.
-    init(pitchHz: Float, pitchVoiced: Bool) {
-        self.pitch = VoiceGauges.pitch(hz: pitchHz, voiced: pitchVoiced)
+    /// Builds the row from the values of one analysis result.
+    init(pitchHz: Float,
+         pitchVoiced: Bool,
+         formant1Hz: Float,
+         formant2Hz: Float,
+         syllablesPerSecond: Float,
+         hnrDecibels: Float) {
+        self.reading = VoiceGauges.pitch(hz: pitchHz, voiced: pitchVoiced)
+        self.details = VoiceSpectralDetails.text(formant1Hz: formant1Hz,
+                                                 formant2Hz: formant2Hz,
+                                                 syllablesPerSecond: syllablesPerSecond,
+                                                 hnrDecibels: hnrDecibels,
+                                                 voiced: pitchVoiced,
+                                                 rateUnit: VoiceTechnicalCopy.syllableUnit)
+    }
+
+    private var label: String {
+        String(localized: "in_call.gauge.pitch",
+               defaultValue: "Tono",
+               comment: "Call screen voice ribbon — label of the pitch reading")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            GuardianGaugeCell(
-                label: String(localized: "in_call.gauge.pitch",
-                              defaultValue: "Tono",
-                              comment: "Call screen voice ribbon — label of the pitch reading"),
-                reading: pitch)
-            Text(String(localized: "in_call.gauge.pitch_note",
-                        defaultValue: "Quanto è alta o bassa la voce dell'altra persona in questo momento.",
-                        comment: "Call screen voice ribbon — one-line explanation under the pitch reading: how high or low the voice of the other person (the received audio) is right now; it states what the number is, with no conclusion about the person"))
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .scaledMono(11)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 6)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct GuardianGaugeCell: View {
-    @Environment(\.qaudionScheme) private var scheme
-    @Environment(\.qaudionExtras) private var extras
-
-    let label: String
-    let reading: VoiceGaugeReading
-
-    private var statusText: String {
-        reading.status.localizedText
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        let voiceWord = VoiceToneCopy.voiceWord(voiced: reading.voiced)
+        let spoken = VoiceGauges.spokenTone(label: label, reading: reading, voiceWord: voiceWord, details: details)
+        HStack(alignment: .lastTextBaseline, spacing: 0) {
             Text(label)
                 .tracking(0.5)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .scaledMono(11)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            HStack(alignment: .lastTextBaseline, spacing: 2) {
-                Text(reading.value)
-                    .foregroundStyle(scheme.onSurface)
-                    .scaledMono(14, weight: .semibold, relativeTo: .body)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                if !reading.unit.isEmpty {
-                    Text(reading.unit)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                        .scaledMono(11)
-                        .lineLimit(1)
-                }
-            }
-            if !statusText.isEmpty {
-                Text(statusText)
-                    .tracking(0.4)
-                    .foregroundStyle(reading.tone.color(scheme: scheme, extras: extras))
+                .padding(.trailing, 8)
+                .layoutPriority(1)
+            Text(reading.value)
+                .foregroundStyle(scheme.onSurface)
+                .scaledMono(14, weight: .semibold, relativeTo: .body)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .layoutPriority(1)
+            Text(reading.unit)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .scaledMono(11)
+                .lineLimit(1)
+                .padding(.leading, 2)
+                .layoutPriority(1)
+            Text(voiceWord)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .scaledMono(11)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.leading, 10)
+                .layoutPriority(1)
+            if let details = details {
+                Text(details)
+                    .foregroundStyle(scheme.onSurfaceVariant)
                     .scaledMono(11)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .truncationMode(.tail)
+                    .padding(.leading, 10)
             }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(spoken))
     }
 }
 
@@ -96,18 +101,5 @@ struct GuardianWaitingForVoice: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-extension VoiceGaugeStatus {
-    /// The text printed under the pitch value. The dash is not language, so it
-    /// is not in the catalog.
-    var localizedText: String {
-        switch self {
-        case .none:
-            return ""
-        case .dash:
-            return VoiceGauges.noValue
-        }
     }
 }
