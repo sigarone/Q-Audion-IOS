@@ -226,6 +226,7 @@ jobs:
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
             -only-testing:QAudionAppTests/PhoneEntryScreenInviteTests \
             -only-testing:QAudionAppTests/RecoveryEnrollmentStatusTests \
+            -only-testing:QAudionAppTests/ReKeyAvatarRingTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -only-testing:QAudionAppTests/VoiceGuardModelTests \

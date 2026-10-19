@@ -292,8 +292,8 @@ enum CallSessionKeyShown {
     }
 
     /// Whether the call holds a session key of any kind, the transitional one a call starts with included. It is not
-    /// an answer about the post-quantum exchange (that is `realKey`): it is the answer the "DEMO" and "REKEY DEMO"
-    /// badges of the in-call screen have always followed, "no key at all yet", so they stay on it.
+    /// an answer about the post-quantum exchange (that is `realKey`): it is the answer the "DEMO" badge of the
+    /// in-call screen has always followed, "no key at all yet", so it stays on it.
     static func isPresent(_ key: Data?) -> Bool {
         guard let key = key else { return false }
         return !key.isEmpty

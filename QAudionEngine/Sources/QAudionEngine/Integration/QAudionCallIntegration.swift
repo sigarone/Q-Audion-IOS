@@ -1536,6 +1536,21 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
+    /// Whether `performPqcReKey` called now for `callId` would start a round. Read-only: none of the side
+    /// effects of `performPqcReKey` (a round it would skip for a held call is not recorded as deferred).
+    public func canInitiateReKey(callId: String) -> Bool {
+        lock.withLock { mayInitiateReKeyLocked(callId: callId) }
+    }
+
+    /// R-REKEY-INIT and R-HELD-REKEY: only the caller, on an active call that is not held, with no round
+    /// already in flight. Call with `lock` held. `canInitiateReKey` and `performPqcReKey` both use it, so
+    /// the answer the app shows and the round the engine runs cannot drift apart.
+    private func mayInitiateReKeyLocked(callId: String) -> Bool {
+        RekeyRolePolicy.mayInitiateRekey(
+            isCaller: isCaller, isActive: state == .active, hasPendingAttempt: pendingReKeyAttempt != nil,
+            isHeld: heldCalls.contains(callId.lowercased()))
+    }
+
     /// I3 §5 (2026-08-21) — mid-call PQC re-key, INITIATOR side. Mirrors
     /// Android's `performReKey` (`CallController.kt:6860`): reuses the
     /// SAME `AndroidHandshakeBundle` OFFER shape as
@@ -1581,9 +1596,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let (canProceed, sendOpaqueRaw) = lock.withLock { () -> (Bool, ((String) async throws -> Void)?) in
             // R-REKEY-INIT: only the caller ever initiates a rekey; the callee only responds.
             let held = heldCalls.contains(callId.lowercased())
-            guard RekeyRolePolicy.mayInitiateRekey(
-                isCaller: isCaller, isActive: state == .active, hasPendingAttempt: pendingReKeyAttempt != nil,
-                isHeld: held)
+            guard mayInitiateReKeyLocked(callId: callId)
             else {
                 // R-HELD-REKEY: a rekey the caller would have started is deferred, not dropped.
                 if held && isCaller && state == .active && pendingReKeyAttempt == nil {
