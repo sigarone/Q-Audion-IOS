@@ -1,0 +1,44 @@
+# XcodeGen spec for the build WITH the earbud (hardware) stack (QAUDION_EARBUD).
+#
+# QAudionApp/project.yml is the default spec: the earbud hardware stack is NOT
+# compiled. That means no IOSEarbudGattProxy (the CoreBluetooth GATT client for the
+# Q-Audion earbud), no earbud GATT UUIDs, no CoreBluetoothSovereignRelay /
+# EarbudKeyImportService / Fe5ExchangeService, no earbud diagnostics screen, and the KMS
+# sweep runs without an earbud relay (hw_only / earbud_pair keys stay pending). This
+# file includes project.yml unchanged and adds, on top, only the compilation condition:
+#   - QAUDION_EARBUD on the QAudionApp target (OTHER_SWIFT_FLAGS rather than
+#     SWIFT_ACTIVE_COMPILATION_CONDITIONS, so it cannot clobber a condition injected
+#     into project.yml by the workflow, e.g. QAUDION_DEV_TOOLS; same choice as
+#     project-vpn.yml for QAUDION_VPN).
+# No extension, no framework, no entitlement and no capability is involved: the earbud
+# stack uses CoreBluetooth, which the default build already links for the mesh, and the
+# same Bluetooth usage description. So the signing setup is identical to the default
+# build and nothing changes on the Apple Developer portal.
+#
+# Generate with:  cd QAudionApp && xcodegen generate --spec project-earbud.yml
+#
+# HOW TO RE-ENABLE THE EARBUD STACK
+#   * In CI, for an internal TestFlight build (never a store build):
+#       gh workflow run ios-testflight.yml -f tag=vX -f earbud=true
+#     (add -f dev_tools=true to get the Settings > SVILUPPATORE > "Diagnostica
+#     auricolare" screen as well; add -f vpn=true for a build that has both, which
+#     generates the project from project-vpn-earbud.yml). Ignored on a tag push: a tag
+#     push is always the default build, and scripts/ci/assert-no-earbud.sh fails it if the
+#     built IPA contains any trace of the stack.
+#   * Locally: generate the project from this spec and build as usual.
+#   * Permanently: make this the spec the tag build generates AND invert the "no earbud
+#     in the artifact" gate in ios-testflight.yml (same as the VPN note in project-vpn.yml).
+#     That is an owner decision: the earbud stack is for hardware lab builds only and is
+#     kept out of store builds.
+#
+# ios-app-tests.yml compiles this variant on every pull request (job
+# earbud-variant-build) so the code does not rot while the default build leaves it out.
+
+include:
+  - project.yml
+
+targets:
+  QAudionApp:
+    settings:
+      base:
+        OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_EARBUD

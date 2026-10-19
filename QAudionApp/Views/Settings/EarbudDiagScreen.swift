@@ -1,5 +1,7 @@
-// Developer tool: compiled only when QAUDION_DEV_TOOLS is set.
-#if QAUDION_DEV_TOOLS
+// Developer tool: compiled only when QAUDION_DEV_TOOLS AND QAUDION_EARBUD are both set (it drives
+// IOSEarbudGattProxy, Fe5ExchangeService and the earbud pairing relay, all of which exist only in a
+// build with the earbud stack).
+#if QAUDION_DEV_TOOLS && QAUDION_EARBUD
 import SwiftUI
 import CoreBluetooth
 import CryptoKit
@@ -1092,4 +1094,4 @@ struct EarbudDiagScreen: View {
     }
     .qAudionTheme(dark: true)
 }
-#endif
+#endif // QAUDION_DEV_TOOLS && QAUDION_EARBUD

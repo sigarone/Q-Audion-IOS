@@ -1,6 +1,6 @@
 import Foundation
 
-/// Frozen wire constants for the qa-earbud-excl-v2 GATT protocol.
+/// Frozen wire sizes for the qa-earbud-excl-v2 GATT protocol (no UUIDs, see below).
 /// Mirror of Android EarbudGattConstants / EarbudDiag.kt.
 /// Any change requires cross-platform KAT update (firmware, Android, iOS).
 // UPPER_SNAKE_CASE is deliberate: mirrors Android/firmware constant names
@@ -9,24 +9,11 @@ import Foundation
 public enum EarbudGattConstants {
 
     // ── GATT UUIDs ────────────────────────────────────────────────────────────
-    /// Primary earbud service
-    public static let SERVICE_UUID      = "f2c0aaaa-bcc0-4001-8000-000000000001"
-    /// KEY_IMPORT characteristic (c3) — sovereign + hw_only relay
-    public static let KEY_IMPORT_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c3"
-    /// ATTEST_POP characteristic (c1) — 32-byte SE PoP after import
-    public static let ATTEST_POP_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c1"
-    /// ATTEST characteristic (c2)
-    public static let ATTEST_UUID       = "f2c0aaaa-bcc0-4001-8000-0000000000c2"
-    /// PAIR_BEGIN (c5) — initiator writes 1632B fragmented
-    public static let PAIR_BEGIN_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c5"
-    /// PAIR_RESP (c6) — reads 4 × 408B chunks
-    public static let PAIR_RESP_UUID    = "f2c0aaaa-bcc0-4001-8000-0000000000c6"
-    /// PAIR_FIN (c7) — writes 32B confirm hash
-    public static let PAIR_FIN_UUID     = "f2c0aaaa-bcc0-4001-8000-0000000000c7"
-    /// FP_ADV_REQUEST (c8) — Phase B fp_adv GATT char
-    ///   WRITE 32B = ct_bind (phone writes this, earbud computes fp_adv in-SE)
-    ///   READ  40B = fp_adv[32] || key_epoch_le[8] (little-endian UInt64)
-    public static let FP_ADV_UUID       = "f2c0aaaa-bcc0-4001-8000-0000000000c8"
+    // Not here. The earbud GATT UUIDs live in the app target, next to the only code that
+    // uses them (QAudionApp/Services/IOSEarbudGattProxy.swift, compiled only with
+    // QAUDION_EARBUD), so a build without the earbud stack carries none of them. This
+    // enum keeps only the frozen sizes and status codes that the hardware-independent
+    // relay logic (EarbudAckPopRelay, EarbudPairGatt) and its known-answer tests use.
 
     // ── KEY_IMPORT sizes (FROZEN) ─────────────────────────────────────────────
     /// Total package size expected by firmware KEY_IMPORT

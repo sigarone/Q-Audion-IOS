@@ -1,5 +1,51 @@
+// QAUDION_EARBUD -- the earbud hardware stack (BLE GATT client for the Q-Audion earbud).
+//
+// This file lives in the APP target and is compiled only when the QAUDION_EARBUD
+// compilation condition is set (QAudionApp/project-earbud.yml, or ios-testflight.yml
+// dispatched with earbud=true). The default build -- every tag push -- does not
+// contain it: no class, no GATT UUID, no CoreBluetooth earbud client. It used to be
+// part of the QAudionEngine package, which cannot see an app compilation condition,
+// so the class (an NSObject subclass, which the linker keeps) and the UUID strings
+// could not be compiled out there; hardware lab builds only, kept out of store
+// builds. The protocols it implements (EarbudKeyGattProxy,
+// EarbudPairingGattProxy) and the hardware-independent relay logic (EarbudAckPopRelay,
+// EarbudPairingRelay, the frozen sizes in EarbudGattConstants) stay in the engine.
+//
+// To re-enable it, see QAudionApp/project-earbud.yml and "Earbud (hardware) support"
+// in CLAUDE.md: generate the project from project-earbud.yml, or dispatch
+// ios-testflight.yml with earbud=true.
+#if QAUDION_EARBUD
 @preconcurrency import CoreBluetooth
 import Foundation
+import QAudionEngine
+
+// GATT UUIDs of the earbud firmware (qaudion_gatt.c). They live here, next to the only
+// code that uses them, and not in the engine's EarbudGattConstants, so that a build
+// without QAUDION_EARBUD carries none of them. The frozen sizes stay in the engine
+// (EarbudAckPopRelay and EarbudPairGatt use them). UPPER_SNAKE_CASE mirrors the
+// firmware / Android constant names byte for byte.
+// swiftlint:disable identifier_name
+extension EarbudGattConstants {
+    /// Primary earbud service
+    static let SERVICE_UUID      = "f2c0aaaa-bcc0-4001-8000-000000000001"
+    /// KEY_IMPORT characteristic (c3) -- sovereign + hw_only relay
+    static let KEY_IMPORT_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c3"
+    /// ATTEST_POP characteristic (c1) -- 32-byte SE PoP after import
+    static let ATTEST_POP_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c1"
+    /// ATTEST characteristic (c2)
+    static let ATTEST_UUID       = "f2c0aaaa-bcc0-4001-8000-0000000000c2"
+    /// PAIR_BEGIN (c5) -- initiator writes 1632B fragmented
+    static let PAIR_BEGIN_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c5"
+    /// PAIR_RESP (c6) -- reads 4 x 408B chunks
+    static let PAIR_RESP_UUID    = "f2c0aaaa-bcc0-4001-8000-0000000000c6"
+    /// PAIR_FIN (c7) -- writes 32B confirm hash
+    static let PAIR_FIN_UUID     = "f2c0aaaa-bcc0-4001-8000-0000000000c7"
+    /// FP_ADV_REQUEST (c8) -- Phase B fp_adv GATT char
+    ///   WRITE 32B = ct_bind (phone writes this, earbud computes fp_adv in-SE)
+    ///   READ  40B = fp_adv[32] || key_epoch_le[8] (little-endian UInt64)
+    static let FP_ADV_UUID       = "f2c0aaaa-bcc0-4001-8000-0000000000c8"
+}
+// swiftlint:enable identifier_name
 
 /// CL-5.X — Concrete CoreBluetooth implementation of EarbudPairingGattProxy.
 ///
@@ -377,3 +423,5 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
 // rejected by the ios-simulator build; MainActor.assumeIsolated needs iOS 17,
 // target is 16 — this witness-level approach needs neither.)
 extension IOSEarbudGattProxy: EarbudPairingGattProxy { }
+
+#endif // QAUDION_EARBUD

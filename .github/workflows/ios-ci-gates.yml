@@ -1,0 +1,97 @@
+# GitHub Actions -- self-tests of the iOS release gates, on ubuntu (seconds, no macOS minutes).
+#
+# What this covers, none of which needs a Mac:
+#   * the earbud hardware stack is a compile-time switch (QAUDION_EARBUD, see
+#     QAudionApp/project-earbud.yml). scripts/ci/check_earbud_gating.py proves on the SOURCES that
+#     with the flag off no symbol of the stack is left in code the compiler would see, and that the
+#     default spec, the earbud specs and ios-testflight.yml's EARBUD_BUILD wiring are as expected;
+#     its tests include mutations of the real sources. scripts/ci/test-assert-no-earbud.sh is the
+#     self-test of the BINARY gate (the real gate runs on the built app in ios-app-tests.yml and on
+#     the shipped IPA in ios-testflight.yml).
+#   * dSYMs are uploaded encrypted (the repository is public): scripts/ci/install-age.sh installs the
+#     pinned age release after checking its SHA-256 (the test downloads it for real and also feeds it
+#     a tampered tarball), scripts/ci/encrypt-dsyms.sh and the recipient committed in
+#     ios-testflight.yml are tested with throwaway keys, and scripts/test_symbolicate_decrypt.py tests
+#     the decrypting side of scripts/symbolicate.py.
+#
+# Needs network access to github.com for the age release only. No secrets.
+
+name: iOS CI gates (self-tests)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'QAudionApp/**'
+      - 'QAudionAppTests/**'
+      - 'QAudionEngine/**'
+      - 'QAudionIntents/**'
+      - 'QAudionPacketTunnel/**'
+      - 'scripts/ci/**'
+      - 'scripts/symbolicate.py'
+      - 'scripts/test_symbolicate_decrypt.py'
+      - '.github/workflows/ios-testflight.yml'
+      - '.github/workflows/ios-ci-gates.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'QAudionApp/**'
+      - 'QAudionAppTests/**'
+      - 'QAudionEngine/**'
+      - 'QAudionIntents/**'
+      - 'QAudionPacketTunnel/**'
+      - 'scripts/ci/**'
+      - 'scripts/symbolicate.py'
+      - 'scripts/test_symbolicate_decrypt.py'
+      - '.github/workflows/ios-testflight.yml'
+      - '.github/workflows/ios-ci-gates.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ci-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: iOS CI gates (self-tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The job does not write to the repository: no stored credentials.
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Earbud stack, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_earbud_gating.py
+          python3 -I scripts/ci/test_check_earbud_gating.py
+
+      - name: Earbud stack, binary gate self-test
+        run: sh scripts/ci/test-assert-no-earbud.sh
+
+      - name: Pinned age release installs and is verified by SHA-256
+        run: sh scripts/ci/test-install-age.sh
+
+      - name: Install age (same script as the release workflow)
+        run: |
+          # No pipe: `sh install-age.sh | tail -1` would hide an install failure (the pipe's status
+          # is tail's, and set -e does not see the first command). pipefail stays on as a guard.
+          set -eo pipefail
+          DIR="$RUNNER_TEMP/age-bin"
+          sh scripts/ci/install-age.sh "$DIR"
+          test -x "$DIR/age"
+          echo "$DIR" >> "$GITHUB_PATH"
+
+      - name: dSYM encryption and the committed recipient
+        run: sh scripts/ci/test-encrypt-dsyms.sh
+
+      - name: symbolicate.py decrypts the dSYM artifact
+        run: python3 -I scripts/test_symbolicate_decrypt.py

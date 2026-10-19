@@ -1,3 +1,9 @@
+// QAUDION_EARBUD -- part of the earbud hardware stack: compiled only when the QAUDION_EARBUD
+// compilation condition is set (QAudionApp/project-earbud.yml; ios-testflight.yml dispatched
+// with earbud=true). The default build, every tag push, does not contain this file's code.
+// See "Earbud (hardware) support" in CLAUDE.md for how to re-enable it.
+// (Holds the earbud GATT UUIDs and the sovereign-key relay orchestrator; only CoreBluetoothSovereignRelay uses it.)
+#if QAUDION_EARBUD
 import Foundation
 import QAudionEngine
 
@@ -162,3 +168,5 @@ public final class EarbudKeyImportService {
         return resp
     }
 }
+
+#endif // QAUDION_EARBUD

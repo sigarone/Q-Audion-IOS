@@ -258,8 +258,8 @@ def _maybe_symbolicate(dump_path, skip):
     """If the pulled telemetry contains a [CrashReporter] (W472) crash dump, auto-run
     scripts/symbolicate.py on it so the stripped 'QAudionApp + <offset>' frames come back
     as file:line -- no Mac required (symbolicate.py downloads the build's dSYM artifact
-    dsyms-<ver>, uploaded by ios-testflight.yml from v1.0.663+). Best-effort: never fails
-    the telemetry pull."""
+    dsyms-<ver>, uploaded by ios-testflight.yml from v1.0.663+, encrypted since the repo is
+    public: it is decrypted on the key host). Best-effort: never fails the telemetry pull."""
     if skip:
         return
     try:
@@ -291,7 +291,9 @@ def _maybe_symbolicate(dump_path, skip):
             if err:
                 print(err[:500])
             print("Note: needs the crashing build's dSYM (artifact dsyms-<ver>, from "
-                  "v1.0.663+). Pre-1.0.663 builds have no staged dSYM to symbolicate against.")
+                  "v1.0.663+; age-encrypted since the repo is public, symbolicate.py decrypts it "
+                  "on the key host through ssh, see its docstring). Pre-1.0.663 builds "
+                  "have no staged dSYM to symbolicate against.")
     except Exception as e:
         print(f"(auto-symbolication skipped: {e})")
 

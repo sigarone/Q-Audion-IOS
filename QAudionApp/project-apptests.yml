@@ -47,6 +47,7 @@ targets:
           - ConfidenceToneTests.swift
           - DesignSystemAccessibilityTests.swift
           - DeviceSymbolTests.swift
+          - EarbudCompileConditionTests.swift
           - FileV2ImageCleanerTests.swift
           - MeshReachTests.swift
           - MissedCallsBadgeTests.swift

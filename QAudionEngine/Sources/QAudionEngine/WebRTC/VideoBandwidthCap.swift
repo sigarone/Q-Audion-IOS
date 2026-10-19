@@ -23,7 +23,7 @@ public enum VideoBandwidthCap {
     private static let lock = NSLock()
     /// Guarded by `lock`; `nonisolated(unsafe)` matches the established
     /// pattern for lock-guarded mutable state elsewhere in this target
-    /// (see `IOSEarbudGattProxy`'s `peripheral`/`attestPopChar`).
+    /// (see `PinnedSessionPolicy`).
     private static nonisolated(unsafe) var _peerCapBps: Int?
 
     /// Current peer-reported cap, or `nil` if none received this call.

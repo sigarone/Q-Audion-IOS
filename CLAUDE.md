@@ -25,6 +25,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 | `.github/workflows/engine-tests.yml` | ACTIVE — Swift package tests on every push | reference if engine tests fail |
 | `.github/workflows/kat-cross-platform.yml` | `workflow_dispatch` only since 2026-07-30 — its test (`WireV1CrossPlatformKatTests.swift`) is real and PASSES, but only via `engine-tests.yml`'s xcodebuild+simulator path; bare `swift test` here can't resolve the package's binary `WebRTC` xcframework (the failure was recorded as `no such module 'LiveKitWebRTC'` while LiveKit was still a dependency; group calls v2 removed LiveKit, the equivalent `WebRTC` failure is expected but not re-verified), so this standalone job can't work without duplicating engine-tests.yml's cost | reference `engine-tests.yml` instead for KAT status |
 | `.github/workflows/artifact-cleanup.yml` | ACTIVE — scheduled artifact retention | leave alone |
+| `.github/workflows/ios-ci-gates.yml` | ACTIVE — ubuntu, seconds: self-tests of the release gates (earbud source gate + binary gate self-test, the pinned age install, dSYM encryption, `symbolicate.py` decryption) | yes if a gate or `scripts/ci/*` changes |
 | `.github/workflows/ios-ui-smoke.yml` | ACTIVE, manual-only (`workflow_dispatch`) — builds QAudionApp for iOS Simulator (no signing) + runs Maestro UI flows from `maestro/*.yaml` (top level only; flows in `maestro/needs-non-prod-backend/` register real PRODUCTION accounts and are refused by the workflow, 2026-09-30). Added 2026-08-06, GREEN as of run [31079859197](https://github.com/sigarone/Q-Audion-IOS/actions/runs/31079859197) (13m51s) after 3 fix iterations (xcodegen not installed; a device-only quiche.xcframework — since removed with the MASQUE/QUIC transport; the packet-tunnel extension/WireGuardKitGo are device-only too, and since they now live only in `project-vpn.yml` nothing is stripped any more — see the workflow file's own header for the full iteration log) | yes if it fails again — read the uploaded `build-sim-log`/`maestro-debug` artifacts first |
 | `.github/workflows/ios-wda-provision.yml` | ACTIVE, manual-only (`workflow_dispatch`, input `device_udid`) — registers a real test iPhone + builds/signs WebDriverAgentRunner (appium/WebDriverAgent v16.1.5, IOS_APP_DEVELOPMENT signing) for interactive UI debug from Windows via go-ios (see global CLAUDE.md "go-ios + WebDriverAgent"). Added 2026-08-06, UNVERIFIED — first Development-type signing in this repo's CI (everything else here is IOS_APP_STORE), see file header for the certificate-reuse caveat | yes if it fails — read `wda-build-log` artifact; check whether `WDA_CERTIFICATE_PRIVATE_KEY` secret needs setting after a first successful cert creation |
 | `XCODE_CLOUD_MIGRATION.md` | **HISTORICAL** — proposal for Xcode Cloud, never adopted | **do not follow its instructions** |
@@ -34,7 +35,7 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 ### If a CI run fails
 
 1. Open the failed run on GitHub Actions: https://github.com/sigarone/Q-Audion-IOS/actions
-2. The "Diagnose Swift compile (raw xcodebuild)" step (when present) uploads `diag.log` as an artifact — read it before guessing.
+2. The "Build IPA" step prints the full `build.log` into the job log when it fails, and the "Diagnose Swift compile (raw xcodebuild)" step (when present) prints every error/warning/note line plus the tail of its log there too — read the job log before guessing. Nothing is uploaded as an artifact (`diag-*`, `archive-diag-*`, `ios-build-*` are gone): the repository is public, so an artifact is downloadable by anyone. The only artifacts are `dsyms-<version>` (encrypted, see below) and `package-resolved-*`.
 3. Do NOT push tags repeatedly to "see if it works" — macOS runner minutes cost money. Reproduce locally with `xcodebuild` if possible.
 
 ## ⚡ AUTOMATION RULE — iOS runtime log fetch (auto-pump v1.0.398+)
@@ -290,6 +291,8 @@ with network shaping, or set `probeIntervalMs = 0` to drop it (the kill switch t
 QAudionApp/          # The iOS app (SwiftUI) — XcodeGen-generated project
   project.yml        # XcodeGen spec (no VPN support); .xcodeproj is NOT committed
   project-vpn.yml    # same spec + VPN support (QAUDION_VPN), see "VPN support" below
+  project-earbud.yml # same spec + the earbud hardware stack (QAUDION_EARBUD), see "Earbud (hardware) support" below
+  project-vpn-earbud.yml # both of the above (union of the two flags)
   Info.plist
   QAudion.entitlements
   Assets.xcassets/   # icon_1024.png MUST be opaque (no alpha)
@@ -354,6 +357,48 @@ also reads `embedded.mobileprovision`); a build with VPN support turns both back
 `ios-app-tests.yml` runs the gate on the default Simulator
 build and compiles the VPN variant (job `vpn-variant-build`).
 
+### Earbud (hardware) support is a compile-time switch (QAUDION_EARBUD)
+
+Owner decision 2026-10-19: hardware lab builds only; kept out of store builds.
+The default build (every tag push) does not contain the earbud hardware stack: the CoreBluetooth
+GATT client `IOSEarbudGattProxy` (it lives in the APP target, `Services/IOSEarbudGattProxy.swift`,
+no longer in the engine package, which cannot see an app compilation condition), the earbud GATT
+UUIDs, `CoreBluetoothSovereignRelay`, `EarbudKeyImportService`, `Fe5ExchangeService`, and the
+Settings > SVILUPPATORE "Diagnostica auricolare" screen (needs `QAUDION_DEV_TOOLS` too). In that
+build the KMS sweep (`AppState.runKmsSweep`) builds `KmsPollerService` without an earbud relay, so
+`hw_only` / `earbud_pair` keys stay pending ("no earbudRelay - skip"); in a store build nothing ever
+connected the proxy to an earbud anyway (only the dev screen calls `connect`). What stays in the
+engine package is hardware-independent protocol logic and its known-answer tests (`EarbudAckPopRelay`,
+`EarbudPairingRelay`, `EarbudPairGatt`, the frozen sizes in `EarbudGattConstants`, the
+`EarbudKeyGattProxy` / `EarbudPairingGattProxy` protocols, the capability tag and the `EARBUDPDU`
+wire parsing): no CoreBluetooth, no UUID, nothing that can reach a device.
+
+TO RE-ENABLE IT (internal TestFlight build for the hardware lab, never a store build):
+`gh workflow run ios-testflight.yml -f tag=vX -f earbud=true` (add `-f dev_tools=true` for the
+diagnostics screen, `-f vpn=true` to combine with the VPN: `project-vpn-earbud.yml`). Locally:
+`cd QAudionApp && xcodegen generate --spec project-earbud.yml`. The input is ignored on a tag push.
+No signing, capability or entitlement changes. To make it permanent, point the tag build at
+`project-earbud.yml` and invert the gate (see below); that is an owner decision, not a CI change.
+
+Proof, in layers, each independent: `scripts/ci/check_earbud_gating.py` (sources: with the flag off no
+symbol of the stack is left in code the compiler sees; also checks the specs and the workflow wiring;
+runs on every release build and in `ios-ci-gates.yml`); `scripts/ci/assert-no-earbud.sh` (binary: no
+Mach-O of the built app contains the mangled class names, the earbud UUID or the other signatures; runs
+on the default Simulator build in `ios-app-tests.yml` and on the shipped IPA in `ios-testflight.yml`,
+where an earbud dispatch runs it with `--require-present` instead); `EarbudCompileConditionTests`
+(the class is absent from the app at run time). `ios-app-tests.yml` job `earbud-variant-build` compiles
+the variant, plain and with the dev tools, so the code does not rot.
+
+### dSYMs are encrypted (the repository is public)
+
+Any artifact of this repository can be downloaded by anyone with a GitHub account. `ios-testflight.yml`
+therefore uploads only `dsyms-<version>` (90 days), whose files are `*.zip.age`: encrypted with age v1.2.1
+(`scripts/ci/install-age.sh`: pinned release, SHA-256 verified; `scripts/ci/encrypt-dsyms.sh`) to the public
+key `DSYM_AGE_RECIPIENT` in the workflow. The private key is kept off GitHub. `scripts/symbolicate.py
+--version 1.0.NNN` downloads the artifact where `gh` is logged in and decrypts it where the key is (see the
+docstring of the script for how it reaches that host).
+The IPA, `build.log` and the failure-only diagnostic logs are not uploaded at all.
+
 ### Trigger philosophy
 
 - **Tag push `v*`** → full TestFlight pipeline (`ios-testflight.yml`).
@@ -412,7 +457,7 @@ The dependency is **pinned exact** in `QAudionEngine/Package.swift` (currently *
 .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.24.2"),
 ```
 
-**History:** 1.17.0 was the original pin. It ships with a broken `onnxruntime.framework/Info.plist` where `MinimumOSVersion=""` (empty string) — Apple's altool rejects this. The framework's Mach-O (`LC_BUILD_VERSION`) correctly declared iOS 16.0 minimum, so the CI patch step was introduced to set `MinimumOSVersion = "16.0"` to match. Bumped to 1.24.2 (commit `b33d4f4`) because it declares iOS 15+ in its own Package.swift, avoiding the iOS 18 issue seen in intermediate releases (1.20+). ⚠️ **First TestFlight build with 1.24.2 not yet validated** — if ITMS-90208 appears after the next tag push, read the CI `diag.log` artifact and check that the Mach-O `minos` still matches 16.0.
+**History:** 1.17.0 was the original pin. It ships with a broken `onnxruntime.framework/Info.plist` where `MinimumOSVersion=""` (empty string) — Apple's altool rejects this. The framework's Mach-O (`LC_BUILD_VERSION`) correctly declared iOS 16.0 minimum, so the CI patch step was introduced to set `MinimumOSVersion = "16.0"` to match. Bumped to 1.24.2 (commit `b33d4f4`) because it declares iOS 15+ in its own Package.swift, avoiding the iOS 18 issue seen in intermediate releases (1.20+). ⚠️ **First TestFlight build with 1.24.2 not yet validated** — if ITMS-90208 appears after the next tag push, read the job log of the "Diagnose Swift compile" step and check that the Mach-O `minos` still matches 16.0.
 
 **Upgrade rule:** Before bumping to any new version, verify its XCFramework Mach-O `minos` with `otool -l onnxruntime.framework/onnxruntime | grep -A3 LC_BUILD_VERSION`. The value patched into `Info.plist` (16.0) must be **≥ the Mach-O minos** or ITMS-90208 fires.
 
@@ -659,7 +704,7 @@ private func startVoiceNoteAsync() async {
 
 Symptoms: the build console shows just `Failed to archive` with **no `error:`/`warning:` lines** — xcbeautify is consuming the diagnostic before tee can capture it.
 
-**Mitigation:** `.github/workflows/ios-testflight.yml` has a "Diagnose Swift compile (raw xcodebuild)" step that runs before `xcode-project build-ipa` with `CODE_SIGNING_ALLOWED=NO`. That output is uploaded as the `diag.log` artifact and is grepped at the end of the build step. Always check the diagnose step in failed runs, not just the Build IPA step.
+**Mitigation:** `.github/workflows/ios-testflight.yml` has a "Diagnose Swift compile (raw xcodebuild)" step that runs only when `xcode-project build-ipa` fails, with `CODE_SIGNING_ALLOWED=NO`. It writes `diag.log` on the runner, prints every `error:`/`warning:`/`note:` line and the tail of the log into the job log, and uploads nothing (the repository is public, so an artifact would be downloadable by anyone). Always read the diagnose step in failed runs, not just the Build IPA step.
 
 ### 14. Single-file Swift compile budget
 
@@ -712,8 +757,9 @@ log gives no useful match — the failure is silent.
 **Root cause hypothesis (we couldn't always read the actual diag.log
 because `xcode-project build-ipa` filters Swift errors through
 xcbeautify before they reach our captured output; under GitHub
-Actions the diag.log is now uploaded as a normal artifact and is
-inspectable directly from the run page):** Swift 6's
+Actions the failure-only diagnose step prints the `error:` lines and
+the tail of the diag.log into the job log, so the real error is
+readable from the run page):** Swift 6's
 strict-concurrency Sendable inference walks the AppState type when
 it appears as a parameter type. AppState is ~2000 lines, has dozens
 of `@Published` properties wrapping non-Sendable Combine publishers,

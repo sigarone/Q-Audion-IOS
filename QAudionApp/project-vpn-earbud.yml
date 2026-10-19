@@ -1,0 +1,19 @@
+# XcodeGen spec for the build with BOTH VPN support (QAUDION_VPN) and the earbud
+# (hardware) stack (QAUDION_EARBUD): project-vpn.yml unchanged, plus the earbud
+# compilation condition. XcodeGen cannot stack two specs given on the command line,
+# and each of project-vpn.yml / project-earbud.yml sets OTHER_SWIFT_FLAGS, so the
+# combination needs its own spec. Used by ios-testflight.yml dispatched with
+# vpn=true AND earbud=true; see the headers of project-vpn.yml and project-earbud.yml.
+#
+# Generate with:  cd QAudionApp && xcodegen generate --spec project-vpn-earbud.yml
+#
+# The flags below must stay the union of the two specs; ios-app-tests.yml checks it.
+
+include:
+  - project-vpn.yml
+
+targets:
+  QAudionApp:
+    settings:
+      base:
+        OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_VPN -DQAUDION_EARBUD

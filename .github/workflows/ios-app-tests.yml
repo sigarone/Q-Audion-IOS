@@ -23,6 +23,13 @@
 # WireGuardKit) for a device destination, unsigned, so that code does not rot
 # while the default build leaves it out.
 #
+# The third job (earbud-variant-build) does the same for the earbud hardware
+# stack (QAudionApp/project-earbud.yml: QAUDION_EARBUD), plain and together with
+# QAUDION_DEV_TOOLS (the earbud diagnostics screen), and checks that the specs
+# combine as intended. The default build proves the opposite: step "No earbud
+# hardware stack in the default build" runs scripts/ci/assert-no-earbud.sh on the
+# built app. Both gates and the source check run again on every release.
+#
 # Runs on public-repo runners (free); no signing secrets, no network to any
 # real backend: the tests are pure.
 
@@ -45,6 +52,9 @@ on:
       - 'QAudionPacketTunnel/**'
       - 'scripts/ci/assert-no-vpn.sh'
       - 'scripts/ci/test-assert-no-vpn.sh'
+      - 'scripts/ci/assert-no-earbud.sh'
+      - 'scripts/ci/test-assert-no-earbud.sh'
+      - 'scripts/ci/check_earbud_gating.py'
       - '.github/workflows/ios-app-tests.yml'
   pull_request:
     branches: [main]
@@ -56,6 +66,9 @@ on:
       - 'QAudionPacketTunnel/**'
       - 'scripts/ci/assert-no-vpn.sh'
       - 'scripts/ci/test-assert-no-vpn.sh'
+      - 'scripts/ci/assert-no-earbud.sh'
+      - 'scripts/ci/test-assert-no-earbud.sh'
+      - 'scripts/ci/check_earbud_gating.py'
       - '.github/workflows/ios-app-tests.yml'
   workflow_dispatch:
 
@@ -172,6 +185,20 @@ jobs:
           ls "$APP/PlugIns"
           sh scripts/ci/assert-no-vpn.sh "$APP"
 
+      # The earbud hardware stack is a compile-time switch (QAUDION_EARBUD) and the default
+      # spec does not compile it: the sources first (python, no build needed), the gate's own
+      # self-test, then the gate on the app just built. A Debug build keeps the object file
+      # paths of every compiled source in its debug map, including the empty ones of the
+      # compiled-out files, which is why the gate matches the mangled class names.
+      - name: No earbud hardware stack in the default build
+        run: |
+          set -e
+          python3 -I scripts/ci/check_earbud_gating.py
+          sh scripts/ci/test-assert-no-earbud.sh
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          test -d "$APP"
+          sh scripts/ci/assert-no-earbud.sh "$APP"
+
       - name: Generate Xcode project (with the app-test target)
         working-directory: QAudionApp
         run: |
@@ -221,6 +248,7 @@ jobs:
             -only-testing:QAudionAppTests/ConfidenceToneTests \
             -only-testing:QAudionAppTests/DesignSystemAccessibilityTests \
             -only-testing:QAudionAppTests/DeviceSymbolTests \
+            -only-testing:QAudionAppTests/EarbudCompileConditionTests \
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
             -only-testing:QAudionAppTests/MeshReachTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
@@ -394,5 +422,160 @@ jobs:
         with:
           name: ios-vpn-variant-logs-${{ github.run_number }}
           path: QAudionApp/build-vpn.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The variant WITH the earbud hardware stack (QAUDION_EARBUD). It needs no extension, no
+  # framework and no Go, so a device destination without signing is enough. Built twice: plain
+  # (what ios-testflight.yml dispatched with earbud=true produces) and together with
+  # QAUDION_DEV_TOOLS, which adds the earbud diagnostics screen that drives the same code.
+  earbud-variant-build:
+    # Not on push to main: that run exists to write the SPM cache (the first job does it) and
+    # this variant was already built on the pull request.
+    if: github.event_name != 'push'
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '26'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: |
+          set -e
+          PIN="${XCODE_VERSION}"
+          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$MATCH" ]; then
+            echo "No Xcode matching '${PIN}*' found. Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
+            exit 1
+          fi
+          echo "Selecting: $MATCH"
+          sudo xcode-select -s "$MATCH"
+          xcodebuild -version
+
+      # Read only: the entry is written by the first job, on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      # Sources and specs: the default spec never mentions the flag, the earbud specs set it, the
+      # combined spec is the union of the VPN and earbud flags.
+      - name: Earbud gating (sources and specs)
+        run: python3 -I scripts/ci/check_earbud_gating.py
+
+      # XcodeGen cannot stack two specs given on the command line, so the VPN + earbud
+      # combination has a spec of its own (project-vpn-earbud.yml, which includes
+      # project-vpn.yml). Check that the include really merges the flags the way the file says:
+      # each spec must resolve to exactly its own set, on the generated project.
+      - name: Specs resolve to the intended compilation conditions
+        working-directory: QAudionApp
+        run: |
+          set -e
+          # The compilation conditions are read from the generated project itself (the
+          # OTHER_SWIFT_FLAGS lines of project.pbxproj): no package resolution needed.
+          flags_of() {
+            xcodegen generate --spec "$1" >/dev/null
+            grep -E 'OTHER_SWIFT_FLAGS' "$XCODE_PROJECT/project.pbxproj" | sort -u | tr -s ' 	' ' ' || true
+          }
+          DEFAULT=$(flags_of project.yml)
+          EARBUD=$(flags_of project-earbud.yml)
+          VPN=$(flags_of project-vpn.yml)
+          BOTH=$(flags_of project-vpn-earbud.yml)
+          echo "default:    $DEFAULT"
+          echo "earbud:     $EARBUD"
+          echo "vpn:        $VPN"
+          echo "vpn+earbud: $BOTH"
+          case "$DEFAULT" in *QAUDION_EARBUD*|*QAUDION_VPN*) echo "::error::the default spec sets a feature flag"; exit 1;; esac
+          case "$EARBUD" in *-DQAUDION_EARBUD*) ;; *) echo "::error::project-earbud.yml does not set -DQAUDION_EARBUD"; exit 1;; esac
+          case "$EARBUD" in *QAUDION_VPN*) echo "::error::project-earbud.yml turns the VPN on"; exit 1;; esac
+          case "$VPN" in *-DQAUDION_VPN*) ;; *) echo "::error::project-vpn.yml does not set -DQAUDION_VPN"; exit 1;; esac
+          case "$VPN" in *QAUDION_EARBUD*) echo "::error::project-vpn.yml turns the earbud stack on"; exit 1;; esac
+          case "$BOTH" in *-DQAUDION_VPN*-DQAUDION_EARBUD*|*-DQAUDION_EARBUD*-DQAUDION_VPN*) ;; *) echo "::error::project-vpn-earbud.yml does not set both flags"; exit 1;; esac
+
+      - name: Generate Xcode project (earbud spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-earbud.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build QAudionApp with the earbud stack (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-earbud \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-earbud.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-earbud.log ==="; tail -300 build-earbud.log; exit 1)
+
+      # The stack is really compiled in (class and service UUID found); this is also the positive
+      # control for the signatures that assert-no-earbud.sh looks for in the default build.
+      - name: Check the earbud variant contents
+        run: |
+          set -e
+          APP="/tmp/dd-ios-earbud/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP"
+          sh scripts/ci/assert-no-earbud.sh --require-present "$APP"
+
+      # With the dev tools too, the earbud diagnostics screen (EarbudDiagScreen, which is compiled
+      # only with both conditions) builds and is in the binary. The command line replaces the
+      # target's compilation conditions, which in project.yml are just $(inherited).
+      - name: Build QAudionApp with the earbud stack and the dev tools (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-earbud-dev \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) QAUDION_DEV_TOOLS' \
+            2>&1 | tee build-earbud-dev.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-earbud-dev.log ==="; tail -300 build-earbud-dev.log; exit 1)
+
+      - name: Check the earbud + dev tools variant contents
+        run: |
+          set -e
+          APP="/tmp/dd-ios-earbud-dev/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP"
+          sh scripts/ci/assert-no-earbud.sh --require-present "$APP"
+          test -n "$(grep -rlaF '19EarbudDiagViewModel' "$APP" | head -1)"
+
+      - name: Upload logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-earbud-variant-logs-${{ github.run_number }}
+          path: |
+            QAudionApp/build-earbud.log
+            QAudionApp/build-earbud-dev.log
           retention-days: 7
           if-no-files-found: ignore
