@@ -335,16 +335,17 @@ final class VoiceDisplayFormatTests: XCTestCase {
         XCTAssertEqual(VoiceNumberFormat.decimalSeparator(of: VoiceDisplayLocale.app), ",")
     }
 
-    /// With no override, the locale of the screens is what the choice gives for the real preferred language of the
-    /// device the tests run on, whichever it is.
+    /// With no override, the locale of the screens is what the choice gives for the real language settings of the
+    /// device the tests run on (the system's localization of the app, then every preferred language), whichever
+    /// they are.
     func testTheScreensAgreeWithTheChoiceForTheRealLanguageOfTheDevice() {
         let previous = AppLanguageManager.currentOverride
         defer { AppLanguageManager.currentOverride = previous }
         AppLanguageManager.currentOverride = nil
-        let expected = VoiceDisplayLocale.locale(override: nil, preferredLanguage: Locale.preferredLanguages.first)
+        let languages = Bundle.main.preferredLocalizations + Locale.preferredLanguages
+        let expected = VoiceDisplayLocale.locale(override: nil, preferredLanguages: languages)
         XCTAssertEqual(VoiceDisplayLocale.app.identifier, expected.identifier)
         XCTAssertEqual(AppLanguageManager.effectiveLanguageCode,
-                       AppLanguageManager.languageCode(override: nil,
-                                                       preferredLanguage: Locale.preferredLanguages.first))
+                       AppLanguageManager.languageCode(override: nil, preferredLanguages: languages))
     }
 }
