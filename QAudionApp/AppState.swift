@@ -2625,6 +2625,20 @@ final class AppState: ObservableObject {
     /// Reset in endCall().
     @Published var voiceSpectrum: [Float]?
 
+    /// The frozen opening spectrum of the remote voice in THIS call: the
+    /// per-band average of the first ~60 spectrum frames (about 4 s at 15 Hz),
+    /// then fixed for the rest of the call. The voice check wave overlays the
+    /// live ``voiceSpectrum`` on it; while it is nil (the opening seconds, and
+    /// between calls) the wave draws the confidence trend instead. It is the
+    /// same measurement as ``voiceSpectrum``, taken in the same call, so the
+    /// two share a speaker, a codec, a network path and a room; nothing is
+    /// compared with a stored template or another call. Reset in endCall().
+    @Published var voiceReference: [Float]?
+
+    /// Builds ``voiceReference`` from the frames published in ``voiceSpectrum``.
+    /// Main-actor only, like every other field of this object.
+    private let voiceReferenceEnvelope = VoiceReferenceEnvelope()
+
     /// Feature B ("voce verificata") — state of the per-contact call-time
     /// voice-learning session (`VoiceLearningSession`, fed from the SAME
     /// decoded RX audio as `voiceAnalysis`/`voiceSpectrum` above via
@@ -2635,7 +2649,7 @@ final class AppState: ObservableObject {
     /// the first time `handleCallSessionEstablished` ever fires for a
     /// contact with no existing `VoiceprintStore` template. `InCallScreen`
     /// now only ever SHOWS state (a brief progress indicator while
-    /// `.inProgress`, the live `voiceConfidenceHistory` wave otherwise) —
+    /// `.inProgress`, the voice check wave otherwise) —
     /// see `InCallScreen.voiceLearningControl`. Reset in endCall(). On
     /// `.completed(contactId:)` this also writes the real "voice verified"
     /// signal via `ContactsStore.setVoiceVerified` — see the observer set up
@@ -2708,8 +2722,10 @@ final class AppState: ObservableObject {
     /// `cryptoMeterTimer`, same lifecycle) rather than pushed per-frame —
     /// polling a `NSLock`-protected snapshot is cheap and avoids adding a
     /// new per-frame callback across the engine boundary. Empty between
-    /// calls / before the first analyzed frame — the wave then renders its
-    /// neutral flat-line state, never fabricated motion.
+    /// calls / before the first analyzed frame. The wave draws it as a trend
+    /// only while the call has no reference spectrum to overlay the live one
+    /// on (see `voiceReference`); with an empty history and no reference it
+    /// renders its neutral flat-line state, never fabricated motion.
     @Published var voiceConfidenceHistory: [Float] = []
     /// Sampler for `voiceConfidenceHistory` — same pattern as
     /// `cryptoMeterTimer` immediately below, just a faster tick (5 Hz) so
@@ -4316,7 +4332,13 @@ final class AppState: ObservableObject {
         // never runs per audio frame). Same pattern as onVoiceAnalysis above.
         callService.onVoiceSpectrum = { [weak self] bands in
             Task { @MainActor in
-                self?.voiceSpectrum = bands
+                guard let self else { return }
+                self.voiceSpectrum = bands
+                // The same frame, second consumer: the frozen reference of the
+                // voice check wave. Published once, when it freezes.
+                if self.voiceReferenceEnvelope.feed(bands) {
+                    self.voiceReference = self.voiceReferenceEnvelope.reference
+                }
             }
         }
 
@@ -21371,6 +21393,11 @@ extension AppState {
         // Unified call UI — drop the last spectrum frame too, so the ribbon
         // bars decay to rest between calls (mirrors the reset above).
         voiceSpectrum = nil
+        // The reference of the voice check wave belongs to the call that just
+        // ended: drop it, and the frames averaged towards it, so the next call
+        // builds its own from its own opening seconds.
+        voiceReferenceEnvelope.reset()
+        voiceReference = nil
         // Feature B — drop any in-flight/last learning-session state so a
         // stale "Voce imparata" badge doesn't leak into the next call's UI
         // before a new session (if any) reports its own state.

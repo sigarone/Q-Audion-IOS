@@ -1,10 +1,10 @@
 import Foundation
 import QAudionEngine
 
-// Pure decisions behind the voice analysis shown during a call: the pitch
-// reading of the ribbon, the "voice check" card and the technical-data rows of
-// the security sheet. No SwiftUI in here, so every threshold, word and format
-// is covered by unit tests; the views only map a `VoiceTone` onto a
+// Pure decisions behind the voice analysis shown during a call: the tone row
+// of the ribbon, the "voice check" card and its wave, and the technical-data
+// rows of the security sheet. No SwiftUI in here, so every threshold, word and
+// format is covered by unit tests; the views only map a `VoiceTone` onto a
 // design-system colour and a string onto a Text.
 //
 // Nothing here turns a measurement into a claim about the person (stress,
@@ -22,24 +22,15 @@ enum VoiceTone: Equatable {
     case neutral
 }
 
-// MARK: - Pitch reading of the ribbon
+// MARK: - Tone row of the ribbon
 
-/// The status text of a reading. The views turn it into the printed text; the
-/// decision itself stays free of any language.
-enum VoiceGaugeStatus: Equatable {
-    /// Nothing to add under the value.
-    case none
-    /// Printed as a dash: there is no pitch to speak of (unvoiced segment).
-    case dash
-}
-
-/// What the pitch cell prints: the number, its unit (a symbol, never
-/// translated), the status text and the colour role of the status text.
-struct VoiceGaugeReading: Equatable {
+/// What the tone row prints: the whole-number f0, its unit (a symbol, never
+/// translated) and whether a voice is present. The row never colours any of it
+/// and never adds a sentence: a pitch is a measurement, not a verdict.
+struct VoiceToneReading: Equatable {
     let value: String
     let unit: String
-    let status: VoiceGaugeStatus
-    let tone: VoiceTone
+    let voiced: Bool
 }
 
 enum VoiceGauges {
@@ -53,11 +44,135 @@ enum VoiceGauges {
         return Int(value).description
     }
 
-    /// Pitch reading: no status text while the segment is voiced, a dash while
-    /// it is not (an unvoiced segment has no pitch to speak of). It is never
-    /// coloured: a pitch is a measurement, not a verdict.
-    static func pitch(hz: Float, voiced: Bool) -> VoiceGaugeReading {
-        VoiceGaugeReading(value: wholeNumber(hz), unit: "Hz", status: voiced ? .none : .dash, tone: .neutral)
+    /// The tone reading: the f0 as a whole number, "Hz", and whether the
+    /// segment is voiced (the row then says "voice", otherwise "silence").
+    static func pitch(hz: Float, voiced: Bool) -> VoiceToneReading {
+        VoiceToneReading(value: wholeNumber(hz), unit: "Hz", voiced: voiced)
+    }
+
+    /// What a screen reader says for the whole row: the label, the value with
+    /// its unit, the voice word and, when there are any, the details with their
+    /// separators turned into pauses.
+    static func spokenTone(label: String, reading: VoiceToneReading, voiceWord: String, details: String?) -> String {
+        let measure: String = reading.value + " " + reading.unit
+        var parts: [String] = [label, measure, voiceWord]
+        if let details = details, !details.isEmpty {
+            parts.append(details.replacingOccurrences(of: VoiceSpectralDetails.separator, with: ", "))
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// The two words of the tone row, for a segment with a voice and one without.
+/// They state what was heard, nothing about the person.
+enum VoiceToneCopy {
+    static func voiceWord(voiced: Bool) -> String {
+        if voiced {
+            return String(localized: "in_call.gauge.pitch_voiced",
+                          defaultValue: "voce",
+                          comment: "Call screen voice ribbon, tone row — word after the pitch value when a voice is present in the audio being measured")
+        }
+        return String(localized: "in_call.gauge.pitch_silent",
+                      defaultValue: "silenzio",
+                      comment: "Call screen voice ribbon, tone row — word after the pitch value when there is no voice in the audio being measured")
+    }
+}
+
+// MARK: - Spectral details of the tone row
+
+/// The details printed to the right of the tone, as neutral acoustic
+/// measurements from the voice analysis result: the first two formants, the
+/// speech rate and the harmonic-to-noise ratio, in this order, joined by " · ":
+///
+///     F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB
+///
+/// Formants are rounded to the nearest 10 Hz, the rate has one decimal in the
+/// separator of the device locale, the HNR is a whole number of dB. Without a
+/// voice in the segment F1, F2 and HNR print a dash (they do not exist for
+/// silence); the rate still prints. Never colour them, and never add a score,
+/// jitter, shimmer or any word about emotion, stress, health or the state of
+/// the person: they are values of the signal and nothing else.
+///
+/// Which of the four are printed is `measured`. A field is listed there only
+/// when the extractor behind it returns the quantity its label names; the
+/// default is none (see `measured`).
+enum VoiceSpectralDetails {
+    enum Field: CaseIterable {
+        case formant1
+        case formant2
+        case speechRate
+        case hnr
+    }
+
+    /// Between two details.
+    static let separator = " · "
+
+    /// The details that are printed. Empty, on purpose, until the extractors
+    /// are fixed. Replaying them on a clean synthetic vowel with known formants
+    /// at several levels: the formant tracker returns a first peak thousands of
+    /// Hz away from the real F1 and no second one; the HNR moves with the
+    /// loudness of the very same vowel (0 dB when quiet, over 20 dB when loud);
+    /// and the syllable count is never windowed, so the rate of a steady talker
+    /// climbs for the whole call instead of staying near its real value.
+    /// Printing them would show invented numbers on a security screen. Add a
+    /// field here only after its extractor passes such a check; the formatting
+    /// below is ready for all four.
+    static let measured: Set<Field> = []
+
+    /// The text of the details, or nil when `fields` selects none.
+    static func text(formant1Hz: Float,
+                     formant2Hz: Float,
+                     syllablesPerSecond: Float,
+                     hnrDecibels: Float,
+                     voiced: Bool,
+                     rateUnit: String,
+                     fields: Set<Field> = VoiceSpectralDetails.measured,
+                     locale: Locale = .current) -> String? {
+        var parts: [String] = []
+        if fields.contains(.formant1) {
+            let first: String = "F1 " + formant(formant1Hz, voiced: voiced)
+            parts.append(first)
+        }
+        if fields.contains(.formant2) {
+            let second: String = "F2 " + formant(formant2Hz, voiced: voiced)
+            parts.append(second)
+        }
+        if fields.contains(.speechRate) {
+            let speed: String = rate(syllablesPerSecond, unit: rateUnit, locale: locale)
+            parts.append(speed)
+        }
+        if fields.contains(.hnr) {
+            let noise: String = "HNR " + hnr(hnrDecibels, voiced: voiced)
+            parts.append(noise)
+        }
+        if parts.isEmpty { return nil }
+        return parts.joined(separator: separator)
+    }
+
+    /// A formant in Hz, rounded to the nearest 10, or a dash for a segment
+    /// without a voice or a formant that was not found.
+    static func formant(_ hertz: Float, voiced: Bool) -> String {
+        guard voiced, hertz.isFinite, hertz > 0, hertz < 100_000 else { return VoiceGauges.noValue }
+        let rounded: Float = (hertz / 10).rounded() * 10
+        return Int(rounded).description
+    }
+
+    /// The speech rate with one decimal, in the separator of `locale`, and the
+    /// unit. It is printed for silence too: a window without speech has a rate.
+    static func rate(_ syllablesPerSecond: Float, unit: String, locale: Locale) -> String {
+        guard syllablesPerSecond.isFinite, syllablesPerSecond >= 0, syllablesPerSecond < 1000 else {
+            return VoiceGauges.noValue + " " + unit
+        }
+        let number: String = String(format: "%.1f", locale: locale, Double(syllablesPerSecond))
+        return number + " " + unit
+    }
+
+    /// The harmonic-to-noise ratio in whole dB, or a dash for a segment
+    /// without a voice.
+    static func hnr(_ decibels: Float, voiced: Bool) -> String {
+        guard voiced, decibels.isFinite, abs(decibels) < 1000 else { return VoiceGauges.noValue }
+        let rounded: Float = decibels.rounded()
+        return Int(rounded).description + " dB"
     }
 }
 
@@ -117,9 +232,9 @@ enum VoiceGuardBanner: Equatable {
 }
 
 /// What the card shows, in priority order: the banner, the learning progress,
-/// the waiting state (before the first sample: the view draws it as the
-/// "Dati insufficienti" word with a flat trace), and finally the verdict with
-/// its wave.
+/// the waiting state (no verdict level and no Guardian sample yet: the view
+/// draws just the "Dati insufficienti" word and its note), and finally the
+/// verdict with its wave.
 enum VoiceGuardContent: Equatable {
     case banner(VoiceGuardBanner)
     case learning(progress: Float)
@@ -189,7 +304,10 @@ enum VoiceGuard {
         if let state = learning, case .inProgress(let progress) = state {
             return .learning(progress: clampedProgress(progress))
         }
-        if !hasHistory {
+        // The level, when known, always wins: it is shown even while the
+        // history that draws the trend is still empty. "Dati insufficienti"
+        // alone is for the case with no level at all.
+        if !hasHistory && level == nil {
             return .waiting
         }
         return .verdict(level: level)
@@ -300,12 +418,104 @@ enum CallSessionKeyShown {
     }
 }
 
-// MARK: - Single-trace wave
+// MARK: - The wave of the voice check card
+
+/// Which of its two pictures the voice wave draws right now.
+enum VoiceWavePicture: Equatable {
+    /// The live spectrum of the far end drawn over the reference spectrum
+    /// taken in this call.
+    case overlay
+    /// The trend of the combined Guardian confidence score, as a variation
+    /// around its average.
+    case trend
+}
 
 enum VoiceGuardWave {
     /// Floor on the spread the trace is scaled by: a perfectly steady window
     /// must not have its tiny noise blown up into movement.
     static let minSpread: Float = 0.02
+
+    /// How the displayed height of a band follows the spectrum: up at once to a
+    /// louder value, and down keeping this share of the old height per spectrum
+    /// frame (the rest comes from the new value). The same attack and decay as
+    /// the wave of the Android call screen, which steps once per frame.
+    static let fall: Float = 0.78
+
+    /// Spectrum frames per second that `fall` is counted in: the analyser
+    /// (`SpectrumExtractor`, fed from the decoded audio) publishes about 15 a
+    /// second. The fall is a rate on the clock, not a step per draw, so it does
+    /// not depend on how often or why the wave is redrawn.
+    static let framesPerSecond: Float = 15
+
+    /// How many spectrum frames a stretch of time is worth. Zero when the clock
+    /// did not advance (two draws in the same instant) or ran backwards, so such
+    /// a draw changes nothing.
+    static func frameSteps(elapsed: TimeInterval) -> Float {
+        guard elapsed.isFinite, elapsed > 0 else { return 0 }
+        return Float(elapsed) * framesPerSecond
+    }
+
+    /// Whether the wave overlays the live spectrum on the reference of this
+    /// call. It does only when both exist and have the same number of bands;
+    /// otherwise, in the opening seconds of a call, it draws the trend of the
+    /// confidence score. The wave and the words read aloud for it both rely on
+    /// this, so the picture and its label come from one test. The one case it
+    /// does not cover: a reference and live bands that are all zero, where the
+    /// wave also falls back to the trend (see `overlay`).
+    static func overlaysReference(live: [Float]?, reference: [Float]?) -> Bool {
+        guard let live = live, let reference = reference else { return false }
+        return live.count == reference.count
+    }
+
+    static func picture(live: [Float]?, reference: [Float]?) -> VoiceWavePicture {
+        overlaysReference(live: live, reference: reference) ? .overlay : .trend
+    }
+
+    /// The next displayed height of one band after `steps` spectrum frames (one
+    /// by default; see `frameSteps`). A louder target is shown at once. A quieter
+    /// one is approached geometrically, keeping `fall` of the distance per
+    /// frame, so two partial steps give the same height as one whole step: the
+    /// result depends on the time that passed, not on how many draws it was cut
+    /// into. No steps (or not a number) leave the height where it was.
+    static func nextDisplay(previous: Float, target: Float, steps: Float = 1) -> Float {
+        if target > previous { return target }
+        guard steps > 0 else { return previous }
+        let keep = Float(pow(Double(fall), Double(steps)))
+        return previous * keep + target * (1 - keep)
+    }
+
+    /// The two curves of the overlay, each band as a share (0...1) of the
+    /// largest value of EITHER curve.
+    struct Overlay: Equatable {
+        let reference: [Float]
+        let live: [Float]
+    }
+
+    /// Both curves are scaled by that one peak so the reference fills the box
+    /// whatever the loudness of the caller, and so the curves coincide only when
+    /// they really do: scaling each on its own would make them agree even when
+    /// they do not. nil when there is nothing to scale by (all zero, or not a
+    /// number), and the wave then draws the trend.
+    static func overlay(display: [Float], reference: [Float]) -> Overlay? {
+        let count = min(display.count, reference.count)
+        guard count > 0 else { return nil }
+        guard display.prefix(count).allSatisfy({ $0.isFinite }),
+              reference.prefix(count).allSatisfy({ $0.isFinite }) else { return nil }
+        var peak: Float = 0
+        for index in 0..<count {
+            peak = max(peak, reference[index], display[index])
+        }
+        guard peak.isFinite, peak > 0 else { return nil }
+        var scaledReference: [Float] = []
+        var scaledLive: [Float] = []
+        scaledReference.reserveCapacity(count)
+        scaledLive.reserveCapacity(count)
+        for index in 0..<count {
+            scaledReference.append(reference[index] / peak)
+            scaledLive.append(display[index] / peak)
+        }
+        return Overlay(reference: scaledReference, live: scaledLive)
+    }
 
     /// Each sample's distance from the window's mean, in units of the largest
     /// distance (but never less than `minSpread`), kept within -1...1. An empty
@@ -325,5 +535,23 @@ enum VoiceGuardWave {
             result.append(min(1, max(-1, deviation)))
         }
         return result
+    }
+}
+
+/// The words read aloud for the wave, for the picture it is drawing: the two
+/// overlaid spectra, or the trend of the confidence score. The pairing lives
+/// here, in one place a test can call, so swapping the two labels fails a test.
+enum VoiceWaveCopy {
+    static func accessibilityLabel(for picture: VoiceWavePicture) -> String {
+        switch picture {
+        case .overlay:
+            return String(localized: "in_call.voice_guard.wave_a11y_overlay",
+                          defaultValue: "Spettro della voce attuale sovrapposto a quello del riferimento preso in questa chiamata",
+                          comment: "Accessibility label of the wave on the call screen voice check card while it draws the live spectrum of the voice over the reference spectrum taken in this call")
+        case .trend:
+            return String(localized: "in_call.voice_guard.wave_a11y_trend",
+                          defaultValue: "Andamento del punteggio di confidenza combinato in questa chiamata, come variazione rispetto alla media",
+                          comment: "Accessibility label of the wave on the call screen voice check card while it draws the trend of the combined confidence score of this call as a variation around its average")
+        }
     }
 }

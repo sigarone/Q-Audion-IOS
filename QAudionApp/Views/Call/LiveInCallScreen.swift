@@ -368,6 +368,10 @@ struct LiveInCallScreen: View {
                 // PCM). nil before the first decoded frame → the
                 // MiniSpectrum bars decay to rest, never fabricated.
                 voiceSpectrum: appState.voiceSpectrum,
+                // The frozen opening spectrum of this call (average of the
+                // first ~4 s of the remote voice), once it exists. The voice
+                // check wave overlays the live spectrum on it; nil → trend.
+                voiceReference: appState.voiceReference,
                 // No live rekey-count/epoch source exists yet (see
                 // AppState.rekeyCount doc comment — it is declared but
                 // never incremented by any current rotation hook), so we
