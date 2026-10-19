@@ -1481,7 +1481,16 @@ final class AppState: ObservableObject {
     /// ""       — no network path reported yet (start of a call, before ICE selects one)
     /// The LiveInCallScreen maps these to TransportMode for the chip label ("" is
     /// `.disconnected`); the security badge prints a dash for "".
-    @Published var backendType: String = ""  // "" | "p2p" | "turn" | "relay"
+    @Published var backendType: String = "" {  // "" | "p2p" | "turn" | "relay"
+        didSet {
+            // Every writer of the call's media path funnels through here, so
+            // this is the one place that sees each change (ICE connected,
+            // the real candidate pair, a degrade to the relay, the reset at
+            // the end of a call). The engine decides when a change has held
+            // long enough to rebuild the speaker-change reference.
+            if backendType != oldValue { callService.mediaPathObserved(backendType) }
+        }
+    }
     @Published var pskActive: Bool = false
     @Published var pskName: String = ""
     @Published var pskFingerprint: String = ""
@@ -2650,10 +2659,12 @@ final class AppState: ObservableObject {
     /// contact with no existing `VoiceprintStore` template. `InCallScreen`
     /// now only ever SHOWS state (a brief progress indicator while
     /// `.inProgress`, the voice check wave otherwise) —
-    /// see `InCallScreen.voiceLearningControl`. Reset in endCall(). On
-    /// `.completed(contactId:)` this also writes the real "voice verified"
-    /// signal via `ContactsStore.setVoiceVerified` — see the observer set up
-    /// alongside `callService.onVoiceLearningStateChanged`.
+    /// see `InCallScreen.voiceLearningControl`. Reset in endCall(), so a
+    /// finished session of one call can never show its confirmation again in
+    /// a later one. On `.completed(contactId:)` this also records the date
+    /// the voice was saved via `ContactsStore.setVoiceSaved` (a date, not a
+    /// verification) — see the observer set up alongside
+    /// `callService.onVoiceLearningStateChanged`.
     @Published var voiceLearningState: VoiceLearningSession.State?
 
     /// This device's OWN TX-side owner-continuity self-check state,
@@ -2684,7 +2695,9 @@ final class AppState: ObservableObject {
     /// Tier 2 ("voce remota") — RX-side per-contact continuity level,
     /// published from `callService.onContactVoiceLevelChanged`. `.unknown`
     /// until the first real score tick for the active contact. Reset in
-    /// endCall().
+    /// endCall(). No screen shows it for now: its thresholds were fitted to
+    /// one call and never tried against a different speaker, so the ear
+    /// shield stays hidden until they are calibrated (`UncalibratedVoiceIndicators`).
     @Published var contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown
 
     /// "Interlocutore cambiato" — is the voice arriving now still the voice
@@ -4342,16 +4355,17 @@ final class AppState: ObservableObject {
             }
         }
 
-        // Feature B ("voce verificata") — publish the learning-session state
-        // for LiveInCallScreen's button/progress UI, and on `.completed`
-        // write the real independent trust signal `ContactDetailScreen`'s
-        // "Voce verificata" row reads (replacing its former mislabeled
-        // duplicate of the SAS-verified boolean).
+        // Feature B — publish the learning-session state for
+        // LiveInCallScreen's progress UI, and on `.completed` record WHEN the
+        // voice of this contact was saved (`ContactDetailScreen` words it
+        // "Voce memorizzata il <data>"). Saving a voice is not verifying the
+        // person: this writes a date and nothing else, and never touches the
+        // SAS verification of the contact.
         callService.onVoiceLearningStateChanged = { [weak self] state in
             Task { @MainActor in
                 self?.voiceLearningState = state
                 if case .completed(let contactId) = state {
-                    ContactsStore().setVoiceVerified(userId: contactId)
+                    ContactsStore().setVoiceSaved(userId: contactId)
                 }
             }
         }
@@ -14577,11 +14591,12 @@ final class AppState: ObservableObject {
             peerOwnerContinuityLevel = mapped
             print("[AppState] OWNER_CONT received callId=\(callId.prefix(8))… level=\(level) from=\(senderId.prefix(8))…")
         case .speakerChange(let callId, let changed):
-            // "Interlocutore cambiato" — the peer's own receive-side verdict
-            // about OUR user. Same sender guard as VOICE_KEY/OWNER_CONT:
-            // only the current call's peer may set it. The engine caps what
-            // this can do — a claim from across the trust boundary raises
-            // the local state to "suspected" and never to "confirmed".
+            // The peer's own receive-side verdict about OUR user — about our
+            // own voice, not the contact's, and not authenticated as coming
+            // from their detector. Same sender guard as VOICE_KEY/OWNER_CONT:
+            // only the current call's peer is heard. The engine only records
+            // it: it does not move the voice check card, its colour or any
+            // text (see `RemoteSpeakerChangeMonitor`).
             guard callContactId == senderId else {
                 print("[AppState] SPKCHG dropped — sender \(senderId.prefix(8))… is not the call peer")
                 return
@@ -20862,23 +20877,31 @@ extension AppState {
         reKeyScheduler.start()
     }
 
-    /// W-AUTOLEARN parity (Android 2026-07-31) — "voce verificata" no
-    /// longer waits for a manual tap: the first time this call's session
-    /// key lands for a contact with no existing `VoiceprintStore` template,
-    /// silently start the same ~3s background enrollment against the live
-    /// RX audio `startVoiceLearning()` already uses. No-op on every later
-    /// call once a template exists. Guarded against the double-fire
+    /// W-AUTOLEARN parity (Android 2026-07-31) — saving the voice of a
+    /// contact no longer waits for a manual tap: the first time this call's
+    /// session key lands for a contact with no existing `VoiceprintStore`
+    /// template, silently start the same ~3s background enrollment against
+    /// the live RX audio `startVoiceLearning()` already uses. No-op on every
+    /// later call once a template exists. Guarded against the double-fire
     /// `handleCallSessionEstablished` documents: only starts when no
-    /// session is already running/finished for this call.
+    /// session is already running or finished for this call, and a session
+    /// that ended `.failed` counts as finished: it is not started again in
+    /// the same call (`voiceLearningState` is cleared when the call ends, so
+    /// the next call may learn again).
     private func maybeAutoStartVoiceLearning(for peerId: String) {
         guard callContactId == peerId else { return }
         switch voiceLearningState {
-        case .inProgress, .completed:
+        case .inProgress, .completed, .failed:
             return
         default:
             break
         }
-        guard !VoiceprintStore().hasTemplate(contactId: peerId) else { return }
+        // Learn only when the store says it holds nothing for this contact.
+        // A store that cannot be read (for example the Keychain before the
+        // first unlock after a restart) holds something unknown: learning
+        // again would burn the first seconds of every call on it and write
+        // over a profile that may be fine.
+        guard case .absent = VoiceprintStore().lookup(contactId: peerId) else { return }
         RTLog.info("call", "auto-starting voice learning for new contact=\(peerId.prefix(8))…")
         startVoiceLearning()
     }
@@ -20996,12 +21019,12 @@ extension AppState {
     /// `maybeAnnounceOwnerContinuity`, so the wire cost is zero on the
     /// overwhelming majority of calls.
     ///
-    /// Only what this device observed for itself is announced. A verdict
-    /// that exists solely because the peer reported it is deliberately not
-    /// echoed back.
+    /// Only what this device observed for itself is announced: the verdict
+    /// is built from the local detector alone (the peer's own report never
+    /// enters it), so nothing the peer said can be echoed back.
     @MainActor
     private func maybeAnnounceSpeakerChange(_ verdict: RemoteSpeakerChangeMonitor.Verdict) {
-        let locallyObserved = verdict.level == .changed && !verdict.peerReportedOnly
+        let locallyObserved = verdict.level == .changed
         guard locallyObserved != lastSentSpeakerChange else { return }
         lastSentSpeakerChange = locallyObserved
         guard let peerId = callContactId else { return }

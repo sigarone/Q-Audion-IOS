@@ -185,13 +185,13 @@ struct CallSecurityBadge: View {
 
     /// The word of the badge for a Guardian level and score. A call starts at level "green" with the -1 "no score
     /// yet" sentinel (the panel prints a dash, the dot is grey): that is no reading, so the word says there is not
-    /// enough data instead of "Sicuro", a verdict nobody measured. It is the voice card's own key and wording for
-    /// the same situation, so the comment below is the card's (the catalog keeps one comment per key).
+    /// enough data instead of "Sicuro", a verdict nobody measured. This is the Guardian confidence of the badge, not
+    /// the voice check card, which has its own words (`VoiceGuardCopy`).
     static func statusWord(level: String, score: Double) -> String {
         guard ConfidenceThresholds.tone(of: score) != .noReading else {
-            return String(localized: "in_call.voice_guard.pending",
+            return String(localized: "call_security.status_no_reading",
                           defaultValue: "Dati insufficienti",
-                          comment: "Call screen voice check card — verdict word when there is not enough data to compare the voice yet")
+                          comment: "Call security badge — status word while there is no Guardian reading yet (not enough data to say anything about the call)")
         }
         switch level {
         case "yellow": return "Attenzione"

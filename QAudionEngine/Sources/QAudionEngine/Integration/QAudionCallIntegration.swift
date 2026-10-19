@@ -472,6 +472,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// no-op with no active contact — see `ContactVoiceVerifier
     /// .feedContinuous`).
     private let contactVoiceVerifier = ContactVoiceVerifier()
+    /// Turns the app's reports of the media path in use into a re-anchor of
+    /// the speaker-change reference, once a changed path has held for a few
+    /// seconds (see `AcousticPathAnchor`). Fed by `mediaPathObserved(_:)`.
+    private let acousticPathAnchor = AcousticPathAnchor()
     private var sendOpaque: ((Data) async throws -> Void)?
     private var resolvedBcryptoUserId: String?
     private var bcryptoUserIdCache: [String: String] = [:]  // recipientId -> BCrypto userId
@@ -734,7 +738,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public var onSpeakerChangeVerdict: ((RemoteSpeakerChangeMonitor.Verdict) -> Void)?
 
     /// Record the far end's own receive-side verdict about this device's
-    /// user, as delivered over the `SPKCHG` control piggy-back.
+    /// user, as delivered over the `SPKCHG` control piggy-back. Only
+    /// recorded: it never reaches `onSpeakerChangeVerdict` (see
+    /// `RemoteSpeakerChangeMonitor`).
     public func peerReportedSpeakerChange(_ changed: Bool) {
         contactVoiceVerifier.peerReportedSpeakerChange(changed)
     }
@@ -744,6 +750,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// not be reported as a person walking in.
     public func acousticPathChanged() {
         contactVoiceVerifier.acousticPathChanged()
+    }
+
+    /// The media path in use changed: the app's own words for it ("p2p",
+    /// "turn", "relay"), or "" while none is reported. Calls
+    /// `acousticPathChanged()` once a path that differs from the one the
+    /// reference was built under has held for a few seconds, and not for a
+    /// burst of reports that ends where it started (`AcousticPathAnchor`).
+    public func mediaPathObserved(_ path: String) {
+        acousticPathAnchor.observe(path)
     }
     /// MASVS-CRYPTO remediation (2026-08-20/21) — see
     /// `ContactVoiceVerifier.onScoreUpdated` kdoc. Feeds `ReKeyScheduler`.
@@ -1237,6 +1252,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         ownerContinuityMonitor.onStateChanged = { [weak self] state in self?.onOwnerContinuityStateChanged?(state) }
         contactVoiceVerifier.onLevelChanged = { [weak self] level in self?.onContactVoiceLevelChanged?(level) }
         contactVoiceVerifier.onSpeakerChanged = { [weak self] verdict in self?.onSpeakerChangeVerdict?(verdict) }
+        acousticPathAnchor.onReanchor = { [weak self] in self?.acousticPathChanged() }
         // MASVS-CRYPTO remediation (2026-08-20/21) — relay the raw score
         // alongside the level, same pattern. See ContactVoiceVerifier's
         // `onScoreUpdated` kdoc.
@@ -4111,12 +4127,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // the first call).
         guardianMode.warmUp()
         contactVoiceVerifier.setActiveContact(contactId)
+        // The reference this call is about to build belongs to the path it
+        // is on now, so that path is not a change to re-anchor for. This runs
+        // more than once per call, so it anchors only for a contact that was
+        // not anchored yet: a repeat must not cancel a path change that is
+        // still waiting to settle.
+        acousticPathAnchor.anchorToCurrent(forContact: contactId)
     }
 
     /// Tier 2 counterpart to `activateContactVoiceVerification` — stops the
     /// continuous per-contact check without persisting anything partial.
     public func deactivateContactVoiceVerification() {
         contactVoiceVerifier.deactivate()
+        acousticPathAnchor.reset()
     }
 
     /// True after `OwnerContinuityMonitor`'s own hysteresis streak has
@@ -4343,6 +4366,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // reuses this instance starts with clean, empty buffers rather than
         // straddling into a prior, unrelated call's leftover audio.
         contactVoiceVerifier.deactivate()
+        acousticPathAnchor.reset()
         ownerContinuityMonitor.stop()
         ownerContinuityMonitor.start()
         // M-15 — cancel any pending capability-exchange fallback so it

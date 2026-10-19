@@ -457,13 +457,15 @@ struct LiveInCallScreen: View {
                 // replaces the old manual-CTA slot for the rest of the call.
                 voiceConfidenceHistory: appState.voiceConfidenceHistory,
                 // "Voce storica" (peer's self-reported live continuity,
-                // received over the OWNER_CONT piggy-back) / "Voce remota"
-                // (this device's own local per-contact continuity) — fed
-                // from AppState.peerOwnerContinuityLevel/contactVoiceLevel.
-                // `.unknown` between calls / before the first real tick —
-                // the shields stay hidden or fall back to the static
-                // `peerVoiceKeyEnrolled` fact in that case, see
-                // InCallScreen's own gating.
+                // received over the OWNER_CONT piggy-back) — fed from
+                // AppState.peerOwnerContinuityLevel. `.unknown` between
+                // calls / before the first real tick — the shield stays
+                // hidden or falls back to the static `peerVoiceKeyEnrolled`
+                // fact in that case, see InCallScreen's own gating.
+                // `contactVoiceLevel` (this device's own local per-contact
+                // continuity, "Voce remota") is passed along, but its ear
+                // shield is hidden for now: the thresholds are not
+                // calibrated yet (see `UncalibratedVoiceIndicators`).
                 peerOwnerContinuityLevel: appState.peerOwnerContinuityLevel,
                 contactVoiceLevel: appState.contactVoiceLevel,
                 speakerChange: appState.speakerChangeVerdict

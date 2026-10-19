@@ -172,7 +172,10 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     public var speakerChangeVerdict: RemoteSpeakerChangeMonitor.Verdict { speakerChange.verdict }
 
     /// Record the far end's own receive-side verdict about this device's
-    /// user, as delivered over the in-call control channel.
+    /// user, as delivered over the in-call control channel. It is only
+    /// recorded: it is about our own user's voice and is not authenticated,
+    /// so it never changes `speakerChangeVerdict` (see
+    /// `RemoteSpeakerChangeMonitor`).
     public func peerReportedSpeakerChange(_ changed: Bool) {
         speakerChange.onPeerReportedChange(changed)
     }
@@ -246,6 +249,13 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// starts auto-enrollment from live RX audio via `feedContinuous`. A
     /// no-op if `contactId` is already the active one (cheap to call
     /// redundantly, matching Android's `setActiveContact`).
+    ///
+    /// The auto-enrollment started here lives in memory for this call only
+    /// and never writes to the store, so a store that cannot be read
+    /// (`VoiceprintLookup.unreadable`) costs nothing but the stored
+    /// template for this call: the change detector still works from the
+    /// opening seconds of the call, and nothing is written over the profile
+    /// that could not be read.
     public func setActiveContact(_ contactId: String?) {
         lock.lock()
         guard contactId != loadedContactId else { lock.unlock(); return }
@@ -260,9 +270,10 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
             verifier.reset()
             return
         }
-        if let template = store.load(contactId: contactId) {
+        switch store.lookup(contactId: contactId) {
+        case .present(let template):
             verifier.importTemplate(template)
-        } else {
+        case .absent, .unreadable:
             verifier.startAutoEnrollment(contactId: contactId)
         }
 

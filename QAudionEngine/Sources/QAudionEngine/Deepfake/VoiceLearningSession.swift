@@ -1,7 +1,8 @@
 import Foundation
 
-/// Per-contact, call-time voice-learning session — Feature B ("voce
-/// verificata"). Wraps `SpeakerVerifier` (2026-08-01: CAM++ neural speaker
+/// Per-contact, call-time voice-learning session — Feature B. Saving a
+/// voice is not verifying the person: a completed session means a voiceprint
+/// was stored, nothing more. Wraps `SpeakerVerifier` (2026-08-01: CAM++ neural speaker
 /// embedding, replacing the prior LFCC-mean matcher) + `VoiceprintStore`
 /// (Keychain-backed persistence) to build a per-contact voiceprint template
 /// from the REMOTE peer's decoded RX audio during a live call.
@@ -76,12 +77,30 @@ public final class VoiceLearningSession {
         frameCount = 0
     }
 
+    /// Ends the session as `.completed` only when a usable template is
+    /// really stored; every other way out is `.failed`, with whatever the
+    /// store held before left exactly as it was:
+    ///  - no embedding came out, or it is empty, not finite or all zero: it
+    ///    is not saved (the next call learns again);
+    ///  - the store cannot be read: what it holds is unknown, so it is not
+    ///    written over;
+    ///  - the write was refused: nothing was saved, so nothing is reported
+    ///    as learned.
     private func finish(contactId: String) {
-        guard verifier.finishEnrollment(), let template = verifier.exportTemplate() else {
+        guard verifier.finishEnrollment(),
+              let template = verifier.exportTemplate(),
+              VoiceprintStore.isUsable(template) else {
             state = .failed
             return
         }
-        store.save(contactId: contactId, template: template)
+        if case .unreadable = store.lookup(contactId: contactId) {
+            state = .failed
+            return
+        }
+        guard store.save(contactId: contactId, template: template) else {
+            state = .failed
+            return
+        }
         state = .completed(contactId: contactId)
     }
 }

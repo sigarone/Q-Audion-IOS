@@ -168,7 +168,12 @@ final class VoiceEnrollmentContainer: ObservableObject {
               let template = speakerVerifier.exportTemplate() else {
             return nil
         }
-        voiceprintStore.save(contactId: VoiceprintStore.deviceOwnerId, template: template)
+        // Success is reported only when the template is really stored: an
+        // unusable template, or a Keychain that refused the write, is a
+        // failed enrollment, not a finished one.
+        guard voiceprintStore.save(contactId: VoiceprintStore.deviceOwnerId, template: template) else {
+            return nil
+        }
         return "embed-\(UUID().uuidString.prefix(8))"
     }
 
