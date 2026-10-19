@@ -1057,6 +1057,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let oldTask = webSocketTask
         webSocketTask = nil
         let listeners = stateListeners
+        // Copied under the lock: the provider pushes new tokens through `updateConfig` from
+        // other threads, and the reads below run after the lock is released.
+        let cfg = config
         lock.unlock()
         if let id = newlyMintedTokenId { legacyStandingToken = ConnectionToken(id: id, client: self) }
 
@@ -1064,7 +1067,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         oldTask?.cancel(with: .goingAway, reason: nil)
         listeners.forEach { $0(.connecting) }
 
-        guard let url = URL(string: config.serverUrl.replacingOccurrences(of: "https://", with: "wss://").replacingOccurrences(of: "http://", with: "ws://") + "/ws") else { return }
+        guard let url = URL(string: cfg.serverUrl.replacingOccurrences(of: "https://", with: "wss://").replacingOccurrences(of: "http://", with: "ws://") + "/ws") else { return }
 
         // VoIP-grade session configuration:
         //   - timeoutIntervalForRequest = 0  → no read timeout (server's
@@ -1092,15 +1095,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         //   - otherwise                     → system default TLS chain
         let challengeMode: WSSessionDelegate.ChallengeMode
         #if DEBUG
-        if config.acceptSelfSignedCerts {
+        if cfg.acceptSelfSignedCerts {
             challengeMode = .trustAll
-        } else if let pin = config.certPinSha256B64 {
+        } else if let pin = cfg.certPinSha256B64 {
             challengeMode = .pinned(CertPinningDelegate(pinB64: pin))
         } else {
             challengeMode = .systemDefault
         }
         #else
-        if let pin = config.certPinSha256B64 {
+        if let pin = cfg.certPinSha256B64 {
             challengeMode = .pinned(CertPinningDelegate(pinB64: pin))
         } else {
             challengeMode = .systemDefault
@@ -1113,7 +1116,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // queued on (or dropped by) a socket that had not finished the
         // HTTP→WS handshake — the server then saw an unauthenticated
         // socket and silently dropped subsequent frames.
-        let pendingToken = Self.tokenForConnect(stored: latestAccessToken?(), configured: config.accessToken)
+        let pendingToken = Self.tokenForConnect(stored: latestAccessToken?(), configured: cfg.accessToken)
         let delegate = WSSessionDelegate(mode: challengeMode) { [weak self] in
             guard let self = self, let token = pendingToken else { return }
             self.authenticate(token: token)

@@ -58,27 +58,60 @@ final class BCryptoRestClientConcurrentRefreshTests: XCTestCase {
         return client
     }
 
-    private func burst(on client: BCryptoRestClient, alongside extra: [@Sendable () -> Void]) async -> [Bool] {
-        await withTaskGroup(of: Bool.self) { group -> [Bool] in
-            for index in 0..<Self.concurrentRequests {
-                group.addTask {
-                    do {
-                        _ = try await client.get("/api/v1/resource\(index)")
-                        return true
-                    } catch {
-                        return false
-                    }
-                }
-            }
+    /// Sends the burst of requests and runs `extra` alongside it until every request has
+    /// finished, so the extra work overlaps the refresh and its writes instead of ending first.
+    private func burst(on client: BCryptoRestClient, alongside extra: [@Sendable (StopFlag) -> Void]) async -> [Bool] {
+        let stop = StopFlag()
+        return await withTaskGroup(of: [Bool].self) { outer -> [Bool] in
             for work in extra {
-                group.addTask {
-                    work()
-                    return true
+                outer.addTask {
+                    await Self.onDispatchThread { work(stop) }
+                    return []
                 }
             }
-            var results: [Bool] = []
-            for await result in group { results.append(result) }
-            return results
+            outer.addTask {
+                let results = await withTaskGroup(of: Bool.self) { group -> [Bool] in
+                    for index in 0..<Self.concurrentRequests {
+                        group.addTask {
+                            do {
+                                _ = try await client.get("/api/v1/resource\(index)")
+                                return true
+                            } catch {
+                                return false
+                            }
+                        }
+                    }
+                    var results: [Bool] = []
+                    for await result in group { results.append(result) }
+                    return results
+                }
+                stop.set()
+                return results
+            }
+            var all: [Bool] = []
+            for await part in outer { all.append(contentsOf: part) }
+            return all
+        }
+    }
+
+    /// Runs `work` on a dispatch thread. The extra work spins until the requests are done, and
+    /// inside Swift's cooperative pool it could hold every thread those requests need.
+    private static func onDispatchThread(_ work: @escaping @Sendable () -> Void) async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                work()
+                done.resume()
+            }
+        }
+    }
+
+    /// Runs `body` at least `minimum` times and then until `stop` is set, with a ceiling so
+    /// a hung request fails the test instead of spinning forever.
+    private static func repeatUntil(_ stop: StopFlag, minimum: Int, _ body: () -> Void) {
+        var runs = 0
+        while runs < minimum || (!stop.isSet && runs < 5_000_000) {
+            body()
+            runs += 1
         }
     }
 
@@ -87,8 +120,8 @@ final class BCryptoRestClientConcurrentRefreshTests: XCTestCase {
             let stale = Pair.make("0"), fresh = Pair.make("1")
             serve(onlyAccess: fresh.access)
             let client = makeClient(stale: stale, fresh: fresh, stored: stale)
-            let reader: @Sendable () -> Void = {
-                for _ in 0..<500 {
+            let reader: @Sendable (StopFlag) -> Void = { stop in
+                Self.repeatUntil(stop, minimum: 500) {
                     _ = client.accessToken
                     _ = client.refreshToken
                     _ = client.serverUrl
@@ -110,8 +143,8 @@ final class BCryptoRestClientConcurrentRefreshTests: XCTestCase {
             let client = makeClient(stale: stale, fresh: fresh, stored: fresh)
             let freshConfig = BackendConfig(serverUrl: "https://auth.test", accessToken: fresh.access,
                                             refreshToken: fresh.refresh)
-            let broadcaster: @Sendable () -> Void = {
-                for _ in 0..<200 { client.updateConfig(freshConfig) }
+            let broadcaster: @Sendable (StopFlag) -> Void = { stop in
+                Self.repeatUntil(stop, minimum: 200) { client.updateConfig(freshConfig) }
             }
             let recovered = await burst(on: client, alongside: Array(repeating: broadcaster, count: 2))
             XCTAssertTrue(recovered.allSatisfy { $0 }, "round \(round): every request recovers")
@@ -151,6 +184,16 @@ final class BCryptoRestClientConcurrentRefreshTests: XCTestCase {
                           "round \(round): the provider ends on one of the applied pairs, never a mix")
         }
     }
+}
+
+/// Set once by the task that sees the last request finish, read by the work running alongside.
+private final class StopFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() { lock.withLock { value = true } }
 }
 
 /// Answers every request with the status the handler picks, and an empty body.
