@@ -230,7 +230,9 @@ jobs:
             -only-testing:QAudionAppTests/ReKeyAvatarRingTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
+            -only-testing:QAudionAppTests/VoiceDisplayFormatTests \
             -only-testing:QAudionAppTests/VoiceGuardModelTests \
+            -only-testing:QAudionAppTests/VoiceToneRowTests \
             -resultBundlePath /tmp/app-tests.xcresult \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGN_IDENTITY="-" \

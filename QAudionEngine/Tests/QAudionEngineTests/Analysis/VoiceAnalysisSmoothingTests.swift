@@ -11,7 +11,7 @@ final class VoiceAnalysisSmoothingTests: XCTestCase {
         VoiceAnalysisResult(
             pitch: .init(f0Hz: f0, voiced: voiced, rms: f0 / 1000),
             stress: .init(score: conf, jitter: 0, shimmer: 0),
-            voiceHealth: .init(hnr: f0, breathiness: 0),
+            voiceHealth: .init(hnr: f0, breathiness: 0, hnrValid: voiced),
             speechRate: .init(syllablesPerSec: 0, pauseRatio: 0, isSpeaking: speaking),
             formants: .init(f1: f0, f2: 0, f3: 0, f4: 0),
             confidence: conf)
@@ -127,5 +127,118 @@ final class VoiceAnalysisSmoothingTests: XCTestCase {
         ])
         XCTAssertEqual(out?.confidence ?? -1, 0, accuracy: 0.001)
         XCTAssertEqual(out?.pitch.voiced, false)
+    }
+
+    // ─── Validity flags (2026-10) ────────────────────────────────────────
+
+    private func measured(hnr: Float?, f1: Float?, rate: Float?) -> VoiceAnalysisResult {
+        VoiceAnalysisResult(
+            pitch: .init(f0Hz: 150, voiced: true, rms: 0.1),
+            stress: .init(score: 0.2, jitter: 0.01, shimmer: 0.02, valid: true),
+            voiceHealth: .init(hnr: hnr ?? 0, breathiness: hnr == nil ? 0 : 0.25, hnrValid: hnr != nil),
+            speechRate: .init(syllablesPerSec: rate ?? 0, pauseRatio: rate == nil ? 0 : 0.3,
+                              isSpeaking: true, valid: rate != nil),
+            formants: .init(f1: f1 ?? 0, f2: 0, f3: 0, f4: 0, f1Found: f1 != nil, f2Found: false, f3Found: false, f4Found: false),
+            confidence: 0.8)
+    }
+
+    /// A field is averaged over the samples that HAD a reading; the zeros an invalid
+    /// sample carries must not drag the mean down.
+    func test_validity_meanIgnoresInvalidSamples() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            measured(hnr: nil, f1: nil, rate: nil),
+            measured(hnr: 20, f1: 600, rate: 4),
+            measured(hnr: 30, f1: 700, rate: 6),
+            measured(hnr: nil, f1: nil, rate: nil),
+        ])
+        XCTAssertEqual(out?.voiceHealth.hnr ?? 0, 25, accuracy: 0.001)
+        XCTAssertEqual(out?.voiceHealth.hnrValid, true)
+        XCTAssertEqual(out?.formants.f1 ?? 0, 650, accuracy: 0.001)
+        XCTAssertEqual(out?.formants.f1Found, true)
+        XCTAssertEqual(out?.speechRate.syllablesPerSec ?? 0, 5, accuracy: 0.001)
+        XCTAssertEqual(out?.speechRate.pauseRatio ?? 0, 0.3, accuracy: 0.001)
+        XCTAssertEqual(out?.speechRate.valid, true)
+    }
+
+    /// No sample had a reading: the average has none either, and says so.
+    func test_validity_noReadingStaysNoReading() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            measured(hnr: nil, f1: nil, rate: nil),
+            measured(hnr: nil, f1: nil, rate: nil),
+        ])
+        XCTAssertEqual(out?.voiceHealth.hnr, 0)
+        XCTAssertEqual(out?.voiceHealth.hnrValid, false)
+        XCTAssertEqual(out?.voiceHealth.breathiness, 0, "no reading is 0, not a made-up 1.0")
+        XCTAssertEqual(out?.formants.f1, 0)
+        XCTAssertEqual(out?.formants.f1Found, false)
+        XCTAssertEqual(out?.formants.f2Found, false)
+        XCTAssertEqual(out?.speechRate.syllablesPerSec, 0)
+        XCTAssertEqual(out?.speechRate.valid, false)
+    }
+
+    /// Breathiness follows the HNR flag: the mean over the samples that had an HNR.
+    func test_validity_breathinessFollowsTheHnrFlag() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            measured(hnr: nil, f1: nil, rate: nil),
+            measured(hnr: 20, f1: nil, rate: nil),
+        ])
+        XCTAssertEqual(out?.voiceHealth.breathiness ?? -1, 0.25, accuracy: 0.001)
+    }
+
+    /// Jitter and shimmer have a flag of their own (`Stress.valid`): a sample without
+    /// history carries zeros that are not readings.
+    func test_validity_jitterAndShimmerAreAveragedOverTheValidSamples() {
+        func stress(_ jitter: Float, _ shimmer: Float, valid: Bool) -> VoiceAnalysisResult {
+            VoiceAnalysisResult(
+                pitch: .init(f0Hz: 150, voiced: true, rms: 0.1),
+                stress: .init(score: 0.2, jitter: jitter, shimmer: shimmer, valid: valid))
+        }
+        let out = VoiceAnalysisSmoothing.average(of: [
+            stress(0, 0, valid: false),
+            stress(0.02, 0.10, valid: true),
+            stress(0.04, 0.20, valid: true),
+            stress(0, 0, valid: false),
+        ])
+        XCTAssertEqual(out?.stress.valid, true)
+        XCTAssertEqual(out?.stress.jitter ?? 0, 0.03, accuracy: 1e-6)
+        XCTAssertEqual(out?.stress.shimmer ?? 0, 0.15, accuracy: 1e-6)
+        let none = VoiceAnalysisSmoothing.average(of: [stress(0, 0, valid: false), stress(0, 0, valid: false)])
+        XCTAssertEqual(none?.stress.valid, false)
+        XCTAssertEqual(none?.stress.jitter, 0)
+        XCTAssertEqual(none?.stress.shimmer, 0)
+    }
+
+    /// F3 and F4 are not measured: never found, whatever the samples carry.
+    func test_validity_f3AndF4StayNotFound() {
+        let out = VoiceAnalysisSmoothing.average(of: [measured(hnr: 20, f1: 600, rate: 4)])
+        XCTAssertEqual(out?.formants.f3Found, false)
+        XCTAssertEqual(out?.formants.f4Found, false)
+        XCTAssertEqual(out?.formants.f3, 0)
+        XCTAssertEqual(out?.formants.f4, 0)
+    }
+
+    /// The flag of a field decides, not the voiced flag: a sample that is not voiced any more but
+    /// still holds a valid HNR (the one-second hold) takes part in the HNR mean.
+    func test_validity_aHeldHnrOnAnUnvoicedSampleStillCounts() {
+        let held = VoiceAnalysisResult(
+            pitch: .init(f0Hz: 0, voiced: false, rms: 0.01),
+            voiceHealth: .init(hnr: 30, breathiness: 0.1, hnrValid: true))
+        let voiced = measured(hnr: 20, f1: nil, rate: nil)
+        let out = VoiceAnalysisSmoothing.average(of: [held, voiced])
+        XCTAssertEqual(out?.voiceHealth.hnr ?? 0, 25, accuracy: 0.001)
+        XCTAssertEqual(out?.pitch.f0Valid, true, "the voiced sample has a pitch")
+        XCTAssertEqual(out?.pitch.f0Hz ?? 0, 150, accuracy: 0.001)
+    }
+
+    func test_validity_f0FlagFollowsTheVoicedSamples() {
+        let out = VoiceAnalysisSmoothing.average(of: [
+            sample(f0: 0, voiced: false, conf: 0),
+            sample(f0: 200, voiced: true, conf: 0.9),
+        ])
+        XCTAssertEqual(out?.pitch.f0Valid, true)
+        XCTAssertEqual(out?.pitch.f0Hz ?? 0, 200, accuracy: 0.001)
+        let silent = VoiceAnalysisSmoothing.average(of: [sample(f0: 0, voiced: false, conf: 0)])
+        XCTAssertEqual(silent?.pitch.f0Valid, false)
+        XCTAssertEqual(silent?.pitch.f0Hz, 0)
     }
 }

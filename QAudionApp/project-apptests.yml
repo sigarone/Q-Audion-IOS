@@ -56,7 +56,9 @@ targets:
           - ReKeyAvatarRingTests.swift
           - RuntimeLogSinkTeeTests.swift
           - TrustEvaluationModelTests.swift
+          - VoiceDisplayFormatTests.swift
           - VoiceGuardModelTests.swift
+          - VoiceToneRowTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

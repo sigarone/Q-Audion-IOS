@@ -123,11 +123,13 @@ final class ConfidenceBadgeWiringTests: XCTestCase {
     /// `ConfidenceThresholds.tone(of:)`, whose `.noReading` (the -1 sentinel) is neutral. None uses the clamping
     /// `category(of:)`, which turns -1 into 0 and paints red: on the previous main the avatar halo did exactly
     /// that for the 10-16 s before Tier 2's first reading. The in-call screen itself no longer colours the score
-    /// at all (the ring around the avatar is the re-key countdown in one fixed accent, number in the collapsed
-    /// technical-data block); the chat strip and the security badge still do, and keep the neutral sentinel.
+    /// at all (the ring around the avatar is the re-key countdown in one fixed accent), and the collapsed
+    /// technical-data block does not show it either: the figure is computed by a different algorithm on each
+    /// platform, so the two screens could not show the same number. The chat strip and the security badge still
+    /// colour it, and keep the neutral sentinel.
     func testNoReadingIsNeutralWhereverTheConfidenceIsPainted() throws {
         // The in-call screen no longer paints anything from the score: the ring around the avatar takes no score
-        // at all and the number is plain text in the collapsed technical-data block, with no colour.
+        // at all and the collapsed technical-data block has no confidence row.
         let screen = try appCode("QAudionApp/Views/Call/InCallScreen.swift")
         XCTAssertFalse(screen.contains("ConfidenceThresholds."), "InCallScreen must not map the score onto a colour")
         XCTAssertFalse(screen.contains("confidenceColor"))
@@ -136,11 +138,12 @@ final class ConfidenceBadgeWiringTests: XCTestCase {
         XCTAssertTrue(screen.contains("ReKeyAvatarRing(remainingSeconds: rekeyInSeconds,"))
         let ring = try appCode("QAudionApp/Views/Call/Components/ReKeyAvatarRing.swift")
         XCTAssertFalse(ring.lowercased().contains("confidence"), "the ring takes no colour from the score")
-        XCTAssertTrue(screen.contains("VoiceBiometricsSection(biometrics: voiceBiometrics, confidence: confidence)"))
+        XCTAssertTrue(screen.contains("VoiceBiometricsSection(biometrics: voiceBiometrics)"))
 
         let section = try appCode("QAudionApp/Views/Call/VoiceBiometricsSection.swift")
-        XCTAssertTrue(section.contains("VoiceBiometricsFormat.confidence(confidence)"))
-        XCTAssertFalse(section.contains("ConfidenceThresholds"), "the number is plain text, never coloured")
+        XCTAssertFalse(section.lowercased().contains("confidence"),
+                       "the technical-data block has no confidence row: the figure differs between platforms")
+        XCTAssertFalse(section.contains("ConfidenceThresholds"), "nothing in the block is coloured by a score")
 
         let strip = try appCode("QAudionApp/Views/Chat/Components/SessionStatusStrip.swift")
         XCTAssertFalse(strip.contains("ConfidenceThresholds.category(of:"))

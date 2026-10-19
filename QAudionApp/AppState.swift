@@ -2605,21 +2605,18 @@ final class AppState: ObservableObject {
     /// Unified call UI — Guardian ribbon voice biometrics (pitch, stress,
     /// voice health, speech rate, confidence). Fed by
     /// `CallService.onVoiceAnalysis`, itself wired from
-    /// `QAudionCallIntegration.getVoiceAnalysis().onResult` on BOTH the
+    /// `QAudionCallIntegration.getVoiceAnalysis().onDisplay` on BOTH the
     /// outgoing (`CallService.startCall`) and incoming
     /// (`CallService.activateIncomingCallAudio`) integration binding sites —
     /// the old outgoing-only asymmetry (gauges dead on every incoming call)
     /// was fixed 2026-07-04. nil until the first analysis result arrives.
-    /// Reset in endCall().
+    /// It is the value to SHOW: the mean over the last 10 analyses (1 s of
+    /// AUDIO time) by the display rule of `VoiceAnalysisSmoothing`, which the
+    /// engine keeps itself and clears with its own state. Each field follows
+    /// its own validity flag. Reset in endCall().
     @Published var voiceAnalysis: VoiceAnalysisResult?
-    /// W-VOICEUISMOOTH (2026-08-29) — raw samples collected since the last
-    /// publish of ``voiceAnalysis``. Never read by anything but the
-    /// once-per-second averaging hop that owns it; see that call site for why
-    /// only the display is smoothed. Cleared on every publish and in
-    /// `endCall()`.
-    var voiceAnalysisWindow: [VoiceAnalysisResult] = []
     /// Unix seconds of the last ``voiceAnalysis`` publish. 0 = never, so the
-    /// first sample of a call publishes immediately instead of making the
+    /// first value of a call publishes immediately instead of making the
     /// user wait a second for the ribbon to come alive.
     var voiceAnalysisLastPublishAt: TimeInterval = 0
 
@@ -4313,30 +4310,30 @@ final class AppState: ObservableObject {
         // onDeepfakeScore subscription immediately above: hop to MainActor,
         // publish the result. This does NOT touch/invert deepfakeAlert —
         // it is a separate @Published field driven by a separate closure.
-        // W-VOICEUISMOOTH (2026-08-29) — publish ONE averaged value per
-        // second instead of every raw sample. The engine emits several per
-        // second, which made the Guardian ribbon's numbers unreadable on a
-        // live call even though each individual value was correct.
+        // W-VOICEUISMOOTH (2026-08-29) — publish ONE value per second instead
+        // of every one. The engine emits ten a second, which made the
+        // Guardian ribbon's numbers unreadable on a live call even though
+        // each individual value was correct.
+        //
+        // The value published is the engine's own display value: the mean
+        // over the LAST 10 analyses, that is the last second of audio, taken
+        // by the display rule (each field over the analyses where its own
+        // validity flag was set). The engine keeps that window in audio time,
+        // so a late timer or a stalled main thread cannot change what a
+        // second means; here only the publish rate is a wall-clock matter,
+        // and nothing is averaged on it.
         //
         // Only the DISPLAY is averaged. Guardian verdicts, the deepfake
         // monitor, the per-contact verifier and voice learning all continue
         // to receive every raw sample on their own paths — smoothing a
         // security signal would mask the brief anomaly it exists to catch.
-        //
-        // The buffer is flushed on the same MainActor hop that publishes, so
-        // it can never grow beyond one second of samples, and it is dropped
-        // wholesale in `endCall()` alongside the published value.
-        callService.onVoiceAnalysis = { [weak self] result in
+        callService.onVoiceAnalysis = { [weak self] shown in
             Task { @MainActor in
                 guard let self else { return }
-                self.voiceAnalysisWindow.append(result)
                 let now = Date().timeIntervalSince1970
                 guard now - self.voiceAnalysisLastPublishAt >= 1.0 else { return }
                 self.voiceAnalysisLastPublishAt = now
-                if let averaged = VoiceAnalysisSmoothing.average(of: self.voiceAnalysisWindow) {
-                    self.voiceAnalysis = averaged
-                }
-                self.voiceAnalysisWindow.removeAll(keepingCapacity: true)
+                self.voiceAnalysis = shown
             }
         }
 
@@ -21409,9 +21406,9 @@ extension AppState {
         // it doesn't leak into the next call's security sheet before the
         // first analysis result of that new call arrives.
         voiceAnalysis = nil
-        // W-VOICEUISMOOTH — drop the averaging window with the value it feeds,
-        // so the next call never averages across a call boundary.
-        voiceAnalysisWindow.removeAll(keepingCapacity: false)
+        // W-VOICEUISMOOTH — the publish throttle restarts with the call, so the
+        // first value of the next one shows at once. (The averaging window
+        // belongs to the engine, which clears it at the end of the call.)
         voiceAnalysisLastPublishAt = 0
         // Unified call UI — drop the last spectrum frame too, so the ribbon
         // bars decay to rest between calls (mirrors the reset above).

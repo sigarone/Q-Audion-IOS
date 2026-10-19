@@ -1,8 +1,44 @@
 import Foundation
 
+/// Analyses the REMOTE party's received voice for the in-call voice panel.
+///
+/// Decoded audio arrives in buffers of any length (10 ms from the native playback
+/// tap, 20 ms or 60 ms from the other paths, in tests anything down to one
+/// sample). The engine keeps the most recent 60 ms of it in a ring (`VoiceWindow`)
+/// and runs ONE analysis per 100 ms of AUDIO time on that window: the first one
+/// 100 ms after the audio started, every later one exactly 4800 samples after the
+/// previous. A step that falls inside a buffer is run at that exact sample, so the
+/// results are identical for every buffer size.
+///
+/// Each analysis measures pitch, formants, harmonics-to-noise ratio and speech
+/// rate; every one of those numbers is a real measurement with a validity flag
+/// (see `VoiceAnalysisResult`). The numbers and the rules behind them are those of
+/// the specification in docs/voice-analysis-spec.md, which the Android engine
+/// implements too.
+///
+/// Two callbacks are delivered for every step, in order:
+///   * `onResult`   the raw result of the step. Consumers that count or detect
+///                  (the call diagnostics) use this one.
+///   * `onDisplay`  the value to SHOW: the mean over the last 10 results by the
+///                  display rule of `VoiceAnalysisSmoothing`. The engine keeps that
+///                  window itself, in audio time, and clears it together with the
+///                  rest of its state.
+///
+/// A gap in the audio is reported with `markDiscontinuity(missingSamples:)`: a gap
+/// shorter than 2 s restarts the analysis grid (the window and the 100 ms phase)
+/// but keeps every history, and a gap of 2 s or more, like `reset()`, clears
+/// everything.
+///
+/// Threading: `processFrame` is called from the single RX analysis queue, never
+/// from the audio thread. The analysis runs under the engine lock so that
+/// `reset()`, `markDiscontinuity` and `setEnabled` are safe from any thread; the
+/// lock is never held while a callback runs. Once constructed the engine
+/// allocates nothing per frame or per analysis.
 public final class VoiceAnalysisEngine: @unchecked Sendable {
     public var onResult: ((VoiceAnalysisResult) -> Void)?
+    public var onDisplay: ((VoiceAnalysisResult) -> Void)?
 
+    private let window = VoiceWindow()
     private let pitchExtractor = PitchExtractor()
     private let stressDetector = StressDetector()
     private let formantTracker = FormantTracker()
@@ -12,72 +48,175 @@ public final class VoiceAnalysisEngine: @unchecked Sendable {
 
     private let lock = NSLock()
     private var enabled = true
-    private var frameCount: Int64 = 0
-    private var analysisRate: Int = 5
 
-    /// How often the analyser should actually run, in MILLISECONDS.
-    ///
-    /// 2026-08-27 — same bug class as `GuardianMode` (fixed 2026-08-12, see
-    /// that type's doc comment for the original incident). `analysisRate`
-    /// counted FRAMES, and a frame stopped being a fixed amount of time once
-    /// the 60 ms profile shipped, and again with the native-SRTP tap's
-    /// ~10 ms chunks (`NativeAudioPcmTap` → `QAudionCallIntegration.analyze`).
-    /// Every 5th frame is 100 ms at 20 ms, 300 ms at 60 ms, and 50 ms at
-    /// 10 ms — pitch/stress/formants/health/speechRate/confidence delivered
-    /// via `onResult` arrived at three different real-world rates depending
-    /// on which path fed the frame, none of them intentional.
-    ///
-    /// `QAudionCallIntegration.analyze(_:)` calls `guardianMode.processFrame`
-    /// and `voiceAnalysis.processFrame` back-to-back on the exact same
-    /// decoded RX `pcm` — same input stream, so the same 100 ms target
-    /// GuardianMode was fixed to applies here unchanged.
-    private static let analysisIntervalMs: Int = 100
+    // Framing. All counters are in samples of the current segment, which starts at
+    // creation, at `reset()` and at every discontinuity.
+    private var segmentSamples = 0
+    private var frameAccumulator = 0.0
+    private var frameFill = 0
+    /// Mean square of the complete 10 ms frames of the step in progress.
+    private let frameEnergies: UnsafeMutablePointer<Double>
+    private var framesInStep = 0
 
-    /// Milliseconds of audio seen since the last analysis. Accumulated from
-    /// the FRAMES THEMSELVES rather than from a clock — see `GuardianMode`'s
-    /// identical field for why: this runs on the receive path, where the
-    /// meaningful rate is audio time, and a wall clock would keep advancing
-    /// through a gap in which no audio arrived at all.
-    private var pendingMs: Int = 0
+    /// The last 10 raw results (the display window).
+    private var displayHistory: [VoiceAnalysisResult] = []
 
-    public init() {}
-
-    public func processFrame(_ pcmFrame: Data) {
-        lock.lock()
-        guard enabled else { lock.unlock(); return }
-        frameCount += 1
-        // Frame duration derived from the buffer in hand — 48 kHz mono Int16
-        // is 96 bytes per millisecond — so this holds for any cadence a peer
-        // sends, negotiated or not, without this path having to be told.
-        // Falls back to the frame-count heuristic when the length is not a
-        // whole number of milliseconds, which means it is not the PCM this
-        // expects.
-        let frameMs = pcmFrame.count / 96
-        let due: Bool
-        if frameMs > 0 {
-            pendingMs += frameMs
-            due = pendingMs >= Self.analysisIntervalMs
-            if due { pendingMs = 0 }
-        } else {
-            due = frameCount % Int64(analysisRate) == 0
-        }
-        guard due else { lock.unlock(); return }
-        let callback = onResult
-        lock.unlock()
-
-        let pitch = pitchExtractor.extract(pcmFrame: pcmFrame)
-        let stress = stressDetector.analyze(pitch: pitch)
-        let formants = formantTracker.extract(pcmFrame: pcmFrame)
-        let health = healthMonitor.analyze(pitch: pitch, pcmFrame: pcmFrame)
-        let speechRate = speechRateAnalyzer.analyze(pcmFrame: pcmFrame, pitch: pitch)
-        let confidence = confidenceIndicator.analyze(pitch: pitch, stress: stress, health: health, speechRate: speechRate)
-
-        let result = VoiceAnalysisResult(pitch: pitch, stress: stress, voiceHealth: health,
-            speechRate: speechRate, formants: formants, confidence: confidence)
-        callback?(result)
+    private struct Step {
+        let result: VoiceAnalysisResult
+        let display: VoiceAnalysisResult
     }
 
-    public func setEnabled(_ enabled: Bool) { lock.lock(); self.enabled = enabled; lock.unlock() }
-    public func setAnalysisRate(_ rate: Int) { lock.lock(); analysisRate = max(1, rate); lock.unlock() }
+    public init() {
+        frameEnergies = UnsafeMutablePointer<Double>.allocate(capacity: VoiceDsp.framesPerStep)
+        frameEnergies.initialize(repeating: 0, count: VoiceDsp.framesPerStep)
+        displayHistory.reserveCapacity(VoiceDsp.displaySteps + 1)
+    }
+
+    deinit {
+        frameEnergies.deallocate()
+    }
+
+    /// Feed one buffer of 16-bit little-endian mono PCM at 48 kHz, of any length.
+    /// An odd trailing byte is ignored.
+    public func processFrame(_ pcmFrame: Data) {
+        let sampleCount = pcmFrame.count / 2
+        guard sampleCount > 0 else { return }
+        pcmFrame.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            var offset = 0
+            while offset < sampleCount {
+                lock.lock()
+                guard enabled else { lock.unlock(); return }
+                let step = consume(raw, offset: &offset, sampleCount: sampleCount)
+                let resultCallback = onResult
+                let displayCallback = onDisplay
+                lock.unlock()
+                if let step = step {
+                    resultCallback?(step.result)
+                    displayCallback?(step.display)
+                }
+            }
+        }
+    }
+
+    /// Audio of `missingSamples` samples (48 kHz) is missing between the last
+    /// sample received and the next one. Estimate it from timestamps or the wall
+    /// clock when it is not known exactly; 0 means "a splice of unknown length" and
+    /// counts as short. Before any audio it has no effect.
+    ///
+    /// Shorter than 2 s: the analysis grid restarts (the next analysis comes 100 ms
+    /// after the audio resumes, on a window of audio from after the gap only), the
+    /// partial 10 ms frame and the frames of the unfinished step are dropped, and
+    /// every history is kept: missing audio is not time. 2 s or more: everything is
+    /// cleared, as by `reset()`.
+    public func markDiscontinuity(missingSamples: Int) {
+        lock.lock()
+        if missingSamples >= VoiceDsp.longGapSamples {
+            clearLocked()
+        } else {
+            restartSegmentLocked()
+        }
+        lock.unlock()
+    }
+
+    /// Forget everything measured so far: the audio ring, the cadence, every
+    /// tracker and the display window. Call at the end of a call (the engine
+    /// instance is reused).
+    public func reset() {
+        lock.lock()
+        clearLocked()
+        lock.unlock()
+    }
+
+    public func setEnabled(_ enabled: Bool) {
+        lock.lock()
+        // Audio was not consumed while disabled: resuming is a splice of unknown length.
+        if enabled && !self.enabled { restartSegmentLocked() }
+        self.enabled = enabled
+        lock.unlock()
+    }
+
     public var isEnabled: Bool { lock.lock(); defer { lock.unlock() }; return enabled }
+
+    // MARK: - Internals (the lock is held)
+
+    private func restartSegmentLocked() {
+        segmentSamples = 0
+        frameAccumulator = 0
+        frameFill = 0
+        framesInStep = 0
+    }
+
+    private func clearLocked() {
+        window.reset()
+        stressDetector.reset()
+        formantTracker.reset()
+        healthMonitor.reset()
+        speechRateAnalyzer.reset()
+        displayHistory.removeAll(keepingCapacity: true)
+        restartSegmentLocked()
+    }
+
+    /// Feeds samples from `offset` on until an analysis step falls due (returning
+    /// it) or the buffer is used up. `offset` is advanced past what was consumed.
+    private func consume(_ raw: UnsafeRawBufferPointer, offset: inout Int, sampleCount: Int) -> Step? {
+        while offset < sampleCount {
+            let lo = UInt16(raw[2 * offset])
+            let hi = UInt16(raw[2 * offset + 1])
+            let v = Double(Int16(bitPattern: lo | (hi << 8))) / 32768.0
+            offset += 1
+
+            window.push(v)
+            frameAccumulator += v * v
+            frameFill += 1
+            if frameFill == VoiceDsp.frameSamples {
+                // A step holds exactly `framesPerStep` frames and `frameEnergies` has room for that many.
+                // The counters are kept in step with the segment, so the bound is never hit; it only keeps a
+                // counter that went out of step from writing past the buffer.
+                if framesInStep < VoiceDsp.framesPerStep {
+                    frameEnergies[framesInStep] = frameAccumulator / Double(VoiceDsp.frameSamples)
+                    framesInStep += 1
+                }
+                frameAccumulator = 0
+                frameFill = 0
+            }
+            segmentSamples += 1
+            if segmentSamples % VoiceDsp.hopSamples == 0 {
+                return analyzeStep()
+            }
+        }
+        return nil
+    }
+
+    private func analyzeStep() -> Step {
+        let result = analyzeWindow()
+        framesInStep = 0
+        displayHistory.append(result)
+        if displayHistory.count > VoiceDsp.displaySteps { displayHistory.removeFirst() }
+        let display = VoiceAnalysisSmoothing.average(of: displayHistory) ?? result
+        return Step(result: result, display: display)
+    }
+
+    /// One analysis of the current 60 ms window.
+    private func analyzeWindow() -> VoiceAnalysisResult {
+        window.snapshot()
+        let estimate = pitchExtractor.extract(window: window)
+        let pitch = VoiceAnalysisResult.Pitch(f0Hz: Float(estimate.f0Hz),
+                                              voiced: estimate.voiced,
+                                              rms: Float(estimate.rms),
+                                              f0Valid: estimate.voiced,
+                                              periodicity: Float(estimate.periodicity))
+        let stress = stressDetector.analyze(pitch: pitch)
+        let formants = formantTracker.extract(window: window, voiced: estimate.voiced, f0Hz: estimate.f0Hz)
+        let health = healthMonitor.analyze(window: window, voiced: estimate.voiced, f0Hz: estimate.f0Hz)
+        let reading = speechRateAnalyzer.analyze(frameEnergies: frameEnergies, count: framesInStep,
+                                                 voiced: estimate.voiced)
+        let speechRate = VoiceAnalysisResult.SpeechRate(
+            syllablesPerSec: Float(reading.syllablesPerSec),
+            pauseRatio: Float(reading.pauseRatio),
+            isSpeaking: reading.isSpeaking,
+            valid: reading.valid)
+        let confidence = confidenceIndicator.analyze(pitch: pitch, stress: stress, health: health, speechRate: speechRate)
+        return VoiceAnalysisResult(pitch: pitch, stress: stress, voiceHealth: health,
+                                   speechRate: speechRate, formants: formants, confidence: confidence)
+    }
 }

@@ -1,0 +1,64 @@
+# Display formatting cases (docs/voice-analysis-spec.md, section 12). One file, byte for byte the same in the Android and iOS repositories.
+# UTF-8, tab separated, one case per line; lines starting with # are comments. The first line after the comments is the column header.
+# Inputs (decimal text, read as binary32): f0 [Hz], f1 and f2 [Hz], rate [syllables/s], hnr [dB], jitter and shimmer [%].
+#   A single dash is a field whose flag is not set (a missing field); NaN and Infinity are read as they are.
+# Expected strings, in Italian (decimal comma, unit sill/s) and English (decimal point, unit syl/s):
+#   tone = the f0 of the tone row; details = the details line of the tone row; pitch_rate = the pitch / rate row of the technical block;
+#   jitter_shimmer = its jitter / shimmer row; hnr_row = its HNR row (the same in both languages).
+# Generated from the rules of section 12 by an independent script; do not edit by hand.
+id	f0	f1	f2	rate	hnr	jitter	shimmer	tone	details_it	details_en	pitch_rate_it	pitch_rate_en	jitter_shimmer_it	jitter_shimmer_en	hnr_row
+typical	142.7	524	1478	4.24	18.4	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+f0_tie_half	142.5	524	1478	4.24	18.4	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+f0_below_half	142.49	524	1478	4.24	18.4	1.2	3.1	142	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	142 Hz · 4,2 sill/s	142 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+f0_low_edge	60	524	1478	4.24	18.4	1.2	3.1	60	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	60 Hz · 4,2 sill/s	60 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+f0_high_tie	399.5	524	1478	4.24	18.4	1.2	3.1	400	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	400 Hz · 4,2 sill/s	400 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+formant_tie_up	142.7	1475	1485	4.24	18.4	1.2	3.1	143	F1 1480 · F2 1490 · 4,2 sill/s · HNR 18 dB	F1 1480 · F2 1490 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+formant_below_tie	142.7	1474.9	1484.9	4.24	18.4	1.2	3.1	143	F1 1470 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 1470 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+formant_ties_low	142.7	205	605	4.24	18.4	1.2	3.1	143	F1 210 · F2 610 · 4,2 sill/s · HNR 18 dB	F1 210 · F2 610 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+formant_low_edge	142.7	200	600	4.24	18.4	1.2	3.1	143	F1 200 · F2 600 · 4,2 sill/s · HNR 18 dB	F1 200 · F2 600 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+formant_high_edge	142.7	1100	3200	4.24	18.4	1.2	3.1	143	F1 1100 · F2 3200 · 4,2 sill/s · HNR 18 dB	F1 1100 · F2 3200 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_tie_4_25	142.7	524	1478	4.25	18.4	1.2	3.1	143	F1 520 · F2 1480 · 4,3 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.3 syl/s · HNR 18 dB	143 Hz · 4,3 sill/s	143 Hz · 4.3 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_tie_4_75	142.7	524	1478	4.75	18.4	1.2	3.1	143	F1 520 · F2 1480 · 4,8 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.8 syl/s · HNR 18 dB	143 Hz · 4,8 sill/s	143 Hz · 4.8 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_binary32_below_4_35	142.7	524	1478	4.35	18.4	1.2	3.1	143	F1 520 · F2 1480 · 4,3 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.3 syl/s · HNR 18 dB	143 Hz · 4,3 sill/s	143 Hz · 4.3 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_binary32_above_3_45	142.7	524	1478	3.45	18.4	1.2	3.1	143	F1 520 · F2 1480 · 3,5 sill/s · HNR 18 dB	F1 520 · F2 1480 · 3.5 syl/s · HNR 18 dB	143 Hz · 3,5 sill/s	143 Hz · 3.5 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_tie_small_0_05	142.7	524	1478	0.05	18.4	1.2	3.1	143	F1 520 · F2 1480 · 0,1 sill/s · HNR 18 dB	F1 520 · F2 1480 · 0.1 syl/s · HNR 18 dB	143 Hz · 0,1 sill/s	143 Hz · 0.1 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_zero_is_a_value	142.7	524	1478	0	18.4	1.2	3.1	143	F1 520 · F2 1480 · 0,0 sill/s · HNR 18 dB	F1 520 · F2 1480 · 0.0 syl/s · HNR 18 dB	143 Hz · 0,0 sill/s	143 Hz · 0.0 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_integer	142.7	524	1478	5	18.4	1.2	3.1	143	F1 520 · F2 1480 · 5,0 sill/s · HNR 18 dB	F1 520 · F2 1480 · 5.0 syl/s · HNR 18 dB	143 Hz · 5,0 sill/s	143 Hz · 5.0 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_max	142.7	524	1478	12	18.4	1.2	3.1	143	F1 520 · F2 1480 · 12,0 sill/s · HNR 18 dB	F1 520 · F2 1480 · 12.0 syl/s · HNR 18 dB	143 Hz · 12,0 sill/s	143 Hz · 12.0 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+hnr_tie_pos	142.7	524	1478	4.24	2.5	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 3 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 3 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	3 dB
+hnr_tie_neg	142.7	524	1478	4.24	-2.5	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR -3 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR -3 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	-3 dB
+hnr_tie_neg_3_5	142.7	524	1478	4.24	-3.5	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR -4 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR -4 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	-4 dB
+hnr_half_pos	142.7	524	1478	4.24	0.5	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 1 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 1 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	1 dB
+hnr_half_neg	142.7	524	1478	4.24	-0.5	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR -1 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR -1 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	-1 dB
+hnr_no_negative_zero	142.7	524	1478	4.24	-0.4	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 0 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 0 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	0 dB
+hnr_zero_is_a_value	142.7	524	1478	4.24	0	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 0 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 0 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	0 dB
+hnr_17_5	142.7	524	1478	4.24	17.5	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+hnr_low_edge	142.7	524	1478	4.24	-40	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR -40 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR -40 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	-40 dB
+hnr_high_edge	142.7	524	1478	4.24	40	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 40 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 40 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	40 dB
+jitter_tie_0_25	142.7	524	1478	4.24	18.4	0.25	0.75	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	0,3% / 0,8%	0.3% / 0.8%	18 dB
+shimmer_binary32_below_8_45	142.7	524	1478	4.24	18.4	0.15	8.45	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	0,2% / 8,4%	0.2% / 8.4%	18 dB
+jitter_shimmer_zero	142.7	524	1478	4.24	18.4	0	0	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	0,0% / 0,0%	0.0% / 0.0%	18 dB
+jitter_shimmer_hundred	142.7	524	1478	4.24	18.4	100.05	99.95	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	100,1% / 99,9%	100.1% / 99.9%	18 dB
+widest_line	399.5	1100	3200	12	-40	1.2	3.1	400	F1 1100 · F2 3200 · 12,0 sill/s · HNR -40 dB	F1 1100 · F2 3200 · 12.0 syl/s · HNR -40 dB	400 Hz · 12,0 sill/s	400 Hz · 12.0 syl/s	1,2% / 3,1%	1.2% / 3.1%	-40 dB
+all_missing	-	-	-	-	-	-	-	—	F1 — · F2 — · — sill/s · HNR —	F1 — · F2 — · — syl/s · HNR —	— · —	— · —	—	—	—
+f0_missing	-	524	1478	4.24	18.4	1.2	3.1	—	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	— · 4,2 sill/s	— · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+f1_missing	142.7	-	1478	4.24	18.4	1.2	3.1	143	F1 — · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 — · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+f2_missing	142.7	524	-	4.24	18.4	1.2	3.1	143	F1 520 · F2 — · 4,2 sill/s · HNR 18 dB	F1 520 · F2 — · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+rate_missing	142.7	524	1478	-	18.4	1.2	3.1	143	F1 520 · F2 1480 · — sill/s · HNR 18 dB	F1 520 · F2 1480 · — syl/s · HNR 18 dB	143 Hz · —	143 Hz · —	1,2% / 3,1%	1.2% / 3.1%	18 dB
+hnr_missing	142.7	524	1478	4.24	-	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR —	F1 520 · F2 1480 · 4.2 syl/s · HNR —	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	—
+jitter_missing	142.7	524	1478	4.24	18.4	-	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	—	—	18 dB
+shimmer_missing	142.7	524	1478	4.24	18.4	1.2	-	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	—	—	18 dB
+stress_missing_only	142.7	524	1478	4.24	18.4	-	-	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	—	—	18 dB
+f0_and_rate_missing	-	524	1478	-	18.4	1.2	3.1	—	F1 520 · F2 1480 · — sill/s · HNR 18 dB	F1 520 · F2 1480 · — syl/s · HNR 18 dB	— · —	— · —	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_f0_zero	0	524	1478	4.24	18.4	1.2	3.1	—	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	— · 4,2 sill/s	— · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_f0_nan	NaN	524	1478	4.24	18.4	1.2	3.1	—	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	— · 4,2 sill/s	— · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_f1_zero	142.7	0	1478	4.24	18.4	1.2	3.1	143	F1 — · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 — · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_f1_nan	142.7	NaN	1478	4.24	18.4	1.2	3.1	143	F1 — · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 — · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_f2_negative	142.7	524	-5	4.24	18.4	1.2	3.1	143	F1 520 · F2 — · 4,2 sill/s · HNR 18 dB	F1 520 · F2 — · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_f2_infinity	142.7	524	Infinity	4.24	18.4	1.2	3.1	143	F1 520 · F2 — · 4,2 sill/s · HNR 18 dB	F1 520 · F2 — · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_rate_negative	142.7	524	1478	-1	18.4	1.2	3.1	143	F1 520 · F2 1480 · — sill/s · HNR 18 dB	F1 520 · F2 1480 · — syl/s · HNR 18 dB	143 Hz · —	143 Hz · —	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_rate_nan	142.7	524	1478	NaN	18.4	1.2	3.1	143	F1 520 · F2 1480 · — sill/s · HNR 18 dB	F1 520 · F2 1480 · — syl/s · HNR 18 dB	143 Hz · —	143 Hz · —	1,2% / 3,1%	1.2% / 3.1%	18 dB
+guard_hnr_nan	142.7	524	1478	4.24	NaN	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR —	F1 520 · F2 1480 · 4.2 syl/s · HNR —	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	—
+guard_hnr_infinity	142.7	524	1478	4.24	Infinity	1.2	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR —	F1 520 · F2 1480 · 4.2 syl/s · HNR —	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	1,2% / 3,1%	1.2% / 3.1%	—
+guard_jitter_negative	142.7	524	1478	4.24	18.4	-0.1	3.1	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	—	—	18 dB
+guard_shimmer_nan	142.7	524	1478	4.24	18.4	1.2	NaN	143	F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB	F1 520 · F2 1480 · 4.2 syl/s · HNR 18 dB	143 Hz · 4,2 sill/s	143 Hz · 4.2 syl/s	—	—	18 dB

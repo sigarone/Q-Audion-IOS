@@ -17,11 +17,13 @@ final class VoiceGuardModelTests: XCTestCase {
 
     func testToneReadingIsTheWholeNumberInHertzAndTheVoicedFlag() {
         let voiced = VoiceGauges.pitch(hz: 142.7, voiced: true)
-        XCTAssertEqual(voiced.value, "142", "cut towards zero, not rounded")
+        XCTAssertEqual(voiced.value, "143", "rounded, not cut towards zero")
+        XCTAssertEqual(VoiceGauges.pitch(hz: 142.4, voiced: true).value, "142")
+        XCTAssertEqual(VoiceGauges.pitch(hz: 142.5, voiced: true).value, "143", "an exact tie goes away from zero")
         XCTAssertEqual(voiced.unit, "Hz")
         XCTAssertTrue(voiced.voiced)
         let silent = VoiceGauges.pitch(hz: 0, voiced: false)
-        XCTAssertEqual(silent.value, "0")
+        XCTAssertEqual(silent.value, "—", "a pitch of 0 is not a reading")
         XCTAssertFalse(silent.voiced)
     }
 
@@ -47,11 +49,22 @@ final class VoiceGuardModelTests: XCTestCase {
     }
 
     func testTheSpokenToneReadsLabelValueUnitAndWord() {
-        let reading = VoiceGauges.pitch(hz: 142.7, voiced: true)
+        let reading = VoiceGauges.pitch(hz: 142.4, voiced: true)
         XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "voce", details: nil),
                        "Tono, 142 Hz, voce")
         XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "voce", details: ""),
                        "Tono, 142 Hz, voce")
+    }
+
+    /// A dash is not read out as a symbol: the screen reader says the word for "not available", for the
+    /// pitch and for every detail alike.
+    func testTheSpokenToneReadsADashAsTheUnavailableWord() {
+        let reading = VoiceGauges.pitch(hz: .nan, voiced: false)
+        XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "silenzio",
+                                              details: "F1 — · F2 1480 · — sill/s · HNR —",
+                                              unavailable: "n/d"),
+                       "Tono, n/d, silenzio, F1 n/d, F2 1480, n/d sill/s, HNR n/d")
+        XCTAssertFalse(VoiceToneCopy.unavailable.isEmpty)
     }
 
     /// The details are read as pauses, not as the middle dot of the screen.
@@ -75,14 +88,12 @@ final class VoiceGuardModelTests: XCTestCase {
                          f2: Float = 1478,
                          rate: Float = 4.24,
                          hnr: Float = 18.4,
-                         voiced: Bool = true,
                          fields: Set<VoiceSpectralDetails.Field>? = nil,
                          locale: Locale) -> String? {
         VoiceSpectralDetails.text(formant1Hz: f1,
                                   formant2Hz: f2,
                                   syllablesPerSecond: rate,
                                   hnrDecibels: hnr,
-                                  voiced: voiced,
                                   rateUnit: "sill/s",
                                   fields: fields ?? allDetails,
                                   locale: locale)
@@ -94,32 +105,47 @@ final class VoiceGuardModelTests: XCTestCase {
     }
 
     func testFormantsAreRoundedToTheNearestTenHertz() {
-        XCTAssertEqual(VoiceSpectralDetails.formant(524, voiced: true), "520")
-        XCTAssertEqual(VoiceSpectralDetails.formant(525, voiced: true), "530")
-        XCTAssertEqual(VoiceSpectralDetails.formant(1474.9, voiced: true), "1470")
-        XCTAssertEqual(VoiceSpectralDetails.formant(1475, voiced: true), "1480")
-        XCTAssertEqual(VoiceSpectralDetails.formant(3004, voiced: true), "3000", "no thousands separator")
+        XCTAssertEqual(VoiceSpectralDetails.formant(524), "520")
+        XCTAssertEqual(VoiceSpectralDetails.formant(525), "530")
+        XCTAssertEqual(VoiceSpectralDetails.formant(1474.9), "1470")
+        XCTAssertEqual(VoiceSpectralDetails.formant(1475), "1480")
+        XCTAssertEqual(VoiceSpectralDetails.formant(3004), "3000", "no thousands separator")
     }
 
     func testHnrIsAWholeNumberOfDecibels() {
-        XCTAssertEqual(VoiceSpectralDetails.hnr(18.4, voiced: true), "18 dB")
-        XCTAssertEqual(VoiceSpectralDetails.hnr(17.5, voiced: true), "18 dB")
-        XCTAssertEqual(VoiceSpectralDetails.hnr(0.2, voiced: true), "0 dB")
-        XCTAssertEqual(VoiceSpectralDetails.hnr(-3.6, voiced: true), "-4 dB", "a noisy segment can be below zero")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(18.4), "18 dB")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(17.5), "18 dB")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(0.2), "0 dB")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(0), "0 dB", "a measured zero is printed as a zero")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(-3.6), "-4 dB", "a noisy segment can be below zero")
     }
 
-    /// Without a voice, F1, F2 and HNR do not exist and print the dash; the rate
-    /// still prints, because a window without speech has a rate.
-    func testWithoutAVoiceTheDashReplacesF1F2AndHnrButNotTheRate() {
-        XCTAssertEqual(details(voiced: false, locale: italian), "F1 — · F2 — · 4,2 sill/s · HNR —")
+    /// Every detail follows the validity flag of its own measurement, which the caller turns into NaN: a
+    /// dash prints where the measurement does not exist, and only there.
+    func testEachDetailFollowsItsOwnValidity() {
+        XCTAssertEqual(details(f1: .nan, locale: italian), "F1 — · F2 1480 · 4,2 sill/s · HNR 18 dB")
+        XCTAssertEqual(details(f2: .nan, locale: italian), "F1 520 · F2 — · 4,2 sill/s · HNR 18 dB")
+        XCTAssertEqual(details(rate: .nan, locale: italian), "F1 520 · F2 1480 · — sill/s · HNR 18 dB")
+        XCTAssertEqual(details(hnr: .nan, locale: italian), "F1 520 · F2 1480 · 4,2 sill/s · HNR —")
+        XCTAssertEqual(details(f1: .nan, f2: .nan, rate: .nan, hnr: .nan, locale: italian),
+                       "F1 — · F2 — · — sill/s · HNR —")
     }
 
     func testAFormantThatWasNotFoundPrintsTheDash() {
-        XCTAssertEqual(VoiceSpectralDetails.formant(0, voiced: true), "—")
-        XCTAssertEqual(VoiceSpectralDetails.formant(-5, voiced: true), "—")
-        XCTAssertEqual(VoiceSpectralDetails.formant(.nan, voiced: true), "—")
-        XCTAssertEqual(VoiceSpectralDetails.formant(.infinity, voiced: true), "—")
-        XCTAssertEqual(VoiceSpectralDetails.hnr(.nan, voiced: true), "—")
+        XCTAssertEqual(VoiceSpectralDetails.formant(0), "—")
+        XCTAssertEqual(VoiceSpectralDetails.formant(-5), "—")
+        XCTAssertEqual(VoiceSpectralDetails.formant(.nan), "—")
+        XCTAssertEqual(VoiceSpectralDetails.formant(.infinity), "—")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(.nan), "—")
+        XCTAssertEqual(VoiceSpectralDetails.hnr(.infinity), "—")
+    }
+
+    /// The details are one line of text: no line break, whatever is missing.
+    func testTheDetailsAreOneLine() {
+        for text in [details(locale: italian),
+                     details(f1: .nan, f2: .nan, rate: .nan, hnr: .nan, locale: english)] {
+            XCTAssertFalse((text ?? "").contains("\n"))
+        }
     }
 
     func testTheRateUsesTheDecimalSeparatorOfTheLocale() {
@@ -141,25 +167,29 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertNil(details(fields: [], locale: italian), "nothing selected, nothing printed")
     }
 
-    /// Printed details are listed here once their extractor returns the quantity
-    /// its label names (see the doc of `VoiceSpectralDetails.measured`). Until
-    /// then the tone row shows the tone alone; this test is the place to change
-    /// when a field is switched on.
-    func testNoDetailIsPrintedUntilItsExtractorIsTrusted() {
-        XCTAssertTrue(VoiceSpectralDetails.measured.isEmpty)
-        XCTAssertNil(VoiceSpectralDetails.text(formant1Hz: 524,
-                                               formant2Hz: 1478,
-                                               syllablesPerSecond: 4.2,
-                                               hnrDecibels: 18,
-                                               voiced: true,
-                                               rateUnit: "sill/s"))
+    /// The tone row prints all four details, on its own line, by default (see the doc of
+    /// `VoiceSpectralDetails.measured`).
+    func testAllFourDetailsArePrintedByDefault() {
+        XCTAssertEqual(VoiceSpectralDetails.measured, Set(VoiceSpectralDetails.Field.allCases))
+        XCTAssertEqual(VoiceSpectralDetails.measured.count, 4)
+        XCTAssertEqual(VoiceSpectralDetails.text(formant1Hz: 524,
+                                                 formant2Hz: 1478,
+                                                 syllablesPerSecond: 4.2,
+                                                 hnrDecibels: 18,
+                                                 rateUnit: "sill/s",
+                                                 locale: italian),
+                       "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB")
     }
 
     // MARK: - Technical-data rows
 
     func testJitterAndShimmerAreShownAsPercentages() {
-        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitter: 0.25, shimmer: 0.5), "25.0% / 50.0%")
-        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitter: 0, shimmer: 0), "0.0% / 0.0%")
+        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitterPercent: 25, shimmerPercent: 50, locale: english),
+                       "25.0% / 50.0%")
+        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitterPercent: 0, shimmerPercent: 0, locale: english),
+                       "0.0% / 0.0%")
+        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitterPercent: 25, shimmerPercent: 50, locale: italian),
+                       "25,0% / 50,0%", "the decimal separator is the one of the language of the app")
     }
 
     func testHnrRowIsWholeDecibels() {
@@ -169,14 +199,12 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceBiometricsFormat.hnr(.infinity), "—")
     }
 
-    /// The Guardian confidence is a plain "C=0.NN" with no colour or band; "C=—" while
-    /// there is no score (the negative sentinel, or a NaN).
-    func testConfidenceRowIsAPlainNumber() {
-        XCTAssertEqual(VoiceBiometricsFormat.confidence(0.5), "C=0.50")
-        XCTAssertEqual(VoiceBiometricsFormat.confidence(0), "C=0.00")
-        XCTAssertEqual(VoiceBiometricsFormat.confidence(1.4), "C=1.00", "never above 1")
-        XCTAssertEqual(VoiceBiometricsFormat.confidence(-1), "C=—")
-        XCTAssertEqual(VoiceBiometricsFormat.confidence(.nan), "C=—")
+    /// The pitch row of the video diagnostics: whole Hz, or the dash while the pitch is not a reading.
+    func testPitchRowIsWholeHertzOrTheDash() {
+        XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: 142), "142 Hz")
+        XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: 142.5), "143 Hz", "rounded, the same as the tone row")
+        XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: .nan), "—")
+        XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: .infinity), "—")
     }
 
     /// The block that holds the raw measures says up front that they are not
@@ -188,10 +216,20 @@ final class VoiceGuardModelTests: XCTestCase {
     }
 
     func testPitchAndRateRow() {
-        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: 142, syllablesPerSecond: 4.5, syllableUnit: "u/s"),
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: 142, syllablesPerSecond: 4.5, syllableUnit: "u/s",
+                                                       locale: english),
                        "142 Hz · 4.5 u/s")
-        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: .nan, syllablesPerSecond: 4.5, syllableUnit: "u/s"), "—")
-        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitter: .nan, shimmer: 0.1), "—")
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: .nan, syllablesPerSecond: 4.5, syllableUnit: "u/s",
+                                                       locale: english),
+                       "— · 4.5 u/s", "a pitch that is not a reading leaves the rate in place")
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: 142, syllablesPerSecond: .nan, syllableUnit: "u/s",
+                                                       locale: english),
+                       "142 Hz · —", "a speech rate that is not a reading yet leaves the pitch in place")
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: .nan, syllablesPerSecond: .nan, syllableUnit: "u/s",
+                                                       locale: english),
+                       "— · —", "one dash for each part that is not a reading")
+        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitterPercent: .nan, shimmerPercent: 10, locale: english),
+                       "—")
     }
 
     // MARK: - Voice check card: verdict

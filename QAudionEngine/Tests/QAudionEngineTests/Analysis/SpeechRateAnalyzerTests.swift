@@ -9,88 +9,96 @@ final class SpeechRateAnalyzerTests: XCTestCase {
         analyzer = SpeechRateAnalyzer()
     }
 
-    func testSilentFrameIsNotSpeaking() {
-        let pcm = TestAudioHelpers.makeSilentPCM(sampleCount: 960)
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 0, voiced: false, rms: 0)
-        let result = analyzer.analyze(pcmFrame: pcm, pitch: pitch)
-        XCTAssertFalse(result.isSpeaking, "Silent frame should not be flagged as speaking")
-    }
-
-    func testVoicedFrameIsSpeaking() {
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.5)
-        let result = analyzer.analyze(pcmFrame: pcm, pitch: pitch)
-        XCTAssertTrue(result.isSpeaking, "Voiced frame with sufficient RMS should be speaking")
-    }
-
-    func testSyllableCountFromVoicedUnvoicedTransitions() {
-        // Simulate voiced -> unvoiced transitions to trigger syllable counting
-        let voicedPitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.5)
-        let unvoicedPitch = VoiceAnalysisResult.Pitch(f0Hz: 0, voiced: false, rms: 0.01)
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        let silentPCM = TestAudioHelpers.makeSilentPCM(sampleCount: 960)
-
-        // Create 5 voiced->unvoiced transitions
-        var lastResult = VoiceAnalysisResult.SpeechRate(syllablesPerSec: 0, pauseRatio: 0, isSpeaking: false)
-        for _ in 0..<5 {
-            // Voiced segment (3 frames)
-            for _ in 0..<3 {
-                lastResult = analyzer.analyze(pcmFrame: pcm, pitch: voicedPitch)
+    /// Feed `x` the way the engine does: the mean square of every 10 ms frame, ten frames per
+    /// analysis step (one step per 100 ms of audio). Returns the last reading.
+    @discardableResult
+    private func drive(_ x: [Double], voiced: Bool = true, analyzer custom: SpeechRateAnalyzer? = nil)
+        -> SpeechRateAnalyzer.Reading? {
+        let target = custom ?? analyzer!
+        var last: SpeechRateAnalyzer.Reading?
+        var energies = [Double](repeating: 0, count: VoiceDsp.framesPerStep)
+        var offset = 0
+        while offset + VoiceDsp.hopSamples <= x.count {
+            for f in 0..<VoiceDsp.framesPerStep {
+                var sum = 0.0
+                for k in 0..<VoiceDsp.frameSamples {
+                    let v = x[offset + f * VoiceDsp.frameSamples + k]
+                    sum += v * v
+                }
+                energies[f] = sum / Double(VoiceDsp.frameSamples)
             }
-            // Unvoiced segment (2 frames)
-            for _ in 0..<2 {
-                lastResult = analyzer.analyze(pcmFrame: silentPCM, pitch: unvoicedPitch)
+            last = energies.withUnsafeBufferPointer {
+                target.analyze(frameEnergies: $0.baseAddress!, count: VoiceDsp.framesPerStep, voiced: voiced)
             }
+            offset += VoiceDsp.hopSamples
         }
-
-        XCTAssertGreaterThan(lastResult.syllablesPerSec, 0, "Should detect syllables from voiced-unvoiced transitions")
+        return last
     }
 
-    func testPauseRatioAllSilence() {
-        let silentPCM = TestAudioHelpers.makeSilentPCM(sampleCount: 960)
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 0, voiced: false, rms: 0)
-
-        var result = VoiceAnalysisResult.SpeechRate(syllablesPerSec: 0, pauseRatio: 0, isSpeaking: false)
-        for _ in 0..<10 {
-            result = analyzer.analyze(pcmFrame: silentPCM, pitch: pitch)
-        }
-        XCTAssertEqual(result.pauseRatio, 1.0, "All silent frames should produce pause ratio of 1.0")
+    private func syllables(rate: Double, seconds: Double) -> [Double] {
+        SyntheticVoice.syllabic(SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: seconds, rms: 0.15), rate: rate)
     }
 
-    func testPauseRatioAllVoiced() {
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.5)
+    func testSilenceIsNotValidAndNotSpeaking() {
+        let r = drive([Double](repeating: 0, count: 48_000 * 4), voiced: false)
+        XCTAssertEqual(r?.valid, false)
+        XCTAssertEqual(r?.syllablesPerSec, 0)
+        XCTAssertEqual(r?.pauseRatio, 0)
+        XCTAssertEqual(r?.isSpeaking, false)
+    }
 
-        var result = VoiceAnalysisResult.SpeechRate(syllablesPerSec: 0, pauseRatio: 0, isSpeaking: false)
-        for _ in 0..<10 {
-            result = analyzer.analyze(pcmFrame: pcm, pitch: pitch)
+    func testRateIsReadFromSyllableNuclei() {
+        // 7.5 s: the end of the signal is inside a syllable block, not in its pause.
+        let r = drive(syllables(rate: 5, seconds: 7.5))
+        XCTAssertEqual(r?.valid, true)
+        XCTAssertEqual(r?.syllablesPerSec ?? 0, 5.0, accuracy: 0.6)
+        XCTAssertEqual(r?.isSpeaking, true)
+    }
+
+    func testNotValidDuringTheFirstTwoSecondsOfSpeech() {
+        let r = drive(syllables(rate: 4, seconds: 1.5))
+        XCTAssertEqual(r?.valid, false)
+        XCTAssertEqual(r?.syllablesPerSec, 0)
+        XCTAssertEqual(r?.pauseRatio, 0)
+        XCTAssertEqual(r?.isSpeaking, true, "speaking is known even before the rate is")
+    }
+
+    func testUnvoicedLoudSoundCountsNoSyllables() {
+        // Loud, modulated, but never voiced: not speech, so no nuclei and no validity.
+        let x = SyntheticVoice.syllabic(SyntheticVoice.whiteNoise(seconds: 8, rms: 0.1), rate: 4)
+        let r = drive(x, voiced: false)
+        XCTAssertEqual(r?.valid, false)
+        XCTAssertEqual(r?.syllablesPerSec, 0)
+    }
+
+    func testCountIsWindowedToSixSeconds() {
+        // 8 s of syllables then 12 s of silence: the rate must fall out of the last 6 s
+        // (the old counter kept every syllable ever heard).
+        drive(syllables(rate: 4, seconds: 8))
+        let r = drive([Double](repeating: 0, count: 48_000 * 12), voiced: false)
+        XCTAssertEqual(r?.syllablesPerSec, 0)
+        XCTAssertEqual(r?.valid, false, "no speaking time left in the last 6 s")
+    }
+
+    func testAPauseLongerThan300msIsCountedAndAShorterOneIsNot() {
+        // 8 s of a steady voice with one gap of silence. A 250 ms gap is part of speech (pauseRatio 0),
+        // a 400 ms one is a pause (pauseRatio near 0.4/6).
+        func withGap(_ gapSeconds: Double) -> [Double] {
+            var x = SyntheticVoice.vowel(f0: 120, SyntheticVoice.a, seconds: 8, rms: 0.15)
+            let start = 48_000 * 4
+            for k in start..<(start + Int(gapSeconds * 48_000)) { x[k] = 0 }
+            return x
         }
-        XCTAssertEqual(result.pauseRatio, 0, "All voiced frames should produce pause ratio of 0")
+        XCTAssertEqual(drive(withGap(0.25), analyzer: SpeechRateAnalyzer())?.pauseRatio ?? -1, 0, accuracy: 1e-9)
+        let long = drive(withGap(0.4), analyzer: SpeechRateAnalyzer())
+        XCTAssertEqual(long?.valid, true)
+        XCTAssertEqual(long?.pauseRatio ?? 0, 0.4 / 6.0, accuracy: 0.03)
     }
 
     func testResetClearsState() {
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960)
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.5)
-
-        // Feed some frames
-        for _ in 0..<5 {
-            _ = analyzer.analyze(pcmFrame: pcm, pitch: pitch)
-        }
-
+        drive(syllables(rate: 4, seconds: 8))
         analyzer.reset()
-
-        // After reset, first frame should have zero syllable rate
-        let silentPCM = TestAudioHelpers.makeSilentPCM(sampleCount: 960)
-        let unvoicedPitch = VoiceAnalysisResult.Pitch(f0Hz: 0, voiced: false, rms: 0)
-        let result = analyzer.analyze(pcmFrame: silentPCM, pitch: unvoicedPitch)
-        XCTAssertEqual(result.syllablesPerSec, 0, "After reset, syllable rate should be zero")
-    }
-
-    func testLowRmsVoicedIsNotSpeaking() {
-        let pcm = TestAudioHelpers.makeSinePCM(frequency: 200, sampleCount: 960, amplitude: 0.001)
-        // voiced = true but rms below threshold (0.02)
-        let pitch = VoiceAnalysisResult.Pitch(f0Hz: 200, voiced: true, rms: 0.01)
-        let result = analyzer.analyze(pcmFrame: pcm, pitch: pitch)
-        XCTAssertFalse(result.isSpeaking, "Voiced frame with low RMS should not be flagged as speaking")
+        let r = drive(syllables(rate: 4, seconds: 1.0))
+        XCTAssertEqual(r?.valid, false, "after reset, two seconds of speaking time must be seen again")
     }
 }
