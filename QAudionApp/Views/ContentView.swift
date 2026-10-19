@@ -278,11 +278,13 @@ struct ContentView: View {
             // avrebbe senso.
             let inCall = appState.isInCall
             snackbarHost.show(.init(
-                // Same wording as the "Anomalia" state of the voice card; the
-                // "Termina chiamata" action below is unchanged.
+                // This is the sustained voice alert of the Guardian, a signal of
+                // its own: it is not the voice check card, which has no
+                // "Anomalia" state any more. The "Termina chiamata" action
+                // below is unchanged.
                 text: String(localized: "in_call.voice_alert.anomaly",
                              defaultValue: "Anomalia nella voce: verifica l'identità della persona.",
-                             comment: "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action; same wording as the Anomalia state of the voice card"),
+                             comment: "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action"),
                 severity: .error,
                 // A plain String reaches `Button(_:)` verbatim, so the label is
                 // resolved here: the button runs `endCall()` and must say so in

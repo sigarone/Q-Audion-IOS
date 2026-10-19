@@ -233,8 +233,8 @@ enum VoiceGuardBanner: Equatable {
 
 /// What the card shows, in priority order: the banner, the learning progress,
 /// the waiting state (no verdict level and no Guardian sample yet: the view
-/// draws just the "Dati insufficienti" word and its note), and finally the
-/// verdict with its wave.
+/// draws just the waiting line, without the wave), and finally the verdict
+/// with its wave.
 enum VoiceGuardContent: Equatable {
     case banner(VoiceGuardBanner)
     case learning(progress: Float)
@@ -248,21 +248,28 @@ enum VoiceGuardIcon: Equatable {
     case microphone
 }
 
-/// The word shown under the card's title. These are the only four states the
-/// card ever shows, each with a short explanation under it:
-///  - `verified`  "Voce coerente": no unusual change from the person's usual voice;
-///  - `caution`   "Da controllare": a change worth verifying (for example with
-///                the 60-digit safety number);
-///  - `highRisk`  "Anomalia": the voice changed in an unusual way, so the
-///                identity of the person should be verified;
-///  - `pending`   "Dati insufficienti": not enough data to compare yet.
-/// None of them says anything about emotion, stress, health or coercion.
-enum VoiceGuardWord: Equatable {
-    /// There is no verdict yet: the card must not claim the voice is consistent.
-    case pending
-    case verified
-    case caution
-    case highRisk
+/// The one line of text the card shows, one per state, with no sentence of
+/// explanation under it (the explanation is the popup the card opens, see
+/// `VoiceGuardCopy.infoBody`):
+///  - `waiting`     no verdict yet: the card must not claim the voice is steady;
+///  - `steady`      the detector sees no change of voice since the start of this
+///                  call (it says nothing about past calls);
+///  - `suspect`     the LOCAL detector sees a possible change of voice;
+///  - `changed`     the local detector confirmed that the voice changed;
+///  - `learning`    this contact's voice is being learned;
+///  - `learned`     banner: the voice was saved;
+///  - `learnFailed` banner: learning did not work.
+/// What the far end reports about its own detector is not a state of this
+/// card (see `RemoteSpeakerChangeMonitor`). None of the lines says anything
+/// about emotion, stress, health, sincerity or coercion.
+enum VoiceGuardLine: Equatable, CaseIterable {
+    case waiting
+    case steady
+    case suspect
+    case changed
+    case learning
+    case learned
+    case learnFailed
 }
 
 enum VoiceGuard {
@@ -277,6 +284,52 @@ enum VoiceGuard {
         case .steady:  return .verified
         case .suspect: return .caution
         case .changed: return .highRisk
+        }
+    }
+
+    /// The card's level from the monitor's verdict. The verdict is built from
+    /// the local detector alone, so nothing the far end reports can reach the
+    /// card through here.
+    static func level(ofVerdict verdict: RemoteSpeakerChangeMonitor.Verdict) -> VoiceGuardLevel? {
+        level(of: verdict.level)
+    }
+
+    /// The line of text a card content reads as.
+    static func line(for content: VoiceGuardContent) -> VoiceGuardLine {
+        switch content {
+        case .banner(.learned):
+            return .learned
+        case .banner(.failed):
+            return .learnFailed
+        case .learning:
+            return .learning
+        case .waiting:
+            return .waiting
+        case .verdict(let level):
+            return line(forLevel: level)
+        }
+    }
+
+    /// "Nessun cambio di voce in chiamata" is said only for an explicit
+    /// verified level; no verdict yet reads as waiting.
+    static func line(forLevel level: VoiceGuardLevel?) -> VoiceGuardLine {
+        switch level {
+        case nil:        return .waiting
+        case .verified?: return .steady
+        case .caution?:  return .suspect
+        case .highRisk?: return .changed
+        }
+    }
+
+    /// Colour role of a line: grey while there is nothing to say, green for
+    /// steady (and for the saved-voice banner), amber for a possible change,
+    /// red for a confirmed one (and for a failed learning).
+    static func tone(ofLine line: VoiceGuardLine) -> VoiceTone {
+        switch line {
+        case .waiting, .learning: return .neutral
+        case .steady, .learned:   return .success
+        case .suspect:            return .warning
+        case .changed, .learnFailed: return .riskHigh
         }
     }
 
@@ -305,8 +358,8 @@ enum VoiceGuard {
             return .learning(progress: clampedProgress(progress))
         }
         // The level, when known, always wins: it is shown even while the
-        // history that draws the trend is still empty. "Dati insufficienti"
-        // alone is for the case with no level at all.
+        // history that draws the trend is still empty. The bare waiting line
+        // is for the case with no level and no sample at all.
         if !hasHistory && level == nil {
             return .waiting
         }
@@ -342,17 +395,6 @@ enum VoiceGuard {
         }
     }
 
-    /// "Voce coerente" is said only for an explicit verified level; no verdict
-    /// yet has its own neutral word ("Dati insufficienti").
-    static func word(for level: VoiceGuardLevel?) -> VoiceGuardWord {
-        switch level {
-        case nil:        return .pending
-        case .verified?: return .verified
-        case .caution?:  return .caution
-        case .highRisk?: return .highRisk
-        }
-    }
-
     static func icon(banner: VoiceGuardBanner?, level: VoiceGuardLevel?) -> VoiceGuardIcon {
         if banner == .learned || level == .verified {
             return .check
@@ -361,6 +403,115 @@ enum VoiceGuard {
             return .warning
         }
         return .microphone
+    }
+}
+
+/// The words of the card. One line per state (`VoiceGuardLine`) and the
+/// popup the card opens; the keys are in `Localizable.xcstrings` in all six
+/// languages of the app, and the Italian text here is the source language.
+enum VoiceGuardCopy {
+    /// Title of the popup and first words a screen reader says for the card.
+    static var title: String {
+        String(localized: "in_call.voice_guard.title",
+               defaultValue: "Verifica vocale",
+               comment: "Call screen voice check card — title of the info popup and first words a screen reader says for the card")
+    }
+
+    /// Body of the popup. It says what is compared (the voice of the other
+    /// person against the start of THIS call), that nothing leaves the phone,
+    /// and that it is a hint, not proof of identity.
+    static var infoBody: String {
+        String(localized: "in_call.voice_guard.info_body",
+               defaultValue: "Confronta la voce dell'altra persona con l'inizio di questa chiamata. Tutto avviene su questo telefono. È un indizio, non una prova d'identità: per esserne certo usa il codice di sicurezza della chiamata.",
+               comment: "Call screen voice check card — body of the info popup opened by tapping the card: what is compared, that it stays on the phone, and that it is a hint and not proof of identity")
+    }
+
+    /// The single line of the card for a state. Never a claim about emotion,
+    /// stress, health, sincerity or coercion.
+    static func text(for line: VoiceGuardLine) -> String {
+        switch line {
+        case .waiting:
+            return String(localized: "in_call.voice_guard.line_waiting",
+                          defaultValue: "Ascolto della voce in corso",
+                          comment: "Call screen voice check card — line while the detector has no verdict yet")
+        case .steady:
+            return String(localized: "in_call.voice_guard.line_steady",
+                          defaultValue: "Nessun cambio di voce in chiamata",
+                          comment: "Call screen voice check card — line while the voice has not changed since the start of this call; it says nothing about past calls")
+        case .suspect:
+            return String(localized: "in_call.voice_guard.line_suspect",
+                          defaultValue: "Possibile cambio di voce",
+                          comment: "Call screen voice check card — line when this phone hears a possible change of the voice during the call")
+        case .changed:
+            return String(localized: "in_call.voice_guard.line_changed",
+                          defaultValue: "Voce cambiata durante la chiamata",
+                          comment: "Call screen voice check card — line when this phone confirmed that the voice changed during the call")
+        case .learning:
+            return String(localized: "in_call.voice_guard.line_learning",
+                          defaultValue: "Apprendimento della voce",
+                          comment: "Call screen voice check card — line while the voice of the other person is being learned")
+        case .learned:
+            return String(localized: "in_call.voice_guard.line_learned",
+                          defaultValue: "Voce memorizzata",
+                          comment: "Call screen voice check card — shown briefly when the voice of the other person has been saved on this phone; it does not claim the voice was verified")
+        case .learnFailed:
+            return String(localized: "in_call.voice_guard.line_learn_failed",
+                          defaultValue: "Apprendimento non riuscito",
+                          comment: "Call screen voice check card — shown briefly when learning the voice of the other person did not succeed")
+        }
+    }
+
+    /// What a screen reader says for the card: the title, then the line.
+    static func spoken(for line: VoiceGuardLine) -> String {
+        title + ", " + text(for: line)
+    }
+}
+
+/// Voice indicators whose thresholds were never tried against a different
+/// speaker. They are hidden, not removed: they come back when calibrated.
+enum UncalibratedVoiceIndicators {
+    /// The "voce remota" ear shield compares the voice with the profile saved
+    /// from past calls. Its two thresholds were fitted to one call with the
+    /// same person, and the scores measured since sit where chance would put
+    /// them, so a verdict from it would be mostly noise. Off until it has been
+    /// calibrated with several different speakers.
+    static let contactVoiceShieldCalibrated = false
+
+    /// Whether the ear shield is drawn for `level`. Never, while uncalibrated.
+    static func showsContactVoiceShield(level: ContactVoiceContinuityGate.Level) -> Bool {
+        guard contactVoiceShieldCalibrated else { return false }
+        return level != .unknown
+    }
+}
+
+// MARK: - Contact screen: the saved voice
+
+/// How the contact screen words a saved voice. Saving a voice is not
+/// verifying the person, so the row says when the voice was saved and never
+/// "verified".
+enum VoiceSavedRow {
+    /// "Voce memorizzata il 12 ott 2026" once a voice is saved, otherwise the
+    /// plain statement that none is. The date is formatted for the app's
+    /// language, not as a fixed pattern.
+    static func label(savedAt: Date?, locale: Locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)) -> String {
+        guard let savedAt else {
+            return String(localized: "contact_detail.voice_not_saved",
+                          defaultValue: "Voce non ancora memorizzata",
+                          comment: "Contact screen, trust card — voice row while no voice of this contact has been saved on this phone")
+        }
+        let date: String = dateText(savedAt, locale: locale)
+        return String(localized: "contact_detail.voice_saved_on",
+                      defaultValue: "Voce memorizzata il \(date)",
+                      comment: "Contact screen, trust card — voice row once the voice of this contact has been saved on this phone; %@ is the date, already formatted for the language of the app. It does not claim the voice was verified.")
+    }
+
+    /// The date in the medium style of `locale`.
+    static func dateText(_ date: Date, locale: Locale) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 }
 

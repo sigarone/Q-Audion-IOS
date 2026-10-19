@@ -400,17 +400,15 @@ struct ContactDetailScreen: View {
     /// any contact that had merely had a SAS ceremony: a voice-match strength
     /// nobody measured.
     ///
-    /// VOICE now reads `voiceVerifiedAt`, the same independent signal the
-    /// trustVerificationCard below was already fixed to use. The two can
-    /// legitimately disagree: a contact can be SAS-verified without ever
-    /// being voice-learned, and the chip will correctly be absent for them.
+    /// There is no VOICE chip any more. It was drawn for any contact whose
+    /// voice had been saved (`voiceVerifiedAt`), which read as "the voice is
+    /// verified" next to the SAS chip; saving a voice verifies nobody. The
+    /// saved voice is stated, with its date, by the voice row of the trust
+    /// card below.
     /// The risk pill and the meter are gone rather than re-sourced — neither
     /// had a number behind it.
     private var trustBadgesRow: some View {
         HStack(spacing: 8) {
-            if voiceVerifiedAt != nil {
-                TrustChip("VOICE", accent: extras.success)
-            }
             if item.isVerified {
                 TrustChip("SAS VERIFICATO", accent: extras.success)
             } else {
@@ -555,19 +553,16 @@ struct ContactDetailScreen: View {
                            description: trustIdentityRowDescription(identityPublished: identityPublished),
                            done: identityPublished)
             divider
-            // Feature B ("voce verificata") — FIXED: this row used to read
-            // the SAME `verified` boolean as the SAS row below (a mislabeled
-            // duplicate, not a real independent signal — see the
-            // W-VOICEFACTOR finding this replaces). Now reads
-            // `voiceVerifiedAt`, written ONLY by `ContactsStore
-            // .setVoiceVerified` when a `VoiceLearningSession` for this
-            // contact — started manually from the live in-call "Avvia
-            // apprendimento voce" button, fed from the peer's decoded RX
-            // audio — actually reaches `.completed`. Independent of SAS: a
-            // contact can be SAS-verified without ever being voice-learned,
-            // and vice versa.
-            trustFactorRow(label: "Voce verificata",
-                           description: voiceVerifiedDescription,
+            // The saved voice. Reads `voiceVerifiedAt`, written ONLY by
+            // `ContactsStore.setVoiceSaved` when a `VoiceLearningSession` for
+            // this contact — fed from the peer's decoded RX audio, started
+            // by the app on the first call — actually reaches `.completed`.
+            // It records WHEN the voice was saved on this phone. It is not a
+            // verification: the row says "Voce memorizzata il <data>", never
+            // "verified", and it is independent of SAS (a contact can be
+            // SAS-verified without a saved voice, and vice versa).
+            trustFactorRow(label: VoiceSavedRow.label(savedAt: voiceVerifiedAt),
+                           description: nil,
                            done: voiceVerifiedAt != nil)
             divider
             // C-4 — the SAS row now has a real, tappable CTA. It reuses the
@@ -610,7 +605,7 @@ struct ContactDetailScreen: View {
     /// `TextButton` only for an unsatisfied factor. Before this the row was
     /// a plain `HStack` with no `Button`/`.onTapGesture` anywhere in it —
     /// nothing here was ever selectable, on any row, regardless of state.
-    private func trustFactorRow(label: String, description: String, done: Bool,
+    private func trustFactorRow(label: String, description: String?, done: Bool,
                                 ctaLabel: String? = nil, ctaAction: (() -> Void)? = nil) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: done ? "checkmark.circle.fill" : "circle")
@@ -620,9 +615,11 @@ struct ContactDetailScreen: View {
                 Text(label)
                     .qaudionStyle(type.bodyMedium)
                     .foregroundStyle(scheme.onSurface)
-                Text(description)
-                    .qaudionStyle(type.labelSmall)
-                    .foregroundStyle(scheme.onSurfaceVariant)
+                if let description {
+                    Text(description)
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
             }
             Spacer(minLength: 0)
             if let ctaLabel, let ctaAction {
@@ -740,34 +737,19 @@ struct ContactDetailScreen: View {
         ContactsStore().load().first(where: { $0.userId == item.userId })?.presenceAuth
     }
 
-    /// Feature B ("voce verificata") — plain synchronous local read (same
-    /// pattern as `presenceAuth` above, no network), the persisted
-    /// "a `VoiceLearningSession` for this contact reached `.completed`"
-    /// timestamp. nil until the user has run the in-call voice-learning
-    /// flow at least once for this contact.
+    /// Plain synchronous local read (same pattern as `presenceAuth` above, no
+    /// network), the persisted "a `VoiceLearningSession` for this contact
+    /// reached `.completed`" timestamp: when the voice of this contact was
+    /// saved on this phone. nil until that has happened once. The name is the
+    /// stored field's; it is a date of saving, not a verification.
     ///
-    /// Three consumers now, not the one this comment used to claim:
-    /// `trustVerificationCard`'s "Voce verificata" row, the security log
-    /// card, and the VOICE chip in `trustBadgesRow`.
+    /// Two consumers: `trustVerificationCard`'s voice row and the security
+    /// log card.
     private var voiceVerifiedAt: Date? {
         guard let ms = ContactsStore().load().first(where: { $0.userId == item.userId })?.voiceVerifiedAt else {
             return nil
         }
         return Date(timeIntervalSince1970: Double(ms) / 1000)
-    }
-
-    private static let voiceVerifiedDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
-        f.dateStyle = .medium
-        return f
-    }()
-
-    private var voiceVerifiedDescription: String {
-        guard let date = voiceVerifiedAt else {
-            return "Durante una chiamata, avvia l'apprendimento vocale per registrare il match"
-        }
-        return "Voiceprint appreso il \(Self.voiceVerifiedDateFormatter.string(from: date))"
     }
 
     /// `nil` while this contact has never reached `AssuranceState
@@ -966,7 +948,9 @@ struct ContactDetailScreen: View {
             if let voiceMs = stored?.voiceVerifiedAt {
                 eventRow(severity: extras.success,
                          when: Self.formatEventDate(voiceMs),
-                         summary: "Voce verificata")
+                         summary: String(localized: "contact_detail.voice_saved_event",
+                                         defaultValue: "Voce memorizzata",
+                                         comment: "Security-log row for a contact — the voice of the contact was saved on this phone. The date/time is shown separately by the row's own timestamp column. It does not claim the voice was verified."))
             }
             // W-PAIRFB (audit finding: an in-person QR + Bluetooth pairing
             // left no trace on this contact beyond a transient toast). The

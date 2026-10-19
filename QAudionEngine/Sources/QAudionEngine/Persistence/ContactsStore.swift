@@ -125,22 +125,22 @@ public final class ContactsStore {
         /// (e.g. on every call-connect) be deduped without
         /// re-downloading. `nil` for a contact with no avatar cached yet.
         public private(set) var avatarVersion: Int?
-        /// Feature B ("voce verificata" — per-contact call-time voice
-        /// learning). Epoch-ms timestamp of the last time a
-        /// `VoiceLearningSession` for THIS contact reached `.completed`
-        /// (i.e. `SpeakerVerifier.finishEnrollment()` succeeded on the
-        /// peer's decoded RX audio and a template was persisted to
-        /// `VoiceprintStore`). `nil` until that has happened at least once.
+        /// Feature B (per-contact call-time voice learning). Epoch-ms
+        /// timestamp of the last time a `VoiceLearningSession` for THIS
+        /// contact reached `.completed` (i.e. `SpeakerVerifier
+        /// .finishEnrollment()` succeeded on the peer's decoded RX audio and
+        /// a template was persisted to `VoiceprintStore`). `nil` until that
+        /// has happened at least once.
+        ///
+        /// The name is the persisted key and the Android column name, kept as
+        /// they are. What it records is that the voice was SAVED on this
+        /// phone, on that date: it is not a verification of the person, and
+        /// the contact screen words it as "Voce memorizzata il <data>".
         ///
         /// Deliberately a SEPARATE, independent field — NOT folded into
-        /// `isVerified` (the SAS/identity trust ladder). That single-value
-        /// ladder cannot represent "both SAS-verified AND voice-verified"
-        /// simultaneously as two independent facts, which is exactly the
-        /// bug this field fixes: `ContactDetailScreen`'s "Voce verificata"
-        /// row used to read the SAME `isVerified`-derived boolean as the
-        /// "SAS verificato" row below it — a mislabeled duplicate of a
-        /// different signal, not a real one. Mirrors Android's independent
-        /// nullable `voiceVerifiedAt` column for the same reason.
+        /// `isVerified` (the SAS/identity trust ladder), which this field
+        /// never touches: a contact can have a saved voice without a SAS
+        /// ceremony and the other way round.
         public private(set) var voiceVerifiedAt: Int64?
         /// W-MESHUNKNOWN-IOS (2026-08-20, parity with Android
         /// `ContactEntity.callVerifiedPeerIdentityKeyB64` /
@@ -292,12 +292,13 @@ public final class ContactsStore {
         ///     verified: by definition the superseded one, and rewritten by
         ///     the next signature-verified call, so keeping it would only let
         ///     the mesh radar keep naming a device that advertises the old key)
-        /// Everything else is kept, notably `voiceVerifiedAt`: a voice match
-        /// is a statement about the PERSON's speaker template, not about a
-        /// key, so a key rotation does not invalidate it (same rule as
-        /// Android, where `voiceVerifiedAt` is deliberately not nulled on
-        /// rotation either). Name, avatar, phone number, extension and
-        /// `pubkey` also stay, as they did before this helper existed.
+        /// Everything else is kept, notably `voiceVerifiedAt` (the date the
+        /// voice was saved on this phone): a saved voice describes the
+        /// PERSON's speech, not a key, so a key rotation does not invalidate
+        /// it (same rule as Android, where `voiceVerifiedAt` is deliberately
+        /// not nulled on rotation either). Name, avatar, phone number,
+        /// extension and `pubkey` also stay, as they did before this helper
+        /// existed.
         public func afterIdentityKeyRotation() -> StoredContact {
             var copy = self
             copy.isVerified = false
@@ -855,13 +856,16 @@ public final class ContactsStore {
         return Self.persisted(userId: userId, version: version, in: self)
     }
 
-    /// Feature B ("voce verificata") — the ONE write path for
+    /// Feature B (per-contact voice learning) — the ONE write path for
     /// `voiceVerifiedAt`. Called when a `VoiceLearningSession` for
-    /// `userId` reaches `.completed`. No-op (returns false) if no row
-    /// exists for `userId` — same contract as `overwriteDisplayName` /
+    /// `userId` reaches `.completed`. It records WHEN the voice of this
+    /// contact was saved on this phone and nothing else: it is not a
+    /// verification, it never touches `isVerified` or the verification
+    /// pin, and no screen may present it as one. No-op (returns false) if no
+    /// row exists for `userId` — same contract as `overwriteDisplayName` /
     /// `setAvatarLocalPath`, this never creates a contact.
     @discardableResult
-    public func setVoiceVerified(userId: String, at date: Date = Date()) -> Bool {
+    public func setVoiceSaved(userId: String, at date: Date = Date()) -> Bool {
         var current = load()
         guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
         let existing = current[idx]
@@ -897,7 +901,7 @@ public final class ContactsStore {
     /// contact's key or verified badge, but recording that the exchange
     /// happened, and when, is pure history and touches neither. No-op
     /// (returns false) if no row exists for `userId` — same contract as
-    /// `overwriteDisplayName`/`setVoiceVerified`, this never creates a
+    /// `overwriteDisplayName`/`setVoiceSaved`, this never creates a
     /// contact (the pairing flow's OWN "add a brand-new contact" path
     /// passes these two fields directly to its own `StoredContact` build
     /// instead, since there is no existing row to patch).

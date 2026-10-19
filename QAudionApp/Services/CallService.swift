@@ -120,6 +120,13 @@ final class CallService: @unchecked Sendable {
     func peerReportedSpeakerChange(_ changed: Bool) {
         callIntegration?.peerReportedSpeakerChange(changed)
     }
+
+    /// Tell the engine which media path the call is on ("p2p", "turn",
+    /// "relay", or "" for none yet), so the speaker-change reference is
+    /// rebuilt after a settled path switch. No-op when no call is live.
+    func mediaPathObserved(_ path: String) {
+        callIntegration?.mediaPathObserved(path)
+    }
     /// MASVS-CRYPTO remediation (2026-08-20/21) — see
     /// `QAudionCallIntegration.onContactVoiceScoreUpdated` kdoc. Feeds
     /// `ReKeyScheduler` in `AppState`.

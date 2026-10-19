@@ -419,7 +419,7 @@ struct InCallScreen: View {
     /// after the reference was dropped). Once the call has a reference the wave
     /// is the overlay of the two spectra, whatever this history holds, so an
     /// empty history is not a flat trace any more. With no history and no
-    /// verdict level yet the card shows "Dati insufficienti"; with a level it
+    /// verdict level yet the card shows "Ascolto della voce in corso"; with a level it
     /// shows the verdict (and the overlay, or a flat trace when there is
     /// nothing to overlay either). See `AppState.voiceConfidenceHistory`'s doc
     /// for the source.
@@ -1409,8 +1409,11 @@ struct InCallScreen: View {
             // and continuous (this device hears the audio directly, no wire
             // signal involved). Hidden until the first real score tick for
             // the active contact (`.unknown` — no template yet / window not
-            // full) — matches Android's `contactVoiceContinuityLevel` shield.
-            if contactVoiceLevel != .unknown {
+            // full) — and, for now, hidden always: its thresholds were never
+            // tried against a different speaker (see
+            // `UncalibratedVoiceIndicators`). Matches Android, where the same
+            // shield is not collected either.
+            if UncalibratedVoiceIndicators.showsContactVoiceShield(level: contactVoiceLevel) {
                 trustShield(
                     tint: contactVoiceLevel == .mismatch ? extras.riskHigh
                         : (contactVoiceLevel == .uncertain ? extras.pqcAccent : extras.success),
@@ -1423,25 +1426,18 @@ struct InCallScreen: View {
                             : "Verifica della voce del contatto in corso")
                 )
             }
-            // "Interlocutore cambiato" — shown only once there is something
-            // to say. Amber while evidence builds, red once sustained. The
-            // three labels distinguish the cases the user needs told apart:
-            // this device heard the change, both devices agree, or only the
-            // far end reports it — which is what the person who just handed
-            // their own phone over sees, since their device hears nothing
-            // unusual in its received audio.
-            if speakerChange.level != .unknown && speakerChange.level != .steady {
+            // Voice change during this call — shown only once there is
+            // something to say. Amber for a possible change, red once it is
+            // confirmed. It follows the same local verdict as the voice check
+            // card and says the same words; what the far end reports about
+            // its own detector is about our own voice and never reaches it.
+            if speakerChange.level == .suspect || speakerChange.level == .changed {
                 trustShield(
                     tint: speakerChange.level == .changed ? extras.riskHigh : extras.warning,
                     icon: "arrow.left.arrow.right",
-                    info: .contactVoice,
-                    accessibilityLabel: speakerChange.peerReportedOnly
-                        ? "L'altro dispositivo segnala che la voce da questo lato è cambiata"
-                        : (speakerChange.level == .changed
-                            ? (speakerChange.corroborated
-                                ? "Entrambi i dispositivi rilevano che chi parla è cambiato"
-                                : "Chi parla ora non è la persona con cui è iniziata questa chiamata")
-                            : "La voce che stai ascoltando sta cambiando rispetto a quella di questa chiamata")
+                    info: .speakerChange,
+                    accessibilityLabel: VoiceGuardCopy.text(
+                        for: speakerChange.level == .changed ? .changed : .suspect)
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with
@@ -1628,12 +1624,13 @@ struct InCallScreen: View {
     /// style (e.g. `identityChangeBanner`/the SAS panel above) rather than
     /// a verbatim copy of Android's strings.
     enum TrustBadgeInfo {
-        case voiceKey, contactVoice, nfc, psk, sas, pqc, transport
+        case voiceKey, contactVoice, speakerChange, nfc, psk, sas, pqc, transport
 
         var title: String {
             switch self {
             case .voiceKey:         return "Voce come chiave"
             case .contactVoice:     return "Voce remota"
+            case .speakerChange:    return VoiceGuardCopy.title
             case .nfc:              return "Chiave di persona in comune"
             case .psk:              return "Chiave pre-condivisa (PSK)"
             case .sas:              return "Verifica identità (SAS)"
@@ -1657,7 +1654,9 @@ struct InCallScreen: View {
             case .voiceKey:
                 return "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
             case .contactVoice:
-                return "Verifica continua, durante la chiamata, che la voce che stai ASCOLTANDO corrisponda a quella già imparata per questo contatto nelle chiamate precedenti. Se il contatto parla per la prima volta, l'apprendimento avviene automaticamente in sottofondo nei primi secondi."
+                return "Confronta la voce che stai ascoltando con quella salvata per questo contatto nelle chiamate precedenti. È un indizio, non una prova d'identità."
+            case .speakerChange:
+                return VoiceGuardCopy.infoBody
             case .nfc:
                 return "Tu e il contatto avete in comune un segreto scambiato di persona, avvicinando i telefoni (NFC) o inquadrando il codice QR con il Bluetooth attivo. Indipendente da quale chiave stia effettivamente usando questa specifica chiamata."
             case .psk:

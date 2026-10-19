@@ -5587,6 +5587,48 @@
         }
       }
     },
+    "call_security.status_no_reading": {
+      "extractionState": "manual",
+      "comment": "Call security badge — status word while there is no Guardian reading yet (not enough data to say anything about the call)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dati insufficienti"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not enough data"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu wenig Daten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datos insuficientes"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Données insuffisantes"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dados insuficientes"
+          }
+        }
+      }
+    },
     "chat_list.group_delete_warning": {
       "extractionState": "manual",
       "comment": "Alert body confirming group chat deletion; %@ is the group name. Explains that deleting also leaves the group and cannot be undone.",
@@ -7141,86 +7183,338 @@
         }
       }
     },
-    "in_call.voice_guard.caution": {
+    "in_call.voice_guard.line_waiting": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word when the voice changed and the change is worth verifying",
+      "comment": "Call screen voice check card — line while the detector has no verdict yet",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Da controllare"
+            "value": "Ascolto della voce in corso"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Needs checking"
+            "value": "Listening to the voice…"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zu prüfen"
+            "value": "Stimme wird erfasst…"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Por verificar"
+            "value": "Escuchando la voz…"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "À vérifier"
+            "value": "Écoute de la voix…"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A verificar"
+            "value": "Ouvindo a voz…"
           }
         }
       }
     },
-    "in_call.voice_guard.caution_note": {
+    "in_call.voice_guard.line_steady": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — explanation under the verdict word when the voice changed and the change should be verified, for example by comparing the 60-digit safety number",
+      "comment": "Call screen voice check card — line while the voice has not changed since the start of this call; it says nothing about past calls",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "C'è un cambiamento da verificare, per esempio con il numero di sicurezza di 60 cifre."
+            "value": "Nessun cambio di voce in chiamata"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "There is a change to check, for example with the 60-digit safety number."
+            "value": "No voice change in this call"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Es gibt eine Veränderung, die Sie prüfen sollten, zum Beispiel mit der 60-stelligen Sicherheitsnummer."
+            "value": "Kein Stimmwechsel im Anruf"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hay un cambio que conviene comprobar, por ejemplo con el número de seguridad de 60 dígitos."
+            "value": "Sin cambio de voz en la llamada"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il y a un changement à vérifier, par exemple avec le numéro de sécurité à 60 chiffres."
+            "value": "Voix inchangée pendant l'appel"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Há uma mudança a verificar, por exemplo com o número de segurança de 60 dígitos."
+            "value": "Sem mudança de voz na chamada"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.line_suspect": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — line when this phone hears a possible change of the voice during the call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Possibile cambio di voce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Possible voice change"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Möglicher Stimmwechsel"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Posible cambio de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changement de voix possible"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Possível mudança de voz"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.line_changed": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — line when this phone confirmed that the voice changed during the call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce cambiata durante la chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice changed during the call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme im Anruf gewechselt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz cambió durante la llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix a changé pendant l'appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz mudou durante a chamada"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.line_learning": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — line while the voice of the other person is being learned",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprendimento della voce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learning this voice"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme wird gelernt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendiendo esta voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprentissage de la voix"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendendo esta voz"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.line_learned": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — shown briefly when the voice of the other person has been saved on this phone; it does not claim the voice was verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce memorizzata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice saved"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme gespeichert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz guardada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix enregistrée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz salva"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.line_learn_failed": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — shown briefly when learning the voice of the other person did not succeed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprendimento non riuscito"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learning failed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lernen fehlgeschlagen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendizaje fallido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'apprentissage"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no aprendizado"
+          }
+        }
+      }
+    },
+    "in_call.voice_guard.info_body": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card — body of the info popup opened by tapping the card: what is compared, that it stays on the phone, and that it is a hint and not proof of identity",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confronta la voce dell'altra persona con l'inizio di questa chiamata. Tutto avviene su questo telefono. È un indizio, non una prova d'identità: per esserne certo usa il codice di sicurezza della chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compares the other person's voice with the start of this call. Everything happens on this phone. It is a hint, not proof of identity: to be sure, use the call's security code."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vergleicht die Stimme der anderen Person mit dem Anfang dieses Anrufs. Alles geschieht auf diesem Telefon. Das ist ein Hinweis, kein Identitätsnachweis: Für Gewissheit verwenden Sie den Sicherheitscode des Anrufs."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compara la voz de la otra persona con el inicio de esta llamada. Todo ocurre en este teléfono. Es un indicio, no una prueba de identidad: para estar seguro, usa el código de seguridad de la llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compare la voix de l'autre personne avec le début de cet appel. Tout se passe sur ce téléphone. C'est un indice, pas une preuve d'identité : pour en être sûr, utilise le code de sécurité de l'appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compara a voz da outra pessoa com o início desta chamada. Tudo acontece neste telefone. É um indício, não uma prova de identidade: para ter certeza, use o código de segurança da chamada."
           }
         }
       }
@@ -7309,303 +7603,9 @@
         }
       }
     },
-    "in_call.voice_guard.highrisk": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word when the voice changed in an unusual way",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anomalia"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anomaly"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anomalie"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anomalía"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anomalie"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anomalia"
-          }
-        }
-      }
-    },
-    "in_call.voice_guard.highrisk_note": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — explanation under the verdict word when the voice changed in an unusual way: verify the identity of the person",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La voce è cambiata in modo insolito: verifica l'identità della persona."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The voice changed in an unusual way: verify the person's identity."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Die Stimme hat sich auf ungewöhnliche Weise verändert: Überprüfen Sie die Identität der Person."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La voz ha cambiado de forma inusual: verifica la identidad de la persona."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La voix a changé de façon inhabituelle : vérifie l'identité de la personne."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A voz mudou de forma incomum: verifique a identidade da pessoa."
-          }
-        }
-      }
-    },
-    "in_call.voice_guard.learn_failed": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — shown briefly when learning the voice of the other person did not succeed; it will be retried on the next call",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apprendimento non riuscito — riproverà alla prossima chiamata"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Learning failed — will retry on the next call"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lernen fehlgeschlagen — neuer Versuch beim nächsten Anruf"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aprendizaje fallido — se reintentará en la próxima llamada"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échec de l'apprentissage — nouvel essai au prochain appel"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Falha no aprendizado — nova tentativa na próxima chamada"
-          }
-        }
-      }
-    },
-    "in_call.voice_guard.learned": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — shown briefly when the voice of the other person has been learned; it does not claim the voice was verified as genuine",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voce appresa"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice learned"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stimme gelernt"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz aprendida"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voix apprise"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz aprendida"
-          }
-        }
-      }
-    },
-    "in_call.voice_guard.learning": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — shown while the voice of the other person is being learned",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Riconoscimento vocale in corso…"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice recognition in progress…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stimmerkennung läuft…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reconocimiento de voz en curso…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reconnaissance vocale en cours…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reconhecimento de voz em andamento…"
-          }
-        }
-      }
-    },
-    "in_call.voice_guard.pending": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word when there is not enough data to compare the voice yet",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dati insufficienti"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not enough data"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zu wenig Daten"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Datos insuficientes"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Données insuffisantes"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dados insuficientes"
-          }
-        }
-      }
-    },
-    "in_call.voice_guard.pending_note": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — explanation under the verdict word when there is not enough data to compare the voice yet",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Non ci sono ancora abbastanza dati per confrontare la voce."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "There is not enough data yet to compare the voice."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Es liegen noch nicht genug Daten vor, um die Stimme zu vergleichen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Todavía no hay datos suficientes para comparar la voz."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il n'y a pas encore assez de données pour comparer la voix."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ainda não há dados suficientes para comparar a voz."
-          }
-        }
-      }
-    },
     "in_call.voice_guard.title": {
       "extractionState": "manual",
-      "comment": "Call screen voice check card — small title above the verdict word",
+      "comment": "Call screen voice check card — title of the info popup and first words a screen reader says for the card",
       "localizations": {
         "it": {
           "stringUnit": {
@@ -7645,93 +7645,9 @@
         }
       }
     },
-    "in_call.voice_guard.verified": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — verdict word when the voice shows no unusual change from the one the call started with",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voce coerente"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Consistent voice"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stimme konsistent"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz coherente"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voix cohérente"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz coerente"
-          }
-        }
-      }
-    },
-    "in_call.voice_guard.verified_note": {
-      "extractionState": "manual",
-      "comment": "Call screen voice check card — explanation under the verdict word when the voice shows no unusual change",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessun cambiamento insolito rispetto alla voce abituale della persona."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No unusual change from the person's usual voice."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keine ungewöhnliche Veränderung gegenüber der gewohnten Stimme der Person."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ningún cambio inusual respecto a la voz habitual de la persona."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucun changement inhabituel par rapport à la voix habituelle de la personne."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhuma mudança incomum em relação à voz habitual da pessoa."
-          }
-        }
-      }
-    },
     "in_call.voice_alert.anomaly": {
       "extractionState": "manual",
-      "comment": "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action; same wording as the Anomalia state of the voice card",
+      "comment": "Snackbar shown for six seconds during a call when the sustained voice-change alert fires, next to the end-call action",
       "localizations": {
         "it": {
           "stringUnit": {
@@ -35264,6 +35180,132 @@
           "stringUnit": {
             "state": "translated",
             "value": "Chave salva pessoalmente · QR + Bluetooth"
+          }
+        }
+      }
+    },
+    "contact_detail.voice_saved_on": {
+      "extractionState": "manual",
+      "comment": "Contact screen, trust card — voice row once the voice of this contact has been saved on this phone; %@ is the date, already formatted for the language of the app. It does not claim the voice was verified.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce memorizzata il %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice saved on %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme gespeichert am %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz guardada el %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix enregistrée le %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz salva em %@"
+          }
+        }
+      }
+    },
+    "contact_detail.voice_not_saved": {
+      "extractionState": "manual",
+      "comment": "Contact screen, trust card — voice row while no voice of this contact has been saved on this phone",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce non ancora memorizzata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice not saved yet"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme noch nicht gespeichert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz aún no guardada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix pas encore enregistrée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz ainda não salva"
+          }
+        }
+      }
+    },
+    "contact_detail.voice_saved_event": {
+      "extractionState": "manual",
+      "comment": "Security-log row for a contact — the voice of the contact was saved on this phone. The date/time is shown separately by the row's own timestamp column. It does not claim the voice was verified.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce memorizzata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice saved"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme gespeichert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz guardada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix enregistrée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz salva"
           }
         }
       }
