@@ -318,6 +318,13 @@ struct ContentView: View {
             snackbarHost.show(.init(text: text, severity: .error))
             appState.groupCallFatalErrorToastText = nil
         }
+        // BLOCK — the server did not add some or one of the members of a group the user created or extended.
+        // One generic notice: it names nobody and says nothing about why.
+        .onChange(of: appState.groupMembersNotAddedToastText) { text in
+            guard let text else { return }
+            snackbarHost.show(.init(text: text, severity: .error))
+            appState.groupMembersNotAddedToastText = nil
+        }
     }
 
     /// W-GRPRING — the incoming-GROUP-call ring. Reuses the 1:1

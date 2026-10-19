@@ -1060,6 +1060,42 @@ def _is_call_format_body(tag, norm_body):
     return False
 
 
+# ---------------------------------------------------------------------------
+# BLOCK (2026-10-19) -- the lines the device writes when it drops something from a contact the user blocked:
+#   block drop=1 kind=msg|undec|svc|mesh|file|offer|opaque|missed|notif|grp|grpcall      (nothing else on the line)
+#   block drop=1 kind=push id=<8 hex>     block drop=1 kind=grpcall id=<8 hex>   (a push reported and ended at once)
+# under the tags chat, call and group. They are the only evidence, in a log pull, that a block held. msg / undec /
+# offer / push / mesh / grp were already vocabulary; the kind words svc (private service payload), file (private file
+# announcement), missed (missed-call event), notif (notification), grpcall (group call) and opaque (anything else on
+# the call channel) were not, so those lines were summarised and the blocked traffic stayed invisible.
+#
+# Same scoping reason as CALL_FORMAT_VOCAB above: putting those words into APP_VOCAB would make them known for EVERY
+# line of every tag (file, missed and notif are plain English words) and widen the unknown-word budget of the whole
+# corpus. They are consulted only when the tag is chat / call / group (or a prefix variant, like TAG_SCOPE_PREFIXES)
+# AND the whole body is one of the shapes above, nothing before it, nothing after it. The 8 hex characters are the
+# head of a call id: no name, no user id. Pinned by test_ship_ios_block_vocab.py.
+# ---------------------------------------------------------------------------
+BLOCK_FORMAT_VOCAB = frozenset("""
+    svc file missed notif grpcall opaque
+""".split())
+
+_BLOCK_TAG_PREFIXES = ("chat", "call", "group")
+
+_RE_BLOCK_DROP_FULL = re.compile(
+    r"^block drop=1 kind=(?:(?:msg|undec|svc|mesh|file|offer|opaque|missed|notif|grp|grpcall)"
+    r"|(?:push|grpcall) id=[0-9a-f]{8})$"
+)
+
+
+def _is_block_format_body(tag, norm_body):
+    """True if `tag` is the chat / call / group RTLog scope (or a prefix variant) AND `norm_body` is, in full, one
+    of the "block drop=1 kind=<k>" lines. Full-line validation, like the dcmux wedge shape: a body that merely
+    starts with "block drop=1" and carries anything else does not widen the vocabulary."""
+    if not tag or not str(tag).lower().startswith(_BLOCK_TAG_PREFIXES):
+        return False
+    return bool(_RE_BLOCK_DROP_FULL.match(norm_body))
+
+
 def _set_active_extra_vocab(vocab):
     """Swap the extra vocabulary _word_known() consults. _word_ok / _ident_ok /
     _kv_classify all memoise their verdicts by token text alone
@@ -2047,7 +2083,9 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
       4b. if `tag` is "call" (or a "call"-prefixed variant) AND the body
           matches one of the known RTLog call-diagnosis line shapes, widen
           _word_known() with CALL_FORMAT_VOCAB for steps 5-7 ONLY (Copilot
-          follow-up to #120 -- see CALL_FORMAT_VOCAB's comment above).
+          follow-up to #120 -- see CALL_FORMAT_VOCAB's comment above); the
+          same for the "block drop=1 kind=<k>" lines with BLOCK_FORMAT_VOCAB
+          (tags chat / call / group, whole-line match).
       5. scrub secrets (deny patterns -> bounded placeholders).
       6. residual high-entropy tripwire -> fall back to attribute summary.
       7. POSITIVE structured-shape gate: if the scrubbed body is NOT
@@ -2089,9 +2127,14 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
 
     # 4b -- scope CALL_FORMAT_VOCAB to the specific call-diagnosis line shapes
     # it was added for (Copilot follow-up to #120): active for steps 5-7 ONLY.
-    _use_call_vocab = _is_call_format_body(tag, norm)
-    if _use_call_vocab:
-        _set_active_extra_vocab(CALL_FORMAT_VOCAB)
+    _scoped_vocab = None
+    if _is_call_format_body(tag, norm):
+        _scoped_vocab = CALL_FORMAT_VOCAB
+    elif _is_block_format_body(tag, norm):
+        # BLOCK (2026-10-19) -- the "block drop=1 kind=<k>" lines, same scoping, own words.
+        _scoped_vocab = BLOCK_FORMAT_VOCAB
+    if _scoped_vocab is not None:
+        _set_active_extra_vocab(_scoped_vocab)
     try:
         # 5 -- scrub (benign key=value tokens are held out as sentinels).
         scrubbed, protected = _scrub_body_ex(norm)
@@ -2110,7 +2153,7 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
         else:
             scrubbed = _restore_kv(scrubbed, protected)
     finally:
-        if _use_call_vocab:
+        if _scoped_vocab is not None:
             _set_active_extra_vocab(frozenset())
 
     # 8 -- cap + empty drop.

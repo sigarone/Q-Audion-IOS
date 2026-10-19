@@ -1,4 +1,5 @@
 import Foundation
+import QAudionEngine
 
 /// Fase 1A — client for the server-authoritative group membership REST
 /// endpoints (admin add / admin remove), plus the byte-deterministic
@@ -159,6 +160,9 @@ struct GroupFetchResult {
     let metadataBlobB64: String?
     let metadataVersion: UInt32
     let statusCode: Int
+    /// BLOCK — the founding members the server did not put in the group (`could_not_add` of the create reply:
+    /// ids only, no reason). Empty for a GET and for a create nobody was refused in.
+    var couldNotAdd: [String] = []
     var isSuccess: Bool { (200..<300).contains(statusCode) }
 }
 
@@ -466,7 +470,8 @@ final class GroupMembershipApi {
             admins: json?["admins"] as? [String] ?? [],
             metadataBlobB64: json?["metadata_blob_b64"] as? String,
             metadataVersion: version,
-            statusCode: status)
+            statusCode: status,
+            couldNotAdd: GroupAddRefusal.couldNotAdd(fromReply: json?["could_not_add"]))
     }
 
     /// GET /api/v1/groups — reconciliation backstop (2026-07-17): the server

@@ -772,20 +772,11 @@ struct ChatDetailScreen: View {
                 } label: {
                     Label("Segnala contatto", systemImage: "flag")
                 }
-                Button(role: .destructive) {
-                    Task {
-                        let ok = await container.toggleBlock()
-                        await MainActor.run {
-                            snackbar?.show(.init(
-                                text: ok
-                                    ? String(localized: "chat_detail.contact_blocked", defaultValue: "Contatto bloccato.", comment: "Snackbar confirming the contact was blocked from the chat overflow menu.")
-                                    : String(localized: "chat_detail.operation_failed", defaultValue: "Operazione fallita.", comment: "Generic snackbar error shown when the block/unblock contact action fails."),
-                                severity: ok ? .info : .error,
-                                durationSeconds: 2))
-                        }
-                    }
-                } label: {
-                    Label("Blocca contatto", systemImage: "hand.raised.fill")
+                // BLOCK — one entry that blocks or unblocks, through the same shared function as every other
+                // screen (server first, local list after it accepted, retry on failure). The snackbar is
+                // raised by that function.
+                Button(role: container.isPeerBlocked ? .none : .destructive, action: toggleBlockFromMenu) {
+                    blockMenuLabel
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -802,6 +793,24 @@ struct ChatDetailScreen: View {
             Rectangle()
                 .fill(scheme.outline.opacity(0.3))
                 .frame(height: 0.5)
+        }
+    }
+
+    /// BLOCK — the overflow menu's block / unblock entry: asks for the opposite of the state in force, through
+    /// the shared function (the snackbar, with its retry, is raised there).
+    private func toggleBlockFromMenu() {
+        let wanted: Bool = !container.isPeerBlocked
+        Task { @MainActor in
+            await container.setPeerBlocked(wanted, snackbar: snackbar)
+        }
+    }
+
+    @ViewBuilder
+    private var blockMenuLabel: some View {
+        if container.isPeerBlocked {
+            Label("Sblocca contatto", systemImage: "hand.raised.slash")
+        } else {
+            Label("Blocca contatto", systemImage: "hand.raised.fill")
         }
     }
 

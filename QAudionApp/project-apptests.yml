@@ -35,6 +35,7 @@ targets:
           - AppStateFilesServerUrlTests.swift
           - AvatarAnnounceReductionTests.swift
           - AvatarResizeTests.swift
+          - BlockedContactsStoreTests.swift
           - BugReportFreezeTests.swift
           - BugReporterRetryQueueTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift

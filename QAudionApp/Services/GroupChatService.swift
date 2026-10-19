@@ -367,6 +367,20 @@ public final class GroupChatService {
         return (rotates: rotates, newCryptoEpoch: state.groupEpoch)
     }
 
+    /// The creator's roster after the server left some of the requested members out of a new group
+    /// (`GroupAddRefusal`): take them out of the crypto roster, with no epoch bump and no new key (they never
+    /// received any key material of this group), and forget that a `sender_key_init` was meant for them.
+    /// `unadded` is spelled as in the requested roster. Idempotent.
+    public func dropUnaddedMembers(groupId: String, members: [String], selfId: String, unadded: [String]) {
+        guard !unadded.isEmpty,
+              let state = session(groupId: groupId, members: members, selfId: selfId) else { return }
+        engine.dropUnaddedMembers(state: state, unadded: unadded)
+        if var already = shippedInits[groupId] {
+            already.subtract(unadded)
+            shippedInits[groupId] = already
+        }
+    }
+
     // MARK: - W390 sender_key_init distribution
 
     /// Returns the list of `sender_key_init` envelopes that must be

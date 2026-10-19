@@ -2088,6 +2088,11 @@ final class AppState: ObservableObject {
     /// `peerVideoPauseToastText`).
     @Published var groupCallFatalErrorToastText: String? = nil
 
+    /// BLOCK — one-shot generic notice that the server did not add some or one of the members of a group the user
+    /// created or extended (`completeGroupCreation`, `handleGroupMemberNotAdded`). It names nobody and gives no
+    /// reason. Shown by `ContentView` (same shape as `groupCallFatalErrorToastText`).
+    @Published var groupMembersNotAddedToastText: String? = nil
+
     /// W-VIDPARITY — re-entrancy guard for `promoteReceiveOnlyToCamera`: a
     /// fast double tap on "Attiva video" must not start two competing
     /// video pipelines.
@@ -3672,6 +3677,9 @@ final class AppState: ObservableObject {
         // Route the auth-recovery coordinator's reason-coded lines to RTLog before any
         // provider (or any 401) can exist.
         AuthCoordinatorLogging.installIfNeeded()
+        // BLOCK — the shared block / unblock function and the reload of the blocked list read the signed-in
+        // backend at call time, so binding it here, before any screen can ask, is safe.
+        ContactBlockService.shared.bind(contactsApi: { [weak self] in self?.liveProvider?.contactsApi })
         // 2026-09-19 service-message root fix — bind the service hold queue and
         // the CONTROL-install observer before ANY provider can exist. The hooks
         // read `liveProvider` at call time, so binding this early is safe, and
@@ -4032,6 +4040,15 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 let callId = info["call_id"]
+                // BLOCK — a notification for a call of a contact the user blocked (private call, or a group call
+                // the contact created; the server sends none, this covers one already on screen) is cleared, and
+                // nothing is answered or latched, so a tap cannot auto-answer the next unrelated call or join a
+                // room. It comes before the group routing on purpose.
+                if self.isBlockedCallNotification(info) {
+                    if let cid = callId { NotificationCenterService.shared.clearIncomingCall(callId: cid) }
+                    RTLog.info("call", "block drop=1 kind=notif")
+                    return
+                }
                 // W-GRPRING — the INCOMING_CALL category is SHARED with group
                 // calls in CallKit-free mode (W-NOCALLKIT): the local
                 // notification we post on a WS invite, and the server's APNs
@@ -5424,6 +5441,11 @@ final class AppState: ObservableObject {
         wireDeviceRenewFallback(on: provider)
         provider.persistingRotatedTokens()
         self.liveProvider = provider
+        // BLOCK — every sign-in (and every cold start) builds the backend here: the blocked list of this
+        // account is loaded now, without waiting for the socket to authenticate, and the load is retried with
+        // a growing delay if it fails (`ContactBlockCoordinator.refreshFromServerWithRetry`). The same
+        // request is repeated at each authentication below; the minimum interval keeps it to one.
+        ContactBlockService.shared.refreshFromServerIfDue()
         // W-MSGOUTBOX (2026-09-01) — bind the durable 1:1 outbox drainer.
         // Primitive closures only (CLAUDE.md §16); each reads `liveProvider`
         // at call time, so a provider swap needs nothing beyond this call
@@ -6318,6 +6340,10 @@ final class AppState: ObservableObject {
                     self?.bindPresenceAfterAuth()
                 }
                 if state == .authenticated {
+                    // BLOCK — the server holds the blocked list (another device may have changed it, and a
+                    // fresh install or sign-in starts with none): every (re)authentication reloads it into the
+                    // local copy the receive paths read. Rate-limited inside; a failure keeps the old list.
+                    ContactBlockService.shared.refreshFromServerIfDue()
                     // W530: re-register the audio_frame handler on the
                     // (possibly fresh) WS instance after every reconnect.
                     // BCryptoWebSocketClient.registerHandler is idempotent
@@ -9159,6 +9185,12 @@ final class AppState: ObservableObject {
     private func handleMissedCallEvent(_ data: [String: Any], source: String) {
         let callIdStr = (data["call_id"] as? String) ?? UUID().uuidString
         let callerId = (data["caller_id"] as? String) ?? ""
+        // BLOCK — a call from a blocked contact is not a missed call: no history row, no "Chiamata persa"
+        // banner. (The live and the durable-replay paths both end here, and the caller acks the replay.)
+        if BlockedContactsStore.isBlocked(callerId) {
+            RTLog.info("call", "block drop=1 kind=missed")
+            return
+        }
         let isVid: Bool = ((data["call_type"] as? String) ?? "audio") == "video"
         // H-15 parity: caller_display is peer-controlled — sanitise it the
         // same way the call_incoming path does before it reaches any UI.
@@ -11644,13 +11676,33 @@ final class AppState: ObservableObject {
             // ensureContactResolved, which runs on every inbound message.
             // Safe against clobbering a manual rubrica rename — see
             // NameResolutionService.maybeRefreshFromChatActivity's kdoc.
-            NameResolutionService.shared.maybeRefreshFromChatActivity(userId: senderId)
+            // BLOCK — not for a contact the user blocked: no lookup is spent on someone whose traffic is
+            // dropped below (the frame has already been decrypted above, which a ratchet step needs).
+            if !BlockedContactsStore.isBlocked(senderId) {
+                NameResolutionService.shared.maybeRefreshFromChatActivity(userId: senderId)
+            }
             if routed == .dispatchService {
                 // Service payload: consumed here, acked, settled. It has no
                 // path to a row, a preview, an unread count, a notification or
                 // a conversation (IOS-15/16) — `handleInboundServicePayload`
                 // never touches the conversation-persistence tail below.
                 handleInboundServicePayload(decryptedRaw, senderId: senderId)
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
+                return
+            }
+            // BLOCK — user content (a message, a file or voice-note descriptor, a picture of the contact)
+            // from a sender the user blocked is dropped: no row, preview, unread count, banner or
+            // conversation. The server does not deliver such frames after the block; this catches the ones
+            // it queued before it, and keeps the device correct if the server ever did. It sits AFTER the
+            // decrypt on purpose: dropping the frame unopened would skip a step of the sender's ratchet and
+            // break the service frames (group keys) that follow on the same session. The frame is acked and
+            // settled like any terminal outcome: left un-acked it would be replayed on every reconnect and
+            // crowd real messages out of the 50-entry pending batch. Group content is not affected: it
+            // arrives through `handleIncomingGroupMessage`, not here.
+            if BlockedContactsStore.isBlocked(senderId) {
+                RTLog.info("chat", "block drop=1 kind=msg")
                 finishInboundFrame(
                     serverMsgId: serverMsgId, senderId: senderId,
                     clientMsgId: clientMsgId, settleClientKey: true)
@@ -11709,6 +11761,23 @@ final class AppState: ObservableObject {
             // `ensureV4Session` state machine and to the call/pre-bootstrap
             // handshakes that replace sessions; a failed frame only feeds it.
             //
+            // BLOCK — a frame of a blocked sender that does not open is not kept for a retry, leaves no
+            // placeholder row, prompts no resend request and starts no session recovery: the device sends
+            // nothing on its own to a contact the user blocked. It is acked and settled like any other
+            // terminal outcome. One exception: a CONTROL frame (the service class) from a blocked sender who
+            // shares a group with the user keeps the normal path below, because it may carry the group's key
+            // material and can have raced ahead of the session that opens it (`BlockPolicy`). This sits BEFORE
+            // the CONTROL recovery on purpose.
+            if BlockPolicy.settlesUndecryptableFrame(
+                senderBlocked: BlockedContactsStore.isBlocked(senderId),
+                isControl: wireClass == .v5,
+                sharesKnownGroup: { self.sharesKnownGroup(with: senderId) }) {
+                RTLog.info("chat", "block drop=1 kind=undec")
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
+                return
+            }
             // CONTROL (0xE6): silent by construction — never a row, always acked.
             if wireClass == .v5 {
                 handleUndecryptableControlFrame(
@@ -12243,6 +12312,22 @@ final class AppState: ObservableObject {
     /// conversation — including an unknown, malformed or newer-schema envelope,
     /// which is dropped here instead of falling through to the text path.
     private func handleInboundServicePayload(_ raw: String, senderId: String) {
+        // BLOCK — what a blocked sender sends on the private service channel is dropped (reactions, edits,
+        // deletes, picture announcements, screenshot requests, timers, resend requests, group invites, member
+        // changes) with one exception: the sender key (`sender_key_init` / `sender_key_rotate`) of a group the
+        // user is already in, which the group needs to open that person's later messages (`BlockPolicy`). A
+        // sender key for a group the user is not in is dropped like the rest.
+        let blockedSender: Bool = BlockedContactsStore.isBlocked(senderId)
+        if BlockPolicy.dropsServicePayload(
+            senderBlocked: blockedSender, payload: raw,
+            isKnownGroup: { groupId in
+                GroupRegistry.shared.entries.contains {
+                    BlockPolicy.normalized($0.id) == BlockPolicy.normalized(groupId)
+                }
+            }) {
+            RTLog.info("chat", "block drop=1 kind=svc")
+            return
+        }
         // W86: typed message-targeted control (delete / edit / reaction) mutates
         // an EXISTING row keyed by clientMsgId. The screenshot-lock family also
         // parses into a typed case but is conversation-level and applied by
@@ -12439,6 +12524,12 @@ final class AppState: ObservableObject {
             RTLog.warn("mesh", "msg_receive self=1 dropped=1")
             return
         }
+        // BLOCK — a mesh packet from a contact the user blocked is dropped before any decryption is spent on
+        // it (the mesh has no server in the path to filter it, and no ack to send).
+        guard !BlockedContactsStore.isBlocked(senderId) else {
+            RTLog.info("chat", "block drop=1 kind=mesh")
+            return
+        }
 
         guard let decrypted = attemptDecryptMeshWireBlob(
             cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId,
@@ -12595,6 +12686,12 @@ final class AppState: ObservableObject {
             return
         }
         let senderId = senderContact.userId
+        // BLOCK — same gate as mesh messages: no server filters the mesh, so a blocked contact's
+        // receipt must not reach the message status.
+        guard !BlockedContactsStore.isBlocked(senderId) else {
+            RTLog.info("chat", "block drop=1 kind=mesh")
+            return
+        }
         guard let decrypted = attemptDecryptMeshWireBlob(
             cipher: sealedBytes, senderId: senderId, clientMsgId: shell.clientMsgId,
             aad: meshPacketAad(
@@ -12990,6 +13087,8 @@ final class AppState: ObservableObject {
         _ peerId: String,
         trigger: AvatarAnnounceCoordinator.Trigger = .chatDecrypt
     ) {
+        // BLOCK — nothing of ours is sent on its own to a contact the user blocked.
+        if BlockedContactsStore.isBlocked(peerId) { return }
         avatarAnnounceCoordinator.maybeAnnounce(to: peerId, trigger: trigger)
     }
 
@@ -13117,6 +13216,8 @@ final class AppState: ObservableObject {
     /// Mark the locally-stored messages as `.read` for the given sender.
     /// W78: same server-id reconciliation as the delivery receipts path.
     private func handleReadReceipts(senderId: String, ids: [String]) {
+        // BLOCK — second line: the server already drops read receipts from a blocked sender.
+        guard !BlockedContactsStore.isBlocked(senderId) else { return }
         let store = ConversationStore()
         let now = Date()
         var matchedAny = false
@@ -13199,6 +13300,8 @@ final class AppState: ObservableObject {
     /// the same NotificationCenter channel and flips its `isPeerTyping`
     /// flag. Auto-clears after 5s if no `is_typing=false` arrives.
     private func handleTypingIndicator(senderId: String, isTyping: Bool) {
+        // BLOCK — a blocked contact's "is typing" never shows.
+        if BlockedContactsStore.isBlocked(senderId) { return }
         NotificationCenter.default.post(
             name: AppState.chatTypingNotification,
             object: nil,
@@ -13735,9 +13838,29 @@ final class AppState: ObservableObject {
     private func dispatchInboundOpaque(senderId: String, blobStr: String, senderDeviceId: String? = nil) {
         guard let cke = contactKeyExchange else { return }
 
+        // BLOCK — from a sender the user blocked this channel carries two things and nothing else. (1) What
+        // belongs to the one-to-one call that is already live on this device with them (`blockedLiveCall`: the
+        // user blocked them in the middle of a call, or placed the call before): offers and key-exchange offers
+        // of that call, its answers, its piggy-backs. (2) The media key of a group call the user is in now
+        // (Paths D and C below, judged by the call id). Everything else is dropped silently, with no hangup
+        // and no reply, so the sender learns nothing: a call or key-exchange offer for a call that is not
+        // live, a handshake answer, a call piggy-back, a private file announcement, an attachment receipt.
+        let senderBlocked: Bool = BlockedContactsStore.isBlocked(senderId)
+        let blockedLiveCall: Bool = senderBlocked && isLiveOneToOneCallPeer(senderId)
+        let blockedDrop: Bool = senderBlocked && !blockedLiveCall
+
         // Path A — base64-encoded QUAD binary frame (iOS / Desktop peers).
         if let blob = Data(base64Encoded: blobStr),
            let decoded = QAudionCapabilityExchange.parse(blob) {
+            if blockedDrop {
+                switch decoded {
+                case .keyExchangeOffer, .offer:
+                    RTLog.info("call", "block drop=1 kind=offer")
+                default:
+                    RTLog.info("call", "block drop=1 kind=opaque")
+                }
+                return
+            }
             switch decoded {
             case .keyExchangeOffer(let pub):
                 Task { [weak self] in
@@ -13804,6 +13927,11 @@ final class AppState: ObservableObject {
         // JSON, etc.), so this is a safe no-op fall-through for every
         // other opaque_message consumer below.
         if let envelope = FileAttachmentAnnounceWireEnvelope.parse(wirePayloadB64: blobStr) {
+            // BLOCK — a private file announcement from a blocked sender: nothing is fetched or shown.
+            if senderBlocked {
+                RTLog.info("chat", "block drop=1 kind=file")
+                return
+            }
             let receiver = ChatFileAttachmentReceiver(appState: self)
             Task { [weak self] in
                 do {
@@ -13894,6 +14022,11 @@ final class AppState: ObservableObject {
         // anything to match against for them. Same safe-no-op-fallthrough
         // contract as Path A1 above.
         if let receipt = AttachmentReceiptEnvelope.parse(wirePayloadB64: blobStr) {
+            // BLOCK — a delivery or read receipt from a blocked contact changes nothing on the device.
+            if senderBlocked {
+                RTLog.info("call", "block drop=1 kind=opaque")
+                return
+            }
             let store = ConversationStore()
             if let msg = store.messageByWireAttachmentId(receipt.id) {
                 let newStatus: Message.Status? = {
@@ -13937,6 +14070,11 @@ final class AppState: ObservableObject {
         // intact. See AndroidHandshakeBundle.swift `CallPiggyBack`
         // and docs/SCREEN_SHARE_PROTOCOL.md.
         if let piggy = CallPiggyBack.parse(blobStr) {
+            // BLOCK — a piggy-back is part of a call: it passes only for the call live with the sender.
+            if blockedDrop {
+                RTLog.info("call", "block drop=1 kind=opaque")
+                return
+            }
             // Self-echo guard (see OpaqueSelfEchoFilter doc) — bcrypto-lite
             // bounces every opaque_message back to its own sender with
             // sender_id rewritten to the recipient, so identity comparison
@@ -13971,6 +14109,15 @@ final class AppState: ObservableObject {
         // does the dual-hybrid encapsulate (ML-KEM-1024 + X25519)
         // and ships the matching ACCEPT back over the same wire.
         if let parsed = AndroidHandshakeEnvelope.parse(blobStr) {
+            // BLOCK — an offer or an answer of this wire passes only for the call live with the sender.
+            if blockedDrop {
+                if parsed.bundle.kind == .offer {
+                    RTLog.info("call", "block drop=1 kind=offer")
+                } else {
+                    RTLog.info("call", "block drop=1 kind=opaque")
+                }
+                return
+            }
             switch parsed.bundle.kind {
             case .offer:
                 Task { @MainActor [weak self] in
@@ -13986,6 +14133,11 @@ final class AppState: ObservableObject {
         // R-COMMIT-FIELD: a bundle routed as a handshake bundle (`kind` OFFER/ACCEPT) that does not even
         // decode is malformed too: it ends the call like every other malformed bundle, not a silent drop.
         if let malformedCallId = AndroidHandshakeEnvelope.malformedBundleCallId(blobStr) {
+            // BLOCK — ending a call on a malformed bundle is an answer to the sender: not for a blocked one.
+            if blockedDrop {
+                RTLog.info("call", "block drop=1 kind=opaque")
+                return
+            }
             Task { @MainActor [weak self] in
                 self?.handleUndecodableHandshakeBundle(callId: malformedCallId, senderId: senderId)
             }
@@ -14006,6 +14158,12 @@ final class AppState: ObservableObject {
            (obj["qa_kms"] as? NSNumber)?.intValue == 1,
            let envB64 = obj["env_b64"] as? String,
            let envelopeBytes = Data(base64Encoded: envB64) {
+            // BLOCK — a blocked sender has no business here unless the user is in a group call or in a call with
+            // them: nothing is opened for them otherwise. What is opened is judged again by its call id below.
+            if blockedDrop && liveGroupCallIds().isEmpty {
+                RTLog.info("call", "block drop=1 kind=opaque")
+                return
+            }
             let selfId = currentUserId ?? ""
             guard let kmsClient = liveProvider?.kmsClient, !selfId.isEmpty else {
                 print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) reason=kms_prebootstrap_no_provider")
@@ -14026,6 +14184,15 @@ final class AppState: ObservableObject {
                 // gives it something it has no idea what to do with.
                 if decoded.contains("\"qa_v4_bootstrap\"") {
                     print("[AppState] KmsPreBootstrap: 1:1 v4 bootstrap consumed sender=\(senderId.prefix(8))…")
+                    return
+                }
+                // BLOCK — the media key of a group call is accepted from a blocked sender only for a call the
+                // user is in now.
+                guard BlockPolicy.acceptsGroupCallControl(
+                    senderBlocked: senderBlocked,
+                    callId: BlockPolicy.groupCallControlCallId(ofEnvelope: decoded),
+                    liveCallIds: self.liveGroupCallIds()) else {
+                    RTLog.info("call", "block drop=1 kind=opaque")
                     return
                 }
                 print("[GroupCallController][telemetry] ctrl envelope RECEIVED+decrypted(prebootstrap) sender=\(senderId.prefix(8)), forwarding to GroupCallController")
@@ -14059,6 +14226,12 @@ final class AppState: ObservableObject {
                 print("[GroupCallController][telemetry] ctrl envelope RECEIVE FAILED sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)) reason=\(GroupControlChannelPolicy.rejectionReason(for: wire)) len=\(wire.count)")
                 return
             }
+            // BLOCK — from a blocked sender the group-call key is for a call the user is in now: with no such
+            // call nothing is opened (no ratchet step is spent on it), with one the call id decides below.
+            if senderBlocked && liveGroupCallIds().isEmpty {
+                RTLog.info("call", "block drop=1 kind=opaque")
+                return
+            }
             // W-GRPCALL-DIAG (2026-07-15, incident 419eb1dc): this is the
             // receive-side mirror of `onSendControlEnvelope`'s logging above — a
             // decrypt failure HERE means the sender's envelope (which the sender-side
@@ -14071,6 +14244,13 @@ final class AppState: ObservableObject {
                 epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: senderId, frame: wire)
                 .flatMap { String(data: $0, encoding: .utf8) }
             if let json = json {
+                guard BlockPolicy.acceptsGroupCallControl(
+                    senderBlocked: senderBlocked,
+                    callId: BlockPolicy.groupCallControlCallId(ofEnvelope: json),
+                    liveCallIds: liveGroupCallIds()) else {
+                    RTLog.info("call", "block drop=1 kind=opaque")
+                    return
+                }
                 print("[GroupCallController][telemetry] ctrl envelope RECEIVED+decrypted sender=\(senderId.prefix(8)) cmid=\(cmid.prefix(8)), forwarding to GroupCallController")
                 groupCallController?.onGroupCallControlEnvelope(json: json, fromUserId: senderId)
             } else {
@@ -16718,6 +16898,15 @@ final class AppState: ObservableObject {
     private func prepareVoipIncomingReport(
         _ payload: PushKitProvider.ParsedPayload
     ) -> PushKitProvider.ReportSpec {
+        // BLOCK — a push for a call from a contact the user blocked. iOS requires every VoIP push to be
+        // reported to CallKit, so it is not ignored: it is reported as a generic placeholder and ended at
+        // once (`PushKitProvider.blockedCallerSpec`), and NOTHING of the call is registered (no active call
+        // id, no ring, no caller name), so it cannot ring the device or be answered. The server does not
+        // send this push for a blocked caller; this is the fallback for one queued before the block. It
+        // must come before `prepareIncomingPushCall`, which registers the call.
+        if BlockedContactsStore.isBlocked(payload.callerId) {
+            return prepareBlockedVoipIncomingReport(payload)
+        }
         let display: String = prepareIncomingPushCall(
             callId: payload.callId,
             callerId: payload.callerId,
@@ -16738,6 +16927,38 @@ final class AppState: ObservableObject {
             uuid: payload.callId, callerName: display, hasVideo: pkReportedVideo, endReason: nil)
     }
 
+    /// BLOCK — the report for a 1:1 push whose caller is blocked: the placeholder of
+    /// `PushKitProvider.blockedCallerSpec`, recorded as unanswerable BEFORE it reaches CallKit (same ledger
+    /// as the placeholder of a cancel push), so an Answer tapped on the ring that fades is refused by the
+    /// answer guard. The call id of the push is remembered as ended too, so a later `call_cancelled` push for
+    /// the same call is turned into a placeholder as well (`planIncomingCancelReport`) and never reports the
+    /// real call id to CallKit as a new call. The log line carries the first 8 characters of the call id only.
+    private func prepareBlockedVoipIncomingReport(
+        _ payload: PushKitProvider.ParsedPayload
+    ) -> PushKitProvider.ReportSpec {
+        let spec: PushKitProvider.ReportSpec = PushKitProvider.blockedCallerSpec()
+        ghostPlaceholderCallIds.recordEnded(spec.uuid)
+        recentlyEndedCallIds.recordEnded(payload.callId)
+        let blockedId8: String = String(payload.callId.uuidString.prefix(8))
+        let blockedLine: String = "block drop=1 kind=push id=" + blockedId8
+        RTLog.warn("call", blockedLine)
+        return spec
+    }
+
+    /// BLOCK — the report for a group push whose creator is blocked: the placeholder of
+    /// `PushKitProvider.blockedCallerSpec`, recorded as unanswerable before it reaches CallKit. The log
+    /// line carries the first 8 characters of the call id only.
+    private func prepareBlockedVoipGroupReport(
+        _ payload: PushKitProvider.ParsedGroupPayload
+    ) -> PushKitProvider.ReportSpec {
+        let spec: PushKitProvider.ReportSpec = PushKitProvider.blockedCallerSpec()
+        ghostPlaceholderCallIds.recordEnded(spec.uuid)
+        let blockedGroupId8: String = String(payload.callId.prefix(8))
+        let blockedGroupLine: String = "block drop=1 kind=grpcall id=" + blockedGroupId8
+        RTLog.warn("call", blockedGroupLine)
+        return spec
+    }
+
     /// W-GRPRING group push: ring through the same invite path as the WS, report
     /// the uuid DERIVED from the call_id (a WS invite and a push for the same room
     /// resolve to the same uuid), and end it at once when there is nothing to ring
@@ -16745,6 +16966,13 @@ final class AppState: ObservableObject {
     private func prepareVoipGroupReport(
         _ payload: PushKitProvider.ParsedGroupPayload
     ) -> PushKitProvider.ReportSpec {
+        // BLOCK — a group call of a blocked creator does not ring (`groupCallRingsForCreator`). iOS still
+        // requires the push to be reported, so it gets the same generic placeholder as a blocked 1:1
+        // caller, ended at once; the creator's name and the group's never reach the system screen, and
+        // nothing about the call is registered.
+        if !groupCallRingsForCreator(payload.creatorId) {
+            return prepareBlockedVoipGroupReport(payload)
+        }
         let prepared: (uuid: UUID, display: String, presented: Bool) = prepareIncomingPushGroupCall(payload)
         let grpUuid: String = String(prepared.uuid.uuidString.prefix(8)) + "…"
         let grpPresented: String = String(describing: prepared.presented)
@@ -16766,6 +16994,13 @@ final class AppState: ObservableObject {
     /// `opaque_wakeup` sender): an Answer tapped on the placeholder before the real
     /// call arrives is refused (`answerguard refuse=1 why=3`); before the server
     /// enables TRUST-6 on iOS these uuids need their own ledger and a deferred answer.
+    ///
+    /// BLOCK, to handle when opaque wakeups are enabled for iOS: this wake names nobody, so the report
+    /// cannot be judged here. When the real `call_incoming` that follows is from a blocked caller it is dropped
+    /// silently (the WS handler returns before any state), so `reconcileOpaqueCallWakeup` never sees a real
+    /// call and the generic placeholder keeps ringing for up to about 30 seconds with nobody behind it. Then
+    /// the placeholder must be ended as soon as the blocked `call_incoming` is dropped (the drop has to hand
+    /// the placeholder id to the reconciler), without telling the caller anything.
     private func prepareVoipOpaqueReport(
         _ payload: PushKitProvider.OpaqueCallWakeupPayload
     ) -> PushKitProvider.ReportSpec {
@@ -16809,6 +17044,9 @@ final class AppState: ObservableObject {
     ) {
         switch event {
         case .incoming:
+            // BLOCK — a blocked caller's push was reported and ended at once: no offer is wanted, so the
+            // socket is not woken for it.
+            guard !PushKitProvider.isBlockedCallerSpec(spec) else { return }
             // CRITICAL: bring the signalling WS up NOW so the buffered call_offer
             // redelivery + PQC handshake can flow while the native UI rings.
             Task { @MainActor [weak self] in
@@ -16856,6 +17094,53 @@ final class AppState: ObservableObject {
         case .unparsed:
             break
         }
+    }
+
+    /// BLOCK — is this incoming-call notification (its `userInfo`) about a call from, or a group call created by, a
+    /// blocked contact? The same rule as every other notification (`BlockPolicy.suppressesNotification`): the
+    /// caller is `peer_id` on a local notification and may be `caller_id` on a pushed one, the creator of a group
+    /// call alert is `creator_id`, and an empty id is skipped.
+    private func isBlockedCallNotification(_ info: [String: String]) -> Bool {
+        BlockPolicy.suppressesNotification(
+            userInfo: info as [AnyHashable: Any], blocked: BlockedContactsStore.loadBlockedIds())
+    }
+
+    /// BLOCK — is `senderId` the other end of the one-to-one call that is live on this device? What a blocked
+    /// contact sends about THAT call (an offer in the middle of it, the answer to a call the user placed) is not
+    /// dropped (`BlockPolicy.isLiveCallPeer`).
+    @MainActor
+    private func isLiveOneToOneCallPeer(_ senderId: String) -> Bool {
+        guard isInCall || (callState != .idle && callState != .ended) else { return false }
+        return BlockPolicy.isLiveCallPeer(senderId, livePeerId: callContactId)
+    }
+
+    /// BLOCK — the group calls the user is in or joining right now: the controller's call, the surface state
+    /// (set synchronously when the user accepts a ring) and a join latched for a cold start. The media key of a
+    /// group call is accepted from a blocked contact only for one of these (`BlockPolicy.acceptsGroupCallControl`).
+    @MainActor
+    private func liveGroupCallIds() -> [String] {
+        var ids: [String] = []
+        func add(_ state: GroupCallController.State) {
+            switch state {
+            case .connecting(let callId), .active(let callId, _):
+                ids.append(callId)
+            case .idle, .failed:
+                break
+            }
+        }
+        if let controller = groupCallController { add(controller.state) }
+        add(groupCallControllerState)
+        if let pending = pendingGroupCallJoinId { ids.append(pending) }
+        return ids
+    }
+
+    /// BLOCK — do the user and `otherId` both belong to a group of the local registry?
+    @MainActor
+    private func sharesKnownGroup(with otherId: String) -> Bool {
+        let selfId: String = currentUserId ?? AppState.currentUserIdSnapshot ?? ""
+        return BlockPolicy.sharesGroup(
+            selfId: selfId, otherId: otherId,
+            groupMembers: GroupRegistry.shared.entries.map { $0.members })
     }
 
     /// W-GHOSTCALL (2026-09-25) — decide which uuid the `call_cancelled` push
@@ -16960,6 +17245,11 @@ final class AppState: ObservableObject {
     /// `call_incoming` still reconcile whenever it eventually arrives, so
     /// polling continues past the early bound rather than hard-stopping;
     /// only the diagnostic noise level changes.
+    ///
+    /// BLOCK, to handle when opaque wakeups are enabled for iOS (see `prepareVoipOpaqueReport`): when the real
+    /// `call_incoming` is from a blocked caller it is dropped silently and never sets `activeCallKitId`, so this
+    /// poll runs to its ~30 s cap and the generic placeholder rings that long with nobody behind it. Ending the
+    /// placeholder earlier needs the blocked drop to tell this reconciler, without any message to the caller.
     @MainActor
     private func reconcileOpaqueCallWakeup(placeholderCallKitId: UUID) async {
         let pollIntervalNs: UInt64 = 200_000_000  // 200ms
@@ -17349,6 +17639,9 @@ final class AppState: ObservableObject {
         // after the wipe, so the cache is emptied here, in the one function every
         // wipe path (logout, remote wipe, account deletion) already calls.
         cachedContacts = []
+        // BLOCK — the blocked list belongs to the account that left: the next account starts with none and
+        // loads its own from the server at sign-in (`ContactBlockService.refreshFromServerIfDue`).
+        ContactBlockService.shared.forgetAccount()
         ServiceSendHub.shared.reset()
         AppState.nackResendCounts.removeAll()
         AppState.decryptNackLastSentMs.removeAll()
@@ -23371,14 +23664,23 @@ extension AppState {
         // forward only. Seal the metadata blob first and it sits at an index
         // BELOW what every member installs — permanently undecryptable for
         // them, i.e. the nameless group this whole change exists to remove,
-        // wearing a crypto disguise. Ship first, seal second.
+        // wearing a crypto disguise. Capture first, seal second.
         //
-        // Shipping the inits here (createGroup never did — the first TEXT
-        // send used to be the trigger) is also strictly better on its own:
-        // the recipient buffers the ctl envelope until they accept the
+        // Shipping the inits at creation (createGroup never did — the first
+        // TEXT send used to be the trigger) is also strictly better on its
+        // own: the recipient buffers the ctl envelope until they accept the
         // invite (W395 `bufferCtl`), so their recv chain is installed the
         // moment they join instead of at our first message.
-        shipSenderKeyInits(groupHex: gidBytes, members: fullMembers, selfId: selfId)
+        //
+        // BLOCK — the envelopes are CAPTURED here, which is all the ordering
+        // above needs (they are built from the send chain as it stands now),
+        // and SENT by `completeGroupCreation` once the server has said which
+        // founding members it left out: a member who is left out never gets a
+        // sender key or an invite, and never appears in the roster.
+        let pendingInits: [(recipient: String, envelopeJson: String)] =
+            GroupChatService.shared.pendingInitsAfterBootstrap(
+                groupId: gidBytes, members: fullMembers, selfId: selfId
+            ).map { (recipient: $0.recipientId, envelopeJson: $0.envelopeJson) }
 
         // SERVER REGISTRATION (Fase 1A, best-effort) — POST /api/v1/groups
         // BEFORE/alongside the P2P fan-out below. Android + Desktop both
@@ -23396,14 +23698,16 @@ extension AppState {
         // by the server in the SAME transaction as the group row, so this
         // group is never visible to anybody without it. The separate
         // `PUT …/metadata` stays — it is the RENAME path.
+        var registrationStarted: Bool = false
         if let groupIdWire = Self.hexToDashedUUID(gidBytes),
            let api = GroupMembershipApi.from(serverUrl: serverUrl, token: currentAccessToken) {
+            registrationStarted = true
             let regMembers = fullMembers
             let regAdmins = fullAdmins
             // Sealed HERE and not above so a P2P-only creation (no auth / bad
             // id ⇒ no server call at all) does not consume a send-chain index
             // for a blob nobody will ever receive. Still strictly after
-            // `shipSenderKeyInits` — that ordering is the load-bearing one.
+            // `pendingInitsAfterBootstrap` — that ordering is the load-bearing one.
             let sealedMetadata = sealCreationMetadata(
                 groupHex: gidBytes, name: name, members: fullMembers, selfId: selfId)
             let regBlob = sealedMetadata?.blobB64
@@ -23427,7 +23731,73 @@ extension AppState {
                 self?.applyGroupCreationResult(
                     res, groupHex: gidBytes, publishedBlob: regPublished,
                     sealedEpoch: regSealEpoch)
+                // BLOCK — keys and invites go out only now, to the members the server put in. An answer
+                // that is missing (no response) or not a success names nobody: then everybody asked for is in,
+                // as before this existed.
+                self?.completeGroupCreation(
+                    groupHex: gidBytes, name: name, requestedMembers: regMembers,
+                    requestedAdmins: regAdmins, refused: res?.couldNotAdd ?? [], inits: pendingInits)
             }
+        }
+        if !registrationStarted {
+            // No server registration (not signed in for it, or an id that is not a UUID): nothing can be
+            // refused, keys and invites go out at once.
+            completeGroupCreation(
+                groupHex: gidBytes, name: name, requestedMembers: fullMembers,
+                requestedAdmins: fullAdmins, refused: [], inits: pendingInits)
+        }
+
+        NotificationCenter.default.post(
+            name: AppState.groupRegistryChangedNotification,
+            object: nil,
+            userInfo: ["groupId": gidBytes])
+        return gidBytes
+    }
+
+    /// BLOCK — the second half of `createGroup`, run when the server has answered the create (or at once when the
+    /// group is not registered there). `refused` is the `could_not_add` of the reply: founding members the server
+    /// left out, ids only and no reason (a contact who blocked the creator, an unknown or deleted account and any
+    /// other cause look the same). In this order, so nothing about the group ever reaches a member who is not in
+    /// it:
+    ///   1. the roster is cut to the members who are in (registry and crypto roster; no rekey, they never
+    ///      received a key), and the creator gets ONE generic notice, which names nobody and gives no reason;
+    ///   2. the `sender_key_init` envelopes captured by `createGroup` go to the members who are in;
+    ///   3. the invite and the `member_added` fan-out are built from the cut roster.
+    @MainActor
+    fileprivate func completeGroupCreation(
+        groupHex: String, name: String, requestedMembers: [String], requestedAdmins: [String],
+        refused: [String], inits: [(recipient: String, envelopeJson: String)]
+    ) {
+        guard let selfId = currentUserId, !selfId.isEmpty else { return }
+        let roster: GroupAddRefusal.Outcome = GroupAddRefusal.outcome(
+            requested: requestedMembers, refused: refused, selfId: selfId)
+        let fullMembers: [String] = roster.kept
+        let fullAdmins: [String] = GroupAddRefusal.outcome(
+            requested: requestedAdmins, refused: refused, selfId: selfId).kept
+        if roster.notifies {
+            for id in roster.dropped {
+                GroupRegistry.shared.removeMember(groupId: groupHex, userId: id)
+            }
+            GroupChatService.shared.dropUnaddedMembers(
+                groupId: groupHex, members: requestedMembers, selfId: selfId, unadded: roster.dropped)
+            let leftOutLine: String = "grp_create r=left n=" + String(roster.dropped.count) + " g=" + String(groupHex.prefix(8))
+            RTLog.info("group", leftOutLine)
+            groupMembersNotAddedToastText = String(
+                localized: "group.create.members_not_added",
+                defaultValue: "Alcuni membri non sono stati aggiunti",
+                comment: "Snackbar after creating a group: the server left some of the chosen members out. Names nobody and gives no reason.")
+        }
+
+        // 2. Sender keys, to the members who are in.
+        let stay: Set<String> = BlockPolicy.normalizedSet(Set(fullMembers))
+        for pending in inits where stay.contains(BlockPolicy.normalized(pending.recipient)) {
+            NotificationCenter.default.post(
+                name: AppState.groupSenderKeyCtlNotification,
+                object: nil,
+                userInfo: [
+                    "recipient": pending.recipient,
+                    "envelopeJson": pending.envelopeJson,
+                ])
         }
 
         // W403 Outbound: emit BOTH the legacy iOS `group_invite`
@@ -23439,7 +23809,7 @@ extension AppState {
         let now = Int64(Date().timeIntervalSince1970)
         let groupEpoch: UInt32 = 1
         let inviteEnv = GroupInviteEnvelope.Invite(
-            g: gidBytes, name: name, members: fullMembers,
+            g: groupHex, name: name, members: fullMembers,
             admins: fullAdmins, from: selfId, e: groupEpoch, ts: now)
         let inviteJson = GroupInviteEnvelope.encodeInvite(inviteEnv)
 
@@ -23466,7 +23836,7 @@ extension AppState {
             // is implied by the very fact they got the invite.
             for otherMember in fullMembers where otherMember != recipient {
                 let addedEnv = GroupInviteEnvelope.MemberAdded(
-                    g: gidBytes, e: groupEpoch, member: otherMember,
+                    g: groupHex, e: groupEpoch, member: otherMember,
                     from: selfId, ts: now)
                 if let addedJson = GroupInviteEnvelope.encodeMemberAdded(addedEnv) {
                     NotificationCenter.default.post(
@@ -23482,8 +23852,30 @@ extension AppState {
         NotificationCenter.default.post(
             name: AppState.groupRegistryChangedNotification,
             object: nil,
-            userInfo: ["groupId": gidBytes])
-        return gidBytes
+            userInfo: ["groupId": groupHex])
+    }
+
+    /// BLOCK — the server refused to add `member` to `groupHex` (403 "member could not be added": no reason; the
+    /// member may have blocked the admin, may no longer exist, ...). `addGroupMembers` extends the roster before
+    /// it asks the server, so the member is taken back out of it here (registry and crypto roster, no rekey),
+    /// and the admin sees one generic error that names nobody and says nothing about why.
+    @MainActor
+    fileprivate func handleGroupMemberNotAdded(groupHex: String, member: String) {
+        if let selfId = currentUserId, !selfId.isEmpty,
+           let entry = GroupRegistry.shared.entry(for: groupHex), entry.members.contains(member) {
+            GroupRegistry.shared.removeMember(groupId: groupHex, userId: member)
+            GroupChatService.shared.dropUnaddedMembers(
+                groupId: groupHex, members: entry.members, selfId: selfId, unadded: [member])
+            NotificationCenter.default.post(
+                name: AppState.groupRegistryChangedNotification,
+                object: nil, userInfo: ["groupId": groupHex])
+        }
+        let refusedLine: String = "grp_add r=left g=" + String(groupHex.prefix(8))
+        RTLog.info("group", refusedLine)
+        groupMembersNotAddedToastText = String(
+            localized: "group.add.member_not_added",
+            defaultValue: "Impossibile aggiungere il membro",
+            comment: "Snackbar after adding a member to a group: the server refused. Names nobody and gives no reason.")
     }
 
     /// W-GRPNAME — apply the `POST /api/v1/groups` reply, and make sure the
@@ -23605,8 +23997,9 @@ extension AppState {
     /// (`group_metadata_changed`, the GET recovery,
     /// `decryptAndApplyGroupMetadataBlob`) already handles it unchanged.
     ///
-    /// **CALLER CONTRACT** — the `sender_key_init` fan-out for `members` MUST
-    /// already have been shipped when this is called. See the ordering
+    /// **CALLER CONTRACT** — the `sender_key_init` envelopes for `members` MUST
+    /// already have been built (`pendingInitsAfterBootstrap`; sending them can
+    /// follow) when this is called. See the ordering
     /// comment in `createGroup`: an init built after this seal installs
     /// `lastSeen` ABOVE the blob's index and every member loses the name for
     /// good.
@@ -23733,6 +24126,16 @@ extension AppState {
             }
             GroupRegistry.shared.addMember(groupId: groupId, userId: member)
         } else if member == currentUserId {
+            // BLOCK — a blocked contact cannot put the user into a group. This envelope names US as the
+            // added member of a group we do not know: that is an add, exactly like an invite, so it creates
+            // no registry entry, no session and no "added to the group" notice when the sender, or the admin
+            // it names, is a contact the user blocked. (A group the user is already in is the branch above:
+            // its content and membership changes stay unfiltered.) Nothing is sent back.
+            let blockedForJoin: Set<String> = BlockedContactsStore.loadBlockedIds()
+            if BlockPolicy.refusesGroupJoin(by: [senderId, adminUserId], blocked: blockedForJoin) {
+                RTLog.info("group", "block drop=1 kind=grp")
+                return
+            }
             // W403 auto-bootstrap: we've been added to a group we don't
             // know yet (Desktop/Android onboarding flow — no preceding
             // group_invite envelope). Persist a minimal registry entry
@@ -24247,11 +24650,16 @@ extension AppState {
             guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { continue }
             let envB64 = envelope.base64EncodedString()
             let sigB64 = sig.base64EncodedString()
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let res = await api.addMember(
                     groupIdWire: groupIdWire, userId: newMember,
-                    signedEnvelopeB64: envB64, adminSignatureB64: sigB64),
-                    res.isSuccess else { return }
+                    signedEnvelopeB64: envB64, adminSignatureB64: sigB64) else { return }
+                // BLOCK — "member could not be added": the member goes back out of the roster, one generic error.
+                if GroupAddRefusal.isAddRefusal(statusCode: res.statusCode) {
+                    self?.handleGroupMemberNotAdded(groupHex: groupHex, member: newMember)
+                    return
+                }
+                guard res.isSuccess else { return }
                 GroupRegistry.shared.setEpoch(groupId: groupHex, epoch: res.groupEpoch)
                 NotificationCenter.default.post(
                     name: AppState.groupRegistryChangedNotification,
@@ -24613,6 +25021,15 @@ extension AppState {
             // e.g. an Android/Desktop admin added us). Bootstrap exactly like
             // `applyMemberAdded`'s auto-bootstrap branch.
             guard members.contains(selfId) else { return }
+            // BLOCK — the user does not join a group through a contact they blocked: when the actor of the
+            // event is blocked, nothing is bootstrapped (no registry entry, no session, no notice). The
+            // server refuses such adds itself; this keeps the device correct for an event that still
+            // arrives. A snapshot names no actor and passes.
+            let blockedForServerJoin: Set<String> = BlockedContactsStore.loadBlockedIds()
+            if BlockPolicy.refusesGroupJoin(by: [actor], blocked: blockedForServerJoin) {
+                RTLog.info("group", "block drop=1 kind=grp")
+                return
+            }
             // W-GRPDEL — the roster containing us says nothing about whether
             // this is a re-add: it contains us on every snapshot/catch-up
             // replay too. Only `operation` + `subject_user_id` distinguish
@@ -25550,6 +25967,15 @@ extension AppState {
         return UUID(uuidString: callId) ?? UUID()
     }
 
+    /// BLOCK — does a group call created by `creatorId` ring on this device? Yes unless the creator is a
+    /// contact the user blocked: then never, whether or not the two share a group
+    /// (`BlockPolicy.ringsForGroupCall`). A group call created by someone else rings as usual even when a
+    /// blocked contact is in it. Read at call time, so a block made a second ago counts.
+    @MainActor
+    func groupCallRingsForCreator(_ creatorId: String) -> Bool {
+        BlockPolicy.ringsForGroupCall(creatorId: creatorId, blocked: BlockedContactsStore.loadBlockedIds())
+    }
+
     /// Ring for an incoming group call. Returns true when a ring is live for
     /// `invite.callId` after this call (either newly presented, or already up
     /// from the other source) — the PushKit path uses that to decide whether
@@ -25560,6 +25986,14 @@ extension AppState {
         _ invite: IncomingGroupCallInvite,
         source: IncomingGroupCallSource
     ) -> Bool {
+        // BLOCK — a group call created by a contact the user blocked never rings, whether or not the two
+        // share a group (the invite's own group id plays no part). Every source passes through here (WS
+        // invite, PushKit group push, notification action). It is dropped silently: no decline, no "busy",
+        // so the creator learns nothing; nothing is registered.
+        if !groupCallRingsForCreator(invite.creatorId) {
+            RTLog.info("call", "block drop=1 kind=grpcall")
+            return false
+        }
         // Already accepted or rejected (push ⇄ WS race, or a WS reconnect
         // replaying the invite) — never ring twice for the same room.
         if handledGroupCallIds.contains(invite.callId) {

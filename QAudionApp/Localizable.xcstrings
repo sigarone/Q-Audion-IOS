@@ -3865,6 +3865,174 @@
         }
       }
     },
+    "contact_block.block_failed": {
+      "extractionState": "manual",
+      "comment": "Snackbar error — the block request did not reach the server, so nothing was blocked; shown with a Retry action.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile bloccare il contatto. Controlla la connessione e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't block the contact. Check your connection and try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt konnte nicht blockiert werden. Verbindung prüfen und erneut versuchen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo bloquear el contacto. Comprueba la conexión e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de bloquer le contact. Vérifie ta connexion et réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível bloquear o contato. Verifique a conexão e tente novamente."
+          }
+        }
+      }
+    },
+    "contact_block.unblock_failed": {
+      "extractionState": "manual",
+      "comment": "Snackbar error — the unblock request did not reach the server, so the contact is still blocked; shown with a Retry action.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile sbloccare il contatto. Controlla la connessione e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't unblock the contact. Check your connection and try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt konnte nicht entsperrt werden. Verbindung prüfen und erneut versuchen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo desbloquear el contacto. Comprueba la conexión e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de débloquer le contact. Vérifie ta connexion et réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível desbloquear o contato. Verifique a conexão e tente novamente."
+          }
+        }
+      }
+    },
+    "group.create.members_not_added": {
+      "extractionState": "manual",
+      "comment": "Snackbar after creating a group: the server left some of the chosen members out. Names nobody and gives no reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alcuni membri non sono stati aggiunti"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some members could not be added"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einige Mitglieder konnten nicht hinzugefügt werden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo añadir a algunos miembros"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Certains membres n'ont pas pu être ajoutés"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alguns membros não puderam ser adicionados"
+          }
+        }
+      }
+    },
+    "group.add.member_not_added": {
+      "extractionState": "manual",
+      "comment": "Snackbar after adding a member to a group: the server refused. Names nobody and gives no reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile aggiungere il membro"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't add the member"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mitglied konnte nicht hinzugefügt werden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo añadir al miembro"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'ajouter le membre"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível adicionar o membro"
+          }
+        }
+      }
+    },
     "contact_detail.contact_blocked": {
       "extractionState": "manual",
       "comment": "Snackbar — a contact was blocked, %@ is their display name",
@@ -29949,6 +30117,47 @@
         }
       }
     },
+    "Sblocca contatto": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sblocca contatto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unblock contact"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt entsperren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desbloquear contacto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Débloquer le contact"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desbloquear contato"
+          }
+        }
+      }
+    },
     "Scanner 2.4 GHz non attivo (richiede stack BLE up)": {
       "extractionState": "manual",
       "localizations": {
@@ -46447,43 +46656,43 @@
         }
       }
     },
-    "Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti.": {
+    "Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti in privato.": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti."
+            "value": "Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti in privato."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Do you also want to block this contact? They will no longer be able to call or message you."
+            "value": "Do you also want to block this contact? They will no longer be able to call you or message you privately."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Möchten Sie diesen Kontakt auch blockieren? Er kann Sie dann weder anrufen noch Ihnen schreiben."
+            "value": "Möchten Sie diesen Kontakt auch blockieren? Er kann Sie dann weder anrufen noch Ihnen privat schreiben."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "¿Quieres bloquear también a este contacto? Ya no podrá llamarte ni escribirte."
+            "value": "¿Quieres bloquear también a este contacto? Ya no podrá llamarte ni escribirte en privado."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Veux-tu aussi bloquer ce contact ? Il ne pourra plus t'appeler ni t'écrire."
+            "value": "Veux-tu aussi bloquer ce contact ? Il ne pourra plus t'appeler ni t'écrire en privé."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Você também quer bloquear este contato? Ele não poderá mais ligar nem escrever para você."
+            "value": "Você também quer bloquear este contato? Ele não poderá mais ligar nem escrever para você em particular."
           }
         }
       }

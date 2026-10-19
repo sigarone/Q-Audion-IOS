@@ -193,6 +193,12 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
                        body: String,
                        userInfo: [AnyHashable: Any] = [:],
                        delay: TimeInterval = 0.5) async {
+        // BLOCK — a banner about a private message or call of a contact the user blocked is never shown.
+        // The receive paths already drop those; this is the backstop at the one place every local banner
+        // goes through. Group notifications carry a group id and are not filtered (`BlockPolicy`).
+        if BlockPolicy.suppressesNotification(userInfo: userInfo, blocked: BlockedContactsStore.loadBlockedIds()) {
+            return
+        }
         // W405: respect the user's quiet-hours setting — if we're
         // inside the configured window, drop the local notification
         // entirely. Banner stays suppressed; the message is already
@@ -243,6 +249,11 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     func postIncomingCall(callId: String, peerId: String, callerName: String, hasVideo: Bool,
                           groupCall: Bool = false, creatorName: String = "",
                           groupId: String = "", groupName: String = "") async {
+        // BLOCK — no ringing banner for a call from a blocked contact, nor for a group call that contact created
+        // (`peerId` is the creator of a group call): a backstop, the call paths drop it first.
+        if BlockPolicy.isBlocked(peerId, in: BlockedContactsStore.loadBlockedIds()) {
+            return
+        }
         let content = UNMutableNotificationContent()
         // W-L10N-BATCH1 (2026-09-08) — UNMutableNotificationContent.title/
         // body are plain String, not LocalizedStringKey; explicit lookup.
@@ -357,6 +368,18 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         // W-MISSEDQUIET (2026-10-04): a missed-call notification that arrives while a call is in flight is shown
         // quietly (banner / list, no sound). Every other notification, and a missed call outside a call, is
         // presented exactly as before. The decision is `MissedCallAlertPolicy.foreground`.
+        //
+        // BLOCK — an alert about a private message or call of a contact the user blocked (one the server pushed
+        // before the block, or a local banner scheduled earlier) is not shown while the app is in front: no
+        // banner, no list entry, no sound, no badge. In the background or with the app killed the system shows
+        // the alert without asking the app, and only the server can keep it from being sent. A group call alert
+        // of a blocked creator is suppressed like a private one; a group message alert carries a group id and is
+        // not filtered (`BlockPolicy`).
+        let alertInfo: [AnyHashable: Any] = notification.request.content.userInfo
+        if BlockPolicy.suppressesNotification(userInfo: alertInfo, blocked: BlockedContactsStore.loadBlockedIds()) {
+            RTLog.info("call", "block drop=1 kind=notif")
+            return []
+        }
         let isMissedCall: Bool = notification.request.content.categoryIdentifier == Category.missedCall.rawValue
         var callInFlight: Bool = false
         if isMissedCall { callInFlight = await self.isCallInFlight() }

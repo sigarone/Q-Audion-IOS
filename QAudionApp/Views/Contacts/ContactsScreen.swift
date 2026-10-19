@@ -145,6 +145,10 @@ struct ContactsScreen: View {
             blockedIds = BlockedContactsStore.loadBlockedIds()
             updateSortedContacts()
         }
+        // The list is reloaded from the server at sign-in and on reconnect, and changed by the detail screen.
+        .onReceive(NotificationCenter.default.publisher(for: .blockedContactsDidChange)) { _ in
+            blockedIds = BlockedContactsStore.loadBlockedIds()
+        }
         .onChange(of: searchText) { newValue in
             container.setSearchQuery(newValue)
         }
@@ -589,15 +593,16 @@ struct ContactsScreen: View {
         }
     }
 
+    /// BLOCK — the shared function: the server first, the local list after it accepted, a retry on failure.
+    /// The tab then shows what the local list really says.
     private func unblockContact(_ item: ContactsListViewModel.Item) {
-        BlockedContactsStore.remove(item.userId)
-        blockedIds = BlockedContactsStore.loadBlockedIds()
         let uid: String = item.userId
         let name: String = item.displayName
-        if let provider = appState.liveProvider {
-            Task { try? await provider.contactsApi.unblockContact(userId: uid) }
+        Task { @MainActor in
+            await ContactBlockService.shared.setBlocked(
+                false, userId: uid, displayName: name, snackbar: snackbar)
+            blockedIds = BlockedContactsStore.loadBlockedIds()
         }
-        snackbar?.show(.init(text: String(localized: "contact_detail.contact_unblocked", defaultValue: "\(name) sbloccato.", comment: "Snackbar — a contact was unblocked, %@ is their display name"), severity: .info))
     }
 
     private var emptyAll: some View {
