@@ -2911,7 +2911,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // OLD formula: `min(30, attempt * 0.5)` capped at attempt=10 →
         // attempt 11+ reconnected every 5 s forever. On a broken-token
         // device this generated 720 reconnects/h on the server (the
-        // exact pattern we saw on 79.51.170.153). Multiplied by N
+        // exact pattern seen from one real client address). Multiplied by N
         // devices behind the same provider, that's a slow DoS of the
         // app's own auth-deadline budget.
         //

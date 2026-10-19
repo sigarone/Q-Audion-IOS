@@ -95,18 +95,19 @@ final class BCryptoRestClientConcurrentRefreshTests: XCTestCase {
     }
 
     /// Runs `work` on a dispatch thread. The extra work spins until the requests are done, and
-    /// inside Swift's cooperative pool it could hold every thread those requests need.
+    /// inside Swift's cooperative pool it could hold every thread those requests need. Utility QoS,
+    /// below the requests and URLSession, so the spinning threads never get ahead of them.
     private static func onDispatchThread(_ work: @escaping @Sendable () -> Void) async {
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.global(qos: .utility).async {
                 work()
                 done.resume()
             }
         }
     }
 
-    /// Runs `body` at least `minimum` times and then until `stop` is set, with a ceiling so
-    /// a hung request fails the test instead of spinning forever.
+    /// Runs `body` at least `minimum` times and then until `stop` is set. The ceiling only bounds
+    /// the spinning: a request that never finishes still keeps `burst` from returning.
     private static func repeatUntil(_ stop: StopFlag, minimum: Int, _ body: () -> Void) {
         var runs = 0
         while runs < minimum || (!stop.isSet && runs < 5_000_000) {
@@ -128,6 +129,7 @@ final class BCryptoRestClientConcurrentRefreshTests: XCTestCase {
                 }
             }
             let recovered = await burst(on: client, alongside: Array(repeating: reader, count: 4))
+            XCTAssertEqual(recovered.count, Self.concurrentRequests, "round \(round)")
             XCTAssertTrue(recovered.allSatisfy { $0 }, "round \(round): every request recovers")
             XCTAssertEqual(client.accessToken, fresh.access, "round \(round)")
             XCTAssertEqual(client.refreshToken, fresh.refresh, "round \(round)")
@@ -147,6 +149,7 @@ final class BCryptoRestClientConcurrentRefreshTests: XCTestCase {
                 Self.repeatUntil(stop, minimum: 200) { client.updateConfig(freshConfig) }
             }
             let recovered = await burst(on: client, alongside: Array(repeating: broadcaster, count: 2))
+            XCTAssertEqual(recovered.count, Self.concurrentRequests, "round \(round)")
             XCTAssertTrue(recovered.allSatisfy { $0 }, "round \(round): every request recovers")
             XCTAssertEqual(client.accessToken, fresh.access, "round \(round)")
             XCTAssertEqual(client.refreshToken, fresh.refresh, "round \(round)")
