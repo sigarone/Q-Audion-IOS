@@ -92,6 +92,8 @@ final class VoiceToneRowTests: XCTestCase {
         XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: bio.pitchHz), "—")
         let row = VoiceGauges.pitch(hz: bio.pitchHz, voiced: bio.pitchVoiced)
         XCTAssertEqual(row.value, "—")
+        XCTAssertEqual(row.text, "—", "the dash alone, never \"— Hz\"")
+        XCTAssertEqual(row.unit, "")
         XCTAssertEqual(VoiceSpectralDetails.text(formant1Hz: bio.f1, formant2Hz: bio.f2,
                                                  syllablesPerSecond: bio.syllablesPerSec,
                                                  hnrDecibels: bio.hnr, rateUnit: "u",
@@ -149,6 +151,29 @@ final class VoiceToneRowTests: XCTestCase {
                                                  hnrDecibels: 18.4, rateUnit: unit,
                                                  locale: Locale(identifier: language.locale))
             XCTAssertEqual(text, "F1 520 · F2 1480 · 4\(language.decimalSeparator)2 \(unit) · HNR 18 dB", language.catalogKey)
+        }
+    }
+
+    /// The widest line (12.5) in each language: the four fields at their largest, with the unit and the separator
+    /// of that language, and no line of that language is longer than it.
+    func testTheWidestLineOfTheDetailsInTheSixLanguages() throws {
+        let entry = try catalogEntry("in_call.bio.syllables_unit")
+        for language in languages {
+            let unit = try catalogValue(entry, language.catalogKey)
+            let locale = Locale(identifier: language.locale)
+            let widest = VoiceSpectralDetails.widestLine(rateUnit: unit, locale: locale)
+            XCTAssertEqual(widest, "F1 1100 · F2 3200 · 12\(language.decimalSeparator)0 \(unit) · HNR -40 dB",
+                           language.catalogKey)
+            for f1: Float in [.nan, 90, 1100] {
+                for rate: Float in [.nan, 0, 12] {
+                    for hnr: Float in [.nan, -40, 40] {
+                        let text = try XCTUnwrap(VoiceSpectralDetails.text(formant1Hz: f1, formant2Hz: 3200,
+                                                                           syllablesPerSecond: rate, hnrDecibels: hnr,
+                                                                           rateUnit: unit, locale: locale))
+                        XCTAssertLessThanOrEqual(text.count, widest.count, "\(language.catalogKey): \(text)")
+                    }
+                }
+            }
         }
     }
 

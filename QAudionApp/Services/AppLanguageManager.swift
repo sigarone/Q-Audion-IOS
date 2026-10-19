@@ -71,15 +71,34 @@ public final class AppLanguageManager {
         }
     }
 
-    /// The override if one is set and still supported, else the closest
-    /// supported match to the system's preferred language, else the app's
-    /// own base language.
+    /// The language the app's text is shown in: the override if one is set and
+    /// still supported; otherwise the localization the system picked for the app
+    /// bundle, which walks the whole list of preferred languages (with
+    /// [ja-JP, en-US] the text is English, not Italian); otherwise the first
+    /// supported language of that list; otherwise the app's own base language.
     public nonisolated static var effectiveLanguageCode: String {
-        if let override = currentOverride,
+        languageCode(override: currentOverride,
+                     preferredLanguages: Bundle.main.preferredLocalizations + Locale.preferredLanguages)
+    }
+
+    /// The choice behind `effectiveLanguageCode`, for a given override and a given
+    /// list of preferred languages (most preferred first), so that it can be
+    /// checked for any device setting without changing the device's.
+    public nonisolated static func languageCode(override: String?, preferredLanguages: [String]) -> String {
+        if let override,
            supportedLanguages.contains(where: { $0.code == override }) {
             return override
         }
-        return closestSupportedCode(from: Locale.preferredLanguages.first) ?? appBaseLanguage
+        for preferred in preferredLanguages {
+            if let code = closestSupportedCode(from: preferred) { return code }
+        }
+        return appBaseLanguage
+    }
+
+    /// `languageCode(override:preferredLanguages:)` for a device with a single
+    /// preferred language.
+    public nonisolated static func languageCode(override: String?, preferredLanguage: String?) -> String {
+        languageCode(override: override, preferredLanguages: preferredLanguage.map { [$0] } ?? [])
     }
 
     /// Exact match first (covers "pt-BR" itself); otherwise strips the

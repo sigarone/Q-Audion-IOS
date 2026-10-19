@@ -21,6 +21,7 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceGauges.pitch(hz: 142.4, voiced: true).value, "142")
         XCTAssertEqual(VoiceGauges.pitch(hz: 142.5, voiced: true).value, "143", "an exact tie goes away from zero")
         XCTAssertEqual(voiced.unit, "Hz")
+        XCTAssertEqual(voiced.text, "143 Hz")
         XCTAssertTrue(voiced.voiced)
         let silent = VoiceGauges.pitch(hz: 0, voiced: false)
         XCTAssertEqual(silent.value, "—", "a pitch of 0 is not a reading")
@@ -30,6 +31,30 @@ final class VoiceGuardModelTests: XCTestCase {
     func testToneValueWithoutANumberReadsAsTheDash() {
         XCTAssertEqual(VoiceGauges.pitch(hz: .nan, voiced: true).value, "—")
         XCTAssertEqual(VoiceGauges.pitch(hz: .infinity, voiced: false).value, "—")
+    }
+
+    /// Specification 12.5: the tone is the number and " Hz", or the dash ALONE. The unit goes with a number and
+    /// never with the dash, so the tone row (which draws the value and the unit as two texts) never shows "— Hz".
+    func testTheToneIsTheNumberWithItsUnitOrTheDashAlone() {
+        let rows: [(Float, String)] = [(142.7, "143 Hz"), (142.5, "143 Hz"), (142.4, "142 Hz"), (60, "60 Hz"),
+                                       (0, "—"), (-3, "—"), (.nan, "—"), (.infinity, "—"), (-.infinity, "—")]
+        for (hz, expected) in rows {
+            for voiced in [true, false] {
+                let reading = VoiceGauges.pitch(hz: hz, voiced: voiced)
+                XCTAssertEqual(reading.text, expected, "\(hz)")
+                XCTAssertEqual(reading.unit.isEmpty, expected == "—", "the unit goes with a number only: \(hz)")
+                XCTAssertEqual(reading.unit, expected == "—" ? "" : "Hz", "\(hz)")
+                XCTAssertFalse(reading.text.contains("— Hz"), "\(hz)")
+            }
+        }
+        XCTAssertEqual(VoiceGauges.pitchUnit, "Hz")
+    }
+
+    /// The diagnostics of the video call write the tone with the same text as the tone row.
+    func testTheVideoDiagnosticsWriteTheSameToneAsTheToneRow() {
+        for hz: Float in [142.7, 142.5, 60, 399.5, 0, -3, .nan, .infinity] {
+            XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: hz), VoiceGauges.pitch(hz: hz, voiced: true).text, "\(hz)")
+        }
     }
 
     /// The dash printed for a missing value is not a word, so it needs no translation.
@@ -60,6 +85,7 @@ final class VoiceGuardModelTests: XCTestCase {
     /// pitch and for every detail alike.
     func testTheSpokenToneReadsADashAsTheUnavailableWord() {
         let reading = VoiceGauges.pitch(hz: .nan, voiced: false)
+        XCTAssertEqual(reading.text, "—")
         XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "silenzio",
                                               details: "F1 — · F2 1480 · — sill/s · HNR —",
                                               unavailable: "n/d"),
@@ -159,6 +185,118 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceSpectralDetails.rate(4, unit: "u", locale: english), "4.0 u")
         XCTAssertEqual(VoiceSpectralDetails.rate(0, unit: "u", locale: italian), "0,0 u")
         XCTAssertEqual(VoiceSpectralDetails.rate(.nan, unit: "u", locale: english), "— u")
+    }
+
+    /// The widest line the details can take (12.5), with the unit and the separator of the language.
+    func testTheWidestLineOfTheDetails() {
+        XCTAssertEqual(VoiceSpectralDetails.widestLine(rateUnit: "sill/s", locale: italian),
+                       "F1 1100 · F2 3200 · 12,0 sill/s · HNR -40 dB")
+        XCTAssertEqual(VoiceSpectralDetails.widestLine(rateUnit: "syl/s", locale: english),
+                       "F1 1100 · F2 3200 · 12.0 syl/s · HNR -40 dB")
+    }
+
+    /// No combination of numbers and dashes is longer than the widest line (the font is monospaced, so the number of
+    /// characters stands for the width): sizing the line on it gives a size at which every text fits.
+    func testNoLineOfTheDetailsIsLongerThanTheWidestLine() {
+        let widest = VoiceSpectralDetails.widestLine(rateUnit: "sill/s", locale: italian).count
+        let formants1: [Float] = [.nan, 0, 90, 200, 999, 1100]
+        let formants2: [Float] = [.nan, 0, 600, 1480, 3200]
+        let rates: [Float] = [.nan, 0, 4.24, 9.96, 12]
+        let hnrs: [Float] = [.nan, -40, -9.5, -3, 0, 18.4, 40]
+        var checked = 0
+        for f1 in formants1 {
+            for f2 in formants2 {
+                for rate in rates {
+                    for hnr in hnrs {
+                        let text = details(f1: f1, f2: f2, rate: rate, hnr: hnr, locale: italian) ?? ""
+                        XCTAssertLessThanOrEqual(text.count, widest, text)
+                        checked += 1
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(checked, 6 * 5 * 5 * 7)
+    }
+
+    // MARK: - Size of the details line
+
+    private func fit(base: Double = 11, available: Double, template: Double) -> Double {
+        VoiceLineFit.fontSize(baseSize: base, availableWidth: available, templateWidth: template)
+    }
+
+    /// When the widest line fits, the line has the full size.
+    func testTheLineHasTheFullSizeWhenTheWidestLineFits() {
+        XCTAssertEqual(fit(available: 300, template: 250), 11)
+        XCTAssertEqual(fit(available: 251, template: 250), 11, "one point is kept free")
+        XCTAssertEqual(fit(available: .infinity, template: 250), 11)
+    }
+
+    /// When it does not, the size is the share of the widest line that fits (less the point kept free).
+    func testTheLineIsScaledByTheShareOfTheWidestLineThatFits() {
+        XCTAssertEqual(fit(base: 12, available: 226, template: 300), 9, accuracy: 1e-9)       // 225 / 300 = 0.75
+        XCTAssertEqual(fit(base: 11, available: 281, template: 400), 11 * 0.7, accuracy: 1e-9) // 0.70 exactly
+        XCTAssertEqual(fit(base: 11, available: 341, template: 400), 11 * 0.85, accuracy: 1e-9)
+        XCTAssertEqual(fit(base: 14, available: 401, template: 400), 14)
+    }
+
+    /// The floor is 70 % of the full size, however little room there is.
+    func testTheLineNeverGoesBelowSeventyPercent() {
+        XCTAssertEqual(VoiceLineFit.smallestShare, 0.7)
+        XCTAssertEqual(fit(available: 100, template: 300), 11 * 0.7, accuracy: 1e-9)
+        XCTAssertEqual(fit(available: 1, template: 300), 11 * 0.7, accuracy: 1e-9)
+        XCTAssertEqual(fit(available: 0, template: 300), 11 * 0.7, accuracy: 1e-9)
+        XCTAssertEqual(fit(available: -20, template: 300), 11 * 0.7, accuracy: 1e-9)
+        XCTAssertEqual(fit(available: -.infinity, template: 300), 11 * 0.7, accuracy: 1e-9)
+        XCTAssertEqual(fit(base: 33, available: 100, template: 900), 33 * 0.7, accuracy: 1e-9)
+    }
+
+    /// A width that is not known leaves the full size: the line is drawn before it is measured.
+    func testAWidthThatIsNotKnownLeavesTheFullSize() {
+        XCTAssertEqual(fit(available: .nan, template: 300), 11)
+        XCTAssertEqual(fit(available: 200, template: 0), 11)
+        XCTAssertEqual(fit(available: 200, template: -5), 11)
+        XCTAssertEqual(fit(available: 200, template: .nan), 11)
+        XCTAssertEqual(fit(available: 200, template: .infinity), 11)
+        XCTAssertEqual(fit(base: 0, available: 200, template: 300), 0)
+        XCTAssertTrue(fit(base: .nan, available: 200, template: 300).isNaN)
+    }
+
+    /// The size depends on the room and on the widest line only: more room never gives a smaller size, a wider
+    /// widest line never gives a bigger one, and the size is always between the floor and the full size.
+    func testTheSizeFollowsTheRoomAndTheWidestLineMonotonically() {
+        var previous = 0.0
+        for available in stride(from: 0.0, through: 600.0, by: 7.0) {
+            let size = fit(available: available, template: 420)
+            XCTAssertGreaterThanOrEqual(size, previous)
+            XCTAssertGreaterThanOrEqual(size, 11 * 0.7 - 1e-9)
+            XCTAssertLessThanOrEqual(size, 11)
+            previous = size
+        }
+        var previousTemplate = 11.0
+        for template in stride(from: 100.0, through: 900.0, by: 25.0) {
+            let size = fit(available: 330, template: template)
+            XCTAssertLessThanOrEqual(size, previousTemplate)
+            previousTemplate = size
+        }
+    }
+
+    /// The size is decided from the widest line, not from the text on screen: every text of the details gets the
+    /// size of the template, so a field turning from a dash into a number does not change it.
+    func testTheSizeIsTheSameForEveryTextOfTheDetails() {
+        // monospaced: width = characters * advance; the widest line of this language has 44 of them
+        let advance = 6.6
+        let widest = VoiceSpectralDetails.widestLine(rateUnit: "sill/s", locale: italian)
+        let available = 250.0
+        let size = fit(available: available, template: Double(widest.count) * advance)
+        XCTAssertLessThan(size, 11, "the room is narrower than the widest line, so the size is reduced")
+        let texts = [details(locale: italian), details(f1: .nan, f2: .nan, rate: .nan, hnr: .nan, locale: italian),
+                     details(rate: .nan, locale: italian), details(f1: 1100, f2: 3200, rate: 12, hnr: -40, locale: italian)]
+        for text in texts {
+            // the size does not take the text as an input at all; at that size the longest text still fits the room
+            let width = Double((text ?? "").count) * advance * size / 11
+            XCTAssertLessThanOrEqual(width, available, text ?? "")
+        }
+        XCTAssertEqual(Double(widest.count) * advance * size / 11, available - VoiceLineFit.slack, accuracy: 1e-9)
     }
 
     func testOnlyTheSelectedDetailsArePrintedInTheFixedOrder() {

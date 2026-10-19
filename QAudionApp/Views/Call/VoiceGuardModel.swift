@@ -25,12 +25,20 @@ enum VoiceTone: Equatable {
 // MARK: - Tone row of the ribbon
 
 /// What the tone row prints: the whole-number f0, its unit (a symbol, never
-/// translated) and whether a voice is present. The row never colours any of it
-/// and never adds a sentence: a pitch is a measurement, not a verdict.
+/// translated) and whether a voice is present. The unit goes with a number and
+/// never with the dash: a pitch that is not a reading is written "—", not
+/// "— Hz" (docs/voice-analysis-spec.md, section 12.5). The row never colours
+/// any of it and never adds a sentence: a pitch is a measurement, not a verdict.
 struct VoiceToneReading: Equatable {
     let value: String
+    /// "Hz" next to a number; empty next to the dash.
     let unit: String
     let voiced: Bool
+
+    /// The tone as one string, wherever it is written: "143 Hz", or the dash alone.
+    var text: String {
+        unit.isEmpty ? value : value + " " + unit
+    }
 }
 
 // MARK: - Number formats (docs/voice-analysis-spec.md, section 12)
@@ -94,10 +102,15 @@ enum VoiceGauges {
         return text
     }
 
+    /// The unit of the tone: a symbol, the same in every language.
+    static let pitchUnit = "Hz"
+
     /// The tone reading: the f0 as a whole number, "Hz", and whether the
-    /// segment is voiced (the row then says "voice", otherwise "silence").
+    /// segment is voiced (the row then says "voice", otherwise "silence"). A
+    /// pitch that is not a reading has the dash and no unit.
     static func pitch(hz: Float, voiced: Bool) -> VoiceToneReading {
-        VoiceToneReading(value: wholeNumber(hz), unit: "Hz", voiced: voiced)
+        let value: String = wholeNumber(hz)
+        return VoiceToneReading(value: value, unit: value == noValue ? "" : pitchUnit, voiced: voiced)
     }
 
     /// What a screen reader says for the whole row: the label, the value with
@@ -109,7 +122,7 @@ enum VoiceGauges {
                            voiceWord: String,
                            details: String?,
                            unavailable: String = VoiceToneCopy.unavailable) -> String {
-        let measure: String = reading.value == noValue ? unavailable : reading.value + " " + reading.unit
+        let measure: String = reading.value == noValue ? unavailable : reading.text
         var parts: [String] = [label, measure, voiceWord]
         if let details = details, !details.isEmpty {
             let paused: String = details.replacingOccurrences(of: VoiceSpectralDetails.separator, with: ", ")
@@ -211,6 +224,17 @@ enum VoiceSpectralDetails {
         return parts.joined(separator: separator)
     }
 
+    /// The widest line the details can take, in the language of the app: F1 up to
+    /// 1100 Hz, F2 up to 3200 Hz, a speech rate up to 12 syllables per second and an
+    /// HNR down to -40 dB, "F1 1100 · F2 3200 · 12,0 sill/s · HNR -40 dB"
+    /// (docs/voice-analysis-spec.md, section 12.5). A screen that fits the details to
+    /// its width sizes them on this line and not on the text it shows, so the size
+    /// does not change when a dash becomes a number.
+    static func widestLine(rateUnit: String, locale: Locale) -> String {
+        text(formant1Hz: 1100, formant2Hz: 3200, syllablesPerSecond: 12, hnrDecibels: -40,
+             rateUnit: rateUnit, locale: locale) ?? ""
+    }
+
     /// A formant in Hz, rounded to the nearest 10 (half away from zero: 1475 reads
     /// "1480"), or a dash for a formant that was not found (NaN, or the 0 of a
     /// result without one).
@@ -234,6 +258,38 @@ enum VoiceSpectralDetails {
     static func hnr(_ decibels: Float) -> String {
         guard let text = VoiceNumberFormat.whole(Double(decibels)) else { return VoiceGauges.noValue }
         return text + " dB"
+    }
+}
+
+// MARK: - Size of a line that keeps one size
+
+/// The font size of a line of text that is fitted to the width it is given and must
+/// keep ONE size while its words change (the details of the tone row,
+/// docs/voice-analysis-spec.md, section 12.5): the size is decided from the natural
+/// width of the widest line it can ever hold, never from the text it holds now, and
+/// the real text is then drawn at that size. No SwiftUI in here: the view measures
+/// the two widths and asks.
+enum VoiceLineFit {
+    /// The smallest share of the base size (70 %). Below it the line is cut at the
+    /// end instead of being shrunk further.
+    static let smallestShare: Double = 0.7
+
+    /// Width kept free, in points. A text width is rounded up to a whole pixel, so a
+    /// line fitted to the very last point can come out a pixel too wide and be cut
+    /// with an ellipsis.
+    static let slack: Double = 1
+
+    /// `baseSize` is the font size at full scale (at the reader's Dynamic Type
+    /// setting), `availableWidth` the width the line is given and `templateWidth` the
+    /// natural width of the widest line at `baseSize`. The result is `baseSize` when
+    /// the widest line fits, otherwise `baseSize` scaled by the share of its width
+    /// that is available, never below `smallestShare`. A width that is not known (NaN,
+    /// or a template without width) leaves the base size.
+    static func fontSize(baseSize: Double, availableWidth: Double, templateWidth: Double) -> Double {
+        guard baseSize.isFinite, baseSize > 0 else { return baseSize }
+        guard templateWidth.isFinite, templateWidth > 0, !availableWidth.isNaN else { return baseSize }
+        let share: Double = (availableWidth - slack) / templateWidth
+        return baseSize * min(1, max(smallestShare, share))
     }
 }
 
@@ -291,10 +347,11 @@ enum VoiceBiometricsFormat {
     }
 
     /// The pitch in whole Hz, rounded half away from zero: "143 Hz" for 142.5, or a
-    /// dash while it is not a reading (the analysis hands it over as NaN then).
+    /// dash alone while it is not a reading (the analysis hands it over as NaN then).
+    /// It is the text of the tone row (`VoiceToneReading.text`); the voiced flag does
+    /// not enter it.
     static func pitch(hz: Float) -> String {
-        guard hz > 0, let text = VoiceNumberFormat.whole(Double(hz)) else { return VoiceGauges.noValue }
-        return text + " Hz"
+        VoiceGauges.pitch(hz: hz, voiced: false).text
     }
 
     /// Harmonic-to-noise ratio in whole dB: "21 dB", or a dash while it is not valid.
