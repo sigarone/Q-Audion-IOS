@@ -86,7 +86,9 @@ final class AppUpdateChecker: ObservableObject {
             let v = (dict["version"] as? String) ?? "unknown"
             let notes = (dict["changelog"] as? String) ?? ""
             let dlString = dict["download_url"] as? String
-            let dlUrl = dlString.flatMap(URL.init(string:))
+            // Only an App Store link is offered: the button says "Apri App Store", and a link
+            // that came from the server must not send the user anywhere else.
+            let dlUrl = dlString.flatMap(URL.init(string:)).flatMap { Self.isAppStoreLink($0) ? $0 : nil }
             let mandatory = (dict["mandatory"] as? Bool) ?? false
             lastResult = .updateAvailable(UpdateInfo(
                 availableVersion: v,
@@ -102,7 +104,21 @@ final class AppUpdateChecker: ObservableObject {
     /// On iOS, "open update" routes to the App Store via the configured downloadUrl
     /// (typically an itms-apps:// link or the public App Store page).
     func openAppStoreLink(for info: UpdateInfo) {
-        guard let url = info.downloadUrl else { return }
+        guard let url = info.downloadUrl, Self.isAppStoreLink(url) else { return }
         UIApplication.shared.open(url, options: [:], completionHandler: nil)
+    }
+
+    /// An App Store page: `itms-apps://` (or `itms-appss://`) on apps.apple.com or itunes.apple.com,
+    /// or `https://apps.apple.com`. Anything else from the update endpoint is ignored.
+    nonisolated static func isAppStoreLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return false }
+        switch scheme {
+        case "itms-apps", "itms-appss":
+            return host == "apps.apple.com" || host == "itunes.apple.com"
+        case "https":
+            return host == "apps.apple.com"
+        default:
+            return false
+        }
     }
 }
