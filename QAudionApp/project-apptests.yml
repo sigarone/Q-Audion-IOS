@@ -30,6 +30,7 @@ targets:
     sources:
       - path: ../QAudionAppTests
         includes:
+          - AbuseReportCategoryTests.swift
           - AgeDeclarationTests.swift
           - AppUpdateLinkTests.swift
           - AppStateFilesServerUrlTests.swift
@@ -48,7 +49,11 @@ targets:
           - DesignSystemAccessibilityTests.swift
           - DeviceSymbolTests.swift
           - EarbudCompileConditionTests.swift
+          - FeatureFlagKillSwitchTests.swift
           - FileV2ImageCleanerTests.swift
+          - LegalLinksTests.swift
+          - MeshConsentPresentationTests.swift
+          - MeshConsentTests.swift
           - MeshReachTests.swift
           - MissedCallsBadgeTests.swift
           - NoticeServiceTests.swift

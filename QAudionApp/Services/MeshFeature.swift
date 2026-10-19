@@ -11,26 +11,40 @@ import QAudionEngine
 /// pass it in as plain values.
 ///
 /// **Flag key:** `mesh_ble.enabled` — the SAME server-side flag key the
-/// Android client (`New-Q-Audion-Android`, branch
-/// `claude/ble-mesh-cleanroom-spike`) reads via its own `MeshFeatureGate`,
-/// so one remote flag flip gates both apps identically. `FeatureFlags`
+/// Android client reads via its own `MeshFeatureGate`, so one remote flag
+/// flip gates both apps identically. `FeatureFlags`
 /// (this file's only dependency beyond `QAudionEngine`) already owns the
 /// polling/caching/fail-safe-default machinery — this type adds no new
 /// infrastructure, it just names the key and the compiled-in default
-/// (`false`).
+/// (`true`, the value the shipped feature has in production).
+///
+/// **The flag is a kill switch, not an enabler.** The mesh is part of the
+/// release, so the compiled default is ON and the public flags file may only
+/// switch it OFF (`FeatureFlags.killSwitch`): the build that was reviewed
+/// behaves the same as the build in use, and a flag can never turn on
+/// something the build was compiled without. Being available is not the same
+/// as running: the radio starts only after the user's one-time explicit
+/// consent (`MeshConsent` / `MeshStartGate`).
 public enum MeshFeature {
 
+    /// The public flag that can switch the mesh OFF everywhere.
+    public static let flagKey: String = "mesh_ble.enabled"
+
+    /// What this build ships with. ON: the feature is part of the release.
+    public static let compiledDefault: Bool = true
+
     /// Master switch for the in-chat mesh entry point (antenna icon, sheet,
-    /// and therefore the BLE radio, which is only ever touched from inside
-    /// the sheet). Reads live off `FeatureFlags` on every call — cheap (an
-    /// in-memory dictionary lookup), so there is no need to cache or poll
-    /// separately the way Android's `MeshFeatureGate` bridges into a
-    /// `StateFlow`. Defaults to `false`: a fresh install, or a build where
-    /// the flag hasn't been fetched yet, never shows the entry point and
-    /// never requests Bluetooth permissions.
+    /// the Settings toggle and therefore the BLE radio). Reads live off
+    /// `FeatureFlags` on every call — cheap (an in-memory dictionary
+    /// lookup), so there is no need to cache or poll separately the way
+    /// Android's `MeshFeatureGate` bridges into a `StateFlow`. ON unless the
+    /// public flags file says `false`. A `true` in that file changes nothing.
+    /// This only says the feature is available: no Bluetooth permission is
+    /// requested and no radio is started before the user accepts the consent
+    /// screen.
     @MainActor
     public static var enabled: Bool {
-        FeatureFlags.bool("mesh_ble.enabled", false)
+        FeatureFlags.killSwitch(flagKey, compiledDefault: compiledDefault)
     }
 
     /// Derive this device's own mesh node id from its long-term identity

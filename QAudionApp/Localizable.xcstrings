@@ -41346,6 +41346,552 @@
         }
       }
     },
+    "mesh_sheet.feature_unavailable": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, antenna row subtitle when the mesh has been switched off for everyone for now (remote kill switch). Not a per-account state.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh temporaneamente non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh temporarily unavailable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh vorübergehend nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh temporalmente no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh temporairement indisponible"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh temporariamente indisponível"
+          }
+        }
+      }
+    },
+    "mesh_consent.title": {
+      "extractionState": "manual",
+      "comment": "Title of the one-time consent screen for the Bluetooth mesh.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth mesh"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Mesh"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        }
+      }
+    },
+    "mesh_consent.body_1": {
+      "extractionState": "manual",
+      "comment": "Consent screen for the Bluetooth mesh, first paragraph: what the mesh is.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quando non c'è rete, Q-Audion può far arrivare i messaggi cifrati passando da un telefono all'altro, via Bluetooth."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When there is no network, Q-Audion can deliver encrypted messages by passing them from phone to phone over Bluetooth."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn kein Netz verfügbar ist, kann Q-Audion verschlüsselte Nachrichten per Bluetooth von Telefon zu Telefon weitergeben."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cuando no hay red, Q-Audion puede hacer llegar mensajes cifrados pasándolos de un teléfono a otro por Bluetooth."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quand il n'y a pas de réseau, Q-Audion peut faire parvenir des messages chiffrés en les faisant passer de téléphone en téléphone par Bluetooth."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quando não há rede, o Q-Audion pode entregar mensagens criptografadas passando-as de um telefone para outro por Bluetooth."
+          }
+        }
+      }
+    },
+    "mesh_consent.body_2": {
+      "extractionState": "manual",
+      "comment": "Consent screen for the Bluetooth mesh, second paragraph: this phone relays encrypted messages of other app users nearby and cannot read them, and while the mesh is on it announces a fixed identifier that other Q-Audion phones nearby can see. This is the thing the user consents to.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se attivi la mesh, questo telefono inoltra anche i messaggi cifrati di altri utenti dell'app che si trovano vicino a te. Non può leggerli: restano cifrati da chi li scrive a chi li riceve. Finché la mesh è accesa, il telefono annuncia anche un identificativo fisso che gli altri telefoni Q-Audion vicini possono vedere."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you turn the mesh on, this phone also relays encrypted messages of other app users who are near you. It cannot read them: they stay encrypted from the sender to the recipient. While the mesh is on, the phone also announces a fixed identifier that other Q-Audion phones nearby can see."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn Sie das Mesh aktivieren, leitet dieses Telefon auch verschlüsselte Nachrichten anderer App-Nutzer in Ihrer Nähe weiter. Es kann sie nicht lesen: Sie bleiben vom Absender bis zum Empfänger verschlüsselt. Solange das Mesh an ist, sendet das Telefon außerdem eine feste Kennung, die andere Q-Audion-Telefone in der Nähe sehen können."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si activas la mesh, este teléfono también retransmite mensajes cifrados de otros usuarios de la app que estén cerca de ti. No puede leerlos: siguen cifrados de quien los escribe a quien los recibe. Mientras la mesh está activada, el teléfono también anuncia un identificador fijo que otros teléfonos Q-Audion cercanos pueden ver."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si tu actives le mesh, ce téléphone relaie aussi les messages chiffrés d'autres utilisateurs de l'app qui se trouvent près de toi. Il ne peut pas les lire : ils restent chiffrés de l'expéditeur au destinataire. Tant que le mesh est activé, le téléphone annonce aussi un identifiant fixe que les autres téléphones Q-Audion proches peuvent voir."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se você ativar a mesh, este telefone também retransmite mensagens criptografadas de outros usuários do app que estejam perto de você. Ele não consegue lê-las: elas continuam criptografadas de quem envia até quem recebe. Enquanto a mesh estiver ligada, o telefone também anuncia um identificador fixo que outros telefones Q-Audion próximos podem ver."
+          }
+        }
+      }
+    },
+    "mesh_consent.body_3": {
+      "extractionState": "manual",
+      "comment": "Consent screen for the Bluetooth mesh, third paragraph: the cost, and where to turn it off. 'Mesh Bluetooth' is the title of the switch in Settings.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'inoltro usa il Bluetooth e un po' di batteria. Puoi spegnerlo quando vuoi con l'interruttore Mesh Bluetooth nelle Impostazioni."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relaying uses Bluetooth and some battery. You can turn it off at any time with the Bluetooth mesh switch in Settings."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Weiterleiten nutzt Bluetooth und etwas Akku. Sie können es jederzeit mit dem Schalter Bluetooth-Mesh in den Einstellungen ausschalten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La retransmisión usa Bluetooth y algo de batería. Puedes desactivarla cuando quieras con el interruptor Mesh Bluetooth en Ajustes."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le relais utilise le Bluetooth et un peu de batterie. Tu peux le désactiver à tout moment avec l'interrupteur Mesh Bluetooth dans Réglages."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A retransmissão usa Bluetooth e um pouco de bateria. Você pode desativá-la quando quiser com a chave Mesh Bluetooth em Ajustes."
+          }
+        }
+      }
+    },
+    "mesh_consent.accept": {
+      "extractionState": "manual",
+      "comment": "Consent screen for the Bluetooth mesh: button that turns the mesh on.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktivieren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativar"
+          }
+        }
+      }
+    },
+    "mesh_consent.decline": {
+      "extractionState": "manual",
+      "comment": "Consent screen for the Bluetooth mesh: button that leaves the mesh off.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non ora"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not now"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht jetzt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ahora no"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas maintenant"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agora não"
+          }
+        }
+      }
+    },
+    "mesh_settings.section": {
+      "extractionState": "manual",
+      "comment": "Header of the Bluetooth mesh section in Settings > Privacy controls.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MESH BLUETOOTH"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BLUETOOTH MESH"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BLUETOOTH-MESH"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MESH BLUETOOTH"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MESH BLUETOOTH"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MESH BLUETOOTH"
+          }
+        }
+      }
+    },
+    "mesh_settings.title": {
+      "extractionState": "manual",
+      "comment": "Title of the switch that lets this phone relay encrypted messages of nearby app users over Bluetooth.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth mesh"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Mesh"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth"
+          }
+        }
+      }
+    },
+    "mesh_settings.subtitle": {
+      "extractionState": "manual",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings: this phone relays encrypted messages of nearby app users and cannot read them.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inoltra via Bluetooth i messaggi cifrati di chi ti sta vicino. Non può leggerli."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relays encrypted messages of people near you over Bluetooth. It cannot read them."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leitet verschlüsselte Nachrichten von Personen in Ihrer Nähe per Bluetooth weiter. Es kann sie nicht lesen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retransmite por Bluetooth los mensajes cifrados de quienes están cerca. No puede leerlos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relaie par Bluetooth les messages chiffrés des personnes proches. Il ne peut pas les lire."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retransmite por Bluetooth as mensagens criptografadas de quem está perto. Não consegue lê-las."
+          }
+        }
+      }
+    },
+    "mesh_settings.status_radio_off": {
+      "extractionState": "manual",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the consent is given but the radio is off: it is turned on from the mesh panel of a chat.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consenso dato. La mesh è spenta: la accendi dal pannello mesh di una chat."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consent given. The mesh is off: you turn it on from the mesh panel of a chat."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einwilligung erteilt. Das Mesh ist aus: Sie schalten es im Mesh-Bereich eines Chats ein."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentimiento dado. La mesh está apagada: la enciendes desde el panel mesh de un chat."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentement donné. Le mesh est éteint : tu l'actives depuis le panneau mesh d'une discussion."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentimento dado. A mesh está desligada: você a liga pelo painel mesh de uma conversa."
+          }
+        }
+      }
+    },
+    "mesh_settings.status_visible_only": {
+      "extractionState": "manual",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the consent is given and the radio is on in visible-only mode: nearby phones can see this one but it relays nothing.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consenso dato. Il telefono è visibile ai vicini, ma non inoltra messaggi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consent given. This phone is visible to people nearby, but it does not relay messages."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einwilligung erteilt. Das Telefon ist für Personen in der Nähe sichtbar, leitet aber keine Nachrichten weiter."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentimiento dado. El teléfono es visible para quienes están cerca, pero no retransmite mensajes."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentement donné. Le téléphone est visible des personnes proches, mais il ne relaie aucun message."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentimento dado. O telefone fica visível para quem está perto, mas não retransmite mensagens."
+          }
+        }
+      }
+    },
+    "mesh_settings.status_on": {
+      "extractionState": "manual",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the consent is given and the radio is on in full mesh mode: this phone relays encrypted messages of nearby app users.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consenso dato. La mesh è accesa: questo telefono inoltra i messaggi cifrati di chi ti sta vicino."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consent given. The mesh is on: this phone relays encrypted messages of people near you."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einwilligung erteilt. Das Mesh ist an: Dieses Telefon leitet verschlüsselte Nachrichten von Personen in Ihrer Nähe weiter."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentimiento dado. La mesh está encendida: este teléfono retransmite los mensajes cifrados de quienes están cerca."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentement donné. Le mesh est activé : ce téléphone relaie les messages chiffrés des personnes proches."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consentimento dado. A mesh está ligada: este telefone retransmite as mensagens criptografadas de quem está perto."
+          }
+        }
+      }
+    },
     "%lld caratteri": {
       "extractionState": "manual",
       "localizations": {
@@ -41889,37 +42435,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Eliminazione non riuscita. Riprova tra qualche istante o scrivi a support@qaudion.app."
+            "value": "Eliminazione non riuscita. Riprova tra qualche istante o scrivi a info@bcrypto.com."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Deletion failed. Try again in a few moments or write to support@qaudion.app."
+            "value": "Deletion failed. Try again in a few moments or write to info@bcrypto.com."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Löschen fehlgeschlagen. Versuchen Sie es in einigen Augenblicken erneut oder schreiben Sie an support@qaudion.app."
+            "value": "Löschen fehlgeschlagen. Versuchen Sie es in einigen Augenblicken erneut oder schreiben Sie an info@bcrypto.com."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "No se pudo eliminar. Vuelve a intentarlo en unos instantes o escribe a support@qaudion.app."
+            "value": "No se pudo eliminar. Vuelve a intentarlo en unos instantes o escribe a info@bcrypto.com."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La suppression a échoué. Réessaie dans quelques instants ou écris à support@qaudion.app."
+            "value": "La suppression a échoué. Réessaie dans quelques instants ou écris à info@bcrypto.com."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Falha na exclusão. Tente novamente em instantes ou escreva para support@qaudion.app."
+            "value": "Falha na exclusão. Tente novamente em instantes ou escreva para info@bcrypto.com."
           }
         }
       }
@@ -42166,48 +42712,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Buscar contatos"
-          }
-        }
-      }
-    },
-    "chat_detail.report_sent": {
-      "extractionState": "manual",
-      "comment": "Snackbar — an abuse report about the chat peer was sent",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Segnalazione inviata."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Report sent."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meldung gesendet."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reporte enviado."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Signalement envoyé."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Denúncia enviada."
           }
         }
       }
@@ -43488,6 +43992,132 @@
         }
       }
     },
+    "report.category.child_safety": {
+      "extractionState": "manual",
+      "comment": "Report dialog: the reported person or group puts minors at risk (abuse or exploitation of children).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minori (abuso o sfruttamento)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minors (abuse or exploitation)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minderjährige (Missbrauch oder Ausbeutung)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menores (abuso o explotación)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mineurs (abus ou exploitation)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menores (abuso ou exploração)"
+          }
+        }
+      }
+    },
+    "report.category.intimate_images": {
+      "extractionState": "manual",
+      "comment": "Report dialog: intimate images shared without the consent of the person shown.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immagini intime senza consenso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Intimate images without consent"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Intime Bilder ohne Einwilligung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imágenes íntimas sin consentimiento"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Images intimes sans consentement"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagens íntimas sem consentimento"
+          }
+        }
+      }
+    },
+    "report.category.threats": {
+      "extractionState": "manual",
+      "comment": "Report dialog: threats of violence or harm.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minacce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Threats"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drohungen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Amenazas"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menaces"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ameaças"
+          }
+        }
+      }
+    },
     "I messaggi verranno eliminati automaticamente. \"Visualizza una volta\" li elimina appena aperti.": {
       "extractionState": "manual",
       "localizations": {
@@ -43775,125 +44405,84 @@
         }
       }
     },
-    "La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i messaggi del gruppo.": {
+    "La segnalazione viene inviata cifrata al nostro team e gestita entro 2 giorni lavorativi. Non contiene i messaggi del gruppo.": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i messaggi del gruppo."
+            "value": "La segnalazione viene inviata cifrata al nostro team e gestita entro 2 giorni lavorativi. Non contiene i messaggi del gruppo."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The report is sent encrypted to our team and handled within 24 hours. It does not contain the group's messages."
+            "value": "The report is sent encrypted to our team and handled within 2 working days. It does not contain the group's messages."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Meldung wird verschlüsselt an unser Team gesendet und innerhalb von 24 Stunden bearbeitet. Sie enthält keine Nachrichten der Gruppe."
+            "value": "Die Meldung wird verschlüsselt an unser Team gesendet und innerhalb von 2 Werktagen bearbeitet. Sie enthält keine Nachrichten der Gruppe."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El reporte se envía cifrado a nuestro equipo y se gestiona en un plazo de 24 horas. No contiene los mensajes del grupo."
+            "value": "El reporte se envía cifrado a nuestro equipo y se gestiona en un plazo de 2 días laborables. No contiene los mensajes del grupo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le signalement est envoyé chiffré à notre équipe et traité sous 24 heures. Il ne contient pas les messages du groupe."
+            "value": "Le signalement est envoyé chiffré à notre équipe et traité sous 2 jours ouvrés. Il ne contient pas les messages du groupe."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A denúncia é enviada criptografada à nossa equipe e tratada em até 24 horas. Ela não contém as mensagens do grupo."
+            "value": "A denúncia é enviada criptografada à nossa equipe e tratada em até 2 dias úteis. Ela não contém as mensagens do grupo."
           }
         }
       }
     },
-    "La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi.": {
+    "La segnalazione viene inviata cifrata al nostro team e gestita entro 2 giorni lavorativi. Non contiene i tuoi messaggi.": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi."
+            "value": "La segnalazione viene inviata cifrata al nostro team e gestita entro 2 giorni lavorativi. Non contiene i tuoi messaggi."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The report is sent encrypted to our team and handled within 24 hours. It does not contain your messages."
+            "value": "The report is sent encrypted to our team and handled within 2 working days. It does not contain your messages."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Meldung wird verschlüsselt an unser Team gesendet und innerhalb von 24 Stunden bearbeitet. Sie enthält keine Ihrer Nachrichten."
+            "value": "Die Meldung wird verschlüsselt an unser Team gesendet und innerhalb von 2 Werktagen bearbeitet. Sie enthält keine Ihrer Nachrichten."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El reporte se envía cifrado a nuestro equipo y se gestiona en un plazo de 24 horas. No contiene tus mensajes."
+            "value": "El reporte se envía cifrado a nuestro equipo y se gestiona en un plazo de 2 días laborables. No contiene tus mensajes."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le signalement est envoyé chiffré à notre équipe et traité sous 24 heures. Il ne contient pas tes messages."
+            "value": "Le signalement est envoyé chiffré à notre équipe et traité sous 2 jours ouvrés. Il ne contient pas tes messages."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A denúncia é enviada criptografada à nossa equipe e tratada em até 24 horas. Ela não contém suas mensagens."
-          }
-        }
-      }
-    },
-    "La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi. Puoi anche bloccare il contatto dal menu.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi. Puoi anche bloccare il contatto dal menu."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The report is sent encrypted to our team and handled within 24 hours. It does not contain your messages. You can also block the contact from the menu."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Die Meldung wird verschlüsselt an unser Team gesendet und innerhalb von 24 Stunden bearbeitet. Sie enthält keine Ihrer Nachrichten. Sie können den Kontakt auch über das Menü blockieren."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El reporte se envía cifrado a nuestro equipo y se gestiona en un plazo de 24 horas. No contiene tus mensajes. También puedes bloquear al contacto desde el menú."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le signalement est envoyé chiffré à notre équipe et traité sous 24 heures. Il ne contient pas tes messages. Tu peux aussi bloquer le contact depuis le menu."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A denúncia é enviada criptografada à nossa equipe e tratada em até 24 horas. Ela não contém suas mensagens. Você também pode bloquear o contato pelo menu."
+            "value": "A denúncia é enviada criptografada à nossa equipe e tratada em até 2 dias úteis. Ela não contém suas mensagens."
           }
         }
       }

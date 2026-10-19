@@ -4,7 +4,7 @@ import PhotosUI   // Fase 1C: group avatar picker (admin-only)
 
 /// Pannello di gruppo — nome, epoch, membri (con badge ADMIN), button
 /// "Esci dal gruppo". 1:1 port di Android
-/// `qaudion-android-new/feature/feature-chat/.../group/GroupInfoScreen.kt`.
+/// `GroupInfoScreen.kt` (feature-chat module).
 ///
 /// Layout:
 ///   1. Top bar — back chevron + nome gruppo titleLarge semibold +
@@ -519,7 +519,7 @@ struct GroupInfoScreen: View {
         .accessibilityLabel("Elimina chat di gruppo")
     }
 
-    /// App Store 1.2 — report this group (spam / abuse / other). Same
+    /// App Store 1.2 — report this group (`AbuseReportCategory`). Same
     /// visual treatment as deleteRow; the report goes through
     /// BugReporter's E2EE pipeline with the group id attached.
     private var reportRow: some View {
@@ -551,16 +551,16 @@ struct GroupInfoScreen: View {
         .confirmationDialog("Segnala gruppo",
                             isPresented: $showingReportDialog,
                             titleVisibility: .visible) {
-            Button("Spam") { sendGroupReport(category: "spam") }
-            Button("Abuso o molestie") { sendGroupReport(category: "abuse") }
-            Button("Altro") { sendGroupReport(category: "other") }
+            ForEach(AbuseReportCategory.allCases) { category in
+                Button(category.title) { sendGroupReport(category: category) }
+            }
             Button("Annulla", role: .cancel) {}
         } message: {
-            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i messaggi del gruppo.")
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 2 giorni lavorativi. Non contiene i messaggi del gruppo.")
         }
     }
 
-    private func sendGroupReport(category: String) {
+    private func sendGroupReport(category: AbuseReportCategory) {
         BugReporter.shared.reportAbuse(reportedUserId: nil,
                                        reportedGroupId: state.groupId.uuidString,
                                        reportedName: state.name,

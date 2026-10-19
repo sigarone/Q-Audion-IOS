@@ -2,7 +2,7 @@ import SwiftUI
 import QAudionEngine
 
 /// Per-contact detail screen. 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-contacts/.../ContactDetailScreen.kt`.
+/// `ContactDetailScreen.kt` (feature-contacts module).
 ///
 /// Layout (top → bottom, scrollable):
 ///   1. Top bar — back chevron + "Dettaglio contatto" + "Modifica" + "Elimina"
@@ -210,16 +210,17 @@ struct ContactDetailScreen: View {
                 .environmentObject(appState)
         }
         // App Store 1.2 — report flow (category picker -> E2EE report ->
-        // offer to block). Same three categories as Android.
+        // offer to block). The categories are `AbuseReportCategory`, the same
+        // list as the chat menu and the group screen.
         .confirmationDialog("Segnala \(item.displayName)",
                             isPresented: $showingReportDialog,
                             titleVisibility: .visible) {
-            Button("Spam") { performReport(category: "spam") }
-            Button("Abuso o molestie") { performReport(category: "abuse") }
-            Button("Altro") { performReport(category: "other") }
+            ForEach(AbuseReportCategory.allCases) { category in
+                Button(category.title) { performReport(category: category) }
+            }
             Button("Annulla", role: .cancel) {}
         } message: {
-            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi.")
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 2 giorni lavorativi. Non contiene i tuoi messaggi.")
         }
         .alert("Segnalazione inviata", isPresented: $showingPostReportBlock) {
             Button("Blocca \(item.displayName)", role: .destructive) {
@@ -1026,7 +1027,7 @@ struct ContactDetailScreen: View {
 
     // MARK: - Report (App Store 1.2)
 
-    private func performReport(category: String) {
+    private func performReport(category: AbuseReportCategory) {
         BugReporter.shared.reportAbuse(reportedUserId: item.userId,
                                        reportedGroupId: nil,
                                        reportedName: item.displayName,

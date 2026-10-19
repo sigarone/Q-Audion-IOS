@@ -8,13 +8,15 @@ import QAudionEngine
 // CLAUDE.md section 16: nothing in the Enigma files takes AppState (or any app type) as a parameter. They take primitives,
 // closures and engine types.
 
-/// The remote flag. Same key as Android (`enigma_mode.enabled`), default OFF. iOS reads ONLY the public flags file (the same
-/// value for every install): the key is deliberately NOT in `FeatureFlags.overlayEligibleKeys`, so a visible feature never
-/// differs by account.
+/// The remote flag. Same key as Android (`enigma_mode.enabled`). It is a kill switch: the compiled default is ON
+/// (`EnigmaSettings.flagDefault`) and the public file can only switch it OFF (`FeatureFlags.killSwitch`); a `true` in the
+/// file never turns on a build compiled with it off. iOS reads ONLY the public flags file (the same value for every
+/// install): the key is deliberately NOT in `FeatureFlags.overlayEligibleKeys`, so a visible feature never differs by
+/// account.
 @MainActor
 enum EnigmaFeature {
     static var flagOn: Bool {
-        FeatureFlags.bool(EnigmaSettings.flagKey, EnigmaSettings.flagDefault)
+        FeatureFlags.killSwitch(EnigmaSettings.flagKey, compiledDefault: EnigmaSettings.flagDefault)
     }
 }
 

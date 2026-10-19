@@ -1,26 +1,26 @@
 import CoreBluetooth
 
 /// Read-only Bluetooth capability/power probe for the mesh antenna row —
-/// entirely independent of `MeshRuntime`/`BleMeshTransport` and the
-/// `mesh_ble.enabled` server flag.
+/// entirely independent of `MeshRuntime`/`BleMeshTransport`.
 ///
 /// W-MESHDEAD (2026-08-15): `BleMeshTransport`'s `CBCentralManager`/
 /// `CBPeripheralManager` are only ever constructed inside its own `start()`,
-/// which `MeshSheetView` never reaches when `MeshFeature.enabled` resolves
-/// false — so a user whose phone has Bluetooth authorization denied, or the
-/// system radio off, saw the EXACT SAME dead "Spenta" antenna row as a user
-/// merely waiting on a server-side flag, with no way to tell the two apart
-/// and nothing tappable that explained or fixed either one ("si clicca il
+/// so a user whose phone has Bluetooth authorization denied, or the system
+/// radio off, saw the EXACT SAME dead "Spenta" antenna row as a user who had
+/// simply not switched the mesh on, with no way to tell the two apart and
+/// nothing tappable that explained or fixed either one ("si clicca il
 /// monolite che non fa nulla e segnala spento" — reported live).
 ///
 /// This probe reads the real CoreBluetooth authorization + power state on
-/// its own tiny `CBCentralManager`, constructed unconditionally as soon as
-/// the mesh sheet appears — never gated on the server flag. It never scans
-/// or advertises (that stays `BleMeshTransport`'s job, only once the flag
-/// AND this device's radio both actually allow it) — this class exists
-/// purely so the UI can tell the user WHICH of "Bluetooth is off",
-/// "permission was denied", or "the feature isn't enabled for you yet" is
-/// actually true, and give the first two a real fix (a button that opens
+/// its own tiny `CBCentralManager`. It waits for the user's one-time mesh
+/// consent (`MeshConsent`): the mesh sheet calls `start()` only once the
+/// consent is accepted, because constructing a `CBCentralManager` with a
+/// delegate is what makes iOS ask for the Bluetooth permission, and nothing
+/// may ask for it before the user said yes. It never scans or advertises
+/// (that stays `BleMeshTransport`'s job, only once the consent AND this
+/// device's radio both actually allow it) — this class exists purely so the
+/// UI can tell the user WHICH of "Bluetooth is off" or "permission was
+/// denied" is actually true, and give both a real fix (a button that opens
 /// Settings) instead of a silent no-op.
 @MainActor
 final class MeshBluetoothCapabilityProbe: NSObject, ObservableObject, CBCentralManagerDelegate {

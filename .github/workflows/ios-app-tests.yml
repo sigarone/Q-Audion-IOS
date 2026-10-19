@@ -222,6 +222,7 @@ jobs:
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
             -derivedDataPath /tmp/dd-ios-app \
             -parallel-testing-enabled NO \
+            -only-testing:QAudionAppTests/AbuseReportCategoryTests \
             -only-testing:QAudionAppTests/AgeDeclarationTests \
             -only-testing:QAudionAppTests/AppUpdateLinkTests \
             -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
@@ -249,7 +250,11 @@ jobs:
             -only-testing:QAudionAppTests/DesignSystemAccessibilityTests \
             -only-testing:QAudionAppTests/DeviceSymbolTests \
             -only-testing:QAudionAppTests/EarbudCompileConditionTests \
+            -only-testing:QAudionAppTests/FeatureFlagKillSwitchTests \
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
+            -only-testing:QAudionAppTests/LegalLinksTests \
+            -only-testing:QAudionAppTests/MeshConsentPresentationTests \
+            -only-testing:QAudionAppTests/MeshConsentTests \
             -only-testing:QAudionAppTests/MeshReachTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
             -only-testing:QAudionAppTests/NoticeServiceTests \

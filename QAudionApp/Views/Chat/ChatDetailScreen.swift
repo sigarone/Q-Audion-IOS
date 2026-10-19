@@ -42,7 +42,7 @@ enum PendingAttachmentSend {
 }
 
 /// Chat detail (conversation) screen. 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-chat/.../detail/ChatDetailScreen.kt`.
+/// `ChatDetailScreen.kt` (feature-chat module).
 ///
 /// Layout (top → bottom):
 ///   1. **Top bar** — back chevron + 36pt avatar + display name + presence
@@ -136,6 +136,8 @@ struct ChatDetailScreen: View {
     /// App Store 1.2 — "Segnala contatto" next to "Blocca contatto" in the
     /// overflow menu; see ContactDetailScreen for the same flow.
     @State private var showReportDialog: Bool = false
+    /// After a report is sent: the offer to also block the reported contact (same flow as the contact screen).
+    @State private var showPostReportBlock: Bool = false
     /// W445: Screenshot lock — local user preference. Toggled from
     /// PrivacySettingsScreen; read here to activate/deactivate on
     /// chat open/close.
@@ -164,7 +166,7 @@ struct ChatDetailScreen: View {
     }
     /// W445: Ephemeral timer picker.
     @State private var showingEphemeralPicker: Bool = false
-    /// BLE-mesh offline chat fallback (branch claude/ble-mesh-cleanroom-spike).
+    /// BLE-mesh offline chat fallback.
     /// `meshRuntime` is `@ObservedObject` (not `@StateObject`) since it's a
     /// shared singleton, not owned by this screen — see `MeshRuntime.swift`.
     @State private var showingMeshSheet: Bool = false
@@ -541,7 +543,7 @@ struct ChatDetailScreen: View {
                 showingDocPicker = false
             }
         }
-        // BLE-mesh offline chat sheet (branch claude/ble-mesh-cleanroom-spike).
+        // BLE-mesh offline chat sheet.
         .sheet(isPresented: $showingMeshSheet) {
             MeshSheetView(
                 runtime: meshRuntime,
@@ -565,17 +567,30 @@ struct ChatDetailScreen: View {
         .confirmationDialog("Segnala contatto",
                             isPresented: $showReportDialog,
                             titleVisibility: .visible) {
-            Button("Spam") { sendAbuseReport(category: "spam") }
-            Button("Abuso o molestie") { sendAbuseReport(category: "abuse") }
-            Button("Altro") { sendAbuseReport(category: "other") }
+            ForEach(AbuseReportCategory.allCases) { category in
+                Button(category.title) { sendAbuseReport(category: category) }
+            }
             Button("Annulla", role: .cancel) {}
         } message: {
-            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 24 ore. Non contiene i tuoi messaggi. Puoi anche bloccare il contatto dal menu.")
+            Text("La segnalazione viene inviata cifrata al nostro team e gestita entro 2 giorni lavorativi. Non contiene i tuoi messaggi.")
+        }
+        // After the report: offer to block the reported contact too, with the same wording as the contact screen.
+        .alert("Segnalazione inviata", isPresented: $showPostReportBlock) {
+            Button("Blocca \(reportedPeerName)", role: .destructive) { blockReportedPeer() }
+            Button("Non ora", role: .cancel) {}
+        } message: {
+            Text("Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti.")
         }
     }
 
-    /// App Store 1.2 — E2EE abuse report for the peer of this chat.
-    private func sendAbuseReport(category: String) {
+    /// The display name of the peer of this chat (the one a report is about).
+    private var reportedPeerName: String {
+        container.viewModel.conversation.peerDisplayName
+    }
+
+    /// App Store 1.2 — E2EE abuse report for the peer of this chat. Carries the category and who it is about, never the
+    /// chat. Afterwards the user is offered to block the contact.
+    private func sendAbuseReport(category: AbuseReportCategory) {
         let peerId: String = container.viewModel.conversation.peerUserId
         let peerName: String = container.viewModel.conversation.peerDisplayName
         BugReporter.shared.reportAbuse(reportedUserId: peerId,
@@ -583,13 +598,18 @@ struct ChatDetailScreen: View {
                                        reportedName: peerName,
                                        category: category,
                                        note: "")
-        snackbar?.show(.init(
-            text: String(localized: "chat_detail.report_sent", defaultValue: "Segnalazione inviata.", comment: "Snackbar — an abuse report about the chat peer was sent"),
-            severity: .info,
-            durationSeconds: 2))
+        showPostReportBlock = true
     }
 
-    // MARK: - BLE mesh sheet callbacks (branch claude/ble-mesh-cleanroom-spike)
+    /// The user said yes to "block this contact too" after reporting: the same shared block as the overflow menu
+    /// (server first, then the local list; the snackbar, with its retry, is raised there).
+    private func blockReportedPeer() {
+        Task { @MainActor in
+            await container.setPeerBlocked(true, snackbar: snackbar)
+        }
+    }
+
+    // MARK: - BLE mesh sheet callbacks
 
     private func handleMeshToast(_ text: String) {
         snackbar?.show(.init(text: text, severity: .info))
@@ -698,8 +718,7 @@ struct ChatDetailScreen: View {
             .disabled(container.viewModel.conversation.kind == .group || appState.isInCall)
             .accessibilityLabel("Chiamata video")
 
-            // BLE-mesh offline chat entry point (branch
-            // claude/ble-mesh-cleanroom-spike) — gated on the same server
+            // BLE-mesh offline chat entry point — gated on the same server
             // flag (`mesh_ble.enabled`) that hides it entirely when off,
             // same discipline as every other flag-gated affordance in this
             // app.
@@ -1556,9 +1575,9 @@ struct ChatDetailScreen: View {
     @ViewBuilder
     private var composerView: some View {
         VStack(spacing: 0) {
-            // BLE-mesh transport chip (branch claude/ble-mesh-cleanroom-spike)
-            // — shown while a mesh peer is the active send target for this
-            // conversation. Clearing it returns to the normal transport.
+            // BLE-mesh transport chip — shown while a mesh peer is the active
+            // send target for this conversation. Clearing it returns to the
+            // normal transport.
             if let target = meshRuntime.activeTarget(for: container.viewModel.conversation.id.uuidString) {
                 // Used to check only whether `target.nodeHex` was itself a
                 // connected peer — never `.connected`-gated either, so a

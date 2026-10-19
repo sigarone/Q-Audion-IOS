@@ -232,7 +232,7 @@ struct AboutSettingsScreen: View {
                             let subject = "Q-Audion v\(v) (build \(b)) — segnalazione"
                             let encoded = subject
                                 .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-                            if let url = URL(string: "mailto:support@qaudion.app?subject=" + encoded) {
+                            if let url = URL(string: "mailto:info@bcrypto.com?subject=" + encoded) {
                                 UIApplication.shared.open(url)
                             }
                             #endif

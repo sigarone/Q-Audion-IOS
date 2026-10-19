@@ -2,7 +2,7 @@ import SwiftUI
 import QAudionEngine
 
 /// New design-token-aware Settings root. 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-settings/.../SettingsScreen.kt`.
+/// `SettingsScreen.kt` (feature-settings module).
 ///
 /// Cross-platform parity is the contract:
 ///   - Same component vocabulary (ProfileHeroCard, SecurityChipsRow,
@@ -693,6 +693,19 @@ struct SettingsScreen: View {
             // unconditional in every build type.
             FeedbackSettingsLink()
 
+            // "Segnala un problema": the same report sheet the shake and the
+            // volume-button gestures open (screenshot of the moment, recent log,
+            // a note), as a visible row so the report channel does not depend on
+            // a hidden gesture. The gestures stay.
+            Button {
+                BugReporter.shared.triggerManualPublic(source: .settings)
+            } label: {
+                SettingsRow(icon: "ladybug",
+                            iconColor: scheme.primary,
+                            title: "Segnala un problema")
+            }
+            .buttonStyle(.plain)
+
             NavigationLink {
                 LazyView { LanguageSettingsScreen() }
             } label: {
@@ -723,7 +736,7 @@ struct SettingsScreen: View {
                 SettingsRow(icon: "hand.raised.fill",
                             iconColor: scheme.primary,
                             title: "Informativa privacy",
-                            subtitle: "q-audion.com · dati trattati · cancellazione account")
+                            subtitle: "Dati trattati · cancellazione account")
             }
             .buttonStyle(.plain)
 
