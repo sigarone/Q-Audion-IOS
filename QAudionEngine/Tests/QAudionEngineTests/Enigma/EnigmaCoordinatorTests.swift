@@ -356,7 +356,7 @@ final class EnigmaCoordinatorTests: XCTestCase {
         XCTAssertEqual(EnigmaSettings.storedLevel(defaults: defaults), .off)
         defaults.removePersistentDomain(forName: "EnigmaSettingsTests")
         XCTAssertEqual(EnigmaSettings.flagKey, "enigma_mode.enabled")
-        XCTAssertFalse(EnigmaSettings.flagDefault)
+        XCTAssertTrue(EnigmaSettings.flagDefault, "ships on; the public flag can only switch it off")
     }
 
     // MARK: - small pure helpers

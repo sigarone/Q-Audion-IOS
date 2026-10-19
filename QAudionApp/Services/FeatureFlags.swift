@@ -51,7 +51,8 @@ import Foundation
 ///   | `ios_bypass_echo_duck`   | Bool | `true` | Remote kill-switch for the TX echo ducker (`BypassEchoDuck`, W-BYPASSDUCK) that runs only while VP-IO is bypassed AND the output is the loudspeaker (`CallsGate.bypassEchoDuckEnabled()`, read once per call at capture creation). `false` switches it off for the next call; `true`/absent leave it armed. Public flags only -- not overlay-eligible. |
 ///   | `ios_dc_wedge_fallback`  | Bool | `true` | W-DCWEDGE kill-switch of the DataChannel-wedge diversion: `true`/absent = while the sealed-audio DataChannel is wedged (send queue stuck over 1500 B for 1 s or 15 shed frames in a row, released only after 3 s drained + a frame received on it) the audio TX goes on the WS relay; `false` = the pre-W-DCWEDGE routing (frames over the back-pressure threshold are dropped, nothing is diverted, a shed hangup / NACK is lost as before). Read once per call, at its first encrypted TX frame (`CallService.refreshDcWedgeFlag`); it can only turn the diversion OFF, never enable anything new. |
 ///   | `calls.native_srtp_kill` | Bool | `false` | W-NATIVESRTPKILL -- remote kill switch for the native-SRTP audio path, checked at every per-call snapshot decision (`AppState.logNativeSrtpSnapshot`). `true` forces THAT call's snapshot to `false` WITHOUT touching the persisted local override slot (`CallCapabilities.savePersistedAudioSrtpOverride`, now written only by the crash-streak safety net -- there is no more user-facing toggle, W-SRTPALWAYSON 2026-09-29/30: native SRTP audio is the unconditional default on every build). `false`/absent leaves the snapshot at whatever the compiled default (always on) or the crash-streak safety net already decided. Same key name on Android (`FeatureFlags`), so one flag flip kills the feature on both platforms at once. Public flags only -- not overlay-eligible (a kill switch that could be scoped to one account is not a fleet-wide safety net). |
-///   | `enigma_mode.enabled` | Bool | `false` | Enigma mode (visual effect only, a port of the Android feature): `true` shows Settings > Privacy > "Modalita' Enigma" (Off / Leggera / Scenografica, stored default Off) and lets the chat morph a message into its real packet and back; `false`/absent hides the entry and switches the effect off whatever the user stored. It changes nothing about the messages (no byte on the wire, no nonce, no tag check). Read live from the PUBLIC flags file only (`EnigmaFeature.flagOn`); deliberately NOT in `overlayEligibleKeys`: a user-visible feature that differs by account is what Guideline 5.6 forbids. Same key name on Android. |
+///   | `enigma_mode.enabled` | Bool | `true` (kill switch) | Enigma mode (visual effect only, a port of the Android feature): compiled default ON, resolved through `FeatureFlags.killSwitch`, so the file can only switch it OFF. On (absent or `true`): Settings > Privacy > "Modalita' Enigma" (Off / Leggera / Scenografica, stored default Off) is offered and the chat can morph a message into its real packet and back; `false` hides the entry and switches the effect off whatever the user stored. A `true` in the file can never turn on a build whose compiled default is off. It changes nothing about the messages (no byte on the wire, no nonce, no tag check). Read live from the PUBLIC flags file only (`EnigmaFeature.flagOn`); deliberately NOT in `overlayEligibleKeys`: a user-visible feature that differs by account is what Guideline 5.6 forbids. Same key name on Android. |
+///   | `mesh_ble.enabled` | Bool | `true` (kill switch) | Bluetooth mesh (`MeshFeature.enabled`, resolved through `FeatureFlags.killSwitch`): compiled default ON, so the public file can only switch it OFF. On: the mesh entry point in the chat, the Settings toggle and the radio are available, but the radio still starts only after the user's one-time explicit consent (`MeshConsent` / `MeshStartGate`). `false` hides every entry point and stops a running radio at the next refresh. A `true` in the file can never turn on a build whose compiled default is off. Public flags only -- not overlay-eligible. Same key name on Android. |
 ///   | `calls.ring_signaling_only` | -- | (not read) | REMOVED (v6 timer round, T2): the callee has ONE path, answer first (WIRE_SPEC 3.7.4 R-ANSWER-FIRST). A flags.json that still carries this key is ignored; no code reads it. |
 ///   | `calls.p2p_probe_kill` | Bool | `false` | D6 (2026-09-28, TURN-stuck-on-P2P fix, owner-requested) -- remote kill switch for the P2P-probe ICE restart (`QAudionWebRtcCallController.startP2pProbeWatch`/`P2pProbeDecisions`), which tries ONE ICE restart on an already-connected call still stuck on a TURN relay pair to see if a direct pair is now reachable. Wired via `p2pProbeKillSwitchProvider` (this engine target cannot import `FeatureFlags` directly) and re-read LIVE on every probe-gate tick, not latched at `call_incoming` -- the probe only ever fires minutes into a call, so a flag flip should take effect immediately. `absent`/`false` = probe active (default); `true` = never probe, on any call, until the flag flips back. Same key name on Android (`CallCapabilities.p2pProbeKillSwitchActive`), so one flag flip kills the feature on both platforms at once. Public flags only -- not overlay-eligible (same fleet-wide-safety-net reasoning as `calls.native_srtp_kill`). |
 ///   | `calls.dtls_answer_passive_kill` | Bool | `false` | TRACK B (2026-09-29, "phone always DTLS server when answering", owner-requested) -- remote kill switch for forcing this phone's own answer to `a=setup:passive` (DTLS server) on the first negotiation of a call, when the remote offer carried `a=setup:actpass` -- see `forcePassiveRoleForFreshAnswer` in `QAudionPeerConnection.swift`. Wired via `dtlsAnswerPassiveKillSwitchProvider` (this engine target cannot import `FeatureFlags` directly), read ONCE per call at `QAudionPeerConnection.init`. `absent`/`false` = fix active (default); `true` = revert to libwebrtc's stock `active` answerer default. Same key name on Android (`CallCapabilities.dtlsAnswerPassiveKillSwitchActive`), so one flag flip kills the feature on both platforms at once. Public flags only -- not overlay-eligible (same fleet-wide-safety-net reasoning as `calls.native_srtp_kill`). |
@@ -59,6 +60,10 @@ import Foundation
 public final class FeatureFlags {
 
     public static let shared = FeatureFlags()
+
+    /// Posted on the main actor after every successful fetch of the public file
+    /// (the new values are already in place when it fires).
+    public static let didRefreshNotification = Notification.Name("qaudion.featureflags.didRefresh")
 
     /// UserDefaults key holding the last successfully fetched dict.
     private static let cacheKey: String = "qaudion.featureflags.cache.v1"
@@ -262,6 +267,9 @@ public final class FeatureFlags {
             // is numeric-only on purpose so it survives regardless.
             let countLine: String = "flags cache_set n=" + String(describing: parsed.count)
             RTLog.info("featureflags", countLine)
+            // A kill switch has to act on what is already running, not only on
+            // the next launch: the Bluetooth radio listens for this.
+            NotificationCenter.default.post(name: FeatureFlags.didRefreshNotification, object: nil)
         } catch {
             self.inflight = false
             let reason: String = FeatureFlags.errorString(error)
@@ -311,6 +319,32 @@ public final class FeatureFlags {
         let value = FeatureFlags.shared.cache[key]
         guard let s = value as? String else { return def }
         return s
+    }
+
+    // MARK: - Kill switches (compiled default is the ceiling)
+
+    /// Resolve a feature that ships ON and that the public flags file may only
+    /// switch OFF. The compiled default is the ceiling: a flag file can take a
+    /// feature away from every install, but it can never give an install a
+    /// feature that this build was compiled without. What the build was
+    /// reviewed with is therefore always the most the build can do.
+    ///
+    /// Reads the PUBLIC file only, never the per-account overlay, so a kill
+    /// switch resolves to the same value for every account (a visible feature
+    /// that differs by account is what Guideline 5.6 forbids), then applies
+    /// `resolveKillSwitch`.
+    public static func killSwitch(_ key: String, compiledDefault: Bool) -> Bool {
+        let remote: Bool? = FeatureFlags.shared.cache[key] as? Bool
+        return resolveKillSwitch(compiledDefault: compiledDefault, remote: remote)
+    }
+
+    /// The rule itself, over plain values so it can be tested without the
+    /// singleton: compiled OFF is OFF whatever the file says; compiled ON is
+    /// ON unless the file says `false` for the key. An absent or non-Bool value
+    /// (`remote == nil`) leaves the compiled default in force.
+    nonisolated static func resolveKillSwitch(compiledDefault: Bool, remote: Bool?) -> Bool {
+        guard compiledDefault else { return false }
+        return remote ?? true
     }
 
     // MARK: - Persistence

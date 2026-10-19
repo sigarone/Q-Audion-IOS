@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Chat message bubble. 1:1 port of Android
-/// `qaudion-android-new/feature/feature-chat/.../components/MessageBubble.kt`.
+/// `MessageBubble.kt` (feature-chat module).
 ///
 /// Three variants share the same shell (rounded rect + asymmetric tail
 /// corner) but differ in colors, alignment and footer:
@@ -95,8 +95,8 @@ struct MessageBubble<Body: View>: View {
     /// appearance.
     let onReact: ((String) -> Void)?
     /// True when this message was delivered over the offline BLE-mesh
-    /// fallback transport (branch `claude/ble-mesh-cleanroom-spike`)
-    /// instead of the normal WebSocket path — mirrors `Message.viaMesh`.
+    /// fallback transport instead of the normal WebSocket path — mirrors
+    /// `Message.viaMesh`.
     /// Renders a small antenna glyph in the footer next to the timestamp.
     let viaMesh: Bool
     /// Stored as `content` (NOT `body`) to avoid colliding with the

@@ -30,6 +30,14 @@ struct MeshSheetView: View {
     @StateObject private var viewModel: MeshSheetViewModel
     @StateObject private var btProbe = MeshBluetoothCapabilityProbe()
     @State private var routingPreference: MeshRoutingPreference = .default
+    /// The user's one-time answer about relaying other people's messages. Until it is "accepted" every antenna chip
+    /// opens the consent screen instead of starting the radio, and no Bluetooth permission is asked for.
+    @ObservedObject private var consent = MeshConsent.shared
+    /// Whether a call is busy (mirrored by the root): the consent screen is never presented over one.
+    @ObservedObject private var arbiter = MeshConsentArbiter.shared
+    @State private var showingConsent: Bool = false
+    /// The mode the user tapped before the consent screen came up; it is started if they accept.
+    @State private var pendingConsentMode: MeshAntennaMode?
 
     let onToast: (String) -> Void
     let onOpenConversation: (String) -> Void
@@ -86,14 +94,40 @@ struct MeshSheetView: View {
                 routingPreference = MeshRoutingPreferenceStore().preference(for: peer)
             }
             // W-MESHDEAD — independent of MeshFeature.enabled on purpose,
-            // see MeshBluetoothCapabilityProbe's kdoc.
-            btProbe.start()
+            // see MeshBluetoothCapabilityProbe's kdoc. It builds a
+            // CBCentralManager, which asks for the Bluetooth permission, so
+            // it waits for the consent: no Bluetooth before the user said yes.
+            if consent.isAccepted { btProbe.start() }
         }
         // Single-parameter onChange on purpose: every other call site in this
         // app uses it, and the two-parameter form is iOS 17+.
         .onChange(of: runtime.peers.map { $0.nodeHex }) { hexes in
             viewModel.autoSelectChatPeer(visibleNodeHexes: hexes)
         }
+        .onChange(of: consent.state) { state in
+            if state == .accepted { btProbe.start() }
+        }
+        .meshConsentSheet(
+            wanted: $showingConsent,
+            callBusy: arbiter.callBusy,
+            onAccept: acceptConsent,
+            onDecline: declineConsent
+        )
+    }
+
+    /// "Attiva" on the consent screen: starts the mode the user had tapped.
+    private func acceptConsent() {
+        let mode: MeshAntennaMode = pendingConsentMode ?? .fullMesh
+        pendingConsentMode = nil
+        showingConsent = false
+        runtime.acceptConsentAndStart(mode: mode)
+    }
+
+    /// "Non ora": the mesh stays off.
+    private func declineConsent() {
+        pendingConsentMode = nil
+        showingConsent = false
+        runtime.declineConsentAndStop()
     }
 
     private var header: some View {
@@ -120,7 +154,16 @@ struct MeshSheetView: View {
         String(localized: "mesh_sheet.antenna_off", defaultValue: "Spenta", comment: "Bluetooth mesh sheet: antenna mode off (chip label and subtitle of the antenna row).")
     }
 
+    /// Subtitle when the kill switch has turned the mesh off for now. It is a switch for everybody, not a setting of this
+    /// account, so the text does not say "for this account".
+    private var featureUnavailableLabel: String {
+        String(localized: "mesh_sheet.feature_unavailable", defaultValue: "Mesh temporaneamente non disponibile", comment: "Bluetooth mesh sheet, antenna row subtitle when the mesh has been switched off for everyone for now (remote kill switch). Not a per-account state.")
+    }
+
     private var antennaSubtitle: String {
+        // Before the consent the Bluetooth is not even probed, so the only
+        // truth is "off"; the chips below open the consent screen.
+        guard consent.isAccepted else { return antennaOffLabel }
         switch btProbe.status {
         case .checking:
             return "Verifica del Bluetooth in corso…"
@@ -143,9 +186,10 @@ struct MeshSheetView: View {
             case nil:
                 if case .error = runtime.radioState { return "Bluetooth non disponibile" }
                 // W-MESHDEAD — distinguishes "radio is fine, you just haven't
-                // turned it on" from "this account can't use mesh yet at
-                // all", instead of both reading as the same flat "Spenta".
-                return MeshFeature.enabled ? antennaOffLabel : "Funzione mesh non ancora attiva per questo account"
+                // turned it on" from "the mesh has been switched off for
+                // everyone for now" (the remote kill switch), instead of both
+                // reading as the same flat "Spenta".
+                return MeshFeature.enabled ? antennaOffLabel : featureUnavailableLabel
             case .visibleOnly:
                 return "Visibile · raggiungibile dai vicini"
             case .fullMesh:
@@ -283,6 +327,15 @@ struct MeshSheetView: View {
         RTLog.info("call", "mesh antenna_tap flag=\(flagOn)")
         guard MeshFeature.enabled else {
             onToast("La mesh Bluetooth non è disponibile al momento.")
+            return
+        }
+        // Turning the radio ON relays other people's messages through this
+        // phone, so it needs the user's explicit consent first: ask, and
+        // start in the tapped mode only if they accept. Turning it OFF never
+        // needs asking.
+        if let mode, !consent.isAccepted {
+            pendingConsentMode = mode
+            showingConsent = true
             return
         }
         runtime.setAntenna(mode: mode)

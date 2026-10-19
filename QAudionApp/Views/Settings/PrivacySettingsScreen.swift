@@ -331,9 +331,13 @@ struct PrivacySettingsScreen: View {
                         )
                     }
 
-                    // Enigma mode (visual effect only): Off / Leggera / Scenografica. Appears only while the remote flag
-                    // `enigma_mode.enabled` is on (default OFF); see EnigmaSettingsSection.
+                    // Enigma mode (visual effect only): Off / Leggera / Scenografica. Appears unless the remote kill switch
+                    // `enigma_mode.enabled` has been set to false; see EnigmaSettingsSection.
                     EnigmaSettingsSection()
+
+                    // Bluetooth mesh: the user's one-time consent to relay other people's encrypted messages, shown and
+                    // changed here. Appears unless the remote kill switch `mesh_ble.enabled` has been set to false.
+                    MeshSettingsSection()
 
                     // 2026-08-10: the "MESSAGGI A SCADENZA" picker and the
                     // "ANONIMIZZAZIONE RETE" Tor toggle were removed here —

@@ -8,7 +8,7 @@ Q-Audion iOS is the native Swift client for the Q-Audion E2EE post-quantum messe
 
 ## Reporting
 
-Please do **not** open a public GitHub issue. Email `security@bcrypto.com` (PGP key TBD). Use GitHub private security advisory for sensitive reports.
+Please do **not** open a public GitHub issue. Email `info@bcrypto.com` (PGP key TBD). Use GitHub private security advisory for sensitive reports.
 
 We acknowledge within 48 business hours, triage within 5 business days, follow a 90-day coordinated-disclosure default.
 

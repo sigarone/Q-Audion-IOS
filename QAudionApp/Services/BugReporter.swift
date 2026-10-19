@@ -7,7 +7,8 @@ import QAudionEngine
 ///
 /// **Triggers:**
 ///   - Manual: volume up-then-down (or down-then-up) within 400ms, two presses in the same
-///     direction within 600ms, or a shake → overlay sheet. W-BUGREPPHANTOM (2026-10-02):
+///     direction within 600ms, a shake, or the visible "Segnala un problema" row in Settings
+///     → overlay sheet. W-BUGREPPHANTOM (2026-10-02):
 ///     only real button presses count (`VolumeGestureDetector`); the output-volume changes
 ///     of an audio route change or a call transition used to open the sheet by
 ///     themselves at every 1:1 -> group hand-over.
@@ -76,6 +77,8 @@ public final class BugReporter: ObservableObject {
     public enum TriggerSource: Int {
         case volumeGesture = 1
         case shake = 2
+        /// The visible "Segnala un problema" row in Settings (the same sheet, without the gestures).
+        case settings = 3
     }
 
     /// Minutes of log before the trigger that a report carries; group calls ask for more
@@ -262,10 +265,11 @@ public final class BugReporter: ObservableObject {
 
     // MARK: - Trigger paths
 
-    /// Public entry point for shake gesture (ShakeDetectorView in ContentView).
-    /// Same as the private triggerManual() but callable from outside the class.
+    /// Public entry point for the shake gesture (ShakeDetectorView in ContentView) and
+    /// for the Settings row. Same as the private triggerManual() but callable from
+    /// outside the class. (The volume gesture logs its own, richer, trigger line.)
     public func triggerManualPublic(source: TriggerSource = .shake) {
-        if source == .shake { RTLog.info("bugreport", "trig src=\(source.rawValue)") }
+        if source != .volumeGesture { RTLog.info("bugreport", "trig src=\(source.rawValue)") }
         triggerManual(source: source)
     }
 
@@ -368,17 +372,22 @@ public final class BugReporter: ObservableObject {
     /// reported ids ALSO travel as plaintext form fields so triage can
     /// route without decrypting. No log tail, no screenshot, no consent
     /// gate — the user is explicitly asking for this to be sent.
-    public func reportAbuse(reportedUserId: String?,
-                            reportedGroupId: String?,
-                            reportedName: String,
-                            category: String,
-                            note: String) {
-        var fields: [String: String] = ["report_category": category]
+    ///
+    /// Never carries message content: the report is built here from the
+    /// category, the ids, the name and the user's own note, and nothing else
+    /// (the dialogs tell the user so). Keep it that way.
+    func reportAbuse(reportedUserId: String?,
+                     reportedGroupId: String?,
+                     reportedName: String,
+                     category: AbuseReportCategory,
+                     note: String) {
+        let categoryValue: String = category.wireValue
+        var fields: [String: String] = ["report_category": categoryValue]
         if let u = reportedUserId, !u.isEmpty { fields["reported_user_id"] = u }
         if let g = reportedGroupId, !g.isEmpty { fields["reported_group_id"] = g }
         var report = PendingReport(screenshot: nil, logEntries: [], trigger: "abuse", capturedAt: Date())
         report.extraFields = fields
-        var lines: [String] = ["ABUSE REPORT", "category=" + category]
+        var lines: [String] = ["ABUSE REPORT", "category=" + categoryValue]
         if let u = reportedUserId, !u.isEmpty { lines.append("reported_user_id=" + u) }
         if let g = reportedGroupId, !g.isEmpty { lines.append("reported_group_id=" + g) }
         lines.append("reported_name=" + reportedName)

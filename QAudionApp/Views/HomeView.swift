@@ -14,6 +14,9 @@ struct HomeView: View {
     /// W-MISSEDBADGE (2026-10-04) — the number on the Calls tab (unread missed calls) and what tells it the tab is
     /// being looked at. See `MissedCallsBadge`.
     @ObservedObject private var missedCalls = MissedCallsBadge.shared
+    /// The one-time Bluetooth mesh consent screen is on screen until the user answers it; observed so it goes away the
+    /// moment "Attiva" or "Non ora" is tapped.
+    @ObservedObject private var meshConsent = MeshConsent.shared
     @Environment(\.scenePhase) private var scenePhase
     /// W-L10N-BATCH2 (2026-09-08) — explicit per-tab navigation path, reset
     /// to root on a language change (see `.onChange(of: locale)` below).
@@ -103,6 +106,15 @@ struct HomeView: View {
         .fullScreenCover(isPresented: $presentingInCall) {
             inCallCoverView
         }
+        // The mesh relays other people's encrypted messages through this phone, so it starts only after an explicit
+        // answer here. Offered once, never over a call (`MeshConsentPresentation`): a call that arrives takes the sheet down
+        // first and the root's call cover waits for it; "Non ora" leaves the mesh off and Settings can reopen the question.
+        .meshConsentSheet(
+            wanted: meshConsentWanted,
+            callBusy: callIsBusy,
+            onAccept: { MeshRuntime.shared.acceptConsentAndStart() },
+            onDecline: { MeshRuntime.shared.declineConsentAndStop() }
+        )
         .onChange(of: appState.isInCall) { isInCall in
             // Single-param form for iOS 16 compat. Auto-dismiss the cover
             // when the call ends.
@@ -134,6 +146,21 @@ struct HomeView: View {
         .onChange(of: selectedTab) { _ in markMissedCallsSeenIfLookedAt() }
         .onChange(of: scenePhase) { _ in markMissedCallsSeenIfLookedAt() }
         .onChange(of: missedCalls.unreadCount) { _ in markMissedCallsSeenIfLookedAt() }
+    }
+
+    /// True while the one-time mesh consent question still has to be asked: the feature is available and nobody has answered.
+    /// Read-only: the sheet cannot be dismissed any other way than by answering it, and it comes back by itself after a call
+    /// because the question stays unanswered. Whether it is on screen right now is `MeshConsentPresentation.sheetShown`.
+    private var meshConsentWanted: Binding<Bool> {
+        Binding(
+            get: { MeshStartGate.consentIsWanted(featureEnabled: MeshFeature.enabled, consent: meshConsent.state) },
+            set: { _ in }
+        )
+    }
+
+    /// A call is ringing, running or being set up: nothing may be presented over it.
+    private var callIsBusy: Bool {
+        appState.callIsBusyForSheets
     }
 
     /// W-MISSEDBADGE — moves the "seen" mark when the Calls tab counts as looked at
@@ -369,7 +396,7 @@ struct HomeView: View {
         // W19.G: replaced the bare `ConversationListView()` with the
         // sectioned `ChatListScreen` — admin banner / Gruppi / Fissate /
         // Conversazioni + 2 FABs, 1:1 visual port of Android
-        // `qaudion-android-new/feature/feature-chat/.../ChatListScreen.kt`.
+        // `ChatListScreen.kt` (feature-chat module).
         // Data layer (`ConversationListContainer`) is unchanged: only the
         // presentation layer flipped, so the existing chat / search /
         // pin / delete / new-conversation flows keep working.
@@ -631,5 +658,21 @@ private struct ContactsTabPlaceholder: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+// MARK: - Call activity, for the places that must not be presented over a call
+
+extension AppState {
+    /// A call is ringing, being set up or running (1:1 or group): the consent screen is never presented over it, and the root
+    /// mirrors this into `MeshConsentArbiter` for the sheets that cannot see `AppState`. The rule is
+    /// `MeshConsentPresentation.callIsBusy`.
+    var callIsBusyForSheets: Bool {
+        MeshConsentPresentation.callIsBusy(
+            isInCall: isInCall,
+            callIdle: callState == .idle,
+            oneToOneRinging: incomingCallRingVisible,
+            groupInvitePending: incomingGroupCallInvite != nil,
+            groupCallIdle: groupCallControllerState == .idle)
     }
 }

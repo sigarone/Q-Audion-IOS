@@ -3,8 +3,8 @@ import QAudionEngine
 
 /// Settings > Privacy > "Modalità Enigma": Off (default) / Leggera / Scenografica.
 ///
-/// Shown only while the remote flag `enigma_mode.enabled` is on (default OFF): with the flag off the entry does not appear
-/// and the effect is off whatever is stored. The line under the control says what it is: a visual effect that changes nothing
+/// Shown unless the remote kill switch `enigma_mode.enabled` has been set to false (the feature ships on): with the switch
+/// off the entry does not appear and the effect is off whatever is stored. The line under the control says what it is: a visual effect that changes nothing
 /// about the security of the messages.
 ///
 /// Takes no AppState (CLAUDE.md section 16): the flag and the stored level are read through `EnigmaFeature` / `EnigmaSettings`.

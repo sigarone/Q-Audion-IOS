@@ -4,6 +4,12 @@ appId: com.qaudion.app
 # then visit every HomeView tab and screenshot it. First real coverage
 # beyond the onboarding welcome screen (smoke-launch.yaml).
 - runFlow: auth-extension-register.yaml
+# The first time the shell is shown, the one-time Bluetooth mesh consent screen
+# covers it; "Non ora" leaves the mesh off. `optional: true` since it is asked
+# only once per install.
+- tapOn:
+    text: "Non ora"
+    optional: true
 - takeScreenshot: home-chat-tab
 - tapOn: "Contatti"
 - takeScreenshot: home-contacts-tab

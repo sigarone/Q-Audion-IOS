@@ -3193,12 +3193,6 @@ final class AppState: ObservableObject {
     /// instead of the lock screen. A mere ring never sets it, so the lock still
     /// holds for an unanswered incoming call (SECURITY M-25/L-7 preserved).
     var callWasAnswered: Bool { answeredCallKitId != nil }
-    /// W-WAKEONLY — true once we've dismissed the native CallKit UI after answer
-    /// (CallKit-for-wake-only) and the app self-manages the audio session. When
-    /// set, `onAudioSessionDeactivated` re-asserts the session instead of pausing
-    /// (the call is still live in-app). Reset per call. Gated by the remote flag
-    /// `ios_callkit_wake_only`.
-    private var selfManagedAudioSession = false
     /// W-CKHOLD (2026-09-02) — B5: true only while a SYSTEM
     /// `CXSetHeldCallAction(isOnHold: true)` is the reason local video is
     /// paused, so the matching resume (`isOnHold: false`) knows whether to
@@ -3840,12 +3834,13 @@ final class AppState: ObservableObject {
             getToken: { [weak self] in self?.authService.loadToken() }
         )
 
-        // BLE mesh (branch claude/ble-mesh-cleanroom-spike) — MeshRuntime
+        // BLE mesh — MeshRuntime
         // is a primitive-only API surface (CLAUDE.md §16, never imports
         // AppState); this closure is the one place that bridges its
         // inbound-data callback back into the real receive/persist path.
-        // Harmless when the feature flag is off: MeshRuntime.setAntenna
-        // refuses to start the radio, so this callback simply never fires.
+        // Harmless while the mesh is off (kill switch pulled, or the user has
+        // not accepted the consent screen yet): MeshRuntime.setAntenna refuses
+        // to start the radio, so this callback simply never fires.
         MeshRuntime.shared.onInboundData = { [weak self] fromNodeHex, payload in
             self?.handleIncomingMeshMessage(fromNodeHex: fromNodeHex, payload: payload)
         }
@@ -3854,7 +3849,10 @@ final class AppState: ObservableObject {
         }
         // Bring the radio up with the app, in full mesh, so a contact standing
         // nearby is reachable without both people having opened the radar
-        // first. Honours an explicit "Spenta" and the server flag.
+        // first. Only once the user has accepted the one-time consent screen
+        // (relaying other people's messages needs an explicit yes); until
+        // then this is a no-op. Honours an explicit "Spenta" and the remote
+        // kill switch.
         MeshRuntime.shared.autoStartIfEnabled()
 
         // Derive this device's own mesh node id from its long-term Ed25519
@@ -4529,8 +4527,8 @@ final class AppState: ObservableObject {
         // Android's !isInitiator early-return in performReKey); a responder
         // integration's ticks are cheap no-ops here (the guard fails fast
         // before any network/crypto work). See
-        // docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md §5 (qaudion-android-new
-        // repo) for the full design.
+        // docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md §5 (Android repository)
+        // for the full design.
         reKeyScheduler.onReKeyTick = { [weak self] tick in
             let reason = tick.reason
             let seq = String(tick.sequence)
@@ -4629,10 +4627,11 @@ final class AppState: ObservableObject {
                         return true
                     }
                     RTLog.info("call", "W-CALLFG-DIAG onAnswerCall uuid=\(uuid) — routing to performAcceptIncoming (1:1)")
-                    // CallKit answered → run the shared accept path + dismiss the
-                    // native CallKit UI. The same accept body is reused by the
-                    // CallKit-FREE path (answerIncomingCall when callKitFreeMode).
-                    return self.performAcceptIncoming(uuid: uuid, dismissNativeUI: true)
+                    // CallKit answered → run the shared accept path (the native
+                    // CallKit UI stays as the system shows it). The same accept
+                    // body is reused by the CallKit-FREE path (answerIncomingCall
+                    // when callKitFreeMode).
+                    return self.performAcceptIncoming(uuid: uuid)
                 }
                 return accepted
             }
@@ -4820,7 +4819,7 @@ final class AppState: ObservableObject {
                     // Group calls v2: tell the group audio unit; a group call with
                     // no CallKit entry of its own (self-managed, or one that just
                     // lost the 1:1 CallKit call it was riding) re-asserts the
-                    // session, like the wake-only 1:1 path below.
+                    // session.
                     let groupLive: Bool = {
                         if case .idle = self.groupCallControllerState { return self.groupCallKitId != nil }
                         return true
@@ -4839,17 +4838,6 @@ final class AppState: ObservableObject {
                     // a group call's audio is the group audio unit's to manage, never
                     // CallService's.
                     guard self.groupCallKitId == nil else { return }
-                    if self.selfManagedAudioSession {
-                        // W-WAKEONLY — CallKit released its audio-session hold
-                        // after we dismissed the system UI, but the call is still
-                        // live in-app. Re-assert the session so mic + speaker keep
-                        // working (do NOT pause as the normal teardown would).
-                        // W-SELFACTID — the call's own CallKit uuid keys the
-                        // self-activation mark of a native-SRTP call.
-                        await (self.callKit as? CallKitProvider)?
-                            .reactivateAudioSessionForSelfManagedCall(uuid: self.activeCallKitId)
-                        return
-                    }
                     self.callService.handleAudioSessionDeactivated()
                 }
             }
@@ -7369,7 +7357,7 @@ final class AppState: ObservableObject {
                         if useCustomUI && self.pendingNotificationAnswer {
                             self.pendingNotificationAnswer = false
                             self.stopInAppRingtone()
-                            self.performAcceptIncoming(uuid: callUUID, dismissNativeUI: false)
+                            self.performAcceptIncoming(uuid: callUUID)
                         }
                         // C-3: do NOT set isInCall here. Setting it on
                         // call ARRIVAL (before the user answers) blocks
@@ -12474,7 +12462,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - BLE mesh receive (branch claude/ble-mesh-cleanroom-spike)
+    // MARK: - BLE mesh receive
     //
     // `MeshRuntime` (QAudionApp/Services/MeshRuntime.swift) is a primitive-
     // only API surface (CLAUDE.md §16) — it never imports AppState. This is
@@ -16681,43 +16669,6 @@ final class AppState: ObservableObject {
         print("[AppState] deferred answer consumed: \(trigger)")
     }
 
-    /// W-WAKEONLY — "CallKit for wake only". After the user answers a
-    /// push-woken call, dismiss the native CallKit in-call UI (which iOS keeps
-    /// on top of our window) so the Q-Audion SAS screen becomes the call
-    /// surface. The call stays alive in-app (sealed audio); the app then
-    /// self-manages the audio session. Gated by the remote flag
-    /// `ios_callkit_wake_only` (compiled default OFF) so it can be killed
-    /// server-side without a rebuild if it regresses audio. Delayed ~0.6 s so
-    /// the audio engine is up before CallKit drops its session hold (re-asserted
-    /// here + in onAudioSessionDeactivated). Only dismisses calls whose native
-    /// UI was actually shown — releaseFromSystemUI no-ops otherwise.
-    @MainActor
-    private func dismissNativeCallUIAfterAnswer(_ uuid: UUID) {
-        // REVERTED to default OFF (v1.0.691). Device evidence (call 19080DFB,
-        // 1.0.690): wake-only fired ("native UI dismissed, app owns the call")
-        // but the app STILL did not come to the foreground — iOS does NOT let an
-        // app foreground its own UI for a screen-off / locked push call (no API;
-        // dismissing the native UI just returns to the lock/home screen, not the
-        // app). So wake-only removed the system call UI without showing ours —
-        // strictly worse. The SAS screen is reachable only by tapping the
-        // Q-Audion icon on the native call screen (standard iOS CallKit behavior).
-        // Kept behind the flag so it can be force-ON for experiments, but OFF by
-        // default restores the standard native call UI.
-        guard FeatureFlags.bool("ios_callkit_wake_only", false) else {
-            RTLog.info("call", "W-CALLFG-DIAG dismissNativeCallUIAfterAnswer uuid=\(uuid) — ios_callkit_wake_only OFF, native CallKit UI left as-is (expected default)")
-            return
-        }
-        RTLog.info("call", "W-CALLFG-DIAG dismissNativeCallUIAfterAnswer uuid=\(uuid) — ios_callkit_wake_only ON, will attempt release in 0.6s")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self = self,
-                  let provider = self.callKit as? CallKitProvider else { return }
-            guard provider.releaseFromSystemUI(uuid) else { return }
-            self.selfManagedAudioSession = true
-            RTLog.info("call", "CallKit-wake-only: native UI dismissed, app owns the call")
-            Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: uuid) }
-        }
-    }
-
     /// Revive the signalling WebSocket on demand. Mirrors the
     /// `UIApplication.willEnterForeground` reconnect logic so a PushKit
     /// incoming-call wake gets the SAME socket recovery a manual foreground does.
@@ -20430,9 +20381,8 @@ extension AppState {
     /// Uses CXCallController so the same `provider(_:perform:CXAnswerCallAction)`
     /// delegate path fires as when the user taps Answer on the system sheet.
     /// Shared incoming-call accept path. Run by BOTH the CallKit answer
-    /// (`onAnswerCall`, `dismissNativeUI=true`) and the CallKit-FREE path
-    /// (`answerIncomingCall` when `CallsGate.callKitFreeMode`,
-    /// `dismissNativeUI=false`). Idempotent via the Bug A guard. The crypto +
+    /// (`onAnswerCall`) and the CallKit-FREE path
+    /// (`answerIncomingCall` when `CallsGate.callKitFreeMode`). Idempotent via the Bug A guard. The crypto +
     /// signalling are unchanged — only WHO triggers the accept differs.
     ///
     /// W-GHOSTCALL (2026-09-25) — returns `false` only when the answer was REFUSED
@@ -20443,11 +20393,11 @@ extension AppState {
     /// audio session for a call that does not exist.
     @MainActor
     @discardableResult
-    private func performAcceptIncoming(uuid: UUID, dismissNativeUI: Bool) -> Bool {
+    private func performAcceptIncoming(uuid: UUID) -> Bool {
         // W-CALLERBUSY (review of #169) — answering an incoming call (any path: CallKit, in-app, notification)
         // silences the busy tone of the outgoing call that just ended.
         callerBusyTone.stop()
-        RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) dismissNativeUI=\(dismissNativeUI) alreadyAnswered=\(self.answeredCallKitId == uuid)")
+        RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) alreadyAnswered=\(self.answeredCallKitId == uuid)")
         // W-GHOSTCALL — before anything else: never turn a tap on a dead call's
         // ring into an in-call state (incident e3acecd7).
         if self.refuseStaleAnswer(uuid: uuid) { return false }
@@ -20664,10 +20614,6 @@ extension AppState {
         // W450 + cold-start race: boot audio + notify caller (latched/replayed
         // when the responder integration isn't ready yet).
         self.consumeDeferredAnswerIfReady("performAcceptIncoming")
-        if dismissNativeUI {
-            // W-WAKEONLY — dismiss the native CallKit UI so the SAS screen shows.
-            self.dismissNativeCallUIAfterAnswer(uuid)
-        }
         // CallKit-free: no native UI. Audio self-activates without CallKit's
         // onAudioSessionActivated via CallService.activateIncomingCallAudio's
         // Bug B fallback (configureForVoIP best-effort setActive + 0.7s
@@ -20909,7 +20855,7 @@ extension AppState {
         pendingAnswerAudioOnlyCallId = (uuid, audioOnly)
         if CallsGate.callKitFreeMode {
             // W-NOCALLKIT — no CallKit; run the accept path directly.
-            performAcceptIncoming(uuid: uuid, dismissNativeUI: false)
+            performAcceptIncoming(uuid: uuid)
         } else {
             // W-SIGSWALLOW (2026-09-01) — the 1:1 twin of
             // `answerIncomingGroupCall`'s W-GRPDOUBLEDIALER fallback: `try?`
@@ -20931,7 +20877,7 @@ extension AppState {
                     let direct = CallSignalingFailurePolicy.directAcceptOnCallKitAnswerFailure
                     RTLog.warn("call", "answer fail kind=cx_answer_call uuid=\(uuid.uuidString.prefix(8)) direct=\(direct ? 1 : 0) err=\(error)")
                     guard direct else { return }
-                    _ = await MainActor.run { self.performAcceptIncoming(uuid: uuid, dismissNativeUI: false) }
+                    _ = await MainActor.run { self.performAcceptIncoming(uuid: uuid) }
                 }
             }
         }
@@ -21779,7 +21725,6 @@ extension AppState {
         pendingNotificationAnswer = false  // W-NOCALLKIT — drop any stale latched answer
         pendingNotificationDecline = false // W-NOCALLKIT — drop any stale latched decline
         pendingAnswerAudioOnlyCallId = nil  // W-VIDPRIVACY — re-arm for the next call
-        selfManagedAudioSession = false  // W-WAKEONLY — re-arm for the next call
         // earbud-relay-v1 — drop the one-shot counterparty state so the
         // next earbud call starts a fresh responder (fresh FW-H7 counter).
         earbudCounterparty.reset()

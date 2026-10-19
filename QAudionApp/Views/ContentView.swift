@@ -175,14 +175,11 @@ struct ContentView: View {
         // exactly). Was: a thin HomeView banner for 1:1, full IncomingCallScreen
         // for group only. Pavel wants informational parity with Android's
         // incoming-call screen for 1:1 too — same screen, same content, always.
-        .fullScreenCover(isPresented: Binding(
-            get: {
-                appState.incomingGroupCallInvite != nil
-                    || appState.groupCallControllerState != .idle
-                    || appState.incomingCallRingVisible
-            },
-            set: { _ in }
-        )) {
+        //
+        // The cover goes through `meshAwareCallCover`: the call always wins over the mesh consent sheet. A sheet that is up when
+        // the call arrives is taken down first and the cover presents once it is gone (bounded wait), so the two presentations
+        // never change in the same update.
+        .meshAwareCallCover(callWanted: callCoverWanted, callBusy: appState.callIsBusyForSheets) {
             if let invite = appState.incomingGroupCallInvite {
                 incomingGroupCallScreen(invite)
             } else if appState.groupCallControllerState != .idle, let vm = appState.groupCallViewModel {
@@ -437,6 +434,14 @@ struct ContentView: View {
         return kind + " · " + creator
     }
 
+    /// Something the root's call cover has to show: a group ring, a live group call or the 1:1 ring. (A 1:1 call in progress is
+    /// not a cover; it replaces the app in `mainStack`.) The cover itself is `meshAwareCallCover`.
+    private var callCoverWanted: Bool {
+        appState.incomingGroupCallInvite != nil
+            || appState.groupCallControllerState != .idle
+            || appState.incomingCallRingVisible
+    }
+
     @ViewBuilder
     private var mainStack: some View {
         if appState.isInCall {
@@ -463,7 +468,7 @@ struct ContentView: View {
             // `bcrypto.example.com` and a generic username/password
             // form) with `OnboardingRoot` — a 1:1 visual + behavioural
             // port of the Android canonical Welcome → FastSetup flow
-            // (`qaudion-android-new/feature/feature-auth/`). The
+            // (`feature-auth` module). The
             // server URL is now pinned to `PinnedServerHost.url`
             // (`https://voip.bcrypto.com`) so a malicious or stale
             // QR cannot redirect the phone to a different origin.

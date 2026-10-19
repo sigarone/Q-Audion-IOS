@@ -340,7 +340,7 @@ final class AccountSettingsContainer: ObservableObject {
                 RTLog.warn("account", "deleteAccount failed: " + String(describing: error))
                 await MainActor.run {
                     self.isLoading = false
-                    self.errorMessage = String(localized: "account_settings.error.delete_failed", defaultValue: "Eliminazione non riuscita. Riprova tra qualche istante o scrivi a support@qaudion.app.", comment: "Error banner — the server did not confirm the account deletion; nothing was wiped locally")
+                    self.errorMessage = String(localized: "account_settings.error.delete_failed", defaultValue: "Eliminazione non riuscita. Riprova tra qualche istante o scrivi a info@bcrypto.com.", comment: "Error banner — the server did not confirm the account deletion; nothing was wiped locally")
                 }
                 return
             }

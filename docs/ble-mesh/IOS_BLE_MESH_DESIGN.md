@@ -1,10 +1,10 @@
 # BLE Mesh Offline Text Transport — iOS Port
 
-> **Status:** WORK IN PROGRESS, branch `claude/ble-mesh-cleanroom-spike`.
+> **Status:** WORK IN PROGRESS.
 > This is a **port** of an already-designed, already-built Android feature
-> (`New-Q-Audion-Android`, same branch name, PR #25) — not a fresh design.
-> Read `New-Q-Audion-Android/docs/ble-mesh/BLE_MESH_ARCHITECTURE_STUDY.md`
-> first if you want the *why*; this document is the *where on iOS*.
+> — not a fresh design. The Android architecture study
+> (`docs/ble-mesh/BLE_MESH_ARCHITECTURE_STUDY.md` in the Android repository)
+> has the *why*; this document is the *where on iOS*.
 > **Not hardware-validated.** CoreBluetooth has no reliable simulator either
 > — the pure wire-format/policy layer is unit-tested (`swift test` /
 > `engine-tests.yml`), the CoreBluetooth glue is only compiler-verified
@@ -16,8 +16,10 @@
 Same feature as Android: when two Q-Audion users have no network path, their
 phones relay already-encrypted chat messages directly over Bluetooth LE,
 flood-style, with a small "radar" UI inside the chat screen. Text only,
-fallback-only, gated behind the same server flag key (`mesh_ble.enabled`)
-both apps read — one flip turns it on for both platforms at once.
+fallback-only, with the same server flag key (`mesh_ble.enabled`) both apps
+read. The feature ships ON and the flag is only a kill switch: one flip to
+`false` turns it off for both platforms at once, and a `true` in the flag file
+never turns on a build that was compiled with it off.
 
 **Non-negotiable invariant, unchanged from Android:** the mesh layer is
 ALWAYS an opaque envelope around ciphertext already produced by this app's
@@ -40,7 +42,7 @@ never invents a KDF/AEAD/handshake.
 | `MeshRadioSchedule` (pure duty-cycle resolver) | `MeshRadioSchedule`, same priority-order `resolve(_:)` | `.../Mesh/MeshRadioSchedule.swift` |
 | `MeshTransport` interface (dual central+peripheral role) | `MeshTransport` protocol + `MeshTransportDelegate` (delegate instead of `StateFlow` — see §4) | `.../Mesh/MeshTransport.swift` |
 | `BleMeshTransportImpl` (real `BluetoothGattServer`/scanner/advertiser) | `BleMeshTransport` (real `CBCentralManager`+`CBPeripheralManager`) | `QAudionApp/Services/BleMeshTransport.swift` |
-| `MeshFeature` (feature gate + node-id derivation) | `MeshFeature` (reads `FeatureFlags.bool("mesh_ble.enabled", false)` live, no separate `StateFlow` bridge needed — see §4) | `QAudionApp/Services/MeshFeature.swift` |
+| `MeshFeature` (feature gate + node-id derivation) | `MeshFeature` (reads `FeatureFlags.killSwitch("mesh_ble.enabled", compiledDefault: true)` live, no separate `StateFlow` bridge needed — see §4 and §10) | `QAudionApp/Services/MeshFeature.swift` |
 | `MeshService` + `MeshSendCoordinator` + `MeshReceiveCoordinator` (core-data orchestration split across 3 classes) | `MeshRuntime` (one class — no outbox/store-and-forward tier yet, see §6) | `QAudionApp/Services/MeshRuntime.swift` |
 | `MeshRadar.kt` (Compose Canvas) | `MeshRadarView` (SwiftUI `Canvas`) | `QAudionApp/Views/Chat/Components/Mesh/MeshRadarView.swift` |
 | `MeshBottomSheet.kt` (`ModalBottomSheet`) | `MeshSheetView` (`.sheet` + `.presentationDetents`) + `MeshTransportChip` | `.../Mesh/MeshSheetView.swift` |
@@ -205,21 +207,53 @@ fallback rather than a silent drop.
 
 ## 10. Feature-flag gate
 
-Single call site: `MeshFeature.enabled` (`FeatureFlags.bool("mesh_ble.enabled",
-false)`, live-read, no caching of its own). Every mesh-touching surface
-checks it:
-- `ChatDetailScreen.topBar` — the antenna button doesn't render at all when off.
-- `MeshRuntime.setAntenna(on:)` — refuses to start the radio even if called
-  directly, so a stray call can never bypass the gate.
-- `MeshSheetView.handleAntennaToggle` — surfaces a toast instead of toggling
-  when off (defense in depth; the entry point is already hidden by the
-  first check).
+Single call site: `MeshFeature.enabled`
+(`FeatureFlags.killSwitch("mesh_ble.enabled", compiledDefault: true)`,
+live-read, no caching of its own). The compiled default is ON, so the feature
+is part of the release the store reviews and the public flag file can only
+switch it OFF; it is never an enabler. A refresh of the flag file also stops a
+radio that is already running (`MeshRuntime.stopIfNoLongerAllowed`).
 
-Bluetooth is NEVER touched just because the flag is on — only when the user
-explicitly flips the antenna toggle inside the sheet, which itself requires
-navigating to the sheet via the (flag-gated) antenna button. `CBCentralManager`/
+The feature being available is not the same as it running. With the mesh on,
+this phone relays the encrypted messages of other app users who are nearby (it
+cannot read them), so the radio starts only after the user's one-time explicit
+consent (`MeshConsent`, `MeshConsentSheet`): "Attiva" starts it, "Non ora"
+leaves it off, and the Settings switch (`MeshSettingsSection`) shows and
+changes the state. The rule is one pure function, `MeshStartGate.mayStart`
+(feature available AND consent accepted), used by:
+- `ChatDetailScreen.topBar` — the antenna button doesn't render at all when the
+  feature is switched off.
+- `MeshRuntime.setAntenna(mode:)` and `autoStartIfEnabled()` — refuse to start
+  the radio unless the gate allows it, even if called directly, so a stray call
+  can never bypass it. Switching OFF is always allowed.
+- `MeshSheetView.handleAntennaSelect` — before consent, a tap on "Visibile" or
+  "Mesh completa" opens the consent screen and starts that mode only if the user
+  accepts; when the feature is off it surfaces a toast.
+- `HomeView` — presents the consent screen once, never over a call.
+
+The consent screen also says that while the mesh is on the phone announces a
+fixed identifier that other Q-Audion phones nearby can see (the node id, §5),
+and the Settings switch shows the consent, with a subtitle that says what the
+radio is doing (`MeshSettingsStatus`: consent given but antenna off, visible
+only, or relaying).
+
+**The call goes first.** The consent screen is a sheet and a ringing,
+connecting or running call is a full-screen cover at the root, so the order
+between them is decided in plain values (`MeshConsentPresentation`) and the
+views only obey it: the sheet is shown only for a wanted question and never
+while a call is busy (`sheetShown`); a call that arrives while the sheet is up
+takes the sheet down first, and the root's cover (`meshAwareCallCover`) waits
+until the sheet has reported that it is gone (`callCoverShown`, bounded by
+`maxWaitForSheet` so a sheet that never reports back cannot hold a call
+hostage); after the call the sheet waits `settleAfterCall` and comes back by
+itself, once, because the question was never answered. The first-run sheet
+(HomeView), the Settings switch and the mesh panel all present it through
+`meshConsentSheet`, so there is one rule.
+
+No Bluetooth is touched before the consent: `CBCentralManager`/
 `CBPeripheralManager` are constructed lazily inside `BleMeshTransport`/
-`MeshRuntime.setAntenna`, never at app launch.
+`MeshRuntime.setAntenna`, and the mesh sheet's read-only capability probe
+(which would trigger the permission prompt) waits for the consent too.
 
 ## 11. What's NOT done in this increment
 

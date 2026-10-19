@@ -102,8 +102,68 @@ final class MeshRuntime: ObservableObject {
     /// runtime doesn't need its own announce parsing.
     private let topology = MeshTopology()
 
+    /// The user's one-time answer to the consent screen. The radio never starts
+    /// without it (see `startAllowed`).
+    private let consent: MeshConsent
+    private var flagRefreshObserver: NSObjectProtocol?
+
     private init() {
+        consent = MeshConsent.shared
         localNodeIdHex = MeshNodeId.random().hex
+        observeFlagRefresh()
+    }
+
+    /// A runtime of its own for unit tests, with a consent of its own, so they
+    /// never touch `shared` or the user's stored answer. No observer is armed.
+    init(forTesting consent: MeshConsent) {
+        self.consent = consent
+        localNodeIdHex = MeshNodeId.random().hex
+    }
+
+    /// The radio may start only when the feature is available (compiled on and
+    /// not switched off by the remote kill switch) AND the user accepted the
+    /// consent screen. The rule itself lives in `MeshStartGate`.
+    var startAllowed: Bool {
+        MeshStartGate.mayStart(featureEnabled: MeshFeature.enabled, consent: consent.state)
+    }
+
+    /// A kill switch has to reach a radio that is already running, not only the
+    /// next start: every fresh copy of the public flags file asks the runtime to
+    /// re-check, and a radio that is no longer allowed is switched off.
+    private func observeFlagRefresh() {
+        flagRefreshObserver = NotificationCenter.default.addObserver(
+            forName: FeatureFlags.didRefreshNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.stopIfNoLongerAllowed()
+            }
+        }
+    }
+
+    /// Switches a running radio off when the gate no longer allows it (the mesh
+    /// was switched off remotely). Does nothing while the radio is off.
+    func stopIfNoLongerAllowed() {
+        guard requestedMode != nil else { return }
+        guard !startAllowed else { return }
+        setAntenna(mode: nil)
+    }
+
+    /// "Attiva": records the consent and brings the antenna up in `mode`
+    /// (full mesh unless the caller asks for another). The user just said they
+    /// want the mesh, so the stored "antenna off" choice is cleared too.
+    func acceptConsentAndStart(mode: MeshAntennaMode = .fullMesh) {
+        consent.accept()
+        setAutoStart(true)
+        setAntenna(mode: mode)
+    }
+
+    /// "Non ora", or the Settings switch turned off: records it and switches the
+    /// radio off. The mesh stays off until the user accepts again.
+    func declineConsentAndStop() {
+        consent.decline()
+        setAntenna(mode: nil)
     }
 
     /// Call once identity bootstrap has produced a long-term key (or
@@ -120,7 +180,8 @@ final class MeshRuntime: ObservableObject {
     private static let autoStartKey = "qaudion.mesh.autostart"
 
     /// Bring the antenna up at app start, in full mesh, unless the user
-    /// switched it off.
+    /// switched it off. Only after the user accepted the consent screen: a
+    /// phone that never said "Attiva" stays silent.
     ///
     /// A mesh only exists while devices are advertising, so an antenna that
     /// comes up only when somebody opens the radar is a mesh nobody can be
@@ -133,7 +194,7 @@ final class MeshRuntime: ObservableObject {
     /// connects out, so two visible-only phones sit next to each other seeing
     /// nothing. Default has to be the mode that can actually form a link.
     func autoStartIfEnabled() {
-        guard MeshFeature.enabled else { return }
+        guard startAllowed else { return }
         if UserDefaults.standard.object(forKey: Self.autoStartKey) != nil,
            UserDefaults.standard.bool(forKey: Self.autoStartKey) == false {
             return
@@ -150,10 +211,13 @@ final class MeshRuntime: ObservableObject {
 
     /// Turns the BLE radio off, or on in `mode`. This is the ONLY call site
     /// that ever touches CoreBluetooth — the antenna selector in
-    /// `MeshSheetView`. Silently refuses when the feature flag is off, so a
-    /// stray call (e.g. a race with a flag flip) can never bypass the gate.
+    /// `MeshSheetView`, the consent screen and the Settings switch. Switching
+    /// OFF is always allowed, whatever the gate says (a kill switch must be
+    /// able to stop the radio). Switching ON silently refuses unless
+    /// `startAllowed`: the feature flag is on AND the user accepted the consent
+    /// screen, so a stray call (a race with a flag flip, a screen that forgot
+    /// to ask) can never bypass the gate.
     func setAntenna(mode: MeshAntennaMode?) {
-        guard MeshFeature.enabled else { return }
         guard let mode else {
             transport?.stop()
             requestedMode = nil
@@ -161,6 +225,7 @@ final class MeshRuntime: ObservableObject {
             MeshOutboxDrain.shared.stop()
             return
         }
+        guard startAllowed else { return }
         // Switching .fullMesh <-> .visibleOnly mid-session: BleMeshTransport
         // .start() is a no-op while already active (it can't reconcile
         // "already active, but in the other mode" mid-call), so stop first —

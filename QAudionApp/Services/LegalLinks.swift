@@ -9,10 +9,16 @@ import UIKit
 /// Account screen) and the URLs typed into App Store Connect can never
 /// drift apart. Same pages the Play listing already uses.
 ///
-/// Locale rule: the site is served under /en, /it, /fr, /de, /es (see
-/// qaudion-website/i18n/routing.ts). The in-app language is mapped onto
-/// that set; anything the site does not have falls back to English, which
-/// is also the canonical URL entered in App Store Connect.
+/// One privacy URL for the whole app: `privacyPolicy()` is the same page as
+/// `appPrivacy()` (the one linked from the age declaration at registration),
+/// so every place that shows the policy shows the same text.
+///
+/// Locale rule: the app's documents (terms, privacy) are served with Italian
+/// under `/it` and every other language from the route without a prefix. The
+/// account-deletion page is served by the product site under /en, /it, /fr,
+/// /de, /es; the in-app language is mapped onto that set and anything the site
+/// does not have falls back to English, which is also the canonical URL entered
+/// in App Store Connect.
 enum LegalLinks {
     private static let host = "https://www.q-audion.com"
     private static let siteLocales: Set<String> = ["en", "it", "fr", "de", "es"]
@@ -24,10 +30,12 @@ enum LegalLinks {
         "bcrypto.com", "www.bcrypto.com",
     ]
 
+    /// The privacy policy of the app (Settings, About, Welcome): the same page as `appPrivacy`, one URL for the app.
     static func privacyPolicy(languageCode: String = AppLanguageManager.effectiveLanguageCode) -> URL {
-        page("privacy", languageCode: languageCode)
+        appPrivacy(languageCode: languageCode)
     }
 
+    /// The account-deletion page. It lives on the product site: the document host has no deletion page for the app.
     static func deleteAccount(languageCode: String = AppLanguageManager.effectiveLanguageCode) -> URL {
         page("delete-account", languageCode: languageCode)
     }
