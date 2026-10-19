@@ -45,8 +45,10 @@ public final class BCryptoRestClient {
     /// learn to follow.
     private let primaryServerUrl: String
     private let session: URLSession
-    private var tokenRefresher: TokenRefresher?
-    private var deviceRenewFallback: DeviceRenewFallback?
+    // Guarded by `configLock`, like `_config`: the app re-installs the device-renew fallback
+    // on a live client at every wake, while a burst of 401s reads these to build its request.
+    private var _tokenRefresher: TokenRefresher?
+    private var _deviceRenewFallback: DeviceRenewFallback?
     /// The ONE refresh single-flight of the process. Every path that refreshes the
     /// session (REST 401, socket `auth_failed`, the app's proactive refresh, the tus
     /// client) goes through it, so two refreshes are never in flight with the same
@@ -55,10 +57,18 @@ public final class BCryptoRestClient {
     /// The app's shared credential store (Keychain). When set, the refresh token is read
     /// from it and results are written back with compare-and-swap; when nil (onboarding,
     /// tests) this client uses its own config copy and persists nothing.
-    public var credentialStore: AuthCredentialStore?
+    public var credentialStore: AuthCredentialStore? {
+        get { configLock.withLock { _credentialStore } }
+        set { configLock.withLock { _credentialStore = newValue } }
+    }
+    private var _credentialStore: AuthCredentialStore?
     /// Called, for every caller of a coordinated refresh, with the tokens it should now
     /// use. The owning provider wires it to broadcast them to every transport.
-    public var onTokensApplied: (@Sendable (AuthTokenSet) -> Void)?
+    public var onTokensApplied: (@Sendable (AuthTokenSet) -> Void)? {
+        get { configLock.withLock { _onTokensApplied } }
+        set { configLock.withLock { _onTokensApplied = newValue } }
+    }
+    private var _onTokensApplied: (@Sendable (AuthTokenSet) -> Void)?
 
     // MARK: - IOS-E2 — anti-zombie-pool HTTP trio + W-INFLIGHTCANCEL
     //
@@ -284,7 +294,7 @@ public final class BCryptoRestClient {
     /// owning `BCryptoBackendProvider` wires this to `BCryptoAccountApiImpl.refreshToken`
     /// after construction to avoid a circular init-time dependency.
     public func setTokenRefresher(_ refresher: @escaping TokenRefresher) {
-        self.tokenRefresher = refresher
+        configLock.withLock { _tokenRefresher = refresher }
     }
 
     /// Phase 2 — install the device-bound silent re-auth fallback.
@@ -294,12 +304,12 @@ public final class BCryptoRestClient {
     /// Ed25519 key, POSTing /auth/device-renew, and returning the
     /// fresh (access, refresh) pair.
     public func setDeviceRenewFallback(_ fallback: @escaping DeviceRenewFallback) {
-        self.deviceRenewFallback = fallback
+        configLock.withLock { _deviceRenewFallback = fallback }
     }
 
     /// True once a device-renew fallback is installed (see `setDeviceRenewFallback`). The app
     /// layer uses it to guarantee that every store-backed client carries one.
-    public var hasDeviceRenewFallback: Bool { deviceRenewFallback != nil }
+    public var hasDeviceRenewFallback: Bool { configLock.withLock { _deviceRenewFallback != nil } }
 
     public func get(_ path: String, headers: [String: String] = [:]) async throws -> Data {
         try await request("GET", path: path, body: nil, headers: headers)
@@ -648,24 +658,28 @@ public final class BCryptoRestClient {
     /// on the same tokens as the one that did the network call.
     public func refreshSession(trigger: AuthRefreshTrigger,
                                ignoreCooldown: Bool = false) async -> AuthRefreshOutcome {
-        // One copy, so the two tokens handed to the coordinator belong to the same pair.
-        let current = config
+        // One snapshot under the lock: the two tokens belong to the same pair, and the store
+        // and closures are the ones installed at that moment.
+        let (current, store, refresher, renewer) = configLock.withLock {
+            (_config, _credentialStore, _tokenRefresher, _deviceRenewFallback)
+        }
         let request = AuthRefreshRequest(
             trigger: trigger,
             staleAccessToken: trigger.adoptsNewerStoredAccess ? current.accessToken : nil,
             callerRefreshToken: current.refreshToken,
-            store: credentialStore,
-            refresher: tokenRefresher.map { Self.wrapRefresher($0) },
-            renewer: deviceRenewFallback.map { Self.wrapRenewer($0) },
+            store: store,
+            refresher: refresher.map { Self.wrapRefresher($0) },
+            renewer: renewer.map { Self.wrapRenewer($0) },
             ignoreCooldown: ignoreCooldown)
         let outcome = await authCoordinator.refresh(request)
         if let tokens = outcome.tokens {
-            withConfig { locked in
-                locked.accessToken = tokens.accessToken
-                if let newRefresh = tokens.refreshToken, !newRefresh.isEmpty { locked.refreshToken = newRefresh }
+            let applied = configLock.withLock { () -> (@Sendable (AuthTokenSet) -> Void)? in
+                _config.accessToken = tokens.accessToken
+                if let newRefresh = tokens.refreshToken, !newRefresh.isEmpty { _config.refreshToken = newRefresh }
+                return _onTokensApplied
             }
-            // Outside the lock: the provider's handler may call `updateConfig` on this client.
-            onTokensApplied?(tokens)
+            // Outside the lock: the provider's handler calls `updateConfig` on this client.
+            applied?(tokens)
         }
         return outcome
     }

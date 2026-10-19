@@ -6,7 +6,12 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// Current backend configuration. Read-only externally; mutated internally
     /// by `applyTokenPair` and `updateServerUrl`. External components (e.g.
     /// ServerSelector) read `config.serverUrl` and `config.accessToken` here.
-    public private(set) var config: BackendConfig
+    public var config: BackendConfig { configLock.withLock { _config } }
+    /// Guarded by `configLock`. After a burst of 401s every caller that joined the refresh
+    /// calls `applyTokenPair` through `onTokensApplied`, from several threads at once;
+    /// unsynchronised, those writes corrupted the token Strings and crashed the app.
+    private var _config: BackendConfig
+    private let configLock = NSLock()
     /// Lazily-created WebSocket client. A transient, REST-only provider — the
     /// ~20 per-use providers spun up for one-off account/contacts/storage/
     /// security calls — never touches a WS-backed API, so this stays nil and
@@ -125,7 +130,7 @@ public final class BCryptoBackendProvider: BackendProvider {
     public var isConnected: Bool { _wsClient?.state == .authenticated }
 
     public init(config: BackendConfig) {
-        self.config = config
+        self._config = config
         self.restClient = BCryptoRestClient(config: config)
 
         // Wire the REST client so it can auto-refresh the JWT access token on
@@ -196,12 +201,18 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// resumes late could put an OLDER pair over a newer one. Other callers (a fresh login)
     /// keep the default and persist as before.
     public func applyTokenPair(access: String, refresh: String?, persist: Bool = true) {
-        config.accessToken = access
-        if let r = refresh, !r.isEmpty { config.refreshToken = r }
+        // Change, copy and hand the copy to the REST client under the lock, so concurrent
+        // callers cannot leave an older copy behind. The client never calls back into this
+        // provider while holding its own lock, so the lock order is always provider -> client.
+        let snapshot: BackendConfig = configLock.withLock {
+            _config.accessToken = access
+            if let r = refresh, !r.isEmpty { _config.refreshToken = r }
+            restClient.updateConfig(_config)
+            return _config
+        }
         // `_wsClient?` — never force-create a socket just to push a token. A
         // socket built later reads the now-updated `config` at creation time.
-        _wsClient?.updateConfig(config)
-        restClient.updateConfig(config)
+        _wsClient?.updateConfig(snapshot)
         if persist { onTokenRotated?(access, refresh) }
     }
 
@@ -229,13 +240,16 @@ public final class BCryptoBackendProvider: BackendProvider {
         // Nothing to do when the selector re-affirms the node we are already on,
         // which is most of what it does — the primary-snap check re-asserts the
         // pinned host on every monitor tick.
-        guard config.serverUrl != newUrl else { return }
-
-        config.serverUrl = newUrl
+        let snapshot: BackendConfig? = configLock.withLock {
+            guard _config.serverUrl != newUrl else { return nil }
+            _config.serverUrl = newUrl
+            restClient.updateConfig(_config)
+            return _config
+        }
+        guard let snapshot else { return }
         // `_wsClient?` — a not-yet-created socket reads the new URL on first
         // connect; no need to force one into existence here.
-        _wsClient?.updateConfig(config)
-        restClient.updateConfig(config)
+        _wsClient?.updateConfig(snapshot)
 
         // updateConfig only STORES the value: a socket that is already open
         // keeps talking to the node it dialled, indefinitely, while REST has
