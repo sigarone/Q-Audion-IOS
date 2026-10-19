@@ -7,7 +7,7 @@ import QAudionEngine
 ///   - Mobile Stitch mockup `Q-Audion Active Call` (project 15710203507549916868)
 ///
 /// Cross-platform parity is the design contract. Component vocabulary
-/// (MetaPill / CircularAction / AvatarHalo / QAudionAvatar)
+/// (MetaPill / CircularAction / ReKeyAvatarRing / QAudionAvatar)
 /// and color tokens (`scheme.X`, `extras.Y`) are shared with Android and
 /// Desktop — only the layout is mobile-tuned.
 ///
@@ -16,15 +16,16 @@ import QAudionEngine
 /// the old synthetic "VOCE RICEVUTA"/"CIFRATURA" oscilloscopes were
 /// DELETED — the Guardian ribbon's real-FFT MiniSpectrum + real-ops/s
 /// CipherFlowTube are their one honest replacement):
-///   1. **Hero avatar** — 180pt halo (success → connected, pqcAccent →
-///      negotiating, warning → degraded) wrapping a 120pt avatar with
-///      the per-name gradient.
+///   1. **Hero avatar** — a 120pt avatar with the per-name gradient,
+///      wrapped by the re-key countdown ring: a faint track, the remaining
+///      share of the period as an arc from 12 o'clock, and a "RE-KEY 117s"
+///      pill on the ring at 6 o'clock.
 ///   2. **Peer name** + presence subtitle.
-///   3. **Stats band** — one outlined box, two rows: DURATA / CODEC /
-///      FLUSSO kbps / RITARDO on the first, RE-KEY progress on the second
-///      (Android's W-NETVIS stats box; absorbs what SessionStatusStrip
-///      showed). The confidence number is not here any more: it is a plain
-///      value in the collapsed technical-data block of the security sheet.
+///   3. **Stats band** — one outlined box: DURATA / CODEC / FLUSSO kbps /
+///      RITARDO (Android's W-NETVIS stats box; absorbs what
+///      SessionStatusStrip showed). The confidence number is not here any
+///      more: it is a plain value in the collapsed technical-data block of
+///      the security sheet.
 ///   4. **Trust bar** — SAS ✓ / PQC / transport chips + shield-to-expand.
 ///   5. **Guardian ribbon** — real-FFT MiniSpectrum + cipher-seal chip +
 ///      pitch reading (Tono) + ENGINE CipherFlowTube.
@@ -38,7 +39,7 @@ import QAudionEngine
 ///      video / screen-share · enhance / add-participant / hangup.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
-/// `confidence`, `rekeyInSeconds`, `sasWords`, `sasVerified`, `keyInfo`,
+/// `confidence`, `sasWords`, `sasVerified`, `keyInfo`,
 /// `transportMode`. Defaults render the screen for design preview; the
 /// real wiring lands once `AppState.callState`/`InCallContainer` exposes
 /// the equivalent fields.
@@ -171,7 +172,10 @@ struct InCallScreen: View {
     let durationSeconds: Int
     let confidence: Double
     let rekeyInSeconds: Int
+    /// Length of the current re-key period; `<= 0` = no re-key timer yet (the ring is drawn bare, with no pill).
     let rekeyTotalSeconds: Int
+    /// A re-key round is running right now: the ring shows full with the plain "RE-KEY" pill.
+    let rekeyInProgress: Bool
     /// W-NETVIS (Android→iOS parity, 2026-08-10) — the Opus bitrate ACTUALLY
     /// applied to this call in kbps, i.e. the value that reached the encoder
     /// after the active profile's block clamp, NOT the stored preference.
@@ -442,6 +446,7 @@ struct InCallScreen: View {
          confidence: Double = 0.92,
          rekeyInSeconds: Int = 252,
          rekeyTotalSeconds: Int = 300,
+         rekeyInProgress: Bool = false,
          codecKbps: Int = 0,
          txKbps: Double? = nil,
          rxKbps: Double? = nil,
@@ -503,6 +508,7 @@ struct InCallScreen: View {
         self.confidence = confidence
         self.rekeyInSeconds = rekeyInSeconds
         self.rekeyTotalSeconds = rekeyTotalSeconds
+        self.rekeyInProgress = rekeyInProgress
         self.codecKbps = codecKbps
         self.txKbps = txKbps
         self.rxKbps = rxKbps
@@ -864,17 +870,21 @@ struct InCallScreen: View {
     /// bar → Guardian ribbon → trust chain → SAS → key info → pills →
     /// transport). The old SessionStatusStrip call and the old stats card
     /// (synthetic oscilloscopes) are GONE — their surviving data (duration,
-    /// confidence, rekey countdown) lives in `statsBand`.
+    /// confidence) lives in `statsBand`; the re-key countdown is the ring
+    /// around the avatar (`ReKeyAvatarRing`).
     private var scrollContent: some View {
         ScrollView {
             VStack(spacing: 0) {
                 Spacer().frame(height: 16)
 
                 ZStack {
-                    // Neutral on purpose: the halo used to turn green, amber or
-                    // red with the confidence score, a second verdict outside
-                    // the four states of the voice card.
-                    AvatarHalo(color: scheme.onSurfaceVariant, diameter: 180)
+                    // The re-key countdown, drawn around the avatar. One fixed
+                    // accent on purpose: the ring never takes a colour from the
+                    // confidence score, a second verdict outside the four
+                    // states of the voice card.
+                    ReKeyAvatarRing(remainingSeconds: rekeyInSeconds,
+                                    totalSeconds: rekeyTotalSeconds,
+                                    isReKeying: rekeyInProgress)
                     QAudionAvatar(displayName: peerDisplayName,
                                   imageURL: avatarUrl,
                                   size: 120,
@@ -1010,52 +1020,36 @@ struct InCallScreen: View {
 
     /// Unified stats band under the peer name — 1:1 port of Android
     /// InCallScreen.kt's W-NETVIS stats box (InCallScreen.kt:913-991): ONE
-    /// thin outlined card holding TWO rows, so the two platforms read the
-    /// same way during a cross-platform call.
+    /// thin outlined card, so the two platforms read the same way during a
+    /// cross-platform call.
     ///
-    ///   row 1 — DURATA | CODEC | FLUSSO kbps | RITARDO
-    ///   row 2 — CONFIDENCE | RE-KEY dial
+    ///   DURATA | CODEC | FLUSSO kbps | RITARDO
     ///
-    /// The link readout follows the duration on the first line for the same
-    /// reason it does on Android: six columns overflow a phone, and this
-    /// keeps confidence adjacent to the re-key dial below.
+    /// The re-key countdown is not in the band: it is the ring (and its
+    /// pill) around the avatar, `ReKeyAvatarRing`.
     ///
-    /// This band absorbs everything the deleted SessionStatusStrip call and
-    /// the deleted old stats card showed that was real (duration,
-    /// confidence, rekey countdown). The old synthetic "VOCE RICEVUTA"/
-    /// "CIFRATURA" oscilloscopes are gone — the Guardian ribbon below
-    /// carries the one honest voice viz (real-FFT MiniSpectrum) and crypto
-    /// viz (real-ops/s CipherFlowTube).
+    /// This band absorbs what the deleted SessionStatusStrip call and the
+    /// deleted old stats card showed that was real (duration, link readout).
+    /// The old synthetic "VOCE RICEVUTA"/"CIFRATURA" oscilloscopes are gone
+    /// — the Guardian ribbon below carries the one honest voice viz
+    /// (real-FFT MiniSpectrum) and crypto viz (real-ops/s CipherFlowTube).
     private var statsBand: some View {
-        VStack(spacing: 6) {
-            HStack(alignment: .center, spacing: 0) {
-                statColumn("DURATA", formatMmSs(durationSeconds), extras.success)
-                Spacer(minLength: 6)
-                // Coding level actually applied — 16k on a constrained link.
-                statColumn("CODEC", Self.codecText(codecKbps), codecColor)
-                Spacer(minLength: 6)
-                // Real wire cost right now (tx/rx), not a bandwidth estimate.
-                // The unit lives in the LABEL to keep the column narrow.
-                statColumn("FLUSSO kbps", Self.flowText(txKbps, rxKbps), scheme.onSurface)
-                Spacer(minLength: 6)
-                // Measured RTT on the active media path; "—" wherever no such
-                // measurement exists (never an invented or last-known number).
-                statColumn("RITARDO", Self.delayText(rttMs, bufMs: bufMs), delayColor)
-            }
-            // The confidence number no longer lives here: it is a plain
-            // technical value, in the collapsed "Dati tecnici (non validati)"
-            // block of the security sheet.
-            HStack(alignment: .center, spacing: 0) {
-                Spacer(minLength: 8)
-                VStack(spacing: 4) {
-                    Text("RE-KEY")
-                        .qaudionStyle(type.labelSmall)
-                        .tracking(1.2)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                    rekeyProgress
-                }
-                Spacer(minLength: 8)
-            }
+        // The confidence number does not live here: it is a plain technical
+        // value, in the collapsed "Dati tecnici (non validati)" block of the
+        // security sheet. The re-key countdown is the ring around the avatar.
+        HStack(alignment: .center, spacing: 0) {
+            statColumn("DURATA", formatMmSs(durationSeconds), extras.success)
+            Spacer(minLength: 6)
+            // Coding level actually applied — 16k on a constrained link.
+            statColumn("CODEC", Self.codecText(codecKbps), codecColor)
+            Spacer(minLength: 6)
+            // Real wire cost right now (tx/rx), not a bandwidth estimate.
+            // The unit lives in the LABEL to keep the column narrow.
+            statColumn("FLUSSO kbps", Self.flowText(txKbps, rxKbps), scheme.onSurface)
+            Spacer(minLength: 6)
+            // Measured RTT on the active media path; "—" wherever no such
+            // measurement exists (never an invented or last-known number).
+            statColumn("RITARDO", Self.delayText(rttMs, bufMs: bufMs), delayColor)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
@@ -1159,39 +1153,6 @@ struct InCallScreen: View {
         if total > 400 { return extras.riskHigh }
         if total > 200 { return extras.warning }
         return extras.success
-    }
-
-    /// Compact circular rekey countdown — port of Android core-ui
-    /// `ReKeyProgress`: a ring that fills with the ELAPSED fraction of the
-    /// rekey window plus a "NNs" remaining readout in the middle. Redrawn
-    /// once per second by the caller's TimelineView tick (LiveInCallScreen);
-    /// the 0.6s tween between ticks is draw-phase only (never-block rules:
-    /// no timers, no per-frame tasks).
-    private var rekeyProgress: some View {
-        let total = max(rekeyTotalSeconds, 1)
-        let remaining = min(max(rekeyInSeconds, 0), total)
-        let elapsedFraction = 1.0 - Double(remaining) / Double(total)
-        return ZStack {
-            Circle()
-                .stroke(scheme.surfaceVariant, lineWidth: 3)
-            Circle()
-                .trim(from: 0, to: CGFloat(elapsedFraction))
-                .stroke(scheme.primary,
-                        style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 0.6), value: remaining)
-            Text(Self.rekeySecondsText(remaining))
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(scheme.onSurface)
-        }
-        .frame(width: 38, height: 38)
-        .accessibilityLabel("Prossimo re-key tra \(remaining) secondi")
-    }
-
-    /// Static readout builder kept out of @ViewBuilder (SWIFT6_PATTERNS
-    /// §1/§6). Mirrors Android's `seconds(sec)`: "now" at 0, else "NNs".
-    private static func rekeySecondsText(_ remaining: Int) -> String {
-        return remaining <= 0 ? "now" : remaining.description + "s"
     }
 
     // MARK: - SAS panel

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Ring around the call avatar that fills as the real PQC key exchange for
-/// THIS call is confirmed — replaces the static-in-name-but-actually-
-/// perpetually-pulsing `AvatarHalo` on the ring screens. See
+/// THIS call is confirmed, on the ring screens (outgoing and incoming); the
+/// in-call screen draws the re-key countdown ring instead. See
 /// `docs/superpowers/specs/2026-09-03-key-exchange-avatar-animation-design.md`
 /// for the full design.
 ///

@@ -41,9 +41,15 @@ import QAudionEngine
 ///                              ribbon + security-sheet biometrics; unified
 ///                              call UI pass — see `liveVoiceBiometrics`)
 ///
+///   - `rekeyInSeconds`,     ← `appState.reKeyScheduler.currentStatus`: time left
+///     `rekeyTotalSeconds`     and length of the current period, only once the
+///                              call holds the ML-KEM key (see
+///                              `liveRekeyCountdown`); drawn as the ring
+///                              around the avatar
+///   - `rekeyInProgress`     ← `appState.isReKeying`
+///
 /// Stub fields (kept until engine exposes them — see W29 spec from
 /// the parallel agent):
-///   - `rekeyInSeconds` / `rekeyTotalSeconds` — fixed 252/300
 ///   - `voiceEnhancement` — local @State only
 ///   - `speakerOn` — local @State only (real AVAudioSession routing
 ///                   stays inside legacy InCallView for now)
@@ -104,13 +110,6 @@ struct LiveInCallScreen: View {
     /// TimelineView tick).
     @State private var cachedPeerAvatarUrl: URL? = nil
 
-    /// Reference timestamp (UNIX epoch seconds) used to derive a
-    /// counting-down rekey clock until the engine surfaces a real
-    /// rekey timer. We anchor it on `.onAppear` and decrement it as
-    /// the TimelineView ticks; resets every `rekeyTotalSeconds`.
-    private static let rekeyTotalSeconds = 300
-    @State private var rekeyAnchorEpoch: TimeInterval = Date().timeIntervalSince1970
-
     var body: some View {
         // TimelineView refreshes the body once per second so the
         // duration label + sparkline tick without forcing CallService
@@ -129,17 +128,6 @@ struct LiveInCallScreen: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
-        // W324: stub disclaimer next to the rekey countdown, shown only
-        // while the call holds no session key at all (`hasSessionKey`). Not
-        // `liveKeyInfo == nil`: that panel exists only for the ML-KEM key, so
-        // the badge would show on a real call that only has the transitional key.
-        .overlay(alignment: .topTrailing) {
-            if !hasSessionKey {
-                stubRekeyDisclaimer
-                    .padding(.top, 56)
-                    .padding(.trailing, 12)
-            }
-        }
         // Reduce the call to the "call in progress" bar on top of the app (audio call, once connected).
         .overlay(alignment: .topTrailing) { reduceButtonOverlay }
         .onAppear {
@@ -149,7 +137,6 @@ struct LiveInCallScreen: View {
             // mirroring of that material are blocked while it is up.
             ScreenshotLockService.lock()
             resolvePeerDisplayName()
-            rekeyAnchorEpoch = Date().timeIntervalSince1970
             // W-AUDIOUILIE (2026-07-24) — this surface is REMOUNTED mid-call
             // every time the pair transitions to/from both-paused, and both
             // toggles used to reopen at a hardcoded `false`. So a call muted
@@ -297,13 +284,15 @@ struct LiveInCallScreen: View {
     /// computed property keeps the type-checker scope clean.
     @ViewBuilder
     private var inCallScreenView: some View {
+        let rekey = liveRekeyCountdown
         InCallScreen(
                 peerDisplayName: cachedPeerDisplayName,
                 avatarUrl: cachedPeerAvatarUrl,
                 durationSeconds: Int(appState.callService.callDurationSeconds),
                 confidence: Double(appState.confidenceScore),
-                rekeyInSeconds: liveRekeyInSeconds,
-                rekeyTotalSeconds: Self.rekeyTotalSeconds,
+                rekeyInSeconds: rekey.remaining,
+                rekeyTotalSeconds: rekey.total,
+                rekeyInProgress: appState.isReKeying,
                 // W-NETVIS (Android→iOS parity) — the three link numbers of
                 // the stats band, all three now measured. Sampled at 1 Hz by
                 // `AppState.sampleCallNetworkStats()` off the existing
@@ -744,24 +733,6 @@ struct LiveInCallScreen: View {
         }
     }
 
-    // MARK: - W324: stub "REKEY DEMO" badge (hidden once keyInfo is live).
-
-    @ViewBuilder
-    private var stubRekeyDisclaimer: some View {
-        Text(Self.stubRekeyText)
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(1.0)
-            .foregroundStyle(.orange)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule().stroke(Color.orange.opacity(0.6), lineWidth: 1)
-            )
-            .accessibilityLabel("Rekey demo, contatore non collegato al motore")
-    }
-
-    private static let stubRekeyText: String = "REKEY DEMO"
-
     // MARK: - Derived state
 
     /// W-MUTEBTNSRC (2026-07-24) — reads the published mirror, so the value
@@ -837,8 +808,8 @@ struct LiveInCallScreen: View {
         CallSessionKeyShown.realKey(appState.callPqcSessionKey, source: appState.callSasKeySource) != nil
     }
 
-    /// The call holds a session key of any kind, the transitional one it starts with included. The "DEMO" and
-    /// "REKEY DEMO" badges follow this ("no key at all yet"), as they did before the panel was narrowed to ML-KEM.
+    /// The call holds a session key of any kind, the transitional one it starts with included. The "DEMO" badge
+    /// follows this ("no key at all yet"), as it did before the panel was narrowed to ML-KEM.
     private var hasSessionKey: Bool {
         CallSessionKeyShown.isPresent(appState.callPqcSessionKey)
     }
@@ -976,14 +947,15 @@ struct LiveInCallScreen: View {
         NameResolutionService.shared.ensureResolved(userId: id)
     }
 
-    /// Stub rekey countdown derived from a local anchor. Counts down
-    /// 300→0 then loops back to 300 — purely visual until the engine
-    /// exposes the real next-rekey timer (see W29 GAP analysis).
-    private var liveRekeyInSeconds: Int {
-        let elapsed = Int(Date().timeIntervalSince1970 - rekeyAnchorEpoch)
-        let inWindow = ((elapsed % Self.rekeyTotalSeconds) + Self.rekeyTotalSeconds)
-            % Self.rekeyTotalSeconds
-        return Self.rekeyTotalSeconds - inWindow
+    /// Time left to the next re-key and the length of the current period, in whole seconds, read from the scheduler that
+    /// drives the real re-key rounds (it is re-armed on every round and adopts the peer's period on the other side).
+    /// `(0, 0)` = no timer: until the call holds the ML-KEM key the scheduler has not been started for it, and what it
+    /// holds is left over from an earlier call.
+    private var liveRekeyCountdown: (remaining: Int, total: Int) {
+        guard mlKemKeyActive else { return (0, 0) }
+        let status = appState.reKeyScheduler.currentStatus
+        return (ReKeyRingModel.wholeSeconds(milliseconds: status.remainingMs),
+                ReKeyRingModel.wholeSeconds(milliseconds: status.periodMs))
     }
 
     // NOTE (2026-07-04 dedup): the old `liveSamples` / `liveRxSamples` /

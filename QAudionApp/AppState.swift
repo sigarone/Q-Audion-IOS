@@ -2581,6 +2581,11 @@ final class AppState: ObservableObject {
     let peerCapabilityBinding = PeerCapabilityBinding()
 
     @Published var rekeyCount: Int = 0
+    /// Call id of the re-key round this device is running right now, nil when none. Set around the PQC re-handshake
+    /// the scheduler tick starts (only the device that originated the call runs one) and cleared at call end; the
+    /// avatar ring shows the "re-keying" state from it. Display only.
+    @Published private(set) var reKeyInFlightCallId: String?
+    var isReKeying: Bool { reKeyInFlightCallId != nil }
     @Published var encryptionAlgo: String = "ML-KEM-1024 + AES-256-GCM"
     /// Last round trip, in ms, of the keepalive ping on the signalling socket (this device to the signalling
     /// server), set by `BCryptoWebSocketClient.onLatencyMeasured`; 0 until the first reading. It is NOT the delay of
@@ -4492,7 +4497,12 @@ final class AppState: ObservableObject {
                 // AFTER the tick (not the stale value from when the tick
                 // fired) so it reflects whatever `trigger()` just armed.
                 let armedPeriodMs = self.reKeyScheduler.currentStatus.periodMs
+                // The tick fires on both devices, but only the caller runs the round: on the callee, or
+                // while the call is held, the engine skips it, and the ring must not flash "re-keying".
+                if integration.canInitiateReKey(callId: cid) { self.reKeyInFlightCallId = cid }
                 let ok = await integration.performPqcReKey(callId: cid, peerId: peerId, armedPeriodMs: armedPeriodMs)
+                // Another call may have begun while the round was awaiting its ACCEPT: clear only our own mark.
+                if self.reKeyInFlightCallId == cid { self.reKeyInFlightCallId = nil }
                 RTLog.info("rekey", "tick #" + seq + " performPqcReKey result=" + String(ok))
             }
         }
@@ -21299,6 +21309,7 @@ extension AppState {
         // scheduler's background timer alongside the other call-scoped
         // controllers below. UNVERIFIED, see `ReKeyScheduler` kdoc.
         reKeyScheduler.stop()
+        reKeyInFlightCallId = nil
         // W398: stop ABR loop before video pipeline teardown so the
         // controller doesn't try to set bitrate on a freed encoder.
         abrController?.stop()

@@ -123,16 +123,19 @@ final class ConfidenceBadgeWiringTests: XCTestCase {
     /// `ConfidenceThresholds.tone(of:)`, whose `.noReading` (the -1 sentinel) is neutral. None uses the clamping
     /// `category(of:)`, which turns -1 into 0 and paints red: on the previous main the avatar halo did exactly
     /// that for the 10-16 s before Tier 2's first reading. The in-call screen itself no longer colours the score
-    /// at all (halo neutral, number in the collapsed technical-data block); the chat strip and the security badge
-    /// still do, and keep the neutral sentinel.
+    /// at all (the ring around the avatar is the re-key countdown in one fixed accent, number in the collapsed
+    /// technical-data block); the chat strip and the security badge still do, and keep the neutral sentinel.
     func testNoReadingIsNeutralWhereverTheConfidenceIsPainted() throws {
-        // The in-call screen no longer paints anything from the score: the avatar halo is a fixed neutral
-        // colour and the number is plain text in the collapsed technical-data block, with no colour.
+        // The in-call screen no longer paints anything from the score: the ring around the avatar takes no score
+        // at all and the number is plain text in the collapsed technical-data block, with no colour.
         let screen = try appCode("QAudionApp/Views/Call/InCallScreen.swift")
         XCTAssertFalse(screen.contains("ConfidenceThresholds."), "InCallScreen must not map the score onto a colour")
         XCTAssertFalse(screen.contains("confidenceColor"))
         XCTAssertFalse(screen.contains("confidenceLabelColor"))
-        XCTAssertTrue(screen.contains("AvatarHalo(color: scheme.onSurfaceVariant"))
+        XCTAssertFalse(screen.contains("AvatarHalo"), "the halo is gone: the ring around the avatar is the re-key countdown")
+        XCTAssertTrue(screen.contains("ReKeyAvatarRing(remainingSeconds: rekeyInSeconds,"))
+        let ring = try appCode("QAudionApp/Views/Call/Components/ReKeyAvatarRing.swift")
+        XCTAssertFalse(ring.lowercased().contains("confidence"), "the ring takes no colour from the score")
         XCTAssertTrue(screen.contains("VoiceBiometricsSection(biometrics: voiceBiometrics, confidence: confidence)"))
 
         let section = try appCode("QAudionApp/Views/Call/VoiceBiometricsSection.swift")

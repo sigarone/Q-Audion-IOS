@@ -1575,6 +1575,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ///   see `AndroidHandshakeBundle.rekeyNextPeriodMs`'s doc. `nil` omits
     ///   the field (byte-identical wire to a peer that hasn't shipped this).
     @discardableResult
+    /// Whether `performPqcReKey` called now for `callId` would start a round, by the same rule it applies:
+    /// only the caller, on an active call that is not held, with no round already in flight. Read-only,
+    /// with none of the side effects of `performPqcReKey` (it does not defer a round for a held call).
+    public func canInitiateReKey(callId: String) -> Bool {
+        lock.withLock {
+            RekeyRolePolicy.mayInitiateRekey(
+                isCaller: isCaller, isActive: state == .active, hasPendingAttempt: pendingReKeyAttempt != nil,
+                isHeld: heldCalls.contains(callId.lowercased()))
+        }
+    }
+
     public func performPqcReKey(
         callId: String, peerId: String, timeoutSec: Double = Double(ConfirmTimeout.rekeyAcceptWaitMs) / 1000,
         armedPeriodMs: Int64? = nil) async -> Bool {
