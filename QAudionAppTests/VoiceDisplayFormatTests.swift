@@ -14,7 +14,10 @@ import QAudionEngine
 /// What it pins: every displayed number is rounded half away from zero by an explicit rule (the exact binary ties
 /// 142.5, 4.25, -2.5 and 1475 included, and the values just under a tie that binary32 stores below it), the
 /// decimal separator comes from the language of the app, f0 is the rounded value everywhere, and each part that
-/// is not a reading is a dash of its own.
+/// is not a reading is a dash of its own. Also pinned: the tone is "143 Hz" or the dash alone, never "— Hz"; the
+/// widest line of the details (the line the tone row is sized on) is at least as long as every line of the
+/// table; the separator follows the same choice of language as the text of the screen, for any language the
+/// device prefers (it-CH, de-CH and en-ZA included); and the table reads the same with CRLF line endings.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
 /// `.github/workflows/ios-app-tests.yml`.
@@ -59,10 +62,16 @@ final class VoiceDisplayFormatTests: XCTestCase {
 
     private func loadCases() throws -> [Case] {
         let url = try sourceURL("QAudionAppTests/voice-analysis/display-format-cases.tsv")
-        let text = try String(contentsOf: url, encoding: .utf8)
+        return try parseCases(try String(contentsOf: url, encoding: .utf8))
+    }
+
+    /// The cases of the text of the table. The lines end with LF or with CRLF (a checkout on Windows may convert the
+    /// file), and `\r\n` is ONE Character in Swift: splitting on "\n" would not split a CRLF file at all, while
+    /// `isNewline` is true for both.
+    private func parseCases(_ text: String) throws -> [Case] {
         var rows: [[String]] = []
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : String(rawLine)
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = String(rawLine)
             if line.isEmpty || line.hasPrefix("#") { continue }
             rows.append(line.components(separatedBy: "\t"))
         }
@@ -130,9 +139,14 @@ final class VoiceDisplayFormatTests: XCTestCase {
             // The HNR of the tone row is the same number as the row of the technical block, and the f0 of the
             // video diagnostics is the f0 of the technical block (spec section 12.3).
             check(c.id, "hnr (tone row)", VoiceSpectralDetails.hnr(c.hnr), e["hnr_row"])
-            let pitchOnly = VoiceBiometricsFormat.pitch(hz: c.f0)
+            // The tone is the number and " Hz", or the dash alone (12.5): the same text on the tone row and in the
+            // video diagnostics.
             let toneValue = e["tone"] ?? ""
-            check(c.id, "video pitch", pitchOnly, toneValue == VoiceGauges.noValue ? toneValue : toneValue + " Hz")
+            let toneText = toneValue == VoiceGauges.noValue ? toneValue : toneValue + " Hz"
+            check(c.id, "tone row text", VoiceGauges.pitch(hz: c.f0, voiced: true).text, toneText)
+            check(c.id, "tone row unit", VoiceGauges.pitch(hz: c.f0, voiced: true).unit,
+                  toneValue == VoiceGauges.noValue ? "" : "Hz")
+            check(c.id, "video pitch", VoiceBiometricsFormat.pitch(hz: c.f0), toneText)
         }
         XCTAssertTrue(failures.isEmpty, "\(failures.count) differences from the table, first ones:\n"
                                         + failures.prefix(20).joined(separator: "\n"))
@@ -199,6 +213,113 @@ final class VoiceDisplayFormatTests: XCTestCase {
         }
     }
 
+    /// The table reads the same with Unix and with Windows line endings (and with the last line unterminated).
+    func testTheTableReadsTheSameWithWindowsLineEndings() throws {
+        let url = try sourceURL("QAudionAppTests/voice-analysis/display-format-cases.tsv")
+        let unix = try String(contentsOf: url, encoding: .utf8).replacingOccurrences(of: "\r\n", with: "\n")
+        let windows = unix.replacingOccurrences(of: "\n", with: "\r\n")
+        XCTAssertTrue(windows.contains("\r\n"), "the copy under test has CRLF line endings")
+        let fromUnix = try parseCases(unix)
+        let fromWindows = try parseCases(windows)
+        let fromUnterminated = try parseCases(String(unix.dropLast()))
+        XCTAssertGreaterThan(fromUnix.count, 50)
+        for other in [fromWindows, fromUnterminated] {
+            XCTAssertEqual(other.map { $0.id }, fromUnix.map { $0.id })
+            XCTAssertEqual(other.map { $0.expected }, fromUnix.map { $0.expected })
+            XCTAssertEqual(other.map { $0.f0.bitPattern }, fromUnix.map { $0.f0.bitPattern })
+        }
+    }
+
+    // MARK: - The widest line (12.5)
+
+    /// "F1 1100 · F2 3200 · 12,0 sill/s · HNR -40 dB" in the language of the app, and no line of the table, in either
+    /// language, is longer than it. (The font of the tone row is monospaced, so the number of characters stands for
+    /// the width, and a line that is not longer than the widest one fits where it fits.)
+    func testNoLineOfTheTableIsLongerThanTheWidestLine() throws {
+        let widestItalian = VoiceSpectralDetails.widestLine(rateUnit: "sill/s", locale: italian)
+        let widestEnglish = VoiceSpectralDetails.widestLine(rateUnit: "syl/s", locale: english)
+        XCTAssertEqual(widestItalian, "F1 1100 · F2 3200 · 12,0 sill/s · HNR -40 dB")
+        XCTAssertEqual(widestEnglish, "F1 1100 · F2 3200 · 12.0 syl/s · HNR -40 dB")
+        for c in try loadCases() {
+            XCTAssertLessThanOrEqual(try XCTUnwrap(c.expected["details_it"]).count, widestItalian.count, c.id)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(c.expected["details_en"]).count, widestEnglish.count, c.id)
+        }
+    }
+
+    // MARK: - The separator comes from the language of the app (12.2)
+
+    /// A preferred language of the device goes through the same choice as the text of the screen
+    /// (`AppLanguageManager.languageCode`, behind `effectiveLanguageCode`), and the locale of that code decides the
+    /// separator: it-CH and de-CH are Italian and German, so a comma, although the region prints a point; en-ZA is
+    /// English, so a point; a language the app does not have falls back to Italian, as the text does.
+    func testTheSeparatorFollowsTheLanguageOfTheAppWhateverTheRegionOfTheDevice() {
+        let rows: [(preferred: String, language: String, separator: String)] = [
+            ("it-CH", "it", ","), ("de-CH", "de", ","), ("en-ZA", "en", "."), ("en-GB", "en", "."),
+            ("pt-BR", "pt-BR", ","), ("pt-PT", "pt-BR", ","), ("fr-CA", "fr", ","), ("es-419", "es", ","),
+            ("ja", "it", ","), ("zh-Hans-CN", "it", ","),
+        ]
+        for row in rows {
+            XCTAssertEqual(AppLanguageManager.languageCode(override: nil, preferredLanguage: row.preferred),
+                           row.language, row.preferred)
+            let locale = VoiceDisplayLocale.locale(override: nil, preferredLanguage: row.preferred)
+            XCTAssertEqual(VoiceNumberFormat.decimalSeparator(of: locale), row.separator, row.preferred)
+            XCTAssertEqual(VoiceNumberFormat.oneDecimal(4.25, locale: locale), "4\(row.separator)3", row.preferred)
+        }
+    }
+
+    /// What the regions above would print if the device locale were used: a point for it-CH and de-CH. This is
+    /// the trap the specification names; the test above is not vacuous because of it.
+    func testTheRegionsOfTheTrapReallyPrintAPoint() {
+        XCTAssertEqual(Locale(identifier: "it_CH").decimalSeparator, ".")
+        XCTAssertEqual(Locale(identifier: "de_CH").decimalSeparator, ".")
+    }
+
+    /// The override of the app wins over the device language when it is a language the app has, and is ignored
+    /// when it is not; with no language at all the Italian text, and the Italian comma, are shown.
+    func testTheOverrideAndTheFallbackDecideTheSeparatorLikeTheText() {
+        func separator(_ override: String?, _ preferred: String?) -> String {
+            VoiceNumberFormat.decimalSeparator(of: VoiceDisplayLocale.locale(override: override,
+                                                                              preferredLanguage: preferred))
+        }
+        XCTAssertEqual(separator("en", "it-CH"), ".", "English set in the app, Italian (Switzerland) on the device")
+        XCTAssertEqual(separator("it", "en-US"), ",", "Italian set in the app, English on the device")
+        XCTAssertEqual(separator("ja", "en-GB"), ".", "an override the app does not have is ignored")
+        XCTAssertEqual(separator("ja", "ko"), ",", "nothing the app has: Italian")
+        XCTAssertEqual(separator(nil, nil), ",", "no language at all: Italian")
+        XCTAssertEqual(AppLanguageManager.languageCode(override: "ja", preferredLanguage: nil), "it")
+    }
+
+    /// With several device languages the text is in the first one the app has, and so is the separator:
+    /// [ja-JP, en-US] shows English, not Italian.
+    func testTheSeparatorFollowsTheFirstDeviceLanguageTheAppHas() {
+        XCTAssertEqual(AppLanguageManager.languageCode(override: nil, preferredLanguages: ["ja-JP", "en-US"]), "en")
+        XCTAssertEqual(AppLanguageManager.languageCode(override: nil, preferredLanguages: ["ko", "de-CH", "en-US"]), "de")
+        XCTAssertEqual(AppLanguageManager.languageCode(override: nil, preferredLanguages: ["ja", "ko"]), "it")
+        XCTAssertEqual(AppLanguageManager.languageCode(override: "fr", preferredLanguages: ["ja-JP", "en-US"]), "fr")
+        XCTAssertEqual(VoiceNumberFormat.decimalSeparator(of: VoiceDisplayLocale.locale(override: nil,
+                                                                                         preferredLanguages: ["ja-JP", "en-US"])),
+                       ".")
+        XCTAssertEqual(VoiceNumberFormat.decimalSeparator(of: VoiceDisplayLocale.locale(override: nil,
+                                                                                         preferredLanguages: ["ja-JP", "it-CH"])),
+                       ",")
+    }
+
+    /// The formatters print the separator of the app language for Swiss and South African devices.
+    func testEveryFormatterUsesTheSeparatorOfTheAppLanguageOnASwissDevice() {
+        let swissItalian = VoiceDisplayLocale.locale(override: nil, preferredLanguage: "it-CH")
+        let swissGerman = VoiceDisplayLocale.locale(override: nil, preferredLanguage: "de-CH")
+        let southAfricanEnglish = VoiceDisplayLocale.locale(override: nil, preferredLanguage: "en-ZA")
+        XCTAssertEqual(VoiceSpectralDetails.text(formant1Hz: 524, formant2Hz: 1478, syllablesPerSecond: 4.24,
+                                                 hnrDecibels: 18.4, rateUnit: "sill/s", locale: swissItalian),
+                       "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB")
+        XCTAssertEqual(VoiceBiometricsFormat.pitchRate(hz: 142, syllablesPerSecond: 4.24, syllableUnit: "Silb./s",
+                                                       locale: swissGerman), "142 Hz · 4,2 Silb./s")
+        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitterPercent: 1.2, shimmerPercent: 3.1,
+                                                           locale: swissGerman), "1,2% / 3,1%")
+        XCTAssertEqual(VoiceBiometricsFormat.jitterShimmer(jitterPercent: 1.2, shimmerPercent: 3.1,
+                                                           locale: southAfricanEnglish), "1.2% / 3.1%")
+    }
+
     // MARK: - Needs the app (not part of the model check that runs without Xcode)
 
     /// The numbers follow the language of the app, not the region of the device: the locale the screens use
@@ -212,5 +333,19 @@ final class VoiceDisplayFormatTests: XCTestCase {
         XCTAssertEqual(VoiceNumberFormat.decimalSeparator(of: VoiceDisplayLocale.app), ",")
         AppLanguageManager.currentOverride = "pt-BR"
         XCTAssertEqual(VoiceNumberFormat.decimalSeparator(of: VoiceDisplayLocale.app), ",")
+    }
+
+    /// With no override, the locale of the screens is what the choice gives for the real language settings of the
+    /// device the tests run on (the system's localization of the app, then every preferred language), whichever
+    /// they are.
+    func testTheScreensAgreeWithTheChoiceForTheRealLanguageOfTheDevice() {
+        let previous = AppLanguageManager.currentOverride
+        defer { AppLanguageManager.currentOverride = previous }
+        AppLanguageManager.currentOverride = nil
+        let languages = Bundle.main.preferredLocalizations + Locale.preferredLanguages
+        let expected = VoiceDisplayLocale.locale(override: nil, preferredLanguages: languages)
+        XCTAssertEqual(VoiceDisplayLocale.app.identifier, expected.identifier)
+        XCTAssertEqual(AppLanguageManager.effectiveLanguageCode,
+                       AppLanguageManager.languageCode(override: nil, preferredLanguages: languages))
     }
 }

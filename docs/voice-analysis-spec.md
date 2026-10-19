@@ -184,22 +184,22 @@ A shown number comes from one field of the display value and is shown only while
    - F1 and F2 are rounded to the nearest 10 Hz by the same rule: `10 * R(x / 10)`.
    - Rate, jitter and shimmer have one decimal: `n = R(x * 10)`, written as `|n| div 10`, the decimal separator, `|n| mod 10`, with a leading "-" only when `n < 0`. The multiplication acts on the widened binary32 value, so 4.25 gives "4,3" and 4.35, which is 4.3499999... in binary32, gives "4,3".
 
-12.2 Decimal separator. It is the one of the app's own language, not of the device region: "," in Italian, German, Spanish and French, "." in English. It is the same in the tone row, the technical block and any diagnostics view.
+12.2 Decimal separator. It is the one of the app's own language, not of the device region: "," in Italian, German, Spanish, French and Brazilian Portuguese, "." in English. The app language is the language of the text the screen shows, fallback included: when the device language is not one the app has, the text falls back to the app's default language (Italian) and the separator falls back with it. A platform therefore takes the separator from the same place as the text (the app-language setting, or the same resource set as the strings), never from the device locale, whose region can change it (it-CH and de-CH use "."). It is the same in the tone row, the technical block and any diagnostics view.
 
 12.3 f0. Wherever f0 is shown (the tone, the technical block, diagnostics) it is `R(f0)`; it is never truncated. 142.7 and 142.5 both give 143.
 
 12.4 Technical block. Three rows, plain text.
-   - Jitter / shimmer: "3,0% / 8,5%". The two values are valid together (the stress flag of section 9); when either is missing the row is one dash.
+   - Jitter / shimmer: "3,0% / 8,5%". The two values are valid together (the stress flag of section 9); when either is missing the row is one dash. Both values are percentages. How they are computed is outside this spec, so the two apps can still show different numbers for them; this section fixes only how a given percentage is written.
    - Pitch / rate: "142 Hz · 4,2 sill/s". Each part has its own dash and the unit goes with its number: "— · 4,2 sill/s", "142 Hz · —", "— · —".
    - HNR: "18 dB", or one dash.
 
-12.5 Tone row. The tone is `R(f0)` or the dash. The details line is the four fields in this order, separated by " · " (space, U+00B7, space): "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB". A missing field shows the dash in place of its number: "F1 —", "F2 —", "— sill/s" (the rate keeps its unit), "HNR —" (no "dB"). "F1", "F2", "HNR", "Hz" and "dB" are symbols and are the same in every language. The rate unit is the abbreviation of the app language: "sill/s" (it), "syl/s" (en), "Silb./s" (de), "síl/s" (es), "syll/s" (fr). The widest possible line is "F1 1100 · F2 3200 · 12,0 sill/s · HNR -40 dB" (F1 up to 1100, F2 up to 3200, rate up to 12, HNR from -40 to 40); a screen that fits the text to its width sizes it on that line, so the size does not change when a dash becomes a number.
+12.5 Tone row. The tone is `R(f0)` followed by " Hz" ("143 Hz"), or the dash alone, without the unit. The details line is the four fields in this order, separated by " · " (space, U+00B7, space): "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB". A missing field shows the dash in place of its number: "F1 —", "F2 —", "— sill/s" (the rate keeps its unit), "HNR —" (no "dB"). "F1", "F2", "HNR", "Hz" and "dB" are symbols and are the same in every language. The rate unit is the abbreviation of the app language: "sill/s" (it), "syl/s" (en), "Silb./s" (de), "síl/s" (es), "syll/s" (fr), and "síl/s" (pt-BR, a language only the iOS app has). The widest possible line is "F1 1100 · F2 3200 · 12,0 sill/s · HNR -40 dB" (F1 up to 1100, F2 up to 3200, rate up to 12, HNR from -40 to 40); a screen that fits the text to its width sizes it on that line, on both platforms, so the size does not change when a dash becomes a number.
 
 Conformance. Both apps pin this section with the same table of inputs and expected strings in Italian and English (`display-format-cases.tsv`, one file, identical in both repositories). Some of its rows:
 
 | Field | Value | Shown (it) | Shown (en) |
 |---|---|---|---|
-| f0 (tone row and technical block) | 142.5 | 143 | 143 |
+| f0, the number (tone row and technical block) | 142.5 | 143 | 143 |
 | HNR | -2.5 | -3 dB | -3 dB |
 | HNR | -0.4 | 0 dB | 0 dB |
 | F1 | 1475 | 1480 | 1480 |
@@ -210,6 +210,7 @@ Conformance. Both apps pin this section with the same table of inputs and expect
 | shimmer | 8.45 | 8,4% | 8.4% |
 | jitter / shimmer | 1.2 / 3.1 | 1,2% / 3,1% | 1.2% / 3.1% |
 | pitch / rate, f0 missing | 4.24 | — · 4,2 sill/s | — · 4.2 syl/s |
+| tone, f0 missing | | — | — |
 | tone row, everything missing | | F1 — · F2 — · — sill/s · HNR — | F1 — · F2 — · — syl/s · HNR — |
 
 ## Appendix G. Test-signal generator (`gen.py`)

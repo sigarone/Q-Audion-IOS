@@ -174,6 +174,29 @@ final class VoiceAnalysisEngineTests: XCTestCase {
                                "result", "display", "result", "display"])
     }
 
+    /// The callbacks are read and replaced under the engine lock and no callback runs with the lock held: a callback
+    /// can replace both of them (and read them back) without deadlock, and each step calls the callbacks that were in
+    /// place when the step was taken.
+    func testACallbackCanReplaceTheCallbacksWhileItRuns() {
+        var order: [String] = []
+        let engine: VoiceAnalysisEngine = self.engine
+        engine.onDisplay = { _ in order.append("display-1") }
+        engine.onResult = { _ in
+            order.append("result-1")
+            engine.onResult = { _ in order.append("result-2") }
+            engine.onDisplay = { _ in order.append("display-2") }
+            XCTAssertNotNil(engine.onResult)
+            XCTAssertNotNil(engine.onDisplay)
+        }
+        engine.processFrame(sine(9_600))                            // two steps
+        XCTAssertEqual(order, ["result-1", "display-1", "result-2", "display-2"])
+        engine.onResult = nil
+        engine.onDisplay = nil
+        XCTAssertNil(engine.onResult)
+        engine.processFrame(sine(4_800))                            // a step with no callback is no error
+        XCTAssertEqual(order.count, 4)
+    }
+
     // MARK: - Display window
 
     func testTheDisplayValueIsTheMeanOfTheLastTenResults() {

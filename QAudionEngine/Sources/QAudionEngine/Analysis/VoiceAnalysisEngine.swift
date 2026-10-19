@@ -31,12 +31,26 @@ import Foundation
 ///
 /// Threading: `processFrame` is called from the single RX analysis queue, never
 /// from the audio thread. The analysis runs under the engine lock so that
-/// `reset()`, `markDiscontinuity` and `setEnabled` are safe from any thread; the
-/// lock is never held while a callback runs. Once constructed the engine
-/// allocates nothing per frame or per analysis.
+/// `reset()`, `markDiscontinuity` and `setEnabled` are safe from any thread, and
+/// the two callbacks are read and replaced under the same lock; the lock is never
+/// held while a callback runs, so a callback may replace either callback. Once
+/// constructed the engine allocates nothing per frame or per analysis.
 public final class VoiceAnalysisEngine: @unchecked Sendable {
-    public var onResult: ((VoiceAnalysisResult) -> Void)?
-    public var onDisplay: ((VoiceAnalysisResult) -> Void)?
+    /// Replaceable from any thread (the instance is reused from call to call, while the analysis queue may
+    /// still be draining); the callbacks a step calls are the ones in place when the step is taken.
+    public var onResult: ((VoiceAnalysisResult) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return resultHandler }
+        // The old closure is released after the lock, so its captures never deinit under it.
+        set { lock.lock(); let old = resultHandler; resultHandler = newValue; lock.unlock(); _ = old }
+    }
+    public var onDisplay: ((VoiceAnalysisResult) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return displayHandler }
+        // The old closure is released after the lock, so its captures never deinit under it.
+        set { lock.lock(); let old = displayHandler; displayHandler = newValue; lock.unlock(); _ = old }
+    }
+    // The storage behind the two callbacks; only touched with the lock held.
+    private var resultHandler: ((VoiceAnalysisResult) -> Void)?
+    private var displayHandler: ((VoiceAnalysisResult) -> Void)?
 
     private let window = VoiceWindow()
     private let pitchExtractor = PitchExtractor()
@@ -87,8 +101,8 @@ public final class VoiceAnalysisEngine: @unchecked Sendable {
                 lock.lock()
                 guard enabled else { lock.unlock(); return }
                 let step = consume(raw, offset: &offset, sampleCount: sampleCount)
-                let resultCallback = onResult
-                let displayCallback = onDisplay
+                let resultCallback = resultHandler
+                let displayCallback = displayHandler
                 lock.unlock()
                 if let step = step {
                     resultCallback?(step.result)

@@ -109,10 +109,24 @@ private enum BioCopy {
 /// The locale the numbers of the voice analysis are printed in: the language of the app (the user can set it
 /// apart from the device), never the region of the device, so the decimal separator of the tone row, the
 /// technical-data block and the video diagnostics follows the unit and the words next to it
-/// (docs/voice-analysis-spec.md, section 12.2).
+/// (docs/voice-analysis-spec.md, section 12.2). It is taken from the same place as the text
+/// (`AppLanguageManager.effectiveLanguageCode`), fallback included: a device language the app does
+/// not have shows the Italian text and prints the Italian separator.
 enum VoiceDisplayLocale {
     static var app: Locale {
         Locale(identifier: AppLanguageManager.effectiveLanguageCode)
+    }
+
+    /// The locale the screens would use for a given override and a given list of preferred languages of
+    /// the device: the same choice as `app` (`AppLanguageManager.languageCode`), with the inputs given
+    /// instead of read, so that the separator can be checked for any device setting.
+    static func locale(override: String?, preferredLanguages: [String]) -> Locale {
+        Locale(identifier: AppLanguageManager.languageCode(override: override, preferredLanguages: preferredLanguages))
+    }
+
+    /// `locale(override:preferredLanguages:)` for a device with a single preferred language.
+    static func locale(override: String?, preferredLanguage: String?) -> Locale {
+        locale(override: override, preferredLanguages: preferredLanguage.map { [$0] } ?? [])
     }
 }
 
