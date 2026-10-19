@@ -282,6 +282,35 @@ public final class PushKitProvider {
         return prepared ?? placeholderSpec()
     }
 
+    /// BLOCK — the reason a blocked caller's push is ended with. CallKit maps `.failed` to
+    /// `CXCallEndedReason.failed`, which (unlike `.unanswered`) leaves no missed-call entry in the system
+    /// recents.
+    public static let blockedCallerEndReason: String = "blocked-caller"
+
+    /// BLOCK — what the delegate reports for a 1:1 push whose caller the user blocked.
+    ///
+    /// iOS kills the app (and, repeated, stops delivering VoIP pushes) when a VoIP push is not reported to
+    /// CallKit before the callback returns, so a push that must not ring cannot simply be ignored. The
+    /// server does not send such a push; if one arrives anyway (the block was made after it was queued), it is
+    /// reported and ended at once, like every other push that cannot ring (`placeholderSpec`):
+    ///  - a fresh uuid, never the call's: nothing about the call is registered, so a later signalling
+    ///    message for it finds no ring to join;
+    ///  - the generic name, never the caller's, and no video: the system screen must not show who it was;
+    ///  - an end reason, so the provider ends it as soon as CallKit has accepted the report.
+    /// The caller is told nothing: no decline, no "busy", the call just is not answered, as when the phone
+    /// is off.
+    public static func blockedCallerSpec(uuid: UUID = UUID()) -> ReportSpec {
+        ReportSpec(uuid: uuid, callerName: placeholderCallerName, hasVideo: false,
+                   endReason: .failed(blockedCallerEndReason))
+    }
+
+    /// BLOCK — true for a spec built by `blockedCallerSpec` (the app skips what only a ringing call needs,
+    /// such as waking the signalling socket for the offer that follows).
+    public static func isBlockedCallerSpec(_ spec: ReportSpec) -> Bool {
+        if case .failed(let reason)? = spec.endReason { return reason == blockedCallerEndReason }
+        return false
+    }
+
     // MARK: - PushKit-only behaviors (iOS-only)
 
     #if canImport(PushKit) && os(iOS)

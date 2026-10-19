@@ -170,4 +170,45 @@ final class GroupSessionTests: XCTestCase {
                                           idx: 0)
         XCTAssertThrowsError(try s.handleSenderKeyInit(state: st, env: env, fromUserId: "b"))
     }
+
+    // MARK: - dropUnaddedMembers (the creator's roster after the server left members out)
+
+    func testDropUnaddedMembersRemovesThemFromTheRosterWithoutRekeying() throws {
+        let vault = InMemoryGroupSessionVault()
+        let s = GroupSession(vault: vault)
+        let st = try s.create(groupIdBytes: groupId, members: ["a", "b", "c", "d"], admins: ["a", "c"], selfId: "a",
+                              selfSeed: Data(repeating: 0x42, count: 32))
+        let epochBefore = st.groupEpoch
+        let keyBefore = st.sendChain.ck
+        let removed = s.dropUnaddedMembers(state: st, unadded: ["c", "d", "not-a-member"])
+        XCTAssertEqual(removed, ["c", "d"])
+        XCTAssertEqual(st.members, ["a", "b"])
+        XCTAssertEqual(st.admins, ["a"], "an admin who is out leaves the admin list too")
+        XCTAssertEqual(st.groupEpoch, epochBefore, "nobody who is out ever got a key: no epoch bump")
+        XCTAssertEqual(st.sendChain.ck, keyBefore, "and no new send key")
+        let saved = try XCTUnwrap(vault.load(groupIdBytes: groupId, groupEpoch: epochBefore, selfId: "a"))
+        XCTAssertEqual(saved.members, ["a", "b"], "the cut roster is what the vault holds")
+    }
+
+    func testDropUnaddedMembersNeverRemovesTheCreatorAndIgnoresUnknownIds() throws {
+        let s = newSession()
+        let st = try s.create(groupIdBytes: groupId, members: ["a", "b"], admins: ["a"], selfId: "a")
+        XCTAssertEqual(s.dropUnaddedMembers(state: st, unadded: ["a"]), [])
+        XCTAssertEqual(st.members, ["a", "b"])
+        XCTAssertEqual(s.dropUnaddedMembers(state: st, unadded: []), [])
+        XCTAssertEqual(s.dropUnaddedMembers(state: st, unadded: ["zzz"]), [])
+        XCTAssertEqual(st.members, ["a", "b"])
+        XCTAssertEqual(st.admins, ["a"])
+    }
+
+    func testDropUnaddedMembersLeavesTheKeysOfTheOthersAlone() throws {
+        let s = newSession()
+        let st = try s.create(groupIdBytes: groupId, members: ["a", "b", "c"], admins: ["a"], selfId: "a")
+        let env = SenderKeyInitEnvelope(g: GroupSenderKey.toHex(groupId), e: st.groupEpoch,
+                                        seed: Data(repeating: 0x05, count: 32).base64EncodedString(), idx: 0)
+        try s.handleSenderKeyInit(state: st, env: env, fromUserId: "b")
+        _ = s.dropUnaddedMembers(state: st, unadded: ["c"])
+        XCTAssertNotNil(st.recvChain(for: "b"), "a member who stays keeps the chain installed for them")
+        XCTAssertNil(st.recvChain(for: "c"))
+    }
 }

@@ -410,12 +410,9 @@ struct PrivacySettingsScreen: View {
                         }
                     }
 
-                    if !container.viewModel.blockedUserIds.isEmpty {
-                        SettingsSectionHeader("UTENTI BLOCCATI")
-                        kvRow(label: "Bloccati",
-                              value: "\(container.viewModel.blockedUserIds.count) utente/i",
-                              mono: false)
-                    }
+                    // BLOCK — the number of contacts the user really blocked (BlockedContactsStore, the list the
+                    // receive paths read and the server list is loaded into), not the legacy settings copy.
+                    BlockedUsersPrivacySection()
 
                     // W284: deep-link into iOS Settings → Privacy &
                     // Security for Q-Audion. Lets the user revisit
@@ -548,34 +545,41 @@ struct PrivacySettingsScreen: View {
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
     }
-
-    private func kvRow(label: String, value: String, mono: Bool) -> some View {
-        HStack(spacing: 14) {
-            Text(label)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-            Spacer()
-            Text(value)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .modifier(MonoIfNeededP(mono: mono))
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 52)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(scheme.surfaceVariant.opacity(0.4))
-        )
-    }
 }
 
-private struct MonoIfNeededP: ViewModifier {
-    let mono: Bool
-    func body(content: Content) -> some View {
-        if mono {
-            content.font(.system(.caption, design: .monospaced))
-        } else {
-            content
+/// BLOCK — "UTENTI BLOCCATI": how many contacts the user blocked, from the real blocked list
+/// (`BlockedContactsStore`), kept current while the screen is open (a block or unblock elsewhere, or the reload
+/// of the server's list, posts `.blockedContactsDidChange`). Nothing is shown when the list is empty. Its own
+/// view so the long settings body does not grow another modifier.
+private struct BlockedUsersPrivacySection: View {
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionType) private var type
+
+    @State private var blockedCount: Int = BlockedContactsStore.loadBlockedIds().count
+
+    var body: some View {
+        Group {
+            if blockedCount > 0 {
+                SettingsSectionHeader("UTENTI BLOCCATI")
+                HStack(spacing: 14) {
+                    Text("Bloccati")
+                        .qaudionStyle(type.bodyMedium)
+                        .foregroundStyle(scheme.onSurface)
+                    Spacer()
+                    Text("\(blockedCount) utente/i")
+                        .qaudionStyle(type.labelSmall)
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 52)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(scheme.surfaceVariant.opacity(0.4))
+                )
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .blockedContactsDidChange)) { _ in
+            blockedCount = BlockedContactsStore.loadBlockedIds().count
         }
     }
 }

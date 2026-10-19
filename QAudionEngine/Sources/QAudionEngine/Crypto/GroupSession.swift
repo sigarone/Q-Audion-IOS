@@ -524,6 +524,23 @@ public final class GroupSession {
         )
     }
 
+    /// The creator's roster after the server left some of the requested members out of a new group: take them out
+    /// of the crypto roster too. NO epoch bump and no new key: these people never received any key material of
+    /// this group (the creator sends none before the server has answered), so there is nothing to protect from
+    /// them, and a rekey would invalidate the metadata sealed at the current epoch. The creator is never
+    /// dropped. Returns the members that were actually taken out.
+    @discardableResult
+    public func dropUnaddedMembers(state: GroupState, unadded: [String]) -> [String] {
+        let gone = Set(unadded.filter { $0 != state.selfId })
+        let removed = state.members.filter { gone.contains($0) }
+        guard !removed.isEmpty else { return [] }
+        state.members.removeAll { gone.contains($0) }
+        state.admins.removeAll { gone.contains($0) }
+        for id in removed { state.removeRecvChain(id) }
+        persist(state)
+        return removed
+    }
+
     // MARK: - Group media key sink (non-mutating reads)
 
     /// NON-MUTATING read of our OWN current send-chain key (a COPY). Used as

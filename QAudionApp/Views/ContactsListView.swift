@@ -390,6 +390,8 @@ struct ContactsListView: View {
     @State private var showingGroupCallPicker: Bool = false
     /// The group call could not be created: said out loud, not ignored.
     @State private var showingGroupCallUnavailable: Bool = false
+    /// BLOCK — bumped when the blocked list changes, so the detail shows the real state.
+    @State private var blockRevision: Int = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.qaudionSnackbar) private var snackbar
 
@@ -519,6 +521,9 @@ struct ContactsListView: View {
             Button("Ho capito", role: .cancel) {}
         }
         .refreshable { container.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .blockedContactsDidChange)) { _ in
+            blockRevision += 1
+        }
         .onAppear {
             container.attach(appState)
             appState.presenceService.observeCallState(
@@ -682,6 +687,8 @@ struct ContactsListView: View {
         // way to unblock from this legacy screen. Read the real state and
         // toggle both directions, matching ContactsScreen/ContactDetailScreen's
         // own block/unblock behavior.
+        // `blockRevision` is read so this view is rebuilt when a block / unblock finishes or the list is reloaded.
+        let _ = blockRevision
         let reallyBlocked = BlockedContactsStore.isBlocked(item.userId)
         let detail = ContactDetailViewModel(
             userId: item.userId,
@@ -704,18 +711,25 @@ struct ContactsListView: View {
                 openOrCreateChat(peerUserId: item.userId, displayName: item.displayName)
             },
             onVerifySas: nil,
-            onBlock: {
-                if reallyBlocked {
-                    BlockedContactsStore.remove(item.userId)
-                } else {
-                    BlockedContactsStore.add(item.userId)
-                }
-            },
+            onBlock: { toggleBlock(of: item, currentlyBlocked: reallyBlocked) },
             onDelete: {
                 ContactsStore().remove(userId: item.userId)
                 container.refresh()
             }
         )
+    }
+
+    /// BLOCK — block or unblock through the shared function (server first, local list after it accepted, retry
+    /// on failure), like every other screen. The detail is rebuilt afterwards from the real local state.
+    private func toggleBlock(of item: ContactsListViewModel.Item, currentlyBlocked: Bool) {
+        let uid: String = item.userId
+        let name: String = item.displayName
+        let wantBlocked: Bool = !currentlyBlocked
+        Task { @MainActor in
+            await ContactBlockService.shared.setBlocked(
+                wantBlocked, userId: uid, displayName: name, snackbar: snackbar)
+            blockRevision += 1
+        }
     }
 
     /// Find existing or create new conversation for a peer, then set the deep-link

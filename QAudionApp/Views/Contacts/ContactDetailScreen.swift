@@ -90,6 +90,10 @@ struct ContactDetailScreen: View {
         }
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        // The blocked list is reloaded from the server at sign-in and on reconnect: keep the button right.
+        .onReceive(NotificationCenter.default.publisher(for: .blockedContactsDidChange)) { _ in
+            isBlocked = BlockedContactsStore.isBlocked(item.userId)
+        }
         .onAppear {
             isBlocked = BlockedContactsStore.isBlocked(item.userId)
             peerExtension = DisplayName.resolvedExtension(
@@ -223,7 +227,7 @@ struct ContactDetailScreen: View {
             }
             Button("Non ora", role: .cancel) {}
         } message: {
-            Text("Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti.")
+            Text("Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti in privato.")
         }
     }
 
@@ -1034,27 +1038,24 @@ struct ContactDetailScreen: View {
     // MARK: - Block / Unblock
 
     private func performBlock() {
-        BlockedContactsStore.add(item.userId)
-        isBlocked = true
-        let uid: String = item.userId
-        let name: String = item.displayName
-        if let provider = appState.liveProvider {
-            Task { try? await provider.contactsApi.blockContact(userId: uid) }
-        }
-        let msg: String = String(localized: "contact_detail.contact_blocked", defaultValue: "\(name) bloccato.", comment: "Snackbar — a contact was blocked, %@ is their display name")
-        snackbar?.show(.init(text: msg, severity: .info))
+        applyBlockState(true)
     }
 
     private func performUnblock() {
-        BlockedContactsStore.remove(item.userId)
-        isBlocked = false
+        applyBlockState(false)
+    }
+
+    /// BLOCK — both directions go through the one shared function: the server is asked first and the local
+    /// list changes only after it accepted; a failure is shown with a retry. The screen then shows whatever
+    /// the local list really says, not what was asked for.
+    private func applyBlockState(_ blocked: Bool) {
         let uid: String = item.userId
         let name: String = item.displayName
-        if let provider = appState.liveProvider {
-            Task { try? await provider.contactsApi.unblockContact(userId: uid) }
+        Task { @MainActor in
+            await ContactBlockService.shared.setBlocked(
+                blocked, userId: uid, displayName: name, snackbar: snackbar)
+            isBlocked = BlockedContactsStore.isBlocked(uid)
         }
-        let msg: String = String(localized: "contact_detail.contact_unblocked", defaultValue: "\(name) sbloccato.", comment: "Snackbar — a contact was unblocked, %@ is their display name")
-        snackbar?.show(.init(text: msg, severity: .info))
     }
 
     /// W294: build the guidance snackbar text via static method to keep

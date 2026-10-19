@@ -98,6 +98,10 @@ final class ChatContainer: ObservableObject {
     /// retain cycle through the container hierarchy.
     private weak var appState: AppState?
     private let peerUserId: String
+    /// BLOCK — whether the peer of this chat is on the blocked list; drives the "Blocca / Sblocca contatto"
+    /// menu entry. Kept in step with the local list by `refreshPeerBlockState`.
+    @Published private(set) var isPeerBlocked: Bool = false
+    private var blockListObserver: NSObjectProtocol?
 
     init(conversationId: UUID,
          peerUserId: String,
@@ -184,6 +188,7 @@ final class ChatContainer: ObservableObject {
             isPeerTyping: false,
             isPeerOnline: false
         )
+        self.isPeerBlocked = BlockedContactsStore.isBlocked(peerUserId)
     }
 
     /// W137: debounced draft save. The composer fires this on every
@@ -219,6 +224,16 @@ final class ChatContainer: ObservableObject {
     func attach(_ state: AppState) {
         self.sendService = ChatMessageSendService(appState: state)
         self.appState = state
+        // BLOCK — the blocked list is reloaded from the server at sign-in and on reconnect, and changed from
+        // other screens: keep the menu entry right. One observer per container.
+        if blockListObserver == nil {
+            blockListObserver = NotificationCenter.default.addObserver(
+                forName: .blockedContactsDidChange, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.refreshPeerBlockState() }
+            }
+        }
+        refreshPeerBlockState()
         // W76: listen for chat envelope events (msg_receive, typing,
         // delivery / read receipts) relayed from AppState's WS
         // dispatcher. Refresh the local view-model when something
@@ -794,18 +809,32 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
     }
 
-    /// W93: server-side block/unblock via ContactsApi. Returns true on
-    /// success. Idempotent semantically (blocking an already-blocked
-    /// contact returns success per server behaviour).
-    func toggleBlock() async -> Bool {
-        guard let provider = self.appState?.liveProvider else { return false }
-        do {
-            try await provider.contactsApi.blockContact(userId: peerUserId)
-            return true
-        } catch {
-            print("[ChatContainer] block failed: \(error)")
-            return false
-        }
+    /// BLOCK — block (`blocked == true`) or unblock the peer of this chat through the one shared function
+    /// (`ContactBlockService`): the server is asked first, the local list changes only after it accepted,
+    /// and a failure is shown with a retry. `isPeerBlocked` is then re-read from the local list, so the menu
+    /// shows what is really in force. Returns true when the server and the local list agree on the wanted
+    /// state.
+    @discardableResult
+    func setPeerBlocked(_ blocked: Bool, snackbar: QAudionSnackbarHostState?) async -> Bool {
+        let name: String = DisplayName.forUser(
+            peerUserId,
+            serverDisplay: viewModel.conversation.peerDisplayName,
+            contacts: appState?.cachedContacts)
+        let ok = await ContactBlockService.shared.setBlocked(
+            blocked, userId: peerUserId, displayName: name, snackbar: snackbar)
+        refreshPeerBlockState()
+        return ok
+    }
+
+    /// BLOCK — re-read whether the peer is blocked (at open, after a block / unblock, and whenever the local
+    /// list changes: the server's list is reloaded at sign-in and on reconnect).
+    func refreshPeerBlockState() {
+        let now = BlockedContactsStore.isBlocked(peerUserId)
+        if now != isPeerBlocked { isPeerBlocked = now }
+    }
+
+    deinit {
+        if let observer = blockListObserver { NotificationCenter.default.removeObserver(observer) }
     }
 
     // MARK: - W441 Ephemeral timer
