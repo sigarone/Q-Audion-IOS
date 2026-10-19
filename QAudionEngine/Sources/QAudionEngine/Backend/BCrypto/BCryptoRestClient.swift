@@ -23,7 +23,18 @@ public final class BCryptoRestClient {
     /// changed), and `BCryptoSessionRecoveryError` (transient) otherwise.
     public typealias DeviceRenewFallback = @Sendable () async throws -> AuthTokenSet
 
-    private var config: BackendConfig
+    /// Guarded by `configLock`. Every REST call reads the tokens from here, and the 401 callers
+    /// that joined one refresh all write the new pair back at the same moment. Unsynchronised,
+    /// those concurrent String writes corrupted reference counts: SIGSEGV while destroying the
+    /// `AuthRefreshRequest` in `refreshSession`, when the app resumed with an expired token and
+    /// six or seven requests got 401 together (18-19 Oct 2026). Read through `config` (a copy
+    /// taken under the lock), write only through `withConfig`.
+    private var _config: BackendConfig
+    private let configLock = NSLock()
+    private var config: BackendConfig { configLock.withLock { _config } }
+    private func withConfig(_ change: (inout BackendConfig) -> Void) {
+        configLock.withLock { change(&_config) }
+    }
     /// The server this client was BUILT with — the certificate-pinned primary,
     /// captured once at init and never reassigned by updateConfig.
     ///
@@ -34,8 +45,10 @@ public final class BCryptoRestClient {
     /// learn to follow.
     private let primaryServerUrl: String
     private let session: URLSession
-    private var tokenRefresher: TokenRefresher?
-    private var deviceRenewFallback: DeviceRenewFallback?
+    // Guarded by `configLock`, like `_config`: the app re-installs the device-renew fallback
+    // on a live client at every wake, while a burst of 401s reads these to build its request.
+    private var _tokenRefresher: TokenRefresher?
+    private var _deviceRenewFallback: DeviceRenewFallback?
     /// The ONE refresh single-flight of the process. Every path that refreshes the
     /// session (REST 401, socket `auth_failed`, the app's proactive refresh, the tus
     /// client) goes through it, so two refreshes are never in flight with the same
@@ -44,10 +57,18 @@ public final class BCryptoRestClient {
     /// The app's shared credential store (Keychain). When set, the refresh token is read
     /// from it and results are written back with compare-and-swap; when nil (onboarding,
     /// tests) this client uses its own config copy and persists nothing.
-    public var credentialStore: AuthCredentialStore?
+    public var credentialStore: AuthCredentialStore? {
+        get { configLock.withLock { _credentialStore } }
+        set { configLock.withLock { _credentialStore = newValue } }
+    }
+    private var _credentialStore: AuthCredentialStore?
     /// Called, for every caller of a coordinated refresh, with the tokens it should now
     /// use. The owning provider wires it to broadcast them to every transport.
-    public var onTokensApplied: (@Sendable (AuthTokenSet) -> Void)?
+    public var onTokensApplied: (@Sendable (AuthTokenSet) -> Void)? {
+        get { configLock.withLock { _onTokensApplied } }
+        set { configLock.withLock { _onTokensApplied = newValue } }
+    }
+    private var _onTokensApplied: (@Sendable (AuthTokenSet) -> Void)?
 
     // MARK: - IOS-E2 — anti-zombie-pool HTTP trio + W-INFLIGHTCANCEL
     //
@@ -139,7 +160,7 @@ public final class BCryptoRestClient {
     ///   trade-off — SECURITY H-1 — and stays gated).
     public init(config: BackendConfig, testURLProtocolClasses: [AnyClass]? = nil) {
         self.primaryServerUrl = config.serverUrl
-        self.config = config
+        self._config = config
         // SECURITY H-1 — `acceptSelfSignedCerts` is honoured ONLY in
         // DEBUG builds (local dev / unit tests against a self-signed
         // staging box). Release builds NEVER instantiate
@@ -273,7 +294,7 @@ public final class BCryptoRestClient {
     /// owning `BCryptoBackendProvider` wires this to `BCryptoAccountApiImpl.refreshToken`
     /// after construction to avoid a circular init-time dependency.
     public func setTokenRefresher(_ refresher: @escaping TokenRefresher) {
-        self.tokenRefresher = refresher
+        configLock.withLock { _tokenRefresher = refresher }
     }
 
     /// Phase 2 — install the device-bound silent re-auth fallback.
@@ -283,12 +304,12 @@ public final class BCryptoRestClient {
     /// Ed25519 key, POSTing /auth/device-renew, and returning the
     /// fresh (access, refresh) pair.
     public func setDeviceRenewFallback(_ fallback: @escaping DeviceRenewFallback) {
-        self.deviceRenewFallback = fallback
+        configLock.withLock { _deviceRenewFallback = fallback }
     }
 
     /// True once a device-renew fallback is installed (see `setDeviceRenewFallback`). The app
     /// layer uses it to guarantee that every store-backed client carries one.
-    public var hasDeviceRenewFallback: Bool { deviceRenewFallback != nil }
+    public var hasDeviceRenewFallback: Bool { configLock.withLock { _deviceRenewFallback != nil } }
 
     public func get(_ path: String, headers: [String: String] = [:]) async throws -> Data {
         try await request("GET", path: path, body: nil, headers: headers)
@@ -637,19 +658,28 @@ public final class BCryptoRestClient {
     /// on the same tokens as the one that did the network call.
     public func refreshSession(trigger: AuthRefreshTrigger,
                                ignoreCooldown: Bool = false) async -> AuthRefreshOutcome {
+        // One snapshot under the lock: the two tokens belong to the same pair, and the store
+        // and closures are the ones installed at that moment.
+        let (current, store, refresher, renewer) = configLock.withLock {
+            (_config, _credentialStore, _tokenRefresher, _deviceRenewFallback)
+        }
         let request = AuthRefreshRequest(
             trigger: trigger,
-            staleAccessToken: trigger.adoptsNewerStoredAccess ? config.accessToken : nil,
-            callerRefreshToken: config.refreshToken,
-            store: credentialStore,
-            refresher: tokenRefresher.map { Self.wrapRefresher($0) },
-            renewer: deviceRenewFallback.map { Self.wrapRenewer($0) },
+            staleAccessToken: trigger.adoptsNewerStoredAccess ? current.accessToken : nil,
+            callerRefreshToken: current.refreshToken,
+            store: store,
+            refresher: refresher.map { Self.wrapRefresher($0) },
+            renewer: renewer.map { Self.wrapRenewer($0) },
             ignoreCooldown: ignoreCooldown)
         let outcome = await authCoordinator.refresh(request)
         if let tokens = outcome.tokens {
-            config.accessToken = tokens.accessToken
-            if let newRefresh = tokens.refreshToken, !newRefresh.isEmpty { config.refreshToken = newRefresh }
-            onTokensApplied?(tokens)
+            let applied = configLock.withLock { () -> (@Sendable (AuthTokenSet) -> Void)? in
+                _config.accessToken = tokens.accessToken
+                if let newRefresh = tokens.refreshToken, !newRefresh.isEmpty { _config.refreshToken = newRefresh }
+                return _onTokensApplied
+            }
+            // Outside the lock: the provider's handler calls `updateConfig` on this client.
+            applied?(tokens)
         }
         return outcome
     }
@@ -708,7 +738,7 @@ public final class BCryptoRestClient {
     /// use the same TLS delegate (cert-pinning / self-signed-cert).
     public var urlSession: URLSession { session }
 
-    public func updateConfig(_ newConfig: BackendConfig) { config = newConfig }
+    public func updateConfig(_ newConfig: BackendConfig) { withConfig { $0 = newConfig } }
 
     /// Always-reachable Phase 2 — public entry point that runs the SAME silent
     /// token-recovery cascade as the 401-retry path (primary `tokenRefresher`
