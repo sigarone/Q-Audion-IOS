@@ -12,8 +12,8 @@ import Foundation
 // moves whole protocol messages (`type ‖ body`), fragmenting and
 // reassembling them with `ProximityFraming` / `ProximityReassembler`.
 //
-// Concurrency (see the transport comment in ProximityPairingTypes.swift and
-// the trailing comment of IOSEarbudGattProxy.swift): no actor annotations.
+// Concurrency (see the transport comment in ProximityPairingTypes.swift): no actor
+// annotations.
 // Both managers are created with `queue: nil`, so every CoreBluetooth
 // callback arrives on the main thread, and every client call is made on the
 // main thread too. Data paths are fully synchronous (no Task / async hop that

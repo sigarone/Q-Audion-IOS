@@ -239,7 +239,10 @@ surface these errors cleanly:
   the diagnostic even if they only paste the IPA step's output
 
 If a build fails opaquely (just "Failed to archive", no `error:`
-line) — open the diag.log artifact or look at Step 7's prefix output.
+line) — read the job log of the failure-only "Diagnose Swift compile"
+step (it prints the `error:` lines and the tail of diag.log; nothing
+is uploaded as an artifact because the repository is public) or look
+at Step 7's prefix output.
 
 ---
 

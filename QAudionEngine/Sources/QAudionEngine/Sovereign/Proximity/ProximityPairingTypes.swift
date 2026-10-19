@@ -506,8 +506,9 @@ public enum ProximityPairingError: Error, Equatable {
 // Deliberately NOT `@MainActor`: a class that lists a global-actor protocol in
 // its primary declaration is inferred to be isolated to that actor, which would
 // drag the CoreBluetooth delegate witnesses across isolation — the exact break
-// `IOSEarbudGattProxy`'s trailing comment records for this package's simulator
-// build. Contract instead: every member is called on the main thread, and
+// the earbud GATT client's conformance note records for the simulator build (that
+// client, IOSEarbudGattProxy, now lives in the app target, QAUDION_EARBUD only).
+// Contract instead: every member is called on the main thread, and
 // CoreBluetooth managers are created with `queue: nil` so their callbacks are
 // on the main thread too. The state machines that drive these are `@MainActor`.
 

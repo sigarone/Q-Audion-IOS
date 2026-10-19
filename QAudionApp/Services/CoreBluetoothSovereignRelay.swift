@@ -1,3 +1,9 @@
+// QAUDION_EARBUD -- part of the earbud hardware stack: compiled only when the QAUDION_EARBUD
+// compilation condition is set (QAudionApp/project-earbud.yml; ios-testflight.yml dispatched
+// with earbud=true). The default build, every tag push, does not contain this file's code.
+// See "Earbud (hardware) support" in CLAUDE.md for how to re-enable it.
+// (Unused by the app today: the KMS sovereign relay driver that talks to the earbud over CoreBluetooth.)
+#if QAUDION_EARBUD
 import Foundation
 import CoreBluetooth
 import QAudionEngine
@@ -310,3 +316,5 @@ public final class CoreBluetoothSovereignRelay: NSObject, SovereignEarbudGattRel
         readingCharUUID = nil
     }
 }
+
+#endif // QAUDION_EARBUD

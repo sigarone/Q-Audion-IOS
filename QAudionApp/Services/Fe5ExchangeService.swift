@@ -1,3 +1,9 @@
+// QAUDION_EARBUD -- part of the earbud hardware stack: compiled only when the QAUDION_EARBUD
+// compilation condition is set (QAudionApp/project-earbud.yml; ios-testflight.yml dispatched
+// with earbud=true). The default build, every tag push, does not contain this file's code.
+// See "Earbud (hardware) support" in CLAUDE.md for how to re-enable it.
+// (Server exchange for earbud pairing; only EarbudDiagScreen, itself dev-tools + earbud only, uses it.)
+#if QAUDION_EARBUD
 import Foundation
 import QAudionEngine
 
@@ -105,3 +111,5 @@ final class Fe5ExchangeService {
         }
     }
 }
+
+#endif // QAUDION_EARBUD

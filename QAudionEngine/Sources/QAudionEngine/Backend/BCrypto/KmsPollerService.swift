@@ -70,8 +70,9 @@ public final class KmsPollerService {
     /// When `v2Context` is supplied, v2 phone-held entries are decrypted
     /// with the AAD-bound path and committed staged→active on a verified
     /// PoP (§3.5). v2 sovereign (earbud) entries are NOT handled here —
-    /// the poller surfaces them to the app layer (`EarbudKeyImportService`)
-    /// which owns the GATT relay (the phone cannot decrypt them).
+    /// the poller surfaces them to the app layer (`EarbudKeyImportService`,
+    /// compiled only with QAUDION_EARBUD) which owns the GATT relay (the phone
+    /// cannot decrypt them).
     @discardableResult
     public func pollOnce(
         deviceKeys: DeviceKeys,

@@ -3037,10 +3037,15 @@ final class AppState: ObservableObject {
         }
         return svc
     }()
+    #if QAUDION_EARBUD
     /// CL-5.4 — earbud BLE GATT proxy for KMS hw_only/earbud_pair key relay.
     /// Shared across KMS sweeps so a single CBCentralManager instance handles all
     /// earbud connection state (avoids duplicate BLE stacks). Nil until first KMS
     /// sweep that needs it (lazy instantiation via runKmsSweep).
+    ///
+    /// Compiled only with QAUDION_EARBUD (the earbud hardware stack). Without it there is no
+    /// proxy, no CBCentralManager is created for the earbud, and runKmsSweep builds the KMS
+    /// poller without a relay.
     lazy var earbudGattProxy: IOSEarbudGattProxy = IOSEarbudGattProxy()
 
     /// Persist the Bluetooth peripheral UUID of the most-recently connected
@@ -3049,6 +3054,7 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(identifier.uuidString,
                                   forKey: "qaudion_paired_earbud_uuid")
     }
+    #endif
 
     /// Phase-0 §6 — keeps a periodic KMS sweep running in the background.
     /// Started once after WS auth; stopped implicitly when AppState is freed.
@@ -13627,7 +13633,15 @@ final class AppState: ObservableObject {
             }
             // CL-5.4 — wire the earbud relay so hw_only/earbud_pair keys are
             // forwarded to the SE via GATT rather than attempting SW decryption.
-            let relay = EarbudAckPopRelay(gatt: earbudGattProxy)
+            // Only in a build with the earbud stack (QAUDION_EARBUD). Without it there is no
+            // relay: KmsPollerService leaves hw_only/earbud_pair entries pending ("no
+            // earbudRelay — skip", no ack, nothing stored), exactly what the relay does in a
+            // store build today, where nothing ever connects the proxy to an earbud.
+            #if QAUDION_EARBUD
+            let relay: EarbudAckPopRelay? = EarbudAckPopRelay(gatt: earbudGattProxy)
+            #else
+            let relay: EarbudAckPopRelay? = nil
+            #endif
             let poller = KmsPollerService(kmsClient: provider.kmsClient, vault: vault, earbudRelay: relay)
             // ROOT-CAUSE FIX (W-KMSV2CTX): this was the ONLY production call
             // to pollOnce and never passed v2Context, so

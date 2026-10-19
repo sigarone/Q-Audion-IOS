@@ -43,20 +43,34 @@ deliberately use the decimal "+ offset" field, which is slide-free.
 
 dSYM ACQUISITION
 ----------------
-The TestFlight workflow (.github/workflows/ios-testflight.yml) uploads
-the dSYM in TWO artifacts (P0-A):
-  * `dsyms-<version>`        — dedicated, versioned, 90-day retention
-                               (step 11). Preferred: stable name, long-
-                               lived, dSYM-only (no IPA).
-  * `ios-build-<run_number>` — the 7-day build bundle (step 10), which
-                               also contains the dSYM zip at path
-                               `QAudionApp/build/ios/dsym/*.zip`. NOTE
-                               the name uses run_NUMBER, not run_id.
-We resolve a build *version* (e.g. 1.0.662) to its CI run (tag/branch
-`v<version>`), download the dSYM artifact by name (trying `dsyms-<ver>`
-first, then `ios-build-<run_number>`), and cache the extracted DWARF
-under `<repo>/.cache/dsyms/<version>/`. If both named downloads miss we
-fall back to pulling all of the run's artifacts.
+The TestFlight workflow (.github/workflows/ios-testflight.yml, step 11)
+uploads the dSYMs of a build as ONE artifact, `dsyms-<version>`: stable
+name, 90-day retention, dSYM-only. There is no IPA, build-log or other
+artifact: the repository is public, so any artifact can be downloaded by
+anyone with a GitHub account.
+
+For the same reason the dSYM files in that artifact are ENCRYPTED with
+age (https://age-encryption.org) to a public key committed in the
+workflow (DSYM_AGE_RECIPIENT); they are `*.zip.age` files. The private
+key is kept off GitHub, on one host of ours (the "key host"). So:
+  * we resolve a build *version* (e.g. 1.0.662) to its CI run (tag/branch
+    `v<version>`) and download the artifact by name (`gh` must be
+    authenticated, as for any artifact download);
+  * each `*.age` file is decrypted ON THE KEY HOST, where the key is:
+      - run on the key host (key file present, `age` installed): decrypted
+        locally;
+      - run anywhere else (the PC, where `gh` is logged in): the encrypted
+        file is piped through ssh into `age -d` on the key host and the
+        plaintext zip comes back on stdout, so the private key is never
+        copied. Needs an ssh alias for the key host
+        (QAUDION_DSYM_DECRYPT_HOST; BatchMode, key in the agent) and `age`
+        on that host;
+  * the zips are extracted and the DWARF is cached, in plaintext, under
+    `<repo>/.cache/dsyms/<version>/` (git-ignored, on a machine of ours).
+If the named download misses we fall back to pulling all of the run's
+artifacts (an earbud or dev-tools dispatch is named `dsyms-<version>-earbud`
+/ `-dev`). A zip that is not encrypted (an artifact uploaded before the
+encryption existed and not yet expired) is simply extracted.
 
 USAGE
 -----
@@ -64,7 +78,8 @@ USAGE
   # dump (looks for "build 1.0.NNN" / "v1.0.NNN" in the text):
   python scripts/symbolicate.py --crash .cache/ios-logs/live-XXXX.log
 
-  # Force a specific build version (downloads dsyms-<ver> on demand):
+  # Force a specific build version (downloads dsyms-<ver> on demand and
+  # decrypts it on the key host, see "dSYM ACQUISITION"):
   python scripts/symbolicate.py --crash crash.txt --version 1.0.662
 
   # Symbolicate a bare list of offsets piped on stdin:
@@ -77,6 +92,13 @@ Requirements
 ------------
   * gh CLI (authenticated; same `sigarone/Q-Audion-IOS` repo) — only
     needed when the dSYM isn't cached and --dsym isn't given.
+  * To decrypt the downloaded artifact: EITHER be on the key host (key
+    file and `age` there), OR have ssh to it working non-interactively
+    (on Windows the script uses the system OpenSSH, whose agent holds the
+    key). Settings: QAUDION_DSYM_AGE_KEY (local key path), QAUDION_AGE_BIN
+    (local age), QAUDION_SSH (ssh client), QAUDION_DSYM_DECRYPT_HOST (ssh
+    alias of the key host), QAUDION_DSYM_REMOTE_AGE / _REMOTE_KEY (paths on
+    that host).
   * EITHER  `pip install symbolic`  (preferred, pure offline, exact),
     OR the Android NDK llvm-symbolizer at
       D:/users/f10379a/DEV APP/sdk/android-sdk/ndk/<ver>/toolchains/
@@ -87,6 +109,7 @@ Requirements
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -100,10 +123,22 @@ IMAGE_NAME = "QAudionApp"               # Mach-O image as it appears in frames
 DEFAULT_TEXT_VMADDR = 0x100000000       # arm64 PIE __TEXT vmaddr (4 GiB)
 WORKFLOW = "ios-testflight.yml"
 
-# Where the CI artifact lands the dSYM, and how the artifact is named.
-# (Verified against .github/workflows/ios-testflight.yml step 10:
-#  name: ios-build-<run_number>, path: QAudionApp/build/ios/dsym/*.zip)
-ARTIFACT_NAME_TMPL = "ios-build-{run}"
+# How the CI artifact with the dSYMs is named: ios-testflight.yml step 11 uploads
+# `dsyms-<marketing version>` (path dsyms-enc/*.age, 90 days). It is the only
+# artifact of a build: the IPA and the build logs are not uploaded (public repo).
+ARTIFACT_NAME_TMPL = "dsyms-{version}"
+
+# The dSYM files in that artifact are age-encrypted (the repo is public). The private
+# key is kept off GitHub; decryption happens on the host that holds it (see _decrypt_age).
+AGE_KEY_PATH = Path(os.environ.get("QAUDION_DSYM_AGE_KEY",
+                                   "~/.config/qaudion/dsym-age.key")).expanduser()
+IS_WINDOWS = os.name == "nt"
+# No default: the ssh alias of the host that holds the key is set by whoever runs the script.
+DECRYPT_HOST = os.environ.get("QAUDION_DSYM_DECRYPT_HOST", "")
+REMOTE_AGE = os.environ.get("QAUDION_DSYM_REMOTE_AGE", "~/go/bin/age")
+REMOTE_KEY = os.environ.get("QAUDION_DSYM_REMOTE_KEY", "~/.config/qaudion/dsym-age.key")
+# These two end up in a command line run by the remote shell: allow only path characters.
+_SAFE_REMOTE_PATH = re.compile(r"^[A-Za-z0-9_./~-]+$")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent           # apps/qaudion-ios
@@ -277,11 +312,9 @@ def _resolve_run(version):
     """Find the CI run for tag v<version>. Returns (run_id, run_number).
 
     run_id     = databaseId, used by `gh run download <id>`.
-    run_number = the human run counter, used to build the artifact NAME
-                 (the workflow names artifacts `ios-build-<run_number>`
-                 AND, since P0-A, `dsyms-<version>`). run_number may be
-                 None if the fallback path can't recover it — callers
-                 must handle that.
+    run_number = the human run counter (informational: the dSYM artifact is
+                 named by version, `dsyms-<version>`, not by run). It may be
+                 None if the fallback path can't recover it.
 
     The release tag is `v<version>` (CLAUDE.md: `git tag v1.0.NNN`), and
     `gh run list` reports it as headBranch on the run.
@@ -322,7 +355,7 @@ def _resolve_run(version):
 def _safe_extract_all(zf: zipfile.ZipFile, dest: Path):
     """Extract a zip with a zip-slip / path-traversal guard.
 
-    The dSYM zip is a downloaded CI artifact (semi-trusted), but the
+    The dSYM zip is a downloaded, decrypted CI artifact (semi-trusted), but the
     extraction target is the cache dir, so we validate every member's
     resolved path stays under `dest` before extracting. Reject absolute
     paths and any member that escapes via `..`. Cheap hardening.
@@ -341,36 +374,116 @@ def _safe_extract_all(zf: zipfile.ZipFile, dest: Path):
     zf.extractall(dest)
 
 
-def _download_dsym(version):
-    """gh run download the dSYM artifact for v<version>, extract the
-    dSYM, and cache the DWARF binary under CACHE_DIR/<version>/.
-    Returns the DWARF binary Path.
+def _local_age():
+    """The local age binary, or None."""
+    env = os.environ.get("QAUDION_AGE_BIN")
+    if env:
+        return env if (os.path.isfile(env) and os.access(env, os.X_OK)) else None
+    found = shutil.which("age")
+    if found:
+        return found
+    cand = Path("~/go/bin/age").expanduser()
+    return str(cand) if cand.is_file() else None
 
-    Artifact-name resolution (P0-A landed two candidates):
-      1. dsyms-<version>          (versioned 90-day artifact — preferred)
-      2. ios-build-<run_number>   (7-day bundle; name uses run_NUMBER,
-                                    NOT run_id/databaseId)
-    We try both by NAME, then fall back to downloading every artifact of
-    the run and letting the DWARF discovery sort it out.
+
+def _ssh_bin():
+    """The ssh client to reach the host that holds the key. On Windows that is the system OpenSSH, the
+    one that talks to the Windows ssh-agent where the kit key lives: the ssh.exe of Git for Windows,
+    which is what a bare `ssh` finds first from Git Bash, cannot use that agent. QAUDION_SSH overrides."""
+    env = os.environ.get("QAUDION_SSH")
+    if env:
+        return env
+    if IS_WINDOWS:
+        win = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "OpenSSH" / "ssh.exe"
+        if win.is_file():
+            return str(win)
+    return shutil.which("ssh")
+
+
+def _decrypt_age(src: Path, dst: Path):
+    """Decrypt one age file ON THE KEY HOST, where the private key is.
+
+    * key file and age binary available locally (we are on the key host): local
+      `age -d -i <key>`;
+    * otherwise the encrypted bytes go through `ssh <host> age -d -i <key>`
+      on stdin and the plaintext comes back on stdout, straight into `dst`.
+      The key is never copied and its content is never printed.
+    On any failure `dst` is removed and a RuntimeError says why.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    age = _local_age()
+    try:
+        if AGE_KEY_PATH.is_file() and age:
+            p = subprocess.run([age, "-d", "-i", str(AGE_KEY_PATH), "-o", str(dst), str(src)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            where = "locally"
+        else:
+            if not DECRYPT_HOST:
+                raise RuntimeError(
+                    "cannot decrypt " + src.name + ": no key at " + str(AGE_KEY_PATH) +
+                    "; set QAUDION_DSYM_DECRYPT_HOST to the ssh alias of the host that has it")
+            ssh = _ssh_bin()
+            if not ssh:
+                raise RuntimeError(
+                    "cannot decrypt " + src.name + ": no key at " + str(AGE_KEY_PATH) +
+                    " and no ssh to reach the host that has it (" + DECRYPT_HOST + ")")
+            for label, value in (("QAUDION_DSYM_REMOTE_AGE", REMOTE_AGE),
+                                 ("QAUDION_DSYM_REMOTE_KEY", REMOTE_KEY)):
+                if not _SAFE_REMOTE_PATH.match(value):
+                    raise RuntimeError(label + " has characters that are not allowed in a path")
+            if not re.match(r"^[A-Za-z0-9_.@-]+$", DECRYPT_HOST):
+                raise RuntimeError("QAUDION_DSYM_DECRYPT_HOST is not a plain host alias")
+            with open(src, "rb") as fin, open(dst, "wb") as fout:
+                p = subprocess.run(
+                    [ssh, "-o", "BatchMode=yes", DECRYPT_HOST,
+                     REMOTE_AGE + " -d -i " + REMOTE_KEY],
+                    stdin=fin, stdout=fout, stderr=subprocess.PIPE)
+            where = "on " + DECRYPT_HOST
+        if p.returncode != 0:
+            raise RuntimeError(
+                "age failed " + where + " for " + src.name + " (rc " + str(p.returncode) + "): " +
+                p.stderr.decode("utf-8", errors="replace").strip()[:300])
+        if not dst.is_file() or dst.stat().st_size == 0:
+            raise RuntimeError("age produced no output for " + src.name + " " + where)
+        print("  decrypted " + src.name + " " + where, file=sys.stderr)
+    except Exception:
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _decrypt_all(vdir: Path):
+    """Decrypt every *.age under vdir next to itself (X.zip.age -> X.zip) and drop the .age."""
+    for enc in sorted(vdir.rglob("*.age")):
+        out = enc.with_name(enc.name[:-len(".age")])
+        if out.exists():
+            out.unlink()
+        _decrypt_age(enc, out)
+        enc.unlink()
+
+
+def _download_dsym(version):
+    """gh run download the dSYM artifact for v<version>, decrypt it (on
+    the key host), extract the dSYM and cache the DWARF binary under
+    CACHE_DIR/<version>/. Returns the DWARF binary Path.
+
+    The artifact is `dsyms-<version>` (ios-testflight.yml step 11; encrypted
+    *.age files, 90 days). If that name misses we download every artifact of
+    the run (this is how the `-earbud` / `-dev` named ones are found; there
+    is no IPA or log artifact any more, so it stays small).
     """
     run_id, run_number = _resolve_run(version)
     vdir = CACHE_DIR / version
     vdir.mkdir(parents=True, exist_ok=True)
 
-    # Candidate artifact names, most-specific first. The ios-build name
-    # is keyed on run_NUMBER (not databaseId) — only attempt it when we
-    # actually resolved the number.
-    candidates = [f"dsyms-{version}"]
-    if run_number is not None:
-        candidates.append(ARTIFACT_NAME_TMPL.format(run=run_number))
+    candidates = [ARTIFACT_NAME_TMPL.format(version=version)]
 
     print(f"  resolving dSYM for v{version} -> run {run_id} "
           f"(run_number {run_number}); trying artifacts {candidates}",
           file=sys.stderr)
 
-    # Try each candidate artifact by NAME (smallest download), then fall
-    # back to pulling every artifact of the run (this also drags in the
-    # multi-MB IPA, so it is the last resort, not the default).
     got = False
     last_err = ""
     for artifact in candidates:
@@ -387,9 +500,9 @@ def _download_dsym(version):
 
     if not got:
         # Last resort: download ALL artifacts of the run and let the DWARF
-        # discovery sort it out (pulls the IPA too — slow but correct).
-        print(f"  named artifacts all missed; downloading ALL artifacts "
-              f"of run {run_id} (includes the IPA)", file=sys.stderr)
+        # discovery sort it out (finds the -earbud / -dev named archives).
+        print(f"  named artifact missed; downloading ALL artifacts "
+              f"of run {run_id}", file=sys.stderr)
         rc, out, err = _run([
             "gh", "run", "download", str(run_id), "--repo", REPO,
             "--dir", str(vdir),
@@ -400,7 +513,9 @@ def _download_dsym(version):
                 f"{err.strip() or out.strip() or last_err}"
             )
 
-    # Unzip any *.zip we pulled (the dSYM is shipped zipped).
+    # Decrypt the *.age files (on the key host), then unzip any *.zip we have
+    # (the dSYM is shipped zipped).
+    _decrypt_all(vdir)
     for z in list(vdir.rglob("*.zip")):
         try:
             with zipfile.ZipFile(z) as zf:
