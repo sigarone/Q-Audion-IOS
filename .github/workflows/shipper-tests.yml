@@ -40,16 +40,8 @@ on:
       - 'QAudionApp/AppState.swift'
       - 'QAudionApp/Services/NotificationCenterService.swift'
       - '.github/workflows/shipper-tests.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'scripts/ship-ios-logs.py'
-      - 'scripts/ship-server-logs.py'
-      - 'scripts/test_ship_*'
-      - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift'
-      - 'QAudionApp/AppState.swift'
-      - 'QAudionApp/Services/NotificationCenterService.swift'
-      - '.github/workflows/shipper-tests.yml'
+  # No push trigger for main: every change reaches main through a pull request whose
+  # checks are required, so a run on the merge commit would test the same code twice.
   workflow_dispatch:
 
 permissions:
