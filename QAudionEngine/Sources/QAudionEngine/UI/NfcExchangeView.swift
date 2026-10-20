@@ -308,8 +308,11 @@ private final class NfcExchangeDriver: ObservableObject {
     /// but it made a correct NFC pairing look broken to the user).
     private static func persistPsk(_ psk: Data, peerIdPub: Data) throws {
         let peerHex: String = peerIdPub.map { String(format: "%02x", $0) }.joined()
-        let name: String = "nfc-" + peerHex.prefix(16)
         let fingerprint: String = PskAdvertising.canonicalFingerprint(forPsk: psk)
+        // "nfc-<16 hex of the peer's identity key>" names the device; the first 8 hex characters of the key's
+        // fingerprint make the name of THIS key, so a later tap with the same phone does not overwrite it.
+        let name: String = CallKeyPriority.inPersonAccountName(
+            device: "nfc-" + peerHex.prefix(16), keyFingerprint: fingerprint)
         let vault = SovereignKeyVault()
         // W-NFCBIND — record the provenance at write time. Without it the entry
         // relies on `PskOrigin.inferred`, which reads the "nfc-" prefix of this
@@ -327,15 +330,15 @@ private final class NfcExchangeDriver: ObservableObject {
         // security floor elsewhere is full 256-bit fingerprints and 32-byte
         // identity keys throughout, never a truncated one.
         //
-        // A repeated tap with the same phone has the same name, so the vault updates that entry in place
-        // (docs/security/CALL_KEY_PRIORITY.md section 4a): the new key replaces the earlier one and keeps its place
-        // in the call-key list and its "placed by hand" mark. This runs from `onPskDerived`, which
-        // `NfcApduExchange` calls only after the user confirmed the SAS: a tap that is rejected, cancelled or left
-        // to time out never gets here, and the earlier key stays as it was.
+        // A repeated tap with the same phone stores a second entry (docs/security/CALL_KEY_PRIORITY.md section 4a):
+        // the new key takes the place and the "placed by hand" mark of the device's highest-ranked key, the earlier
+        // key stays directly below it, still live, until a call (or the other phone's message) confirms the new
+        // one. This runs from `onPskDerived`, which `NfcApduExchange` calls only after the user confirmed the SAS: a
+        // tap that is rejected, cancelled or left to time out never gets here, and the earlier key stays as it was.
         try vault.storePsk(name: name, key: psk, fingerprint: fingerprint,
                            keyClass: nil, origin: .nfc, nfcPeerIdentityKey: peerIdPub)
-        // A new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md section 3); a key
-        // that replaced an earlier one is already in it and stays where it was.
+        // A new key takes its place in the call-key list (section 3), or the place of the earlier key of the same
+        // device (section 4a).
         CallKeyPriorityStore.live(vault: vault).syncWithVault()
     }
 }

@@ -60,6 +60,21 @@ final class KcMacKCloseTests: XCTestCase {
     /// The ACCEPT reached first: the round stops waiting, the deadline that follows does nothing, and the round is
     /// resolved only when the ACCEPT's processing ends. (Before this rule the deadline abandoned the round and the
     /// ACCEPT, still being verified, was dropped at the old `stillLive` check.)
+    /// A rekey that is still building its OFFER (reading the vault for the advert) counts as pending, as does one
+    /// that waits for its ACCEPT: the in-person key deletions are held for both.
+    func testARekeyBeingBuiltOrAwaitingItsAcceptCountsAsPending() throws {
+        let integ = QAudionCallIntegration()
+        XCTAssertFalse(integ.hasPendingReKeyAttempt)
+        integ.beginReKeyInProgress()
+        XCTAssertTrue(integ.hasPendingReKeyAttempt, "building")
+        integ.endReKeyInProgress()
+        XCTAssertFalse(integ.hasPendingReKeyAttempt)
+        integ.endReKeyInProgress()
+        XCTAssertFalse(integ.hasPendingReKeyAttempt, "the count never goes below zero")
+        _ = try integ.installWaitingReKeyAttemptForTesting(round: 2) { _ in }
+        XCTAssertTrue(integ.hasPendingReKeyAttempt, "waiting for the ACCEPT")
+    }
+
     func testAnAcceptThatReachedInTimeIsNotAbandonedByTheDeadline() throws {
         let integ = QAudionCallIntegration()
         let resolutions = Resolutions()
