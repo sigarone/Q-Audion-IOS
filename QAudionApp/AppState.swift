@@ -3221,16 +3221,24 @@ final class AppState: ObservableObject {
     /// back on for them the moment the hold clears — the opposite of what
     /// they asked for. Reset per call alongside `callMuted`.
     private var holdPausedLocalVideo = false
-    /// In-app ringtone timer (fires every 3 s while callState == .ringing
-    /// and the native CallKit UI is suppressed).
-    private var ringtoneTimer: DispatchSourceTimer?
+    /// In-app ring (foreground, CallKit UI suppressed): the chosen ringtone looped at the user's ring volume.
+    private lazy var inAppRing = InAppRingPlayer(inCall: { [weak self] in self?.callSoundsInCall ?? false })
+    /// Cues played as system sounds: the start tick (before CallKit activates the audio session) and the
+    /// call-ended chime (after it released it).
+    private let callCueSystemSound = CallCueSystemSound()
 
     /// W-RINGBACKCONFIRMED (2026-09-02) — outgoing-call cue player, port of
     /// Android's `QAudionRingtonePlayer.kt` / Desktop's `QAudionRingtone.ts`.
     /// Owns only the OUTGOING pre-connect cues (dialing → confirmed-ringback
     /// → key-exchange → connected); incoming calls are unaffected (CallKit's
     /// native ringtone + `startInAppRingtone()` above, untouched).
-    private let outgoingRingtone = QAudionRingtonePlayer()
+    private let outgoingRingtone: QAudionRingtonePlayer = {
+        let player = QAudionRingtonePlayer()
+        player.log = { line, isProblem in
+            if isProblem { RTLog.warn("call", line) } else { RTLog.info("call", line) }
+        }
+        return player
+    }()
     /// Escalation flags mirroring `CallViewModel`'s `outgoingRingConfirmed`/
     /// `keyExchangeCueActive` — both reset to false at the start of every
     /// fresh outgoing call (`startCall()`), each idempotent so the two real
@@ -3260,7 +3268,16 @@ final class AppState: ObservableObject {
     /// writes `callerOutcome`.
     private var callerOutcomeHold = CallerOutcomeHold()
     /// The busy tone (system sound: it must be audible after CallKit ended the call, see `CallerBusyTone`).
-    private let callerBusyTone = CallerBusyTone()
+    private lazy var callerBusyTone: CallerBusyTone = {
+        let tone = CallerBusyTone()
+        // With an app-owned audio session the busy tone goes through the cue player; otherwise it is a system sound.
+        tone.sessionPlayback = { [weak self] in
+            guard let self, CallsGate.callKitFreeMode, self.outgoingAudioSessionReady else { return false }
+            return self.outgoingRingtone.play(.busy)
+        }
+        tone.sessionStop = { [weak self] in self?.outgoingRingtone.stop() }
+        return tone
+    }()
     /// W-CALLERBUSY (review of #169) — how the last outgoing call ended when a caller-side terminal envelope ended
     /// it, keyed by wire call id. Read by `settleOutgoingCallKitStart` when CallKit finishes starting a call that
     /// is already over, so that late report carries the reason the teardown would have used.
@@ -18415,6 +18432,9 @@ final class AppState: ObservableObject {
         outgoingKeyExchangeCueActive = false
         outgoingAudioSessionReady = false
         outgoingRingCurrentCue = nil
+        // Start tick: the earliest feedback iOS allows. The audio session does not exist yet (CallKit activates it
+        // later), so it is a system sound; the connecting loop follows once the session is active.
+        playCallCue(.dialingTick)
         outgoingRingbackFallback?.cancel()
         let fallback = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -19650,61 +19670,56 @@ final class AppState: ObservableObject {
 
     // MARK: - In-app ringtone (foreground WS calls, no CallKit UI)
 
-    /// Start the in-app ringtone using AudioServicesPlayAlertSound.
-    /// Repeats every 3 s. Safe to call multiple times (idempotent).
-    ///
-    /// 2026-09-19 — the ring is the SAME sound CallKit rings with in the background (two rings of
-    /// `qaudion_ringtone.caf`, cut to a 3 s unit and normalized to a -3 dBFS peak). It was
-    /// `AudioServicesPlayAlertSound(1005)`, the one-second SMS chime, every 3 s: on a phone in hand it
-    /// was barely audible and nothing like the ring the same call has when the app is in the
-    /// background. Falls back to that chime only if the resource is missing from the bundle, so a
-    /// packaging slip never means a silent ring. A system sound (not an audio player) on purpose:
-    /// it seizes no audio session, which CallKit and WebRTC configure when the call is answered.
+    /// Start the in-app ring: the ringtone chosen in Settings, looped by `InAppRingPlayer` at the ring volume, with
+    /// the ring haptics when enabled. Safe to call multiple times (idempotent).
     func startInAppRingtone() {
         // W-CALLERBUSY (review of #169) — a ring (1:1 or group) never plays over the busy tone of the outgoing call
         // that just ended.
         callerBusyTone.stop()
-        guard ringtoneTimer == nil else { return }
-        // 1005 = "sms-received5.caf" — the fallback only.
-        let soundId: SystemSoundID = Self.registerInAppRingSound() ?? 1005
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now(), repeating: 3.0)
-        timer.setEventHandler { AudioServicesPlayAlertSound(soundId) }
-        ringtoneTimer = timer
-        timer.resume()
+        guard !inAppRing.isRunning else { return }
+        inAppRing.start()
     }
 
     /// Stop the in-app ringtone. Called on answer, decline, or hangup.
     func stopInAppRingtone() {
-        ringtoneTimer?.cancel()
-        ringtoneTimer = nil
-        // Disposing the id also stops a unit that is still playing, so the ring does not tail into the
-        // call, and frees it: the next ring registers a fresh one.
-        Self.disposeInAppRingSound()
+        inAppRing.stop()
     }
 
-    /// SystemSoundID of the bundled 3 s ring unit while a ring is active; nil otherwise.
-    private static var inAppRingSoundId: SystemSoundID?
-
-    private static func registerInAppRingSound() -> SystemSoundID? {
-        if let id = inAppRingSoundId { return id }
-        guard let url = Bundle.main.url(forResource: "qaudion_ringtone_unit", withExtension: "caf") else {
-            RTLog.warn("call", "inappring res=0")
-            return nil
+    /// True while a call is in progress, from the app's call state (never from the audio session's category): a live
+    /// 1:1 call, an outgoing call being set up or ringing, or a group call. The ring and the ringtone preview do not
+    /// touch the audio session then.
+    var callSoundsInCall: Bool {
+        if isInCall { return true }
+        switch callState {
+        case .connecting, .active, .encrypted: return true
+        case .ringing: if originalCallRole == .caller { return true }
+        case .idle, .ended: break
         }
-        var id: SystemSoundID = 0
-        guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == kAudioServicesNoError else {
-            RTLog.warn("call", "inappring reg=0")
-            return nil
+        switch groupCallControllerState {
+        case .connecting, .active: return true
+        case .idle, .failed: return false
         }
-        inAppRingSoundId = id
-        return id
     }
 
-    private static func disposeInAppRingSound() {
-        guard let id = inAppRingSoundId else { return }
-        AudioServicesDisposeSystemSoundID(id)
-        inAppRingSoundId = nil
+    /// Plays a cue that comes after the call (ended, busy) or before its audio session exists (start tick).
+    /// Through the cue player when the app owns an active session (no CallKit), otherwise as a system sound,
+    /// which needs no session. Honors the call-sound settings either way.
+    private func playCallCue(_ cue: QAudionRingtonePlayer.Cue) {
+        if CallsGate.callKitFreeMode, outgoingAudioSessionReady, outgoingRingtone.play(cue) { return }
+        callCueSystemSound.play(cue.kind)
+    }
+
+    /// True when the call that is ending rang or connected, so the ended chime applies. A call that failed during
+    /// setup, or that ended with a busy / unreachable outcome (it has its own tone), does not get one.
+    private func callEndedCueApplies(outcome: CallerTerminalOutcome?) -> Bool {
+        guard outcome == nil else { return false }
+        switch callState {
+        // Calls that connected, and outgoing calls that rang. Declining an incoming call is not one of them.
+        case .active, .encrypted: return true
+        case .ringing: return originalCallRole == .caller
+        case .connecting: return originalCallRole == .caller && outgoingRingCurrentCue != nil
+        case .idle, .ended: return false
+        }
     }
 
     /// W-RINGBACKCONFIRMED (2026-09-02) — re-evaluate and (if changed)
@@ -20535,6 +20550,8 @@ extension AppState {
         // W-GHOSTCALL — before anything else: never turn a tap on a dead call's
         // ring into an in-call state (incident e3acecd7).
         if self.refuseStaleAnswer(uuid: uuid) { return false }
+        stopInAppRingtone()
+        // Every accept path stops the in-app ring and its haptics here.
         // Bug A — idempotent answer (CallKit/in-app/notification may all target
         // the same call). A repeat would re-enter activateIncomingCallAudio
         // mid-start → uncatchable NSException.
@@ -21516,6 +21533,7 @@ extension AppState {
     /// `.remoteEnded` (peer offline) instead of `.userEnded`, and the call record and the telemetry carry
     /// `busy` / `peer_offline` as the reason. The teardown itself is the one every other ending runs.
     func endCall(notifyPeerInBand: Bool = true, outcome: CallerTerminalOutcome? = nil) {
+        let playsEndedCue = callEndedCueApplies(outcome: outcome)
         // H-6: idempotency — a second endCall() while teardown is
         // already in flight (CallKit onEndCall racing a remote
         // call_hangup) must be a no-op, otherwise we double-hangup the
@@ -21535,6 +21553,9 @@ extension AppState {
         // ring screen must never outlive the call it was ringing for.
         incomingCallRingVisible = false
         guard let teardownToken = teardownLatch.begin() else { return }
+        if playsEndedCue { playCallCue(.callEnded) }
+        // The call's audio session is going away: no later cue (busy, ended) may use the player on it.
+        outgoingAudioSessionReady = false
         // Finalizations held for a rekey that was waiting for its ACCEPT run now: the call is over.
         for callId in Array(kcCalls.keys) {
             runInPersonFinalize(deferredInPersonFinalize.flush(callId: callId))

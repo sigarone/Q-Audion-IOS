@@ -375,8 +375,8 @@ final class CallerBusyWiringTests: XCTestCase {
             code.contains("@Published var incomingCallRingVisible: Bool = false { didSet { if incomingCallRingVisible { callerBusyTone.stop() } } }"),
             "an incoming 1:1 ring silences the tone")
         let ring = try slice(code, from: "func startInAppRingtone() {", to: "func stopInAppRingtone() {")
-        assertOrder(ring, "callerBusyTone.stop()", before: "guard ringtoneTimer == nil",
-                    "any ring (1:1 or group) silences it, whether or not a ring timer is already up")
+        assertOrder(ring, "callerBusyTone.stop()", before: "guard !inAppRing.isRunning",
+                    "any ring (1:1 or group) silences it, whether or not a ring is already up")
         XCTAssertTrue(
             code.contains("private func performAcceptIncoming(uuid: UUID) -> Bool { callerBusyTone.stop()"),
             "answering a 1:1 call, on any path, silences it")
