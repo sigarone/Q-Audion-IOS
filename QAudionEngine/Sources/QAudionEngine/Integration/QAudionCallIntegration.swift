@@ -941,11 +941,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         /// Whether THIS call's OFFER/ACCEPT Ed25519 transcript signature verified
         /// (`AssuranceState.decide`'s `sigOk` input).
         public let sigOk: Bool
-        /// The peer's advertised per-fingerprint PSK roles, PRE-FILTERED to
-        /// fingerprints this side also holds (`AssuranceState.decide`'s
-        /// `peerAdvertisedRoles` input — this function does the fp-matching so
-        /// `decide()` itself stays a pure function with no vault access).
-        public let peerAdvertisedRoles: [Int]
+        /// The identity key that signed this round's OFFER/ACCEPT: the bundle's own key, set
+        /// only when the verdict verified the signature under it (`sigOk`), `nil` otherwise.
+        /// `AssuranceState.resolveNfcConfirmed` binds the local in-person keys to this key.
+        public let signerIdentityKey: Data?
+        /// The static fingerprints of the LOCAL keys the peer's advertisement
+        /// matched (`PskAdvertResolver.Resolution.mutualStaticFps`). The app
+        /// resolves each to its vault entry, so `AssuranceState.resolveNfcConfirmed`
+        /// judges the key this side holds and never a role the peer declared.
+        public let mutualFingerprints: [String]
         /// W-NFCBADGE — the hex fingerprint of the ONE PSK actually selected
         /// for this call's session-key mix (`selectedFp`/`selectedFpStr` at
         /// the two call sites below), `nil` when `n == 0`. This is the SAME
@@ -963,7 +967,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         public init(
             peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
             kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
-            sigOk: Bool, peerAdvertisedRoles: [Int], selectedFp: String? = nil, round: UInt32 = 1
+            sigOk: Bool, signerIdentityKey: Data?, mutualFingerprints: [String],
+            selectedFp: String? = nil, round: UInt32 = 1
         ) {
             self.peerId = peerId
             self.callId = callId
@@ -974,7 +979,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             self.n = n
             self.peerSupportsMix = peerSupportsMix
             self.sigOk = sigOk
-            self.peerAdvertisedRoles = peerAdvertisedRoles
+            self.signerIdentityKey = signerIdentityKey
+            self.mutualFingerprints = mutualFingerprints
             self.selectedFp = selectedFp
             self.round = round
         }
@@ -1436,6 +1442,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             return PskAdvertising.Entry(
                 name: entry.name,
                 origin: pskVault.origin(name: entry.name),
+                keyClass: pskVault.getKeyClass(name: entry.name),
                 material: raw,
                 createdAt: entry.createdAt
             )
@@ -1449,7 +1456,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // `PskAdvertising.candidatesForAdvertisement` applies the SAME eligibility
         // filter and order as `fingerprintsForAdvertisement`, so a v3 tag list and a
         // static fingerprint list describe the same secrets in the same priority
-        // positions — which the responder is required to honour.
+        // positions — which the responder is required to honour. That priority puts
+        // hw_only keys first, then the KMS keys (newest delivery first), then every
+        // other key: the KMS key is the call key by default and an in-person key
+        // (NFC, QR + Bluetooth proximity) confirms it, as on Android.
         let advert = PskAdvertResolver.buildAdvertisement(
             dialect: Self.offerAdvertDialect,
             callId: callId,
@@ -1663,6 +1673,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             guard let raw = (try? pskVault.loadPsk(name: entry.name)) ?? nil, !raw.isEmpty else { return nil }
             return PskAdvertising.Entry(
                 name: entry.name, origin: pskVault.origin(name: entry.name),
+                keyClass: pskVault.getKeyClass(name: entry.name),
                 material: raw, createdAt: entry.createdAt)
         }
         let advert = PskAdvertResolver.buildAdvertisement(
@@ -2215,6 +2226,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 return PskAdvertising.Entry(
                     name: entry.name,
                     origin: acceptPskVault.origin(name: entry.name),
+                    keyClass: acceptPskVault.getKeyClass(name: entry.name),
                     material: raw,
                     createdAt: entry.createdAt
                 )
@@ -2595,16 +2607,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // advertised fingerprints with ours, which is only correct while the wire
                 // carries static fingerprints: under §3.3.1 those values are per-call HMAC
                 // tags, the intersection empties, and the "NFC in comune" chip goes dark on
-                // precisely the calls it describes — silently, call still connected. The
-                // roles here are the PEER's, recovered from which preimage reproduced its
-                // tag rather than read off an array v3 does not send.
-                let kcPeerAdvertisedRoles = Array(resolvedAdvert.mutualPeerRoles)
+                // precisely the calls it describes — silently, call still connected. What
+                // leaves here is the set of LOCAL fingerprints the peer's tags reproduced;
+                // the app judges those keys (origin, bound identity), not a role the peer
+                // declared.
+                let kcMutualFingerprints = Array(resolvedAdvert.mutualStaticFps)
                 rekeyRoundArmed = true
                 onKcMacReady?(KcMacReadyEvent(
                     peerId: callerId, callId: callId, isInitiator: false, sessionKey: combined,
                     kcKey: kcKeyForEvent, transcript: kcTranscriptForEvent, n: kcN,
                     peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
-                    peerAdvertisedRoles: kcPeerAdvertisedRoles, selectedFp: selectedFp,
+                    signerIdentityKey: offerSigOk ? v4PeerSik : nil,
+                    mutualFingerprints: kcMutualFingerprints, selectedFp: selectedFp,
                     round: innerAadEpoch
                 ))
 
@@ -3231,12 +3245,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if kcCallerResolved.dialect == .v3Blinded {
                 Self.pskDialectLatch.rememberSpokeBlindedAdvert(contactId: callerId)
             }
-            let kcCallerPeerAdvertisedRoles = Array(kcCallerResolved.mutualPeerRoles)
+            let kcCallerMutualFingerprints = Array(kcCallerResolved.mutualStaticFps)
             onKcMacReady?(KcMacReadyEvent(
                 peerId: callerId, callId: callId, isInitiator: true, sessionKey: combined,
                 kcKey: kcCallerKeyForEvent, transcript: kcCallerTranscriptForEvent, n: kcCallerN,
                 peerSupportsMix: kcCallerPeerSupportsMix, sigOk: acceptSigOk,
-                peerAdvertisedRoles: kcCallerPeerAdvertisedRoles,
+                signerIdentityKey: acceptSigOk ? v4InitPeerSik : nil,
+                mutualFingerprints: kcCallerMutualFingerprints,
                 // W-KCMACBLIND — static form, matching the responder leg (:1872)
                 // and what AppState.resolvePskDisplayMeta/resolveNfcMixInputs
                 // actually match against. The raw wire echo (`selectedFpStr`)

@@ -1,0 +1,90 @@
+{
+  "schema": "qaudion-assurance-state-kat:1",
+  "_meta": {
+    "purpose": "Cross-platform test vectors for AssuranceState.decide(...).",
+    "spec_source": "AssuranceState, the call assurance states S0 to S10.",
+    "order_note": "First-match-wins order: S0, S1, S2, S3, S4, S5, S6, S7, S8, S9, S10. S0 is evaluated before every other state.",
+    "assumption_peerAdvertisedRoles": "peerAdvertisedRoles is non-empty when this call confirms the in-person key: a mutually held key whose local origin is NFC or in-person pairing, bound to the identity key that signed this call's transcript. decide() does no fingerprint matching itself.",
+    "s2_unreachable_note": "S2 requires the in-person key to be the key mixed into this call (mixRoles contains 'NFC')."
+  },
+  "states_table": [
+    {
+      "comment": "S0: the peer does not support key confirmation; evaluated before every other state.",
+      "inputs": { "peerSupportsMix": false, "N": 0, "mixRoles": [], "peerAdvertisedRoles": [], "expectedNfc": true, "kcStatus": "ABSENT", "sigOk": true, "nfcBound": false, "witnessOk": false, "floorRecorded": true, "mediaDwellMs": 12000 },
+      "expectedState": "S0_PEER_LEGACY"
+    },
+    {
+      "comment": "S1: key confirmation failed: the received kc_mac does not match the local expectation.",
+      "inputs": { "peerSupportsMix": true, "N": 1, "mixRoles": [], "peerAdvertisedRoles": [0], "expectedNfc": false, "kcStatus": "WRONG", "sigOk": true, "nfcBound": false, "witnessOk": false, "floorRecorded": false, "mediaDwellMs": 3000 },
+      "expectedState": "S1_KC_FAILED"
+    },
+    {
+      "comment": "S3: in-person key mixed and kc_mac verified, but bound to a different identity key than the one on this call.",
+      "inputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC", "PSK"], "peerAdvertisedRoles": [1, 0], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": false, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 20000 },
+      "expectedState": "S3_NFC_IDENTITY_MISMATCH"
+    },
+    {
+      "comment": "S4: in-person key bound to this identity but restored from a backup without a secure-element witness on this device.",
+      "inputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": false, "floorRecorded": false, "mediaDwellMs": 15000 },
+      "expectedState": "S4_NFC_UNATTESTABLE"
+    },
+    {
+      "comment": "S5: in-person key mixed, kc_mac verified, bound and witnessed, but the transcript signature did not verify.",
+      "inputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": false, "nfcBound": true, "witnessOk": true, "floorRecorded": false, "mediaDwellMs": 15000 },
+      "expectedState": "S5_IDENTITY_UNVERIFIED"
+    },
+    {
+      "comment": "S6: in-person key mixed this call but kc_mac did not arrive before the deadline.",
+      "inputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "ABSENT", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 8000 },
+      "expectedState": "S6_NFC_PRESENT_UNCONFIRMED"
+    },
+    {
+      "comment": "S7: the contact has a presence floor, the in-person key was not mixed and is not confirmed on this call.",
+      "inputs": { "peerSupportsMix": true, "N": 1, "mixRoles": [], "peerAdvertisedRoles": [], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 25000 },
+      "expectedState": "S7_EXPECTED_NFC_STRIPPED"
+    },
+    {
+      "comment": "S8: pre-shared key call, kc_mac verified, no in-person key involved.",
+      "inputs": { "peerSupportsMix": true, "N": 1, "mixRoles": [], "peerAdvertisedRoles": [0], "expectedNfc": false, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": false, "witnessOk": false, "floorRecorded": false, "mediaDwellMs": 18000 },
+      "expectedState": "S8_PSK_CONFIRMED"
+    },
+    {
+      "comment": "S8: the in-person key is confirmed on this call without a presence floor, while another pre-shared key was mixed.",
+      "inputs": { "peerSupportsMix": true, "N": 1, "mixRoles": [], "peerAdvertisedRoles": [1], "expectedNfc": false, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": false, "witnessOk": false, "floorRecorded": false, "mediaDwellMs": 18000 },
+      "expectedState": "S8_PSK_CONFIRMED"
+    },
+    {
+      "comment": "S8: the contact has a presence floor and the in-person key is confirmed on this call, while a higher-priority pre-shared key was mixed.",
+      "inputs": { "peerSupportsMix": true, "N": 1, "mixRoles": [], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": false, "witnessOk": false, "floorRecorded": true, "mediaDwellMs": 18000 },
+      "expectedState": "S8_PSK_CONFIRMED"
+    },
+    {
+      "comment": "S9: pre-shared key call, kc_mac absent.",
+      "inputs": { "peerSupportsMix": true, "N": 1, "mixRoles": [], "peerAdvertisedRoles": [0], "expectedNfc": false, "kcStatus": "ABSENT", "sigOk": true, "nfcBound": false, "witnessOk": false, "floorRecorded": false, "mediaDwellMs": 4000 },
+      "expectedState": "S9_PSK_UNCONFIRMED"
+    },
+    {
+      "comment": "S10: no pre-shared key at all; fires on N == 0 regardless of the kc_mac outcome.",
+      "inputs": { "peerSupportsMix": true, "N": 0, "mixRoles": [], "peerAdvertisedRoles": [], "expectedNfc": false, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": false, "witnessOk": false, "floorRecorded": false, "mediaDwellMs": 30000 },
+      "expectedState": "S10_PQC_ONLY"
+    }
+  ],
+  "exhaustiveness": {
+    "s2_baseline": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 },
+    "s2_baseline_expected_state": "S2_NFC_AUTHENTICATED",
+    "single_flips": [
+      { "flip": { "peerSupportsMix": false }, "resultingInputs": { "peerSupportsMix": false, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S0_PEER_LEGACY" },
+      { "flip": { "kcStatus": "WRONG" }, "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "WRONG", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S1_KC_FAILED" },
+      { "flip": { "nfcBound": false }, "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": false, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S3_NFC_IDENTITY_MISMATCH" },
+      { "flip": { "witnessOk": false }, "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": false, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S4_NFC_UNATTESTABLE" },
+      { "flip": { "sigOk": false }, "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": false, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S5_IDENTITY_UNVERIFIED" },
+      { "flip": { "kcStatus": "ABSENT" }, "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": ["NFC"], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "ABSENT", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S6_NFC_PRESENT_UNCONFIRMED" },
+      { "flip": { "mixRoles": [] }, "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": [], "peerAdvertisedRoles": [1], "expectedNfc": true, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S8_PSK_CONFIRMED" }
+    ],
+    "compound_transitions_for_S8_S9_S10": [
+      { "flips": { "mixRoles": [], "expectedNfc": false, "peerAdvertisedRoles": [] }, "note": "3-field transition (mixRoles, expectedNfc, peerAdvertisedRoles all cleared): N=2>=1 and kcStatus stays VERIFIED -> S8_PSK_CONFIRMED.", "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": [], "peerAdvertisedRoles": [], "expectedNfc": false, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S8_PSK_CONFIRMED" },
+      { "flips": { "mixRoles": [], "expectedNfc": false, "peerAdvertisedRoles": [], "kcStatus": "ABSENT" }, "note": "4-field transition: same as the S8 compound plus kcStatus->ABSENT -> S9_PSK_UNCONFIRMED.", "resultingInputs": { "peerSupportsMix": true, "N": 2, "mixRoles": [], "peerAdvertisedRoles": [], "expectedNfc": false, "kcStatus": "ABSENT", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S9_PSK_UNCONFIRMED" },
+      { "flips": { "mixRoles": [], "expectedNfc": false, "peerAdvertisedRoles": [], "N": 0 }, "note": "4-field transition: same as the S8 compound plus N->0 -> S10_PQC_ONLY (fires regardless of kcStatus, since S8/S9 both require N>=1).", "resultingInputs": { "peerSupportsMix": true, "N": 0, "mixRoles": [], "peerAdvertisedRoles": [], "expectedNfc": false, "kcStatus": "VERIFIED", "sigOk": true, "nfcBound": true, "witnessOk": true, "floorRecorded": true, "mediaDwellMs": 15000 }, "expectedState": "S10_PQC_ONLY" }
+    ]
+  }
+}
