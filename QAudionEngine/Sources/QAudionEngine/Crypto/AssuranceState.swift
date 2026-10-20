@@ -31,7 +31,8 @@ import Foundation
 /// This is the iOS port of the Android reference
 /// `apps/qaudion-android-new/qaudion-engine/src/main/java/com/bcrypto/qaudion/crypto/AssuranceState.kt`
 /// and Desktop's `src/main/calling/AssuranceState.ts` — all three MUST agree on the
-/// shared cross-platform KAT vectors (`AssuranceStatePolicyTests.swift`).
+/// shared cross-platform KAT vectors (`tools/kat/assurance-state/assurance-state-kat.json`,
+/// run by `AssuranceStateKatTests.swift`; the policy cases in `AssuranceStatePolicyTests.swift`).
 public enum AssuranceState: Equatable {
 
     /// S0 — the peer's app doesn't advertise `pskMixV1` at all. Evaluated BEFORE every
@@ -67,6 +68,12 @@ public enum AssuranceState: Equatable {
     /// exposed as its own independent, always-on "NFC in comune" signal (see
     /// `mutualPeerAdvertisedRoles`), additive to whichever of `S2`/`S8`/`S9`/`S10`
     /// actually fires — never folded into this single-select verdict.
+    ///
+    /// The KMS key is the call key by default, so a contact with a recorded floor is
+    /// normally called with a secret other than its in-person key. Fires only when
+    /// the in-person key is also NOT confirmed (`nfcConfirmed`): a key that is still
+    /// there, bound to this peer and proven by the handshake, is not stripped, merely
+    /// not the one in use.
     case expectedNfcStripped
     /// S8 — ordinary `N>=1` pre-shared-key call, no NFC involved, `kc_mac` verified.
     case pskConfirmed
@@ -121,14 +128,14 @@ public enum AssuranceState: Equatable {
     ///   - n: number of secrets actually mixed into `K_mix` this call (`0`, `1`, or,
     ///     from step 7 on, up to `4`).
     ///   - mixRoles: which secret kinds `n` is made of (empty when `n==0`).
-    ///   - peerAdvertisedRoles: the peer's advertised per-fingerprint PSK roles for
-    ///     fingerprints THIS side also holds (caller pre-filters to mutually-held
-    ///     fingerprints before calling `decide` — this function does no fp-matching
-    ///     itself). NOT consulted by `decide()` as of W-NFCCOMMON (kept for cross-
-    ///     platform signature parity) — `1` denotes an NFC-tier fingerprint in the
-    ///     peer's advert, and the caller uses `peerAdvertisedRoles.contains(1)` as its
-    ///     OWN independent "NFC in comune" UI signal instead, rendered alongside
-    ///     whatever this function returns.
+    ///   - nfcConfirmed: this call proved an in-person key (NFC tap, QR + Bluetooth
+    ///     proximity) shared with THIS peer: the transcript signature verified and the
+    ///     peer's advertisement matched a LOCAL key of that origin bound to the verified
+    ///     peer identity (`resolveNfcConfirmed`; `decide()` does no matching itself).
+    ///     Independent of which secret was mixed — with the KMS key as the call key it is
+    ///     the confirmation. The caller also renders it as its OWN independent "NFC in
+    ///     comune" UI signal alongside whatever this function returns. Never derived
+    ///     from a role the peer declared.
     ///   - expectedNfc: this contact previously reached `S2` (the persisted
     ///     `presenceFloor`), so an NFC secret is expected on every subsequent call.
     ///   - kcStatus: this call's key-confirmation outcome (`KeyConfirmation.Status`).
@@ -150,7 +157,7 @@ public enum AssuranceState: Equatable {
         peerSupportsMix: Bool,
         n: Int,
         mixRoles: [MixSecretRole],
-        peerAdvertisedRoles: [Int],
+        nfcConfirmed: Bool,
         expectedNfc: Bool,
         kcStatus: KeyConfirmation.Status,
         sigOk: Bool,
@@ -188,9 +195,10 @@ public enum AssuranceState: Equatable {
             return .nfcPresentUnconfirmed // S6
         }
 
-        // W-NFCCOMMON: deliberately `expectedNfc` alone now — see `.expectedNfcStripped`'s
-        // doc for why a mere mutual-advert-without-floor must not hijack this branch.
-        if expectedNfc && !nfcMixed {
+        // W-NFCCOMMON: a mere mutual-advert-without-floor must not hijack this branch —
+        // see `.expectedNfcStripped`'s doc. W-NFCPRIORITY: neither may a floor whose
+        // in-person key is still confirmed on this call, merely outranked by the KMS key.
+        if expectedNfc && !nfcMixed && !nfcConfirmed {
             return .expectedNfcStripped // S7
         }
 
@@ -305,6 +313,49 @@ public enum AssuranceState: Equatable {
             }
         }
         return ([.nfc], nfcBound, witnessOk)
+    }
+
+    /// A local vault key the peer's advertisement matched, reduced to what
+    /// `resolveNfcConfirmed` judges: where the key came from and the peer identity
+    /// it was bound to when it was created.
+    public struct MutualLocalKey: Equatable {
+        public let origin: PskOrigin
+        /// `SovereignKeyVault.nfcPeerIdentityKey(name:)` — `nil` when the entry never
+        /// recorded one (every non-presence entry, and any older presence entry).
+        public let boundPeerIdentityKey: Data?
+
+        public init(origin: PskOrigin, boundPeerIdentityKey: Data?) {
+            self.origin = origin
+            self.boundPeerIdentityKey = boundPeerIdentityKey
+        }
+    }
+
+    /// `decide()`'s `nfcConfirmed` input: the in-person key (NFC tap, QR + Bluetooth
+    /// proximity) is a CONFIRMATION of the call, whichever key is mixed into it.
+    ///
+    /// True iff the transcript signature verified AND some key the peer's advertisement
+    /// matched is a LOCAL key whose own origin is a presence origin AND whose captured
+    /// peer identity equals this call's verified peer identity. The peer's matching
+    /// tag is a fresh proof that it holds that very key; the origin and the identity
+    /// are read from this device's vault, never from the role the peer declared.
+    ///
+    /// - Parameters:
+    ///   - sigOk: the OFFER/ACCEPT Ed25519 transcript signature verified.
+    ///   - mutualLocalKeys: the local vault entries behind `PskAdvertResolver`'s
+    ///     mutual set (static fingerprints of the keys the peer's tags reproduced).
+    ///   - verifiedPeerIdentityKey: the identity key that signed this round's
+    ///     OFFER/ACCEPT transcript (nil when the signature did not verify).
+    public static func resolveNfcConfirmed(
+        sigOk: Bool,
+        mutualLocalKeys: [MutualLocalKey],
+        verifiedPeerIdentityKey: Data?
+    ) -> Bool {
+        guard sigOk, let verified = verifiedPeerIdentityKey else { return false }
+        return mutualLocalKeys.contains { key in
+            guard PskAdvertV3.isPresenceRole(PskAdvertV3.role(for: key.origin)),
+                  let bound = key.boundPeerIdentityKey, bound.count == 32 else { return false }
+            return bound == verified
+        }
     }
 
     // MARK: - W-ASSURANCE/W-FLOOR (ship steps 6/8) — persistence-write POLICY

@@ -17,12 +17,20 @@ public enum PskAdvertising {
     public struct Entry {
         public let name: String
         public let origin: PskOrigin
+        /// The vault's recorded class (`SovereignKeyVault.getKeyClass(name:)`); the
+        /// advert order ranks `.hwOnly` entries first. `.shared` is what an entry
+        /// with no recorded class already means.
+        public let keyClass: SovereignKeyVault.KeyClass
         public let material: Data
         public let createdAt: Date?
 
-        public init(name: String, origin: PskOrigin, material: Data, createdAt: Date?) {
+        public init(
+            name: String, origin: PskOrigin, keyClass: SovereignKeyVault.KeyClass = .shared,
+            material: Data, createdAt: Date?
+        ) {
             self.name = name
             self.origin = origin
+            self.keyClass = keyClass
             self.material = material
             self.createdAt = createdAt
         }
@@ -57,9 +65,11 @@ public enum PskAdvertising {
     /// meant to evolve forward for the group-control ratchet, not be mixed
     /// as a static 1:1-call audio PSK — a rotation or compromise on either
     /// side would otherwise unintentionally couple into the other. Then order
-    /// the rest deterministically (oldest-registered first, tie-broken by name
-    /// so the result never depends on Keychain's unspecified enumeration
-    /// order), then map each surviving entry to its canonical fingerprint.
+    /// the rest deterministically (`isOrderedBefore`: hw_only keys, then KMS
+    /// keys newest delivery first, then every other key oldest-registered
+    /// first, tie-broken by name so the result never depends on Keychain's
+    /// unspecified enumeration order), then map each surviving entry to its
+    /// canonical fingerprint.
     ///
     /// Pure — no Keychain access — so it is unit-testable with plain
     /// `Entry` fixtures.
@@ -83,8 +93,9 @@ public enum PskAdvertising {
     /// order: `1` marks an NFC-origin fingerprint in this advert, else `0`.
     /// Lets a peer that ALSO holds this same fingerprint recognise "we share
     /// an NFC secret" independent of whether THIS call's session key ends up
-    /// mixing a different (e.g. KMS) secret due to vault selection priority
-    /// (`AssuranceState` S7's `peerAdvertisedRoles.contains(1)`). Mirrors
+    /// mixing a different (e.g. KMS) secret due to vault selection priority.
+    /// The verdict never trusts this declared role: `AssuranceState.resolveNfcConfirmed`
+    /// judges the LOCAL key's origin and bound identity. Mirrors
     /// Android's `PqcHandshake.kt` OFFER/ACCEPT role computation and Desktop's
     /// `AndroidBundleHandshake.ts` equivalent, shipped in the same commit series.
     public static func rolesForAdvertisement(_ entries: [Entry]) -> [Int] {
@@ -142,14 +153,32 @@ public enum PskAdvertising {
         origin != .callDerived && origin != .deviceInternal && origin != .identityKey
     }
 
-    /// Stable-order comparator: earliest `createdAt` first; entries with no
-    /// recorded creation date sort after those that have one; a tie (or two
-    /// entries both missing a date) breaks by `name`. So two calls over the
-    /// same vault state — even across separate app launches — always
-    /// produce the identical order, unlike raw Keychain enumeration order.
+    /// Advert priority of an entry, highest first: `0` hw_only, `1` KMS, `2`
+    /// everything else. The KMS key is the call key by default, whoever calls;
+    /// an in-person key (NFC, QR + Bluetooth proximity) confirms it instead of
+    /// taking its place. This is the order Android's vault keeps by promoting
+    /// a freshly delivered KMS or hw_only key to the top.
+    private static func tier(_ entry: Entry) -> Int {
+        if entry.keyClass == .hwOnly { return 0 }
+        if entry.origin == .kms { return 1 }
+        return 2
+    }
+
+    /// Stable-order comparator: lower `tier` first. Within the hw_only and KMS
+    /// tiers the newest `createdAt` (the delivery) goes first, so a freshly
+    /// delivered key outranks an older one; within the last tier the earliest
+    /// `createdAt` goes first. Entries with no recorded creation date sort
+    /// after those that have one; a tie (or two entries both missing a date)
+    /// breaks by `name`. So two calls over the same vault state — even across
+    /// separate app launches — always produce the identical order, unlike raw
+    /// Keychain enumeration order.
     static func isOrderedBefore(_ lhs: Entry, _ rhs: Entry) -> Bool {
+        let lhsTier = tier(lhs)
+        let rhsTier = tier(rhs)
+        if lhsTier != rhsTier { return lhsTier < rhsTier }
+        let newestFirst = lhsTier < 2
         switch (lhs.createdAt, rhs.createdAt) {
-        case let (l?, r?) where l != r: return l < r
+        case let (l?, r?) where l != r: return newestFirst ? l > r : l < r
         case (nil, .some): return false
         case (.some, nil): return true
         default: return lhs.name < rhs.name

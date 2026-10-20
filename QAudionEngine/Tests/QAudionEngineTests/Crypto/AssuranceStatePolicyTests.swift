@@ -14,10 +14,11 @@ import XCTest
 /// `AppState.emitKeyConfirmationTelemetry`) — so `S2`(-`S6`) are reachable from a real
 /// call today, not just via this suite's synthetic `decide()` inputs.
 ///
-/// `peerAdvertisedRoles`' `S7` semantics ("peer advertised role 1 for a fp I hold") is
-/// modelled as `1 in peerAdvertisedRoles` — `decide()` does no fp-matching itself; the
-/// caller is assumed to have already filtered the list down to roles for MUTUALLY HELD
-/// fingerprints before calling `decide()`.
+/// `nfcConfirmed` is the Boolean form of the shared KAT's mutual-presence input
+/// (`peerAdvertisedRoles` containing a presence role, 1 or 3): `decide()` does no
+/// matching itself, the caller resolves it with `AssuranceState.resolveNfcConfirmed`.
+/// The vectors of `tools/kat/assurance-state/assurance-state-kat.json` are run by
+/// `AssuranceStateKatTests`.
 final class AssuranceStatePolicyTests: XCTestCase {
 
     // MARK: - S0..S10 states table (one example input tuple per state)
@@ -27,7 +28,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
         // even though this contact was previously verified via NFC (expectedNfc/
         // floorRecorded true) -- a legacy peer must never be accused of stripping.
         let result = AssuranceState.decide(
-            peerSupportsMix: false, n: 0, mixRoles: [], peerAdvertisedRoles: [],
+            peerSupportsMix: false, n: 0, mixRoles: [], nfcConfirmed: false,
             expectedNfc: true, kcStatus: .absent, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: true, mediaDwellMs: 12000
         )
@@ -36,7 +37,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testS1KcFailed_activeAttackSignature() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: [], peerAdvertisedRoles: [0],
+            peerSupportsMix: true, n: 1, mixRoles: [], nfcConfirmed: false,
             expectedNfc: false, kcStatus: .wrong, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: false, mediaDwellMs: 3000
         )
@@ -45,7 +46,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testS3NfcIdentityMismatch() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 2, mixRoles: [.nfc, .psk], peerAdvertisedRoles: [1, 0],
+            peerSupportsMix: true, n: 2, mixRoles: [.nfc, .psk], nfcConfirmed: true,
             expectedNfc: true, kcStatus: .verified, sigOk: true, nfcBound: false,
             witnessOk: true, floorRecorded: true, mediaDwellMs: 20000
         )
@@ -54,7 +55,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testS4NfcUnattestable() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 2, mixRoles: [.nfc], peerAdvertisedRoles: [1],
+            peerSupportsMix: true, n: 2, mixRoles: [.nfc], nfcConfirmed: true,
             expectedNfc: true, kcStatus: .verified, sigOk: true, nfcBound: true,
             witnessOk: false, floorRecorded: false, mediaDwellMs: 15000
         )
@@ -63,7 +64,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testS5IdentityUnverified_callContinuesWNoBrick() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 2, mixRoles: [.nfc], peerAdvertisedRoles: [1],
+            peerSupportsMix: true, n: 2, mixRoles: [.nfc], nfcConfirmed: true,
             expectedNfc: true, kcStatus: .verified, sigOk: false, nfcBound: true,
             witnessOk: true, floorRecorded: false, mediaDwellMs: 15000
         )
@@ -72,7 +73,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testS6NfcPresentUnconfirmed() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 2, mixRoles: [.nfc], peerAdvertisedRoles: [1],
+            peerSupportsMix: true, n: 2, mixRoles: [.nfc], nfcConfirmed: true,
             expectedNfc: true, kcStatus: .absent, sigOk: true, nfcBound: true,
             witnessOk: true, floorRecorded: true, mediaDwellMs: 8000
         )
@@ -81,16 +82,27 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testS7ExpectedNfcStripped_floorButFellBackToPlainPsk() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: [], peerAdvertisedRoles: [1],
+            peerSupportsMix: true, n: 1, mixRoles: [], nfcConfirmed: false,
             expectedNfc: true, kcStatus: .verified, sigOk: true, nfcBound: true,
             witnessOk: true, floorRecorded: true, mediaDwellMs: 25000
         )
         XCTAssertEqual(result, .expectedNfcStripped)
     }
 
+    /// The floor is recorded and the in-person key is still confirmed on this call; the
+    /// KMS key is simply the one mixed. Not stripped: the call is an ordinary S8.
+    func testS8_floorAndConfirmedNfcButKmsMixed_isNotStripped() {
+        let result = AssuranceState.decide(
+            peerSupportsMix: true, n: 1, mixRoles: [.psk], nfcConfirmed: true,
+            expectedNfc: true, kcStatus: .verified, sigOk: true, nfcBound: false,
+            witnessOk: false, floorRecorded: true, mediaDwellMs: 25000
+        )
+        XCTAssertEqual(result, .pskConfirmed)
+    }
+
     func testS8PskConfirmed_neverSaysAuthenticated() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: [], peerAdvertisedRoles: [0],
+            peerSupportsMix: true, n: 1, mixRoles: [], nfcConfirmed: false,
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: false, mediaDwellMs: 18000
         )
@@ -99,7 +111,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
 
     func testS9PskUnconfirmed() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: [], peerAdvertisedRoles: [0],
+            peerSupportsMix: true, n: 1, mixRoles: [], nfcConfirmed: false,
             expectedNfc: false, kcStatus: .absent, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: false, mediaDwellMs: 4000
         )
@@ -110,7 +122,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
         // kcStatus VERIFIED here on purpose: S10 fires purely off n==0, since S8/S9
         // both require n>=1 and so never compete for n==0 inputs.
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 0, mixRoles: [], peerAdvertisedRoles: [],
+            peerSupportsMix: true, n: 0, mixRoles: [], nfcConfirmed: false,
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: false, mediaDwellMs: 30000
         )
@@ -124,7 +136,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     /// REAL `n: 1` pipeline `AppState.emitKeyConfirmationTelemetry` actually runs).
     func testS2ReachableGivenSyntheticInputsPureFunctionOnly() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 2, mixRoles: [.nfc], peerAdvertisedRoles: [1],
+            peerSupportsMix: true, n: 2, mixRoles: [.nfc], nfcConfirmed: true,
             expectedNfc: true, kcStatus: .verified, sigOk: true, nfcBound: true,
             witnessOk: true, floorRecorded: true, mediaDwellMs: 15000
         )
@@ -137,7 +149,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
         peerSupportsMix: Bool = true,
         n: Int = 2,
         mixRoles: [AssuranceState.MixSecretRole] = [.nfc],
-        peerAdvertisedRoles: [Int] = [1],
+        nfcConfirmed: Bool = true,
         expectedNfc: Bool = true,
         kcStatus: KeyConfirmation.Status = .verified,
         sigOk: Bool = true,
@@ -148,7 +160,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
     ) -> AssuranceState {
         AssuranceState.decide(
             peerSupportsMix: peerSupportsMix, n: n, mixRoles: mixRoles,
-            peerAdvertisedRoles: peerAdvertisedRoles, expectedNfc: expectedNfc,
+            nfcConfirmed: nfcConfirmed, expectedNfc: expectedNfc,
             kcStatus: kcStatus, sigOk: sigOk, nfcBound: nfcBound, witnessOk: witnessOk,
             floorRecorded: floorRecorded, mediaDwellMs: mediaDwellMs
         )
@@ -182,8 +194,14 @@ final class AssuranceStatePolicyTests: XCTestCase {
         XCTAssertEqual(s2Baseline(kcStatus: .absent), .nfcPresentUnconfirmed)
     }
 
-    func testExhaustiveness_flipMixRolesEmpty_yieldsS7() {
-        XCTAssertEqual(s2Baseline(mixRoles: []), .expectedNfcStripped)
+    func testExhaustiveness_flipMixRolesEmpty_yieldsS8() {
+        // The baseline's nfcConfirmed stays true: the in-person key is still there, merely
+        // not the key mixed, so the floor is not stripped.
+        XCTAssertEqual(s2Baseline(mixRoles: []), .pskConfirmed)
+    }
+
+    func testExhaustiveness_flipMixRolesEmptyAndNfcUnconfirmed_yieldsS7() {
+        XCTAssertEqual(s2Baseline(mixRoles: [], nfcConfirmed: false), .expectedNfcStripped)
     }
 
     // These three necessarily flip more than one field: S8/S9/S10 all require BOTH
@@ -191,17 +209,17 @@ final class AssuranceStatePolicyTests: XCTestCase {
     // a 3-/4-field transition away from the S2 baseline — not a single flip. Documented
     // honestly as compounds rather than mis-labelled as single flips.
     func testExhaustiveness_compound_yieldsS8() {
-        let result = s2Baseline(mixRoles: [], peerAdvertisedRoles: [], expectedNfc: false)
+        let result = s2Baseline(mixRoles: [], nfcConfirmed: false, expectedNfc: false)
         XCTAssertEqual(result, .pskConfirmed)
     }
 
     func testExhaustiveness_compound_yieldsS9() {
-        let result = s2Baseline(mixRoles: [], peerAdvertisedRoles: [], expectedNfc: false, kcStatus: .absent)
+        let result = s2Baseline(mixRoles: [], nfcConfirmed: false, expectedNfc: false, kcStatus: .absent)
         XCTAssertEqual(result, .pskUnconfirmed)
     }
 
     func testExhaustiveness_compound_yieldsS10() {
-        let result = s2Baseline(n: 0, mixRoles: [], peerAdvertisedRoles: [], expectedNfc: false)
+        let result = s2Baseline(n: 0, mixRoles: [], nfcConfirmed: false, expectedNfc: false)
         XCTAssertEqual(result, .pqcOnly)
     }
 
@@ -216,14 +234,13 @@ final class AssuranceStatePolicyTests: XCTestCase {
     func testExhaustivenessCrossProduct_neverFallsThrough() {
         let allN = [0, 1, 2]
         let allMixRoles: [[AssuranceState.MixSecretRole]] = [[], [.nfc], [.psk], [.nfc, .psk]]
-        let allPeerAdvertisedRoles: [[Int]] = [[], [0], [1]]
         let allKcStatus: [KeyConfirmation.Status] = [.verified, .absent, .wrong]
         var evaluated = 0
 
         for peerSupportsMix in [true, false] {
             for n in allN {
                 for mixRoles in allMixRoles {
-                    for peerAdvertisedRoles in allPeerAdvertisedRoles {
+                    for nfcConfirmed in [true, false] {
                         for expectedNfc in [true, false] {
                             for kcStatus in allKcStatus {
                                 for sigOk in [true, false] {
@@ -232,7 +249,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
                                             let result = AssuranceState.decide(
                                                 peerSupportsMix: peerSupportsMix, n: n,
                                                 mixRoles: mixRoles,
-                                                peerAdvertisedRoles: peerAdvertisedRoles,
+                                                nfcConfirmed: nfcConfirmed,
                                                 expectedNfc: expectedNfc, kcStatus: kcStatus,
                                                 sigOk: sigOk, nfcBound: nfcBound,
                                                 witnessOk: witnessOk, floorRecorded: false,
@@ -255,7 +272,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
             }
         }
 
-        XCTAssertEqual(evaluated, 2 * 3 * 4 * 3 * 2 * 3 * 2 * 2 * 2)
+        XCTAssertEqual(evaluated, 2 * 3 * 4 * 2 * 2 * 3 * 2 * 2 * 2)
     }
 
     // MARK: - R6: iOS platform constraint (see AssuranceState.iosOriginatesS2Witness doc)
@@ -286,37 +303,30 @@ final class AssuranceStatePolicyTests: XCTestCase {
     // `PskAdvertResolverTests` in both dialects, which is strictly more than these
     // five static-only cases proved.
 
-    // MARK: - Integration shape: the mutual-role signal feeding decide() end-to-end
+    // MARK: - Integration shape: the confirmation feeding decide() end-to-end
 
     /// W-NFCCOMMON (2026-07-24, Pavel correction) — RENAMED from
-    /// `testMutualRoleOneFeedsS7WhenNfcNotMixed`, expectation FLIPPED. A mutual NFC-tier
-    /// advert alone (no persisted `expectedNfc` floor) is the routine "vault priority picked
-    /// a different secret (e.g. KMS) over an available NFC one" outcome — NOT a downgrade.
-    /// `decide()` must resolve normally to S8 here; the mutual fact is surfaced by the caller
-    /// as its OWN independent "NFC in comune" UI signal (still exactly `filtered.contains(1)`),
-    /// never by hijacking this single-select verdict into S7 (which would wrongly persist a
-    /// suspended-badge security event for an everyday priority choice).
-    func testMutualRoleAloneWithoutFloorDoesNotStripS7_surfacesAsIndependentSignalInstead() {
-        // W-PSKBLIND — the mutual set now arrives from `PskAdvertResolver`, which is
-        // tested against both dialects on its own. What THIS test pins is the
-        // downstream contract: `decide()` must ignore it, and the caller surfaces it as
-        // an independent signal. That contract is dialect-agnostic, so the input is a
-        // literal here rather than a re-derivation.
-        let filtered = [1]
+    /// `testMutualRoleOneFeedsS7WhenNfcNotMixed`, expectation FLIPPED. A confirmed in-person
+    /// key alone (no persisted `expectedNfc` floor) is the routine "the KMS key is the call
+    /// key, the in-person key confirms it" outcome — NOT a downgrade. `decide()` must resolve
+    /// normally to S8 here; the confirmation is surfaced by the caller as its OWN independent
+    /// "NFC in comune" UI signal (the same `nfcConfirmed` value), never by hijacking this
+    /// single-select verdict into S7 (which would wrongly persist a suspended-badge security
+    /// event for an everyday priority choice).
+    func testConfirmedNfcAloneWithoutFloorDoesNotStripS7_surfacesAsIndependentSignalInstead() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: [.psk], peerAdvertisedRoles: filtered,
+            peerSupportsMix: true, n: 1, mixRoles: [.psk], nfcConfirmed: true,
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: false, mediaDwellMs: 0
         )
-        XCTAssertEqual(result, .pskConfirmed, "mutual NFC advert alone (no floor) must NOT strip to S7 — decide() ignores peerAdvertisedRoles now")
-        XCTAssertTrue(filtered.contains(1), "the independent 'NFC in comune' signal is still true from this same filtered result")
+        XCTAssertEqual(result, .pskConfirmed, "a confirmed NFC key alone (no floor) must NOT strip to S7")
     }
 
     /// The genuine S7 case is unchanged: a persisted per-contact floor (`expectedNfc`) that
     /// this call fails to re-confirm still strips, regardless of what the peer advertises.
     func testExpectedNfcAloneStillFeedsS7WhenNfcNotMixed() {
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: [.psk], peerAdvertisedRoles: [],
+            peerSupportsMix: true, n: 1, mixRoles: [.psk], nfcConfirmed: false,
             expectedNfc: true, kcStatus: .verified, sigOk: true, nfcBound: false,
             witnessOk: false, floorRecorded: true, mediaDwellMs: 0
         )
@@ -440,6 +450,99 @@ final class AssuranceStatePolicyTests: XCTestCase {
         XCTAssertEqual(result.mixRoles, [.psk])
     }
 
+    // MARK: - resolveNfcConfirmed (the in-person key as a confirmation of the call,
+    // judged from the LOCAL key's origin and bound identity, never a declared role)
+
+    private let identity = Data(repeating: 0xAB, count: 32)
+
+    func testResolveNfcConfirmed_localNfcKeyBoundToTheSameIdentity_isConfirmed() {
+        let result = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .nfc, boundPeerIdentityKey: identity)],
+            verifiedPeerIdentityKey: identity
+        )
+        XCTAssertTrue(result)
+    }
+
+    func testResolveNfcConfirmed_localProximityKeyBoundToTheSameIdentity_isConfirmed() {
+        let result = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .proximity, boundPeerIdentityKey: identity)],
+            verifiedPeerIdentityKey: identity
+        )
+        XCTAssertTrue(result)
+    }
+
+    /// The role byte of the advertisement is not an input: what counts is the key this device
+    /// holds, and a KMS key on this device confirms nothing whatever role the advert carried.
+    func testResolveNfcConfirmed_aLocalKmsKeyIsNotConfirmed_whateverRoleTheAdvertCarried() {
+        let result = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .kms, boundPeerIdentityKey: nil)],
+            verifiedPeerIdentityKey: identity
+        )
+        XCTAssertFalse(result)
+        // an ordinary key does not become an in-person key by carrying an identity either
+        let manual = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .manual, boundPeerIdentityKey: identity)],
+            verifiedPeerIdentityKey: identity
+        )
+        XCTAssertFalse(manual)
+    }
+
+    func testResolveNfcConfirmed_nfcKeyBoundToADifferentIdentity_isNotConfirmed() {
+        let result = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .nfc, boundPeerIdentityKey: Data(repeating: 0xCD, count: 32))],
+            verifiedPeerIdentityKey: identity
+        )
+        XCTAssertFalse(result)
+    }
+
+    func testResolveNfcConfirmed_signatureNotOk_isNotConfirmed() {
+        let result = AssuranceState.resolveNfcConfirmed(
+            sigOk: false,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .nfc, boundPeerIdentityKey: identity)],
+            verifiedPeerIdentityKey: identity
+        )
+        XCTAssertFalse(result)
+    }
+
+    func testResolveNfcConfirmed_withoutARecordedOrVerifiedIdentity_isNotConfirmed() {
+        let unbound = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .nfc, boundPeerIdentityKey: nil)],
+            verifiedPeerIdentityKey: identity
+        )
+        XCTAssertFalse(unbound, "an in-person key that never recorded an identity cannot be bound to this peer")
+        let shortIdentity = Data(repeating: 0xAB, count: 16)
+        let malformed = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .nfc, boundPeerIdentityKey: shortIdentity)],
+            verifiedPeerIdentityKey: shortIdentity
+        )
+        XCTAssertFalse(malformed)
+        let unverified = AssuranceState.resolveNfcConfirmed(
+            sigOk: true,
+            mutualLocalKeys: [AssuranceState.MutualLocalKey(origin: .nfc, boundPeerIdentityKey: identity)],
+            verifiedPeerIdentityKey: nil
+        )
+        XCTAssertFalse(unverified, "nothing to bind the key to yet")
+    }
+
+    func testResolveNfcConfirmed_oneMatchingKeyAmongOthers_isConfirmed() {
+        let keys = [
+            AssuranceState.MutualLocalKey(origin: .kms, boundPeerIdentityKey: nil),
+            AssuranceState.MutualLocalKey(origin: .nfc, boundPeerIdentityKey: Data(repeating: 0xCD, count: 32)),
+            AssuranceState.MutualLocalKey(origin: .proximity, boundPeerIdentityKey: identity)
+        ]
+        XCTAssertTrue(AssuranceState.resolveNfcConfirmed(
+            sigOk: true, mutualLocalKeys: keys, verifiedPeerIdentityKey: identity))
+        XCTAssertFalse(AssuranceState.resolveNfcConfirmed(
+            sigOk: true, mutualLocalKeys: [], verifiedPeerIdentityKey: identity), "no mutual key, nothing confirmed")
+    }
+
     // MARK: - End-to-end: resolveNfcMixInputs -> decide(), the ACTUAL pipeline
     // AppState.emitKeyConfirmationTelemetry runs at its call site
 
@@ -450,7 +553,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
             verifiedPeerIdentityKey: identity, priorPresenceAuth: nil
         )
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: mixRoles, peerAdvertisedRoles: [],
+            peerSupportsMix: true, n: 1, mixRoles: mixRoles, nfcConfirmed: false,
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: nfcBound,
             witnessOk: witnessOk, floorRecorded: false, mediaDwellMs: 15_000
         )
@@ -470,7 +573,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
             verifiedPeerIdentityKey: Data(repeating: 0x22, count: 32), priorPresenceAuth: nil
         )
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: mixRoles, peerAdvertisedRoles: [],
+            peerSupportsMix: true, n: 1, mixRoles: mixRoles, nfcConfirmed: false,
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: nfcBound,
             witnessOk: witnessOk, floorRecorded: false, mediaDwellMs: 0
         )
@@ -485,7 +588,7 @@ final class AssuranceStatePolicyTests: XCTestCase {
             verifiedPeerIdentityKey: verifiedNow, priorPresenceAuth: nil
         )
         let result = AssuranceState.decide(
-            peerSupportsMix: true, n: 1, mixRoles: mixRoles, peerAdvertisedRoles: [],
+            peerSupportsMix: true, n: 1, mixRoles: mixRoles, nfcConfirmed: false,
             expectedNfc: false, kcStatus: .verified, sigOk: true, nfcBound: nfcBound,
             witnessOk: witnessOk, floorRecorded: false, mediaDwellMs: 0
         )

@@ -1319,8 +1319,10 @@ final class AppState: ObservableObject {
     /// W-NFCCOMMON (2026-07-24, Pavel correction) — "this device and the peer
     /// BOTH hold a matching NFC-tap secret", independent of whether THIS
     /// call's session key actually mixes it (`callAssuranceState` above can
-    /// legitimately be S8/S9/S10 with this still `true` — vault priority
-    /// picked a different secret, e.g. KMS). Drives the trust bar's OWN
+    /// legitimately be S8/S9/S10 with this still `true` — the KMS key is the
+    /// call key by default). It is `AssuranceState.resolveNfcConfirmed`: the key
+    /// is a LOCAL NFC or proximity key bound to the verified peer identity.
+    /// Drives the trust bar's OWN
     /// always-on "NFC ✓" chip, additive to (never gated by) whichever
     /// `AssuranceStateUI.Presentation` `callAssuranceState` renders as.
     @Published var callMutualNfcInCommon: Bool = false
@@ -2254,7 +2256,13 @@ final class AppState: ObservableObject {
         let n: Int
         let peerSupportsMix: Bool
         let sigOk: Bool
-        let peerAdvertisedRoles: [Int]
+        /// The identity key that signed this round (`KcMacReadyEvent.signerIdentityKey`),
+        /// `nil` unless the signature verified.
+        let signerIdentityKey: Data?
+        /// Static fingerprints of the local keys the peer's advert matched
+        /// (`KcMacReadyEvent.mutualFingerprints`); `emitKeyConfirmationTelemetry`
+        /// resolves them to vault entries for `AssuranceState.resolveNfcConfirmed`.
+        let mutualFingerprints: [String]
         /// W-NFCBADGE — the hex fingerprint of the ONE PSK selected for this
         /// call (`KcMacReadyEvent.selectedFp`), `nil` when `n == 0`. Used by
         /// `emitKeyConfirmationTelemetry` to look up the vault entry's
@@ -2303,7 +2311,8 @@ final class AppState: ObservableObject {
             n = event.n
             peerSupportsMix = event.peerSupportsMix
             sigOk = event.sigOk
-            peerAdvertisedRoles = event.peerAdvertisedRoles
+            signerIdentityKey = event.signerIdentityKey
+            mutualFingerprints = event.mutualFingerprints
             selectedFp = event.selectedFp
         }
     }
@@ -14388,6 +14397,25 @@ final class AppState: ObservableObject {
         return vault.nfcPeerIdentityKey(name: name)
     }
 
+    /// The vault entries behind a call's mutual advert fingerprints, reduced to what
+    /// `AssuranceState.resolveNfcConfirmed` judges: each key's OWN origin and the peer
+    /// identity captured when it was created. One scan of the vault, matching the
+    /// same way as `resolveNfcPeerIdentityKey` (fingerprint recomputed from the raw
+    /// material, never the cached label).
+    static func resolveMutualLocalKeys(fingerprints: [String]) -> [AssuranceState.MutualLocalKey] {
+        guard !fingerprints.isEmpty else { return [] }
+        let wanted = Set(fingerprints)
+        let vault = SovereignKeyVault()
+        return vault.listPskNames().compactMap { n -> AssuranceState.MutualLocalKey? in
+            if n.hasPrefix("__") { return nil }
+            let origin = vault.origin(name: n)
+            guard PskAdvertising.isEligibleMatchCandidate(origin: origin),
+                  let raw = (try? vault.loadPsk(name: n)) ?? nil, !raw.isEmpty,
+                  wanted.contains(PskAdvertising.canonicalFingerprint(forPsk: raw)) else { return nil }
+            return AssuranceState.MutualLocalKey(origin: origin, boundPeerIdentityKey: vault.nfcPeerIdentityKey(name: n))
+        }
+    }
+
     /// Responder-side dispatch for Android JSON OFFER. Symmetric to
     /// `routeInboundPqcOffer` but consumes the Android wire format
     /// directly via `QAudionCallIntegration.onAndroidBundleReceived`.
@@ -15352,9 +15380,9 @@ final class AppState: ObservableObject {
         // ceremony existed anywhere in this codebase. `resolvePskDisplayMeta`
         // is the SAME vault lookup the in-call key panel already uses to
         // label a fingerprint "NFC" — reused, not re-derived.
-        // `PeerIdentityPinStore.pinnedKey` is the SAME verified-peer-identity
-        // notion `sigOk`'s own verdict is anchored to elsewhere in
-        // `QAudionCallIntegration`. See `AssuranceState.resolveNfcMixInputs`
+        // The identity is the key that signed this round's transcript; the
+        // stored `PeerIdentityPinStore` pin is only the fallback when the
+        // signature did not verify. See `AssuranceState.resolveNfcMixInputs`
         // for the pure decision logic (unit-tested).
         // A QR + Bluetooth proximity key (`PskOrigin.proximity`, method "QR+BLE")
         // is presence evidence of the same kind as an NFC tap — both users
@@ -15368,13 +15396,18 @@ final class AppState: ObservableObject {
         // fingerprint (which is SHA-256(psk), never an identity key — see
         // `resolveNfcMixInputs`'s parameter doc for the failure this replaces).
         let capturedPeerIdentityKey = AppState.resolveNfcPeerIdentityKey(fingerprint: state.selectedFp)
+        // The identity key this call's own handshake round was signed by, when the
+        // signature verified: the verified peer identity of THIS call, whichever of
+        // the peer's devices answered. Without a verified signature the stored pin
+        // stands in for the binding check.
+        let signerIdentityKey = state.signerIdentityKey
         // D11 fix — pass the peer's device id, same reasoning as
         // `peerDeviceId(for:)`'s own kdoc: the pin this call's handshake
         // committed lives under the composite "<peerId>|<deviceId>" account
         // whenever the server stamped one, and omitting it here checks a
         // different (legacy bare-contactId) account than the one that pin
         // actually landed in.
-        let verifiedPeerIdentityKey = PeerIdentityPinStore().pinnedKey(
+        let verifiedPeerIdentityKey = signerIdentityKey ?? PeerIdentityPinStore().pinnedKey(
             contactId: state.peerId, deviceId: peerDeviceId(for: state.peerId))
         let priorPresenceAuth = existingContact?.presenceAuth
             .map { (peerIdentityKey: $0.peerIdentityKey, witnessTier: $0.witnessTier) }
@@ -15385,11 +15418,21 @@ final class AppState: ObservableObject {
             verifiedPeerIdentityKey: verifiedPeerIdentityKey,
             priorPresenceAuth: priorPresenceAuth
         )
+        // The in-person key as a CONFIRMATION of this call, whichever key was mixed
+        // (the KMS key is the call key by default): a signed handshake whose
+        // advertisement matched a LOCAL NFC or proximity key bound to the verified
+        // peer identity. Judged from this device's own vault entry, never from the
+        // role the peer declared.
+        let nfcConfirmed = AssuranceState.resolveNfcConfirmed(
+            sigOk: state.sigOk,
+            mutualLocalKeys: AppState.resolveMutualLocalKeys(fingerprints: state.mutualFingerprints),
+            verifiedPeerIdentityKey: signerIdentityKey
+        )
         let assurance = AssuranceState.decide(
             peerSupportsMix: state.peerSupportsMix,
             n: state.n,
             mixRoles: mixRoles,
-            peerAdvertisedRoles: state.peerAdvertisedRoles,
+            nfcConfirmed: nfcConfirmed,
             expectedNfc: expectedNfc,
             kcStatus: state.kcStatus,
             sigOk: state.sigOk,
@@ -15398,25 +15441,15 @@ final class AppState: ObservableObject {
             floorRecorded: expectedNfc,
             mediaDwellMs: 0
         )
-        // `expected_but_missing` — the half of S7's predicate this step CAN
-        // honestly evaluate: the peer advertised a role-1 (NFC-tier) fingerprint
-        // this side also holds, but no NFC secret was mixed this call. Always
-        // false in practice today (nobody sets a non-zero role yet — see
-        // `AndroidHandshakeBundle.pskRoles`'s doc) until step 7 ships role
-        // advertisement for real.
-        // Role 3 (QR + Bluetooth proximity) is presence evidence exactly like
-        // role 1 (NFC) — see `selectedIsNfc` above.
-        let peerAdvertisesPresenceRole: Bool = state.peerAdvertisedRoles.contains(where: { (role: Int) -> Bool in
-            return PskAdvertV3.isPresenceRole(role)
-        })
-        let expectedButMissing = peerAdvertisesPresenceRole && !mixRoles.contains(.nfc)
-        // W-NFCCOMMON — the independent "NFC in comune" fact: true whenever the peer's
-        // OFFER/ACCEPT advert shows a mutual NFC-tier fingerprint, regardless of whether
-        // THIS call's mixRoles/decide() verdict actually used it. Same underlying set as
-        // expectedButMissing above, without the `!mixRoles.contains(.nfc)` restriction —
-        // when NFC WAS mixed (S2), this is trivially also true, which is correct: the
-        // trust bar's "NFC ✓" chip should light in that case too, same as before.
-        let mutualNfcInCommon = peerAdvertisesPresenceRole
+        // `expected_but_missing` — the contact's in-person key was expected on this
+        // call and was neither mixed nor confirmed (S7).
+        let expectedButMissing = assurance == .expectedNfcStripped
+        // W-NFCCOMMON — the independent "NFC in comune" fact: true whenever this call
+        // confirmed a shared in-person key, regardless of whether THIS call's
+        // mixRoles/decide() verdict actually used it. When NFC WAS mixed (S2), this is
+        // trivially also true, which is correct: the trust bar's "NFC ✓" chip should
+        // light in that case too, same as before.
+        let mutualNfcInCommon = nfcConfirmed
         // W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a pre-shared key of ANY
         // origin was mixed into this call", independent of `assurance`'s single-select
         // verdict: shows in EVERY state a PSK was mixed, including warning states.

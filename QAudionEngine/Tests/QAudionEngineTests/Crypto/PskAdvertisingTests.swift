@@ -139,6 +139,96 @@ final class PskAdvertisingTests: XCTestCase {
         )
     }
 
+    // MARK: - 2b. Call-key priority: hw_only, then KMS (newest delivery first), then the rest
+
+    private func entry(
+        _ name: String, _ origin: PskOrigin, _ byte: UInt8, at createdAt: Date?,
+        keyClass: SovereignKeyVault.KeyClass = .shared
+    ) -> PskAdvertising.Entry {
+        PskAdvertising.Entry(
+            name: name, origin: origin, keyClass: keyClass,
+            material: Data(repeating: byte, count: 32), createdAt: createdAt)
+    }
+
+    private func fp(_ byte: UInt8) -> String { canonicalFp(Data(repeating: byte, count: 32)) }
+
+    private let kmsNameA = "11111111-1111-1111-1111-111111111111"
+    private let kmsNameB = "22222222-2222-2222-2222-222222222222"
+
+    func testKmsKeyDeliveredAfterTheNfcKeyIsAdvertisedFirst() {
+        let t0 = Date()
+        let nfc = entry("nfc-aaaa", .nfc, 0x01, at: t0)
+        let kms = entry(kmsNameA, .kms, 0x02, at: t0.addingTimeInterval(60))
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([nfc, kms]), [fp(0x02), fp(0x01)])
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([kms, nfc]), [fp(0x02), fp(0x01)])
+    }
+
+    func testKmsKeyDeliveredBeforeTheNfcKeyIsStillAdvertisedFirst() {
+        // The Keychain creation date of the NFC key is the LATER one: the order must not
+        // depend on which of the two keys arrived first.
+        let t0 = Date()
+        let kms = entry(kmsNameA, .kms, 0x02, at: t0)
+        let nfc = entry("nfc-aaaa", .nfc, 0x01, at: t0.addingTimeInterval(60))
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([nfc, kms]), [fp(0x02), fp(0x01)])
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([kms, nfc]), [fp(0x02), fp(0x01)])
+    }
+
+    func testTwoKmsKeysAreAdvertisedNewestDeliveryFirstAheadOfTheOtherKeys() {
+        let t0 = Date()
+        let kmsOld = entry(kmsNameA, .kms, 0x01, at: t0.addingTimeInterval(10))
+        let kmsNew = entry(kmsNameB, .kms, 0x02, at: t0.addingTimeInterval(500))
+        let nfc = entry("nfc-aaaa", .nfc, 0x03, at: t0)
+        let manual = entry("peer.alice", .manual, 0x04, at: t0.addingTimeInterval(5))
+        let expected = [fp(0x02), fp(0x01), fp(0x03), fp(0x04)]
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([nfc, kmsOld, manual, kmsNew]), expected)
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([kmsNew, manual, kmsOld, nfc]), expected)
+    }
+
+    func testWithoutAKmsKeyTheOrderIsOldestRegisteredFirst() {
+        let t0 = Date()
+        let nfc = entry("nfc-aaaa", .nfc, 0x01, at: t0.addingTimeInterval(10))
+        let manual = entry("peer.alice", .manual, 0x02, at: t0)
+        let proximity = entry("prox-bbbb", .proximity, 0x03, at: t0.addingTimeInterval(5))
+        let qr = entry("peer.bob", .qr, 0x04, at: nil)
+        XCTAssertEqual(
+            PskAdvertising.fingerprintsForAdvertisement([qr, nfc, proximity, manual]),
+            [fp(0x02), fp(0x03), fp(0x01), fp(0x04)])
+    }
+
+    func testKmsKeysWithoutACreationDateKeepTheKmsTierAndSortAfterDatedOnes() {
+        let t0 = Date()
+        let undatedB = entry(kmsNameB, .kms, 0x01, at: nil)
+        let undatedA = entry(kmsNameA, .kms, 0x02, at: nil)
+        let dated = entry("33333333-3333-3333-3333-333333333333", .kms, 0x03, at: t0)
+        let nfc = entry("nfc-aaaa", .nfc, 0x04, at: t0.addingTimeInterval(-60))
+        // dated KMS first, then the undated ones by name, then the in-person key
+        XCTAssertEqual(
+            PskAdvertising.fingerprintsForAdvertisement([nfc, undatedB, dated, undatedA]),
+            [fp(0x03), fp(0x02), fp(0x01), fp(0x04)])
+    }
+
+    func testHwOnlyKeysAreAdvertisedFirstNewestFirstAheadOfEveryKmsKey() {
+        let t0 = Date()
+        let hwOld = entry("peer.hw-old", .manual, 0x01, at: t0, keyClass: .hwOnly)
+        let hwNew = entry("peer.hw-new", .manual, 0x02, at: t0.addingTimeInterval(30), keyClass: .hwOnly)
+        let kms = entry(kmsNameA, .kms, 0x03, at: t0.addingTimeInterval(600))
+        let nfc = entry("nfc-aaaa", .nfc, 0x04, at: t0)
+        let expected = [fp(0x02), fp(0x01), fp(0x03), fp(0x04)]
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([nfc, kms, hwOld, hwNew]), expected)
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([hwNew, hwOld, nfc, kms]), expected)
+    }
+
+    func testRolesAndCandidatesFollowTheSamePriorityOrder() {
+        let t0 = Date()
+        let nfc = entry("nfc-aaaa", .nfc, 0x01, at: t0)
+        let kms = entry(kmsNameA, .kms, 0x02, at: t0.addingTimeInterval(60))
+        let entries = [nfc, kms]
+        XCTAssertEqual(PskAdvertising.rolesForAdvertisement(entries), [PskAdvertV3.roleOrdinary, PskAdvertV3.roleNfc])
+        let candidates = PskAdvertising.candidatesForAdvertisement(entries)
+        XCTAssertEqual(candidates.map { $0.staticFp }, PskAdvertising.fingerprintsForAdvertisement(entries))
+        XCTAssertEqual(candidates.map { $0.staticFp }, [fp(0x02), fp(0x01)])
+    }
+
     // MARK: - 3. Fingerprint normalisation
 
     func testCanonicalFingerprintIsFullLowercase64HexSha256() {
