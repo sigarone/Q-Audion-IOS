@@ -326,9 +326,16 @@ private final class NfcExchangeDriver: ObservableObject {
         // (8-byte) prefix is not a sound basis for that comparison — this app's
         // security floor elsewhere is full 256-bit fingerprints and 32-byte
         // identity keys throughout, never a truncated one.
+        //
+        // A repeated tap with the same phone has the same name, so the vault updates that entry in place
+        // (docs/security/CALL_KEY_PRIORITY.md section 4a): the new key replaces the earlier one and keeps its place
+        // in the call-key list and its "placed by hand" mark. This runs from `onPskDerived`, which
+        // `NfcApduExchange` calls only after the user confirmed the SAS: a tap that is rejected, cancelled or left
+        // to time out never gets here, and the earlier key stays as it was.
         try vault.storePsk(name: name, key: psk, fingerprint: fingerprint,
                            keyClass: nil, origin: .nfc, nfcPeerIdentityKey: peerIdPub)
-        // The new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md).
+        // A new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md section 3); a key
+        // that replaced an earlier one is already in it and stays where it was.
         CallKeyPriorityStore.live(vault: vault).syncWithVault()
     }
 }

@@ -57,4 +57,87 @@ final class NfcApduExchangeSasGateTests: XCTestCase {
         let result = await gate.awaitConfirmation()
         XCTAssertTrue(result, "the FIRST resolution wins; later calls are no-ops")
     }
+
+    // MARK: - Pairing the same phone again (docs/security/CALL_KEY_PRIORITY.md section 4a)
+
+    /// Stands in for `SovereignKeyVault`, which needs the Keychain: name -> key material, written the way the vault
+    /// writes a name that is already there (the entry is replaced).
+    private final class FakeVault {
+        private(set) var keys: [String: Data]
+        private(set) var writes = 0
+
+        init(keys: [String: Data]) {
+            self.keys = keys
+        }
+
+        func store(name: String, key: Data) {
+            keys[name] = key
+            writes += 1
+        }
+    }
+
+    private static let phoneName = "nfc-0707070707070707"
+    private static let phoneIdentity = Data(repeating: 0x07, count: 32)
+    private static let earlierKey = Data(repeating: 0x01, count: 32)
+    private static let newKey = Data(repeating: 0x02, count: 32)
+
+    /// Runs the last step of a tap: the user decides after a moment (`confirm` or reject), and the handler stores
+    /// the key the way `NfcExchangeView` does. Returns the error the step threw, if any.
+    private func handOver(confirm: Bool, to vault: FakeVault) async -> Error? {
+        let gate = NfcApduExchange.NfcSasConfirmGate()
+        Task {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+            if confirm {
+                gate.confirm()
+            } else {
+                gate.reject()
+            }
+        }
+        do {
+            try await NfcApduExchange.handOverIfConfirmed(
+                gate: gate, psk: Self.newKey, peerIdentityPub: Self.phoneIdentity,
+                to: { (psk: Data, peerIdentity: Data) in
+                    XCTAssertEqual(peerIdentity, Self.phoneIdentity)
+                    vault.store(name: Self.phoneName, key: psk)
+                })
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    private func isSasRejected(_ error: Error?) -> Bool {
+        guard let exchangeError = error as? NfcApduExchange.ExchangeError, case .sasRejected = exchangeError else {
+            return false
+        }
+        return true
+    }
+
+    func test_confirmedTap_replacesTheEarlierKeyOfTheSamePhoneUnderTheSameName() async {
+        let vault = FakeVault(keys: [Self.phoneName: Self.earlierKey])
+        let error = await handOver(confirm: true, to: vault)
+        XCTAssertNil(error)
+        XCTAssertEqual(vault.keys, [Self.phoneName: Self.newKey])
+        XCTAssertEqual(vault.writes, 1)
+    }
+
+    /// `cancel()` (the user leaves the screen, or the session ends) rejects the same gate, so a cancelled tap takes
+    /// this path too.
+    func test_unconfirmedTap_leavesTheEarlierKeyUntouched() async {
+        let vault = FakeVault(keys: [Self.phoneName: Self.earlierKey])
+        let error = await handOver(confirm: false, to: vault)
+        XCTAssertTrue(isSasRejected(error), "a rejected SAS must end the tap with sasRejected, got \(String(describing: error))")
+        XCTAssertEqual(vault.keys, [Self.phoneName: Self.earlierKey])
+        XCTAssertEqual(vault.writes, 0, "nothing may be written for a tap that was not confirmed")
+    }
+
+    func test_confirmedTap_withoutAHandler_isNotAnError() async throws {
+        let gate = NfcApduExchange.NfcSasConfirmGate()
+        Task {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+            gate.confirm()
+        }
+        try await NfcApduExchange.handOverIfConfirmed(
+            gate: gate, psk: Self.newKey, peerIdentityPub: Self.phoneIdentity, to: nil)
+    }
 }

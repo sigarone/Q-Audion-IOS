@@ -138,6 +138,12 @@ public enum ProximityPairingStore {
     /// - the peer's full Ed25519 key in the blob's presence-identity field
     ///   (`nfcpid`), so call-time binding can compare it with the verified caller.
     ///
+    /// Called only for a pairing both users confirmed (`ProximityPairingViewDriver.finish`, on `.completed`). A
+    /// repeated pairing with the same phone has the same name, so the vault updates that entry in place
+    /// (docs/security/CALL_KEY_PRIORITY.md section 4a): the new key replaces the earlier one and keeps its place in
+    /// the call-key list and its "placed by hand" mark. Another phone of the same person has another name and is a
+    /// new key. Input that fails the checks below throws before the vault is touched, so the earlier key stays.
+    ///
     /// Throws `ProximityPairingError.cryptoFailure` on any malformed input
     /// (checked before the Keychain is touched) and rethrows the vault's
     /// `KeyVaultError` on a failed write. Never writes identity pins.
@@ -170,7 +176,8 @@ public enum ProximityPairingStore {
                            keyClass: nil,
                            origin: .proximity,
                            nfcPeerIdentityKey: peerKey)
-        // The new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md).
+        // A new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md section 3); a key
+        // that replaced an earlier one is already in it and stays where it was.
         CallKeyPriorityStore.live(vault: vault).syncWithVault()
     }
 
