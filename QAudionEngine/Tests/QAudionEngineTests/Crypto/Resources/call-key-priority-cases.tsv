@@ -17,4 +17,7 @@ delete_then_new_kms	+O1 +K1 ^O1 -K1 +K2	O1 K2	NFC placed by hand above KMS; afte
 delete_then_new_kms_not_placed	+O1 +K1 -K1 +K2	K2 O1	nothing placed by hand: after deleting every KMS key a new KMS key goes to the top
 placed_mark_is_per_key	+O1 +O2 +K1 -K1 ^O2 +K2	O2 K2 O1	only the moved key is placed: a new KMS key goes above the first key not placed by hand
 placed_mark_cleared_on_delete	+O1 +K1 ^O1 -O1 +O1 -K1 +K2	K2 O1	deleting a placed key clears its mark
+pair_again_keeps_place	+O1 +K1 ^O1 =O1 +K2	O1 K2 K1	pairing again with the same device keeps the key's place above KMS and its mark
+pair_again_default_place	+K1 +O1 =O1	K1 O1	pairing again with the same device keeps the default place below KMS
+other_device_is_new	+K1 +O1 ^O1 +O2	O1 K1 O2	a pairing with another device of the same person is a new key at the end
 mixed_sequence	+O1 +K1 +O2 ^O2 ^O2 +K2 +H1 vH1 -O1 +K3	O2 K3 K2 H1 K1	a longer mixed sequence

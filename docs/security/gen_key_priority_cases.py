@@ -13,6 +13,8 @@ caller's advert):
   -X   key X is deleted
   ^X   the user moves X up by one place (no effect when already first)
   vX   the user moves X down by one place (no effect when already last)
+  =X   X is replaced by the key of a new confirmed pairing with the same device by the
+       same method: the new key takes X's place and mark (it keeps the name X here)
 
 A key the user has moved (^ or v, even when the move had no effect) is "placed by hand"
 and stays placed until it is deleted. Only the moved key is marked, not the neighbour it
@@ -65,6 +67,8 @@ def apply(ops):
             i = order.index(key)
             if i > 0:
                 order[i - 1], order[i] = order[i], order[i - 1]
+        elif kind == "=":
+            assert key in order, op
         elif kind == "v":
             placed.add(key)
             i = order.index(key)
@@ -93,6 +97,9 @@ CASES = [
     ("delete_then_new_kms_not_placed", "nothing placed by hand: after deleting every KMS key a new KMS key goes to the top", "+O1 +K1 -K1 +K2"),
     ("placed_mark_is_per_key", "only the moved key is placed: a new KMS key goes above the first key not placed by hand", "+O1 +O2 +K1 -K1 ^O2 +K2"),
     ("placed_mark_cleared_on_delete", "deleting a placed key clears its mark", "+O1 +K1 ^O1 -O1 +O1 -K1 +K2"),
+    ("pair_again_keeps_place", "pairing again with the same device keeps the key's place above KMS and its mark", "+O1 +K1 ^O1 =O1 +K2"),
+    ("pair_again_default_place", "pairing again with the same device keeps the default place below KMS", "+K1 +O1 =O1"),
+    ("other_device_is_new", "a pairing with another device of the same person is a new key at the end", "+K1 +O1 ^O1 +O2"),
     ("mixed_sequence", "a longer mixed sequence", "+O1 +K1 +O2 ^O2 ^O2 +K2 +H1 vH1 -O1 +K3"),
 ]
 

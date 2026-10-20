@@ -338,8 +338,9 @@ public final class NfcApduExchange: NSObject {
         // key is ever handed to the integration layer. `onPskDerived` (the
         // ONLY call in this type that persists anything — `NfcExchangeView
         // .persistPsk` writes to `SovereignKeyVault` from inside it) is
-        // reached ONLY on the `true` branch below; a reject (or a cancel())
-        // throws first, so nothing is ever written for a rejected tap.
+        // reached ONLY through `handOverIfConfirmed` below, on a confirm; a
+        // reject (or a cancel()) throws first, so nothing is ever written for
+        // a rejected tap.
         //
         // Uses `NfcSasComputation` — a byte-exact port of Android's
         // `nfc/SasComputation.kt` — over the two Ed25519 IDENTITY keys
@@ -356,14 +357,11 @@ public final class NfcApduExchange: NSObject {
         let gate = NfcSasConfirmGate()
         sasGate = gate
         state = .sasConfirm(sas: sas, peerDeviceName: Self.peerDeviceName)
-        let confirmed = await gate.awaitConfirmation()
-        sasGate = nil
-        guard confirmed else {
-            throw ExchangeError.sasRejected
-        }
+        defer { if sasGate === gate { sasGate = nil } }
 
-        // Notify the integration layer.
-        try await onPskDerived?(psk, peerIdentityPub)
+        // Notify the integration layer, but only once the user has confirmed. A key stored by an earlier tap with
+        // the same phone is replaced by this one at that point and not before.
+        try await Self.handOverIfConfirmed(gate: gate, psk: psk, peerIdentityPub: peerIdentityPub, to: onPskDerived)
 
         return Self.peerDeviceName
     }
@@ -522,6 +520,22 @@ public final class NfcApduExchange: NSObject {
             continuation?.resume(returning: false)
             continuation = nil
         }
+    }
+
+    /// W-NFCSAS — the last step of a tap, extracted with the gate so a test can run it without CoreNFC: wait for
+    /// the user's decision on the SAS and hand the key to `handler` only when the user confirmed. A reject, or a
+    /// `cancel()` while the code is showing, throws ``ExchangeError/sasRejected`` first, so `handler` (the one
+    /// place a key is stored) is never called and a key stored by an earlier tap stays as it was.
+    static func handOverIfConfirmed(
+        gate: NfcSasConfirmGate,
+        psk: Data,
+        peerIdentityPub: Data,
+        to handler: ((Data, Data) async throws -> Void)?
+    ) async throws {
+        guard await gate.awaitConfirmation() else {
+            throw ExchangeError.sasRejected
+        }
+        try await handler?(psk, peerIdentityPub)
     }
 
     /// SECURITY M-6 — the pin decision of `runPhase14cExchange`, extracted as

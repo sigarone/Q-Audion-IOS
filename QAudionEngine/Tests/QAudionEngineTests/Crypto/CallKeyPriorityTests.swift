@@ -25,7 +25,7 @@ final class CallKeyPriorityTests: XCTestCase {
     }
 
     /// SHA-256 of the table. A change to the table must be the same change in both repositories.
-    private static let tableSha256 = "be62e50da836ddbb5bcb227d0c4a3c458bc49d248b2856ed606de6dedcd9f5fb"
+    private static let tableSha256 = "07a3ccb01b0c33054c6ecf37609b6ccf8deb5410dbfa0274f474255f6915bbd3"
 
     private static let columns = ["name", "operations", "expected_order", "description"]
 
@@ -74,7 +74,7 @@ final class CallKeyPriorityTests: XCTestCase {
 
     func testEveryRowOfTheTableGivesItsExpectedOrder() throws {
         let cases = try parseCases(try tableData())
-        XCTAssertGreaterThanOrEqual(cases.count, 18, "the table lost rows")
+        XCTAssertGreaterThanOrEqual(cases.count, 21, "the table lost rows")
         for testCase in cases {
             var list = CallKeyPriority()
             for operation in testCase.operations.split(separator: " ") {
@@ -85,6 +85,14 @@ final class CallKeyPriorityTests: XCTestCase {
                 case "-": list.remove(key)
                 case "^": list.moveUp(key)
                 case "v": list.moveDown(key)
+                case "=":
+                    // Section 4a: a confirmed pairing with the same device by the same method is stored under
+                    // the name the earlier key has, so the list meets a key it already holds. That key keeps its
+                    // place and its mark.
+                    XCTAssertTrue(list.contains(key), "\(testCase.name): \(operation) replaces a key that is not held")
+                    let before = list
+                    list.add(id: key, group: try group(of: key))
+                    XCTAssertEqual(list, before, "\(testCase.name): \(operation) moved the key or changed its mark")
                 default: XCTFail("\(testCase.name): unknown operation \(operation)")
                 }
             }
@@ -121,6 +129,14 @@ final class CallKeyPriorityTests: XCTestCase {
                 case "v":
                     list = CallKeyPriority.reconciled(stored: stored, candidates: held)
                     list.moveDown(key)
+                case "=":
+                    // The vault entry is updated in place: same name, new material, and a date later than every
+                    // key before it.
+                    let index = try XCTUnwrap(held.firstIndex(where: { $0.id == key }),
+                                              "\(testCase.name): \(operation) replaces a key that is not held")
+                    held[index] = CallKeyPriority.Candidate(
+                        id: key, group: held[index].group, createdAt: Date(timeIntervalSince1970: Double(step)))
+                    list = CallKeyPriority.reconciled(stored: stored, candidates: held)
                 default:
                     XCTFail("\(testCase.name): unknown operation \(operation)")
                 }
@@ -293,6 +309,13 @@ final class CallKeyPriorityTests: XCTestCase {
         func remove(_ id: String) {
             items.removeAll(where: { $0.id == id })
         }
+
+        /// The vault updates the entry in place (same name, new material): the key stays, with a later date.
+        func replace(_ id: String, at seconds: Double) {
+            guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+            items[index] = CallKeyPriority.Candidate(
+                id: id, group: items[index].group, createdAt: Date(timeIntervalSince1970: seconds))
+        }
     }
 
     private func makeStore(_ backing: MemoryBacking, _ held: Held) -> CallKeyPriorityStore {
@@ -337,6 +360,76 @@ final class CallKeyPriorityTests: XCTestCase {
         XCTAssertEqual(store.current().ids, ["O1", "K2", "K1"])
         held.add("K3", .kms, at: 4)
         XCTAssertEqual(store.current().ids, ["O1", "K3", "K2", "K1"])
+    }
+
+    /// Section 4a: a confirmed pairing with the same device by the same method is stored under the name the earlier
+    /// key has, and the vault updates that entry in place. The key keeps its place and its mark, with or without a
+    /// restart in between and whatever the entry's date becomes.
+    func testAKeyStoredAgainUnderTheSameNameKeepsItsPlaceAndMark() {
+        let backing = MemoryBacking()
+        let held = Held()
+        held.add("O1", .other, at: 1)
+        held.add("K1", .kms, at: 2)
+        var store = makeStore(backing, held)
+        XCTAssertEqual(store.moveUp("O1").list.ids, ["O1", "K1"])
+
+        held.replace("O1", at: 9)
+        store.syncWithVault()
+        XCTAssertEqual(store.current().ids, ["O1", "K1"])
+        XCTAssertTrue(store.current().isPlacedByHand("O1"))
+        XCTAssertFalse(store.current().isPlacedByHand("K1"))
+
+        store = makeStore(backing, held)
+        XCTAssertEqual(store.current().ids, ["O1", "K1"])
+        XCTAssertTrue(store.current().isPlacedByHand("O1"))
+
+        // The mark still does its work: a new KMS key goes below the key the user put first.
+        held.add("K2", .kms, at: 10)
+        XCTAssertEqual(store.current().ids, ["O1", "K2", "K1"])
+    }
+
+    func testAKeyStoredAgainInItsDefaultPlaceStaysThereAndWritesNothing() {
+        let backing = MemoryBacking()
+        let held = Held()
+        held.add("K1", .kms, at: 1)
+        held.add("O1", .other, at: 2)
+        let store = makeStore(backing, held)
+        XCTAssertEqual(store.current().ids, ["K1", "O1"])
+        let writes = backing.writes
+
+        held.replace("O1", at: 8)
+        store.syncWithVault()
+        XCTAssertEqual(store.current().ids, ["K1", "O1"])
+        XCTAssertFalse(store.current().isPlacedByHand("O1"))
+        XCTAssertEqual(backing.writes, writes, "an update in place changes neither the order nor the marks")
+    }
+
+    /// Another device of the same person has another identity key, so another name, and so it is a new key (section
+    /// 3). So is the same device by the other method: the name starts with the method.
+    func testAKeyOfAnotherDeviceOrOfTheOtherMethodIsANewKeyAtTheEnd() {
+        let device = Data(repeating: 0x11, count: 32)
+        let otherDevice = Data(repeating: 0x22, count: 32)
+        let proximity = ProximityPairingStore.vaultEntryName(peerSigningPublicKey: device)
+        XCTAssertEqual(ProximityPairingStore.vaultEntryName(peerSigningPublicKey: device), proximity,
+                       "the same device by the same method is the same name")
+        let otherProximity = ProximityPairingStore.vaultEntryName(peerSigningPublicKey: otherDevice)
+        let nfc = "nfc-" + String(proximity.dropFirst("prox-".count))
+        XCTAssertEqual(Set([proximity, otherProximity, nfc]).count, 3)
+
+        let backing = MemoryBacking()
+        let held = Held()
+        held.add("K1", .kms, at: 1)
+        held.add(proximity, .other, at: 2)
+        let store = makeStore(backing, held)
+        _ = store.moveUp(proximity)
+        XCTAssertEqual(store.current().ids, [proximity, "K1"])
+
+        held.add(otherProximity, .other, at: 3)
+        held.add(nfc, .other, at: 4)
+        XCTAssertEqual(store.current().ids, [proximity, "K1", otherProximity, nfc])
+        XCTAssertTrue(store.current().isPlacedByHand(proximity))
+        XCTAssertFalse(store.current().isPlacedByHand(otherProximity))
+        XCTAssertFalse(store.current().isPlacedByHand(nfc))
     }
 
     func testAKeyDeletedFromTheVaultLeavesTheListAndLosesItsMark() {
