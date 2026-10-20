@@ -182,14 +182,14 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "callerBusyTone.play()", in: code), 1, "one start: the showing of a busy outcome")
     }
 
-    /// The tone's own timing: disposed after its end (derived from the one constant), a file name that carries its length.
-    func testTheToneIsDisposedAfterItsEndAndItsFileCarriesItsLength() throws {
+    /// The tone's own timing: disposed after its end (derived from the one constant), played from the bundled cue file.
+    func testTheToneIsDisposedAfterItsEndAndPlaysTheBundledCue() throws {
         let tone = try code("QAudionApp/Services/CallerBusyTone.swift")
         XCTAssertTrue(tone.contains("Double(CallerBusyFeedback.soundDisposeAfterMs) / 1_000"))
         XCTAssertTrue(tone.contains("DispatchQueue.main.asyncAfter(deadline: .now() + disposeAfter, execute: work)"))
-        XCTAssertFalse(tone.contains("3.5"), "#169's 3.5 s disposal would cut the last burst of a 4 s tone")
-        XCTAssertTrue(tone.contains("QAudionCueWav.busyToneFileName"))
-        XCTAssertFalse(tone.contains("\"qaudion_busy_tone.wav\""), "a stale 3 s file must never be reused")
+        XCTAssertFalse(tone.contains("3.5"), "#169's 3.5 s disposal would cut the last burst of the tone")
+        XCTAssertTrue(tone.contains("CallCueKind.busy.resourceName"))
+        XCTAssertFalse(tone.contains("QAudionCueWav"), "the tone is a bundled file, not a rendered one")
     }
 
     // MARK: - the badge

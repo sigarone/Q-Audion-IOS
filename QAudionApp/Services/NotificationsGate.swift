@@ -12,14 +12,12 @@ public enum NotificationsGate {
 
     public static let keyBanners       = "qaudion.notifications.banners_enabled"   // already used pre-W405
     public static let keyInAppSound    = "qaudion.notifications.in_app_sound_enabled"
-    public static let keyVibration     = "qaudion.notifications.vibration_enabled"
     public static let keyQuietEnabled  = "qaudion.notifications.quiet_hours_enabled"
     public static let keyQuietStartMin = "qaudion.notifications.quiet_hours_start_min"  // minutes since midnight
     public static let keyQuietEndMin   = "qaudion.notifications.quiet_hours_end_min"
 
     public static var bannersEnabled: Bool { readBool(keyBanners, default: true) }
     public static var inAppSoundEnabled: Bool { readBool(keyInAppSound, default: true) }
-    public static var vibrationEnabled: Bool { readBool(keyVibration, default: true) }
     public static var quietHoursEnabled: Bool { readBool(keyQuietEnabled, default: false) }
     public static var quietStartMinutes: Int {
         return UserDefaults.standard.object(forKey: keyQuietStartMin) as? Int ?? (22 * 60)  // 22:00 default
@@ -44,7 +42,6 @@ public enum NotificationsGate {
     }
 
     public static func setInAppSound(_ value: Bool) { UserDefaults.standard.set(value, forKey: keyInAppSound) }
-    public static func setVibration(_ value: Bool)  { UserDefaults.standard.set(value, forKey: keyVibration) }
     public static func setQuietHoursEnabled(_ value: Bool) { UserDefaults.standard.set(value, forKey: keyQuietEnabled) }
     public static func setQuietStart(minutes: Int) { UserDefaults.standard.set(minutes, forKey: keyQuietStartMin) }
     public static func setQuietEnd(minutes: Int)   { UserDefaults.standard.set(minutes, forKey: keyQuietEndMin) }

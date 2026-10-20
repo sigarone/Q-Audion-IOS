@@ -23,6 +23,9 @@ enum HapticFeedback {
         return UserDefaults.standard.bool(forKey: key)
     }
 
+    /// The master switch (Privacy, Vibrazione), for haptics that are not driven from here, such as the ring's.
+    static var masterEnabled: Bool { isEnabled }
+
     /// Soft tap when a chat message ships successfully.
     static func messageSent() {
         guard isEnabled else { return }

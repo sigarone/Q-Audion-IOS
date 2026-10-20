@@ -4,19 +4,18 @@ import QAudionEngine
 
 /// W-CALLERBUSY (2026-10-03) — plays the busy tone when the callee is busy (`call_busy`).
 ///
-/// A system sound, not the cue player (`QAudionRingtonePlayer`), on purpose and for the same reason the in-app
-/// ringtone is one (`AppState.startInAppRingtone`): the tone starts the instant the caller reports the outgoing
-/// call ended to CallKit, and that report is what makes iOS deactivate the audio session. The cue player's engine
-/// lives on that session (the W464 gate), so it would be cut or fail to start; a system sound uses no audio
-/// session, and so leaves nothing behind for the next call's CallKit activation to trip over.
+/// A system sound unless the app owns an active audio session (`sessionPlayback`, set by `AppState`), on purpose:
+/// the tone starts the instant the caller reports the outgoing call ended to CallKit, and that report is what makes
+/// iOS deactivate the audio session. The cue player lives on that session (the W464 gate), so it would be cut or
+/// fail to start; a system sound uses no audio session, and so leaves nothing behind for the next call's CallKit
+/// activation to trip over. When a session does exist the tone goes through the cue player, which has a gain.
 ///
-/// The WAV is rendered by the engine (`QAudionCueWav.busyTone()`, 425 Hz, 0.5 s on / 0.5 s off, repeated to fill
-/// the busy hold) and written once to the temporary directory, under a name that carries its length. Like every
-/// system sound it follows the ringer switch.
+/// The tone is the bundled `qa_cue_busy.caf` (425 Hz, 0.5 s on / 0.5 s off, three bursts). Like every system sound
+/// it follows the ringer switch. The "end-of-call and busy sounds" setting can switch it off.
 ///
-/// W-BUSYHOLD (2026-10-04) — the tone is as long as the "Occupato" screen (`CallerBusyFeedback.holdMs`, 4000 ms),
-/// and the sound id is disposed `CallerBusyFeedback.soundDisposeAfterMs` after it starts: after the tone's end,
-/// never before it (#169 disposed at 3.5 s, which would have cut the last burst of a 4 s tone).
+/// W-BUSYHOLD (2026-10-04) — the "Occupato" screen holds for `CallerBusyFeedback.holdMs` (4000 ms) and the tone
+/// (3 s) plays inside it; the sound id is disposed `CallerBusyFeedback.soundDisposeAfterMs` after it starts: after
+/// the tone's end, never before it.
 ///
 /// `stop()` is idempotent and is what `startCall` and the teardown call: disposing the id also stops a tone that
 /// is still playing, so a redial never starts under a tail of the previous call's tone. A tone cut before its end
@@ -25,6 +24,11 @@ import QAudionEngine
 final class CallerBusyTone {
 
     private var soundId: SystemSoundID?
+    /// Plays the tone through the cue player when the app owns an active audio session; returns whether it did.
+    var sessionPlayback: (() -> Bool)?
+    /// Stops the tone started through `sessionPlayback`.
+    var sessionStop: (() -> Void)?
+    private var playingViaSession = false
     private var disposeWork: DispatchWorkItem?
     /// `DispatchTime` uptime, in nanoseconds, of the moment the tone started.
     private var startedAtNs: UInt64 = 0
@@ -32,6 +36,15 @@ final class CallerBusyTone {
     /// Plays the tone from the start, replacing one that is still playing.
     func play() {
         stop()
+        guard CallCueGate.shouldPlay(.busy, settings: SettingsStore().loadCallSounds()) else {
+            RTLog.info("call", "busytone skip=1 disabled=1")
+            return
+        }
+        if sessionPlayback?() == true {
+            playingViaSession = true
+            RTLog.info("call", "busytone play=1 via=player")
+            return
+        }
         guard let id = register() else {
             RTLog.warn("call", "busytone reg=0")
             return
@@ -49,11 +62,15 @@ final class CallerBusyTone {
 
     /// Stops the tone if it is playing and frees its sound id. Safe to call when nothing was started.
     func stop() {
+        if playingViaSession {
+            playingViaSession = false
+            sessionStop?()
+        }
         disposeWork?.cancel()
         disposeWork = nil
         guard let id = soundId else { return }
         let playedMs: Int = Int((DispatchTime.now().uptimeNanoseconds &- startedAtNs) / 1_000_000)
-        if playedMs < CallerBusyFeedback.holdMs {
+        if playedMs < CallSoundCatalog.busyCueMs {
             let line: String = "busytone stop early=1 ms=\(playedMs)"
             RTLog.info("call", line)
         }
@@ -62,15 +79,9 @@ final class CallerBusyTone {
     }
 
     private func register() -> SystemSoundID? {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(QAudionCueWav.busyToneFileName)
-        // Written once per process (a purged temporary directory is rewritten the next time).
-        if !FileManager.default.fileExists(atPath: url.path) {
-            do {
-                try QAudionCueWav.busyTone().write(to: url, options: .atomic)
-            } catch {
-                RTLog.warn("call", "busytone write=0 err=\(error)")
-                return nil
-            }
+        guard let url = Bundle.main.url(forResource: CallCueKind.busy.resourceName, withExtension: "caf") else {
+            RTLog.warn("call", "busytone res=0")
+            return nil
         }
         var id: SystemSoundID = 0
         guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == kAudioServicesNoError else { return nil }

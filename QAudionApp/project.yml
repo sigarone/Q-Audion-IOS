@@ -136,11 +136,33 @@ targets:
         embed: true
     resources:
       - path: Assets.xcassets
-      # Custom incoming-call ringtone (CallKit cfg.ringtoneSound). Bundle root.
+      # Default incoming-call ringtone (CallKit cfg.ringtoneSound) and its 3 s unit for the in-app ring.
       - path: Resources/qaudion_ringtone.caf
-      # 3 s unit of the same ring, replayed by the in-app foreground ring (AppState.startInAppRingtone).
-      # Same explicit-resource pattern as the file above (which does land in the IPA).
       - path: Resources/qaudion_ringtone_unit.caf
+      # Call sounds (docs/call-sounds, encode_ios.sh). Same explicit-resource pattern as before (*.caf is
+      # excluded from the recursive sources sweep above). qa_ring_*: 28 s CallKit ringtones
+      # (CXProviderConfiguration.ringtoneSound); qa_loop_*: in-app ring loops; qa_cue_*: call cues.
+      - path: Resources/CallSounds/qa_ring_vetro.caf
+      - path: Resources/CallSounds/qa_ring_impulso.caf
+      - path: Resources/CallSounds/qa_ring_arpeggio.caf
+      - path: Resources/CallSounds/qa_ring_calore.caf
+      - path: Resources/CallSounds/qa_ring_digitale.caf
+      - path: Resources/CallSounds/qa_ring_legno.caf
+      - path: Resources/CallSounds/qa_ring_duetto.caf
+      - path: Resources/CallSounds/qa_loop_vetro.caf
+      - path: Resources/CallSounds/qa_loop_impulso.caf
+      - path: Resources/CallSounds/qa_loop_arpeggio.caf
+      - path: Resources/CallSounds/qa_loop_calore.caf
+      - path: Resources/CallSounds/qa_loop_digitale.caf
+      - path: Resources/CallSounds/qa_loop_legno.caf
+      - path: Resources/CallSounds/qa_loop_duetto.caf
+      - path: Resources/CallSounds/qa_cue_connecting.caf
+      - path: Resources/CallSounds/qa_cue_ringback.caf
+      - path: Resources/CallSounds/qa_cue_key_exchange.caf
+      - path: Resources/CallSounds/qa_cue_connected.caf
+      - path: Resources/CallSounds/qa_cue_ended.caf
+      - path: Resources/CallSounds/qa_cue_busy.caf
+      - path: Resources/CallSounds/qa_cue_dialing_tick.caf
       # Apple privacy manifest (PrivacyInfo.xcprivacy) and ITMS-90626's
       # it.lproj/AppIntentVocabulary.plist deliberately have NO explicit
       # resources: entry here (see `sources.excludes` comment above for

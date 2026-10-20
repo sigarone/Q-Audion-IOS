@@ -19,7 +19,7 @@ final class NotificationsSettingsContainer: ObservableObject {
         self.viewModel = NotificationsSettingsViewModel(
             ringtoneId: legacy.ringtoneId,
             inAppSoundEnabled: NotificationsGate.inAppSoundEnabled,
-            vibrationEnabled: NotificationsGate.vibrationEnabled,
+            vibrationEnabled: legacy.vibrationEnabled,
             quietHours: NotificationsSettingsViewModel.QuietHours(
                 startHour: qhStartH, startMinute: qhStartM,
                 endHour: qhEndH, endMinute: qhEndM, enabled: qhEnabled),
@@ -27,23 +27,12 @@ final class NotificationsSettingsContainer: ObservableObject {
         )
     }
 
-    // 2026-08-10 settings cleanup: setRingtone() and the "Suoneria" picker it
-    // backed were REMOVED. `ringtoneId` had no consumer: the in-app ring is a
-    // hardcoded system sound (AppState.startRingtone → SystemSoundID 1005) and
-    // the CallKit ring is the fixed bundled "qaudion_ringtone.caf"
-    // (CallKitProvider.swift, cfg.ringtoneSound). The picker even offered
-    // "silent", which still rang. The field is still hydrated from and saved
-    // back to the legacy SettingsStore blob so the stored value is untouched.
+    // The ringtone is chosen in "Suoni e avvisi di chiamata" (CallSoundsSettingsScreen), which writes `ringtoneId`
+    // to the same SettingsStore blob; every save below reads it back fresh so it is never overwritten here.
     func toggleInAppSound(_ enabled: Bool) {
         viewModel = makeUpdated(inAppSound: enabled)
         store.saveNotifications(viewModel)
         NotificationsGate.setInAppSound(enabled)
-    }
-
-    func toggleVibration(_ enabled: Bool) {
-        viewModel = makeUpdated(vibration: enabled)
-        store.saveNotifications(viewModel)
-        NotificationsGate.setVibration(enabled)
     }
 
     func setQuietHours(_ quietHours: NotificationsSettingsViewModel.QuietHours) {
@@ -69,13 +58,12 @@ final class NotificationsSettingsContainer: ObservableObject {
 
     private func makeUpdated(
         inAppSound: Bool? = nil,
-        vibration: Bool? = nil,
         quietHours: NotificationsSettingsViewModel.QuietHours? = nil
     ) -> NotificationsSettingsViewModel {
         NotificationsSettingsViewModel(
-            ringtoneId: viewModel.ringtoneId,
+            ringtoneId: store.loadNotifications().ringtoneId,
             inAppSoundEnabled: inAppSound ?? viewModel.inAppSoundEnabled,
-            vibrationEnabled: vibration ?? viewModel.vibrationEnabled,
+            vibrationEnabled: viewModel.vibrationEnabled,
             quietHours: quietHours ?? viewModel.quietHours,
             mutedContactsCount: viewModel.mutedContactsCount
         )
@@ -88,6 +76,7 @@ final class NotificationsSettingsContainer: ObservableObject {
 /// row with surfaceVariant background).
 struct NotificationsSettingsScreen: View {
     @StateObject private var container: NotificationsSettingsContainer
+    private let state: AppState
 
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
@@ -95,6 +84,7 @@ struct NotificationsSettingsScreen: View {
 
     init(state: AppState) {
         _container = StateObject(wrappedValue: NotificationsSettingsContainer())
+        self.state = state
     }
 
     private var quietHoursRange: String {
@@ -148,9 +138,35 @@ struct NotificationsSettingsScreen: View {
                     }
                     SettingsSectionHeader("SUONI")
                     VStack(spacing: 8) {
-                        // 2026-08-10: the "Suoneria" picker was removed — see
-                        // the note on NotificationsSettingsContainer. Neither
-                        // the in-app ring nor the CallKit ring is selectable.
+                        NavigationLink {
+                            LazyView { CallSoundsSettingsScreen(inCall: { [weak state] in state?.callSoundsInCall ?? false }) }
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "bell.and.waves.left.and.right")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Suoni e avvisi di chiamata")
+                                        .qaudionStyle(type.bodyMedium)
+                                        .foregroundStyle(scheme.onSurface)
+                                    Text("Suoneria, volumi, vibrazione")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
                         SettingsToggleRow(
                             title: "Suoni in-app",
                             subtitle: "Effetti sonori dentro l'app",
@@ -159,14 +175,6 @@ struct NotificationsSettingsScreen: View {
                                 set: { container.toggleInAppSound($0) }
                             )
                         )
-                        // 2026-08-06 fix: removed the "Vibrazione" toggle that
-                        // used to live here — NotificationsGate.vibrationEnabled
-                        // had zero real readers (confirmed: no call/message path
-                        // ever consulted it), so it silently did nothing, and it
-                        // duplicated/collided in name with the master haptics
-                        // switch on the Privacy screen (Impostazioni → Privacy →
-                        // Vibrazione), which IS wired to HapticFeedback and
-                        // actually controls this.
                     }
 
                     SettingsSectionHeader("MODALITÀ NON DISTURBARE")

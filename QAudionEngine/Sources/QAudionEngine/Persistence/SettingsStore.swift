@@ -87,6 +87,16 @@ public final class SettingsStore {
         save(vm, forKey: Key.notifications)
     }
 
+    // MARK: - Call sounds
+
+    public func loadCallSounds() -> CallSoundSettings {
+        load(forKey: Key.callSounds, default: CallSoundSettings.defaults)
+    }
+
+    public func saveCallSounds(_ settings: CallSoundSettings) {
+        save(settings, forKey: Key.callSounds)
+    }
+
     // MARK: - Transport
 
     public func loadTransport() -> TransportSettingsViewModel {
@@ -116,6 +126,7 @@ public final class SettingsStore {
         case calls         = "qaudion.settings.calls"
         case notifications = "qaudion.settings.notifications"
         case transport     = "qaudion.settings.transport"
+        case callSounds    = "qaudion.settings.callsounds"
     }
 
     private func load<T: Codable>(forKey key: Key, default fallback: T) -> T {

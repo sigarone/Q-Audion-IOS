@@ -9,6 +9,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
 
     private let provider: CXProvider
     private let controller: CXCallController
+    private var currentConfiguration: CXProviderConfiguration
+    private var ringtoneObserver: NSObjectProtocol?
 
     /// W-CKLEDGER (2026-09-01) — the W495 rejected/suppressed set, the
     /// W-WAKEONLY natively-reported set and the outstanding set used to be
@@ -88,19 +90,35 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // `reportIncomingCall` also stamps `CXCallUpdate.supportsHolding`
         // explicitly rather than relying on its undocumented default.
         //
-        // Custom ringtone: the bundled "qaudion_ringtone.caf" (Copy-Bundle-
-        // Resources, see project.yml) plays instead of the default iOS ringtone
-        // so an incoming Q-Audion call is audibly ours. iOS falls back to the
-        // system ringtone automatically if the file is ever missing.
-        cfg.ringtoneSound = "qaudion_ringtone.caf"
+        // Ringtone: the user's choice (bundled 28 s CAF, or the imported file in Library/Sounds), so an incoming
+        // Q-Audion call is audibly ours. iOS falls back to the system ringtone if the file is ever missing.
+        cfg.ringtoneSound = CustomRingtone.currentResolution().callKitFileName
         // Brand the native call UI with the Q-Audion lock glyph (template image
         // from Assets.xcassets/CallKitGlyph — alpha defines the shape, tinted by
         // the system). Best-effort: a nil/absent asset just leaves the default.
         cfg.iconTemplateImageData = UIImage(named: "CallKitGlyph")?.pngData()
+        self.currentConfiguration = cfg
         self.provider = CXProvider(configuration: cfg)
         self.controller = CXCallController()
         super.init()
         self.provider.setDelegate(self, queue: nil)
+        ringtoneObserver = NotificationCenter.default.addObserver(
+            forName: .qaudionCallRingtoneChanged, object: nil, queue: .main
+        ) { [weak self] _ in self?.applyRingtone() }
+    }
+
+    deinit {
+        if let ringtoneObserver { NotificationCenter.default.removeObserver(ringtoneObserver) }
+    }
+
+    /// Applies the current ringtone choice to the provider; takes effect for the next incoming call. Called when the
+    /// settings screen posts `.qaudionCallRingtoneChanged`.
+    func applyRingtone() {
+        let resolution = CustomRingtone.currentResolution()
+        guard currentConfiguration.ringtoneSound != resolution.callKitFileName else { return }
+        currentConfiguration.ringtoneSound = resolution.callKitFileName
+        provider.configuration = currentConfiguration
+        log?("callkit ringtone id=\(resolution.effectiveId) fallback=\(resolution.usedFallback ? 1 : 0)")
     }
 
     // MARK: - CallKitManaging
