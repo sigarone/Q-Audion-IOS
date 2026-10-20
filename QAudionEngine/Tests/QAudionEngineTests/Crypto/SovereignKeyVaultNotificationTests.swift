@@ -3,10 +3,10 @@ import XCTest
 
 /// W-VAULTREFRESH — pins the real root cause fix for the reported bug
 /// "vault doesn't show a newly-paired NFC key immediately, has to
-/// leave/re-enter the screen": `KeyRotationCoordinator.vaultKeys`
-/// (`QAudionApp/Services/KeyRotationCoordinator.swift`) was previously
-/// populated only once at `init()` plus after its OWN
-/// `importPeerIdentity`/`deletePsk` calls -- a PSK written by a path that
+/// leave/re-enter the screen": the list of Key management
+/// (`KeyManagementCoordinator.keys` in `QAudionApp/Services`) was
+/// populated only once at `init()` plus after its OWN calls -- a PSK
+/// written by a path that
 /// doesn't hold a reference to that coordinator (`NfcExchangeView
 /// .persistPsk`, called after a real NFC tap) never triggered a refresh.
 ///
@@ -14,18 +14,17 @@ import XCTest
 /// `.sovereignVaultDidChange` (mirroring `ContactsStore`'s own
 /// `.contactsDidChange` convention, already relied on elsewhere in this
 /// codebase for the identical class of problem) so ANY vault-mutating code
-/// path notifies listeners, not just the two call sites the coordinator
-/// itself happens to know about.
+/// path notifies listeners, not just the call sites the coordinator
+/// itself happens to know about. The device-internal entries (`__` prefix)
+/// stay quiet.
 ///
 /// This pins the MECHANISM half (does the vault actually notify) in a
 /// module (`QAudionEngine`) covered by CI (`engine-tests.yml`
-/// `ios-simulator-tests`). The CONSUMER half (`KeyRotationCoordinator`
-/// subscribing and calling `loadVaultKeys()`) lives in `QAudionApp`, whose
-/// own test target (`QAudionAppTests`) is not wired into any CI workflow --
-/// verified by reading that class's `init()`/`deinit`, which mirrors
-/// `AppState`'s own already-shipped `.contactsDidChange` observer pattern
-/// byte-for-byte (same `NotificationCenter.default.addObserver(forName:
-/// object: queue: .main)` + `Task { @MainActor [weak self] in ... }` hop).
+/// `ios-simulator-tests`). The CONSUMER half (`KeyManagementCoordinator`
+/// subscribing and calling `loadKeys()`) lives in `QAudionApp`: the
+/// observer is registered without a queue, so the poster never waits for
+/// the main queue, and hops to the main actor with
+/// `Task { @MainActor [weak self] in ... }`.
 ///
 /// **Not run in CI.** This test performs real Keychain I/O
 /// (`SovereignKeyVault.storePsk`/`deletePsk`), which fails on the CI
@@ -45,10 +44,12 @@ import XCTest
 final class SovereignKeyVaultNotificationTests: XCTestCase {
 
     private let testName = "test-vault-notify-\(UUID().uuidString)"
+    private let internalTestName = "__test-vault-notify-\(UUID().uuidString)"
 
     override func tearDownWithError() throws {
         let vault = SovereignKeyVault()
         try? vault.deletePsk(name: testName)
+        try? vault.deletePsk(name: internalTestName)
         try super.tearDownWithError()
     }
 
@@ -102,5 +103,24 @@ final class SovereignKeyVaultNotificationTests: XCTestCase {
         try vault.storePsk(name: testName, key: Data(repeating: 0x04, count: 32), fingerprint: "fp2")
 
         wait(for: [posted], timeout: 2.0)
+    }
+
+    /// A device-internal entry (`__` prefix: the order of the call keys is one) is written and deleted without a
+    /// notification: `CallKeyPriorityStore` writes it inside its lock, where no observer may run.
+    func testDeviceInternalEntry_writeAndDeletePostNothing() throws {
+        try KeychainAvailability.requireKeychain()
+        let vault = SovereignKeyVault()
+        let silent = expectation(description: "no sovereignVaultDidChange for a device-internal entry")
+        silent.isInverted = true
+        let observer = NotificationCenter.default.addObserver(
+            forName: .sovereignVaultDidChange, object: nil, queue: nil
+        ) { _ in silent.fulfill() }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        try vault.storePsk(name: internalTestName, key: Data(repeating: 0x05, count: 32), fingerprint: "fp3")
+        try vault.storePsk(name: internalTestName, key: Data(repeating: 0x06, count: 32), fingerprint: "fp4")
+        try vault.deletePsk(name: internalTestName)
+
+        wait(for: [silent], timeout: 0.5)
     }
 }

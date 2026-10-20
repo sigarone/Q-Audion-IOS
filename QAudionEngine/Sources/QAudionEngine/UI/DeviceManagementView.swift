@@ -24,8 +24,7 @@ public struct DeviceManagementView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Link new", systemImage: "plus") {
-                    // W72: open the existing NFC pairing surface — same
-                    // path KeyManagementView uses for "Import Key via NFC".
+                    // W72: open the existing NFC pairing surface.
                     showingNfcPairing = true
                 }
             }

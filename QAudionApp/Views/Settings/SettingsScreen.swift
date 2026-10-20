@@ -465,16 +465,17 @@ struct SettingsScreen: View {
             NavigationLink {
                 LazyView { GatedScreenEntry(capability: .keyManagement) { KeyManagementScreen(state: appState) } }
             } label: {
-                // The one row that keeps the PQC purple, deliberately: its
-                // subtitle IS "PSK · PQC · rotazione". Three neighbours
-                // wore the same tint and had nothing to do with
-                // post-quantum crypto — a voiceprint, a 12-word BIP-39
-                // mnemonic, an Ed25519-signed update catalogue — so the
-                // colour meant nothing wherever it appeared.
+                // The one row that keeps the PQC purple, deliberately: it manages
+                // the pre-shared keys that are mixed into the post-quantum
+                // session key. Three neighbours wore the same tint and had
+                // nothing to do with post-quantum crypto — a voiceprint, a
+                // 12-word BIP-39 mnemonic, an Ed25519-signed update
+                // catalogue — so the colour meant nothing wherever it
+                // appeared.
                 SettingsRow(icon: "key.fill",
                             iconColor: extras.pqcAccent,
                             title: "Gestione chiavi",
-                            subtitle: "PSK · PQC · rotazione")
+                            subtitle: "PSK · NFC · KMS")
             }
             .buttonStyle(.plain)
 

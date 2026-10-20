@@ -1433,7 +1433,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // from the entry's raw key material rather than trusted from its
         // Keychain label — so an entry mislabelled in the 16-hex or
         // dotted-group display form (`AppState.installKmsPreBootstrapPsk`,
-        // `KeyRotationCoordinator`) is advertised in the WIRE_SPEC §3.3
+        // the entries of the former identity QR) is advertised in the WIRE_SPEC §3.3
         // canonical 64-hex form instead of a value the responder's gate can
         // never match.
         let pskVault = SovereignKeyVault()
@@ -1456,15 +1456,17 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // `PskAdvertising.candidatesForAdvertisement` applies the SAME eligibility
         // filter and order as `fingerprintsForAdvertisement`, so a v3 tag list and a
         // static fingerprint list describe the same secrets in the same priority
-        // positions — which the responder is required to honour. That priority puts
-        // hw_only keys first, then the KMS keys (newest delivery first), then every
-        // other key: the KMS key is the call key by default and an in-person key
-        // (NFC, QR + Bluetooth proximity) confirms it, as on Android.
+        // positions — which the responder is required to honour. That priority is the
+        // call-key list of Key management (docs/security/CALL_KEY_PRIORITY.md, the same
+        // on Android): by default the newest KMS key first and the in-person keys (NFC,
+        // QR + Bluetooth proximity) after it as confirmations, unless the user moved one
+        // of them above. The caller decides; nothing about it goes on the wire.
         let advert = PskAdvertResolver.buildAdvertisement(
             dialect: Self.offerAdvertDialect,
             callId: callId,
             ownEphemeralX25519Pub: x25519RawPub,
-            candidates: PskAdvertising.candidatesForAdvertisement(pskAdvertEntries)
+            candidates: PskAdvertising.candidatesForAdvertisement(
+                pskAdvertEntries, store: CallKeyPriorityStore.live(vault: pskVault))
         )
         let advertisedPskFingerprints: [String] = advert.fingerprints
         // W-NFCVISIBLE — parallel role array, same order (both derive from the
@@ -1679,7 +1681,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let advert = PskAdvertResolver.buildAdvertisement(
             dialect: Self.offerAdvertDialect, callId: callId,
             ownEphemeralX25519Pub: x25519RawPub,
-            candidates: PskAdvertising.candidatesForAdvertisement(pskAdvertEntries))
+            candidates: PskAdvertising.candidatesForAdvertisement(
+                pskAdvertEntries, store: CallKeyPriorityStore.live(vault: pskVault)))
         // CALL-3 — this OFFERER's own next round: reuse the nonce round 1
         // established (never regenerate mid-call) and increment the round
         // counter. A call that somehow never went through
@@ -2248,7 +2251,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // `ciphertext.x25519`, which is what the peer will derive our nonce
                 // from. Anything else here and the initiator matches nothing.
                 ownEphemeralX25519Pub: x25519Result.ephemeralPublicKey,
-                candidates: PskAdvertising.candidatesForAdvertisement(acceptPskAdvertEntries)
+                candidates: PskAdvertising.candidatesForAdvertisement(
+                    acceptPskAdvertEntries, store: CallKeyPriorityStore.live(vault: acceptPskVault))
             )
             let acceptAdvertisedPskFingerprints: [String] = acceptAdvert.fingerprints
             let acceptAdvertisedPskRoles: [Int]? = acceptAdvert.roles

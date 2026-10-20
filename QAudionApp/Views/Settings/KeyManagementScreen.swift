@@ -1,21 +1,22 @@
 import SwiftUI
-import CoreImage.CIFilterBuiltins
 import QAudionEngine
 
-/// Key management sub-screen. W31 design-token refactor.
-/// Replaces stock `Form` with the new design vocabulary while
-/// preserving every coordinator binding (rotate / NFC pair / QR
-/// export / clipboard).
+/// Key management: where the pre-shared keys of calls come from, and the order in which they are tried.
+///
+/// Top to bottom, the same as on Android: the KMS row (status of the key delivery and "Aggiorna"), "Associa di
+/// persona" (QR + Bluetooth, with another person), NFC (with an Android phone), then the keys that take part in
+/// calls. The list is the call-key priority of docs/security/CALL_KEY_PRIORITY.md: by default the KMS key is the
+/// call key and an in-person key confirms it; the arrows put one above another, and a key placed by hand keeps its
+/// place when a new KMS key arrives.
 struct KeyManagementScreen: View {
-    @StateObject private var coordinator: KeyRotationCoordinator
-    @State private var showingRotateConfirm = false
-    @State private var showingIdentityText = false
-    @State private var showingQrScanner = false
-    /// 2026-08-06 fix: the vault-entry trash button used to call
-    /// `coordinator.deletePsk` directly on tap, no confirmation —
-    /// inconsistent with "Ruota chiavi" right above it on the same
-    /// screen, which does confirm before acting.
-    @State private var pendingDeletePskName: String?
+    @StateObject private var coordinator: KeyManagementCoordinator
+    /// The address-book side of an in-person pairing started from here: the same bookkeeping Contacts runs
+    /// (contact added if missing, outcome, telemetry).
+    @StateObject private var contacts: ContactsListContainer
+    @ObservedObject private var kmsStatus = KmsSweepStatus.shared
+    @State private var pendingDeleteKeyId: String?
+    @State private var showingProximityPair = false
+    @State private var proximityOutcome: ContactsListContainer.ProximityOutcome?
 
     private let appState: AppState
     /// Whether this device can read NFC tags; the NFC row is replaced by a
@@ -25,343 +26,288 @@ struct KeyManagementScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
-    @Environment(\.qaudionSnackbar) private var snackbar
 
     init(state: AppState) {
         self.appState = state
-        _coordinator = StateObject(wrappedValue: KeyRotationCoordinator(appState: state))
+        _coordinator = StateObject(wrappedValue: KeyManagementCoordinator())
+        _contacts = StateObject(wrappedValue: ContactsListContainer(appState: state))
     }
 
     var body: some View {
         ZStack {
             scheme.background.ignoresSafeArea()
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    SettingsSectionHeader("FINGERPRINT IDENTITÀ")
-                    fingerprintCard
-
-                    if let qrString = coordinator.currentIdentityQr {
-                        SettingsSectionHeader("MOSTRA LA TUA IDENTITÀ")
-                        VStack(spacing: 12) {
-                            qrCard(content: qrString)
-                            actionRow(icon: "doc.plaintext.fill",
-                                      title: "Mostra come testo") {
-                                showingIdentityText = true
-                            }
-                            actionRow(icon: "doc.on.doc.fill",
-                                      title: "Copia negli appunti") {
-                                UIPasteboard.general.string = qrString
-                            }
-                        }
-                    }
-
-                    SettingsSectionHeader("SCAMBIO CHIAVE CON CONTATTO")
-                    VStack(spacing: 8) {
-                        actionRow(icon: "qrcode.viewfinder",
-                                  title: "Scansiona QR contatto") {
-                            showingQrScanner = true
-                        }
-                        if nfcAvailability.isAvailable {
-                            NavigationLink {
-                                NfcExchangeView()
-                            } label: {
-                                SettingsRow(icon: "wave.3.right",
-                                            iconColor: extras.pqcAccent,
-                                            title: "Accoppia via NFC")
-                            }
-                            .buttonStyle(.plain)
-                        } else {
-                            Text(NfcAvailability.unavailableMessage)
-                                .qaudionStyle(type.labelSmall)
-                                .foregroundStyle(scheme.onSurfaceVariant)
-                                .padding(.horizontal, 14)
-                        }
-                        Text("Scansiona il QR del tuo contatto per salvare la sua chiave pubblica nel vault. Puoi anche condividere il tuo QR qui sopra.")
-                            .qaudionStyle(type.labelSmall)
-                            .foregroundStyle(scheme.onSurfaceVariant)
-                            .padding(.horizontal, 14)
-                    }
-
-                    SettingsSectionHeader("CHIAVI IN VAULT (PSK)")
-                    vaultSection
-
-                    SettingsSectionHeader("ROTAZIONE CHIAVE EFFIMERA")
-                    VStack(spacing: 8) {
-                        if let last = coordinator.lastRotationDate {
-                            kvRow(label: "Ultima rotazione",
-                                  value: last.formatted(.relative(presentation: .named).locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode))),
-                                  mono: false)
-                        }
-                        rotateButton
-                        Text("Genera un nuovo keypair X25519 effimero locale. Aggiorna il fingerprint e il QR mostrati sopra. Non modifica la tua identità sovrana (userId). Per ora la chiave è solo locale — il push al server arriverà quando il backend esporrà l'endpoint di aggiornamento chiave.")
-                            .qaudionStyle(type.labelSmall)
-                            .foregroundStyle(scheme.onSurfaceVariant)
-                            .padding(.horizontal, 14)
-                    }
-
-                    if let err = coordinator.errorMessage {
-                        errorBanner(err).padding(.top, 12)
-                    }
-
+                VStack(alignment: .leading, spacing: 8) {
+                    kmsRow
+                    pairInPersonRow
+                    nfcRow
+                    SettingsSectionHeader(keysHeader)
+                    keyList
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 16)
+                .padding(.top, 12)
+            }
+            // At the bottom of the screen, not in the list: an arrow press can be far from the top of a long list.
+            .safeAreaInset(edge: .bottom) {
+                if let message = coordinator.errorMessage {
+                    errorBanner(message)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .background(scheme.background)
+                }
             }
         }
         .navigationTitle("Gestione chiavi")
-        // SECURITY F-3: this screen shows the identity QR + fingerprint
-        // and supports clipboard export of identity material. Mirror
-        // ChatDetailScreen's secure-window lifecycle so it cannot be
-        // screenshotted / recorded / AirPlay-mirrored while presented.
-        .onAppear { ScreenshotLockService.lock() }
-        .onDisappear { ScreenshotLockService.unlock() }
-        .alert("Ruotare le chiavi?", isPresented: $showingRotateConfirm) {
-            Button("Annulla", role: .cancel) { }
-            Button("Ruota", role: .destructive) {
-                coordinator.rotate()
-                snackbar?.show(.init(
-                    text: String(localized: "key_management.rotation_started", defaultValue: "Rotazione chiavi avviata.", comment: "Snackbar — X25519 ephemeral key rotation started after the user confirms the rotate-keys alert"),
-                    severity: .warning,
-                    durationSeconds: 5
-                ))
-            }
-        } message: {
-            Text("Verranno generate nuove chiavi. Tutti i contatti dovranno ri-verificare la tua identità. Continuare?")
-        }
         .alert("Eliminare questa chiave?",
                isPresented: Binding(
-                   get: { pendingDeletePskName != nil },
-                   set: { if !$0 { pendingDeletePskName = nil } }
+                   get: { pendingDeleteKeyId != nil },
+                   set: { if !$0 { pendingDeleteKeyId = nil } }
                )) {
-            Button("Annulla", role: .cancel) { pendingDeletePskName = nil }
+            Button("Annulla", role: .cancel) { pendingDeleteKeyId = nil }
             Button("Elimina", role: .destructive) {
-                if let name = pendingDeletePskName {
-                    coordinator.deletePsk(name: name)
+                if let id = pendingDeleteKeyId {
+                    coordinator.deleteKey(id)
                 }
-                pendingDeletePskName = nil
+                pendingDeleteKeyId = nil
             }
         } message: {
             Text("La chiave verrà rimossa dal vault locale. Se serve di nuovo, andrà ri-scambiata con il contatto.")
         }
-        .sheet(isPresented: $showingQrScanner) {
-            QrScannerSheet { decoded in
-                if case .identity(let identity) = decoded {
-                    coordinator.importPeerIdentity(userId: identity.userId, pubkey: identity.pubkey)
-                }
-            }
+        .sheet(isPresented: $showingProximityPair) {
+            ProximityPairingChooserSheet(
+                localUserId: appState.currentUserId,
+                serverIdentityKeys: { (userId: String) async -> Set<Data> in
+                    await contacts.publishedIdentityKeys(userId)
+                },
+                onCompleted: { result in handleProximityPaired(result) })
         }
-        .sheet(isPresented: $showingIdentityText) {
-            NavigationStack {
-                ZStack {
-                    scheme.background.ignoresSafeArea()
-                    if let qr = coordinator.currentIdentityQr {
-                        ScrollView {
-                            Text(qr)
-                                .qaudionStyle(type.bodySmall)
-                                .modifier(MonoIfNeededK(mono: true))
-                                .foregroundStyle(scheme.onSurface)
-                                .padding(20)
-                                .textSelection(.enabled)
-                        }
-                    }
-                }
-                .navigationTitle("Testo identità")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Fatto") { showingIdentityText = false }
-                    }
-                }
-            }
+        .sheet(item: $proximityOutcome) { outcome in
+            ProximityOutcomeResultSheet(outcome: outcome) { proximityOutcome = nil }
         }
     }
 
-    // MARK: - Vault PSK section
+    // MARK: - KMS
 
-    @ViewBuilder
-    private var vaultSection: some View {
-        if coordinator.vaultKeys.isEmpty {
-            Text("Nessuna chiave salvata. Scansiona il QR di un contatto per aggiungerne una.")
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 12).fill(scheme.surfaceVariant.opacity(0.4)))
-        } else {
-            VStack(spacing: 8) {
-                ForEach(coordinator.vaultKeys, id: \.name) { entry in
-                    HStack(spacing: 14) {
-                        Image(systemName: "key.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(extras.pqcAccent)
-                            .frame(width: 22)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.name)
-                                .qaudionStyle(type.bodyMedium)
-                                .foregroundStyle(scheme.onSurface)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Text(entry.fingerprint)
-                                .qaudionStyle(type.labelSmall)
-                                .foregroundStyle(scheme.onSurfaceVariant)
-                                .font(.system(.caption, design: .monospaced))
-                        }
-                        Spacer()
-                        Button {
-                            pendingDeletePskName = entry.name
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 14))
-                                .foregroundStyle(extras.riskHigh.opacity(0.7))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Elimina chiave")
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 52)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(scheme.surfaceVariant.opacity(0.4)))
-                }
-            }
-        }
-    }
-
-    // MARK: - Fingerprint card
-
-    private var fingerprintCard: some View {
-        Text(coordinator.currentFingerprint)
-            .font(.system(.title3, design: .monospaced).weight(.bold))
-            .foregroundStyle(scheme.onSurface)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16).padding(.horizontal, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(scheme.surfaceVariant.opacity(0.4))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(scheme.primary.opacity(0.4), lineWidth: 1)
-            )
-    }
-
-    // MARK: - QR card
-
-    private func qrCard(content: String) -> some View {
-        VStack {
-            qrCodeImage(for: content)
-                .frame(maxWidth: .infinity)
-                .frame(height: 220)
-                .padding(20)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white)
-                )
-        }
-    }
-
-    @ViewBuilder
-    private func qrCodeImage(for content: String) -> some View {
-        if let image = generateQrImage(from: content) {
-            Image(uiImage: image)
-                .interpolation(.none)
-                .resizable()
-                .scaledToFit()
-        } else {
-            Text("Generazione QR fallita")
-                .qaudionStyle(type.bodySmall)
-                .foregroundStyle(extras.riskHigh)
-        }
-    }
-
-    private func generateQrImage(from content: String) -> UIImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(content.utf8)
-        filter.correctionLevel = "M"
-        guard let outputImage = filter.outputImage else { return nil }
-        let scale = CGAffineTransform(scaleX: 8, y: 8)
-        let scaled = outputImage.transformed(by: scale)
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return UIImage(cgImage: cgImage)
-    }
-
-    // MARK: - Rotate button
-
-    private var rotateButton: some View {
-        Button(action: { showingRotateConfirm = true }) {
-            HStack {
-                Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                    .foregroundStyle(extras.warning)
-                Text("Ruota chiavi")
-                    .qaudionStyle(type.labelLarge)
-                    .foregroundStyle(extras.warning)
-                Spacer()
-                if coordinator.isRotating {
-                    ProgressView().progressViewStyle(.circular).tint(extras.warning)
-                }
-            }
-            .padding(.horizontal, 14).padding(.vertical, 14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(extras.warning.opacity(0.12))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(extras.warning.opacity(0.45), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(coordinator.isRotating)
-    }
-
-    // MARK: - Generic action row + kv + error helpers
-
-    private func actionRow(icon: String,
-                           title: String,
-                           action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(scheme.primary)
-                    .frame(width: 22)
-                Text(title)
+    private var kmsRow: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(extras.pqcAccent)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("KMS")
                     .qaudionStyle(type.bodyMedium)
                     .foregroundStyle(scheme.onSurface)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                Text(verbatim: kmsStatusText)
+                    .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
+                    .lineLimit(2)
             }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 56)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(scheme.surfaceVariant.opacity(0.4))
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func kvRow(label: String, value: String, mono: Bool) -> some View {
-        HStack(spacing: 14) {
-            Text(label)
-                .qaudionStyle(type.bodyMedium)
-                .foregroundStyle(scheme.onSurface)
-            Spacer()
-            Text(value)
-                .qaudionStyle(type.labelSmall)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .modifier(MonoIfNeededK(mono: mono))
+            Spacer(minLength: 6)
+            Button {
+                Task { await appState.pollKmsNow() }
+            } label: {
+                if kmsStatus.isRunning {
+                    ProgressView().progressViewStyle(.circular)
+                } else {
+                    Text("Aggiorna")
+                        .qaudionStyle(type.labelLarge)
+                        .foregroundStyle(scheme.primary)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(kmsStatus.isRunning)
+            .frame(minWidth: 64, minHeight: 44)
         }
         .padding(.horizontal, 14)
-        .frame(minHeight: 52)
+        .frame(minHeight: 56)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(scheme.surfaceVariant.opacity(0.4))
         )
+    }
+
+    private var kmsStatusText: String {
+        switch kmsStatus.state {
+        case .idle:
+            return String(
+                localized: "key_management.kms_idle",
+                defaultValue: "Il server consegna le chiavi qui appena disponibili.",
+                comment: "Key management, KMS row — status line before any key delivery check has finished")
+        case .running:
+            return String(
+                localized: "key_management.kms_running",
+                defaultValue: "Aggiornamento in corso…",
+                comment: "Key management, KMS row — status line while the app asks the server for new keys")
+        case .succeeded(let date):
+            let time: String = Self.timeText(date)
+            return String(
+                localized: "key_management.kms_last_update",
+                defaultValue: "Ultimo aggiornamento: \(time)",
+                comment: "Key management, KMS row — status line after a successful check; %@ is the time of day")
+        case .failed:
+            return String(
+                localized: "key_management.kms_failed",
+                defaultValue: "Aggiornamento non riuscito.",
+                comment: "Key management, KMS row — status line after the check for new keys failed")
+        }
+    }
+
+    private static func timeText(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute().locale(Locale(identifier: AppLanguageManager.effectiveLanguageCode)))
+    }
+
+    // MARK: - In person and NFC
+
+    private var pairInPersonRow: some View {
+        Button {
+            showingProximityPair = true
+        } label: {
+            SettingsRow(icon: "person.2.wave.2",
+                        iconColor: extras.pqcAccent,
+                        title: "Associa di persona")
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var nfcRow: some View {
+        if nfcAvailability.isAvailable {
+            NavigationLink {
+                NfcExchangeView()
+            } label: {
+                SettingsRow(icon: "wave.3.right",
+                            iconColor: extras.pqcAccent,
+                            title: "Accoppia via NFC",
+                            subtitle: "Funziona con un telefono Android")
+            }
+            .buttonStyle(.plain)
+        } else {
+            Text(NfcAvailability.unavailableMessage)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .padding(.horizontal, 14)
+        }
+    }
+
+    /// The pairing sheet closed itself when the pairing finished; what is left is the address-book side and the
+    /// final screen of the outcome.
+    private func handleProximityPaired(_ result: ProximityPairingSummary) {
+        let outcome: ContactsListContainer.ProximityOutcome = contacts.recordProximityPairing(result)
+        showingProximityPair = false
+        proximityOutcome = outcome
+        coordinator.loadKeys()
+    }
+
+    // MARK: - The keys
+
+    private var keysHeader: String {
+        let count: Int = coordinator.keys.count
+        return String(
+            localized: "key_management.section_keys",
+            defaultValue: "CHIAVI DISPONIBILI (\(count))",
+            comment: "Key management — header above the list of call keys; %lld is how many there are")
+    }
+
+    @ViewBuilder
+    private var keyList: some View {
+        if coordinator.keys.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Nessuna chiave presente")
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.onSurface)
+                Text("Usa Associa di persona o NFC con un'altra persona, oppure aggiorna il KMS per ricevere le chiavi del server.")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(scheme.surfaceVariant.opacity(0.4)))
+        } else {
+            VStack(spacing: 8) {
+                ForEach(coordinator.keys) { row in
+                    keyRow(row)
+                }
+            }
+        }
+    }
+
+    private func keyRow(_ row: KeyManagementRow) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(extras.pqcAccent)
+                .frame(width: 22)
+            keyDescription(row)
+            Spacer(minLength: 6)
+            priorityArrows(row)
+            deleteButton(row)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(minHeight: 72)
+        .background(RoundedRectangle(cornerRadius: 12).fill(scheme.surfaceVariant.opacity(0.4)))
+    }
+
+    private func keyDescription(_ row: KeyManagementRow) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            originLabel(row)
+                .qaudionStyle(type.bodyMedium)
+                .foregroundStyle(scheme.onSurface)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(verbatim: row.fingerprint)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .font(.system(.caption, design: .monospaced))
+            Text("Priorità \(row.priority)")
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+        }
+    }
+
+    /// Up and down: one place each, always enabled (a move at the edge changes nothing but still marks the key as
+    /// placed by hand, as on Android).
+    private func priorityArrows(_ row: KeyManagementRow) -> some View {
+        VStack(spacing: 0) {
+            arrowButton(systemImage: "chevron.up", label: "Aumenta priorità") {
+                coordinator.moveUp(row.id)
+            }
+            arrowButton(systemImage: "chevron.down", label: "Riduci priorità") {
+                coordinator.moveDown(row.id)
+            }
+        }
+    }
+
+    private func arrowButton(systemImage: String, label: LocalizedStringKey,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(scheme.primary)
+                .frame(width: 44, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func deleteButton(_ row: KeyManagementRow) -> some View {
+        Button {
+            pendingDeleteKeyId = row.id
+        } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 14))
+                .foregroundStyle(extras.riskHigh.opacity(0.7))
+                .frame(width: 36, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Elimina chiave")
     }
 
     private func errorBanner(_ msg: String) -> some View {
@@ -381,15 +327,18 @@ struct KeyManagementScreen: View {
                 .fill(extras.riskHigh.opacity(0.12))
         )
     }
-}
 
-private struct MonoIfNeededK: ViewModifier {
-    let mono: Bool
-    func body(content: Content) -> some View {
-        if mono {
-            content.font(.system(.caption, design: .monospaced))
-        } else {
-            content
+    /// What the key is called: where it came from, or the name it was given when it came from nowhere known.
+    private func originLabel(_ row: KeyManagementRow) -> Text {
+        switch row.origin {
+        case .kms:
+            return Text("KMS")
+        case .nfc:
+            return Text("NFC")
+        case .proximity:
+            return Text("Associa di persona")
+        default:
+            return Text(verbatim: row.id)
         }
     }
 }

@@ -28,13 +28,15 @@ import UIKit
 ///
 /// SECURITY H-18 (secure-window coverage): the secure field is installed by
 /// ChatDetailScreen and GroupChatScreen (preference-gated), LiveInCallScreen,
-/// VideoCallView, GroupCallView, MyIdentityQrSheet, ProximityPairingSheet,
-/// KeyManagementScreen (PSK vault), LinkNewDeviceScreen (device-link) and
+/// VideoCallView, GroupCallView, ProximityPairingSheet,
+/// LinkNewDeviceScreen (device-link) and
 /// RecoverySeedContainerView (mnemonic shown in `.setup` mode).
 /// Deliberately NOT covered: ContactDetailScreen (only public fingerprints,
 /// and it is pushed from ChatDetailScreen whose unconditional unlock could
-/// race its onAppear) and GroupInviteQrSheet (payload is non-sensitive, see
-/// its kdoc). Because lock()/unlock() share ONE sentinel, a screen that is
+/// race its onAppear), KeyManagementScreen (only the first 64 bits of each
+/// key's fingerprint; it presents ProximityPairingSheet, whose dismissal
+/// unlocks) and GroupInviteQrSheet (payload is non-sensitive, see its
+/// kdoc). Because lock()/unlock() share ONE sentinel, a screen that is
 /// presented over a locked one must not call unlock() on its own dismissal.
 @MainActor
 public enum ScreenshotLockService {

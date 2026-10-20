@@ -117,8 +117,9 @@ final class KcMacSignerKeyWiringTests: XCTestCase {
         XCTAssertTrue(telemetry.contains(
             "AssuranceState.resolveNfcConfirmed( sigOk: state.sigOk, mutualLocalKeys: AppState.resolveMutualLocalKeys(fingerprints: state.mutualFingerprints), verifiedPeerIdentityKey: signerIdentityKey )"),
             "the confirmation takes the signer key and nothing else")
-        XCTAssertTrue(telemetry.contains("let verifiedPeerIdentityKey = signerIdentityKey ?? PeerIdentityPinStore().pinnedKey("),
-                      "the binding check prefers the signer key too")
+        XCTAssertTrue(telemetry.contains(
+            "let verifiedPeerIdentityKey = AssuranceState.resolvePresenceAuthIdentityKey( signerIdentityKey: signerIdentityKey, pinnedKey: PeerIdentityPinStore().pinnedKey("),
+            "the binding check prefers the signer key too (AssuranceState.resolvePresenceAuthIdentityKey)")
     }
 
     /// `expected_but_missing` reads the S7 verdict, as the other platform does.

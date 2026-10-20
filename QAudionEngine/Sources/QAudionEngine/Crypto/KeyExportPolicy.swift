@@ -51,12 +51,14 @@ public enum PskOrigin: String {
     /// correct answer.
     case deviceInternal = "device_internal"
 
-    /// An X25519 IDENTITY public key — this device's own rotated identity
-    /// (`KeyRotationCoordinator.rotate()`, `"rotated_ephemeral.<ts>"`) or a
-    /// peer's imported identity (`KeyRotationCoordinator.importPeerIdentity`,
-    /// `"peer.<userId>"`). Not a shared secret with anyone: it is asymmetric,
+    /// An X25519 IDENTITY public key — what the former identity-QR import
+    /// (`"peer.<userId>"`) and ephemeral key rotation
+    /// (`"rotated_ephemeral.<ts>"`) of Key management stored in this vault.
+    /// Nothing writes them any more; `LegacyIdentityKeyEntries` deletes the
+    /// rotated ephemeral ones that are left, and every call-key reader skips
+    /// them all. Not a shared secret with anyone: it is asymmetric,
     /// public by design, and carries none of the "both radios were in
-    /// contact" evidence a real PSK does. Both call sites share this
+    /// contact" evidence a real PSK does. Such an entry shares this
     /// vault's storage (a pre-existing design choice this policy doesn't
     /// change) but must never be eligible as call-PSK material — an
     /// identity pubkey accidentally advertised/matched as a PSK fingerprint
@@ -118,9 +120,11 @@ public enum PskOrigin: String {
         // material. `.callDerived` is already excluded from advertisement
         // below, so this closes that path without a new origin case.
         if name.hasPrefix("auto:") { return .callDerived }
-        // `KeyRotationCoordinator.importPeerIdentity`/`rotate()` name their
-        // entries "peer.<userId>" / "rotated_ephemeral.<ts>" — X25519 IDENTITY
-        // public keys sharing this vault's storage, not PSKs. Without this
+        // The former identity-QR import and key rotation of Key management
+        // named their entries "peer.<userId>" / "rotated_ephemeral.<ts>" —
+        // X25519 IDENTITY public keys sharing this vault's storage, not
+        // PSKs (`LegacyIdentityKeyEntries` deletes the rotated ephemeral ones that
+        // are left). Without this
         // branch they fell through to `.manual`, which `fingerprintsForAdvertisement`/
         // `isEligibleMatchCandidate` never exclude — reachable, in principle,
         // as call-PSK candidates. (Never actually selected in practice because

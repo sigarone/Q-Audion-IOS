@@ -41,23 +41,21 @@ final class SecurityDashboardContainer: ObservableObject {
         let storedContacts = appState.cachedContacts
         let unverifiedCount = storedContacts.count(where: { !$0.isVerified })
 
-        // 2026-08-06 fix: keyHealth/lastKeyRotation/activeThreatReports used
-        // to just copy whatever `viewModel` already held — which starts as
-        // `.mock` and, since nothing here ever recomputed them, stayed
-        // frozen at the mock's `.healthy` / fixed 2025-04-07 date / `0`
-        // forever, even after real rotations or real filed threat reports.
-        // lastKeyRotation/keyHealth now mirror KeyRotationCoordinator's own
-        // most-recent-rotation lookup (same SovereignKeyVault source, same
-        // "rotated_ephemeral." naming contract) instead of a static date.
-        // activeThreatReports reads the same local store ThreatReportListView
-        // already persists to, so filing a report is reflected immediately.
-        let rotation = Self.mostRecentRotation()
+        // 2026-08-06 fix: keyHealth/activeThreatReports used to just copy
+        // whatever `viewModel` already held — which starts as `.mock` and,
+        // since nothing here ever recomputed them, stayed frozen at the
+        // mock's `.healthy` / `0` forever, even after real filed threat
+        // reports. activeThreatReports reads the same local store
+        // ThreatReportListView already persists to, so filing a report is
+        // reflected immediately. There is no key rotation in the app any
+        // more (Key management has no "Rotazione chiave effimera"), so no
+        // last-rotation date is shown.
         let reportCount = ThreatReportLogStore().load().count
 
         viewModel = SecurityDashboardViewModel(
             identityFingerprint: fingerprint,
             keyHealth: .healthy,
-            lastKeyRotation: rotation ?? viewModel.lastKeyRotation,
+            lastKeyRotation: nil,
             pqcAlgorithm: "ML-KEM-1024",
             unverifiedContacts: unverifiedCount,
             activeThreatReports: reportCount,
@@ -68,13 +66,6 @@ final class SecurityDashboardContainer: ObservableObject {
             // one — never flips true today, so this banner never lies.
             wipeRequestPending: false
         )
-    }
-
-    private static func mostRecentRotation() -> Date? {
-        SovereignKeyVault().listPskEntries()
-            .filter { $0.name.hasPrefix("rotated_ephemeral.") }
-            .compactMap { $0.createdAt }
-            .max()
     }
 
     func refresh() {
@@ -131,14 +122,6 @@ struct SecurityDashboardScreen: View {
         }
     }
 
-    private var lastRotationText: String {
-        guard let date = container.viewModel.lastKeyRotation else { return "Mai" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
-
     /// Sigsum kt-status row label + color. See `BCryptoKmsClient.KtStatus`'s
     /// kdoc — "confirmed" is the only state backed by an independently
     /// verified transparency-log proof; "pending"/"unknown" are neutral
@@ -191,9 +174,6 @@ struct SecurityDashboardScreen: View {
                         statusRow(label: String(localized: "security_dashboard.status.label", defaultValue: "Stato", comment: "Security dashboard — generic status row label (reused for key health and key-transparency rows)"),
                                   value: keyHealthLabel,
                                   tone: keyHealthColor)
-                        kvRow(label: "Ultima rotazione",
-                              value: lastRotationText,
-                              mono: false)
                     }
 
                     // Sigsum key transparency (2026-09-04) — purely

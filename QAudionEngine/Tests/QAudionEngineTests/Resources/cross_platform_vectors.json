@@ -174,20 +174,6 @@
       }
     ]
   },
-  "identity_qr_v1": {
-    "description": "4-byte integrity checksum for IdentityQrCode v1 QR string.",
-    "algorithm": "first 4 bytes of SHA-256(version_byte=0x01 || userId_utf8 || pubkey_bytes)",
-    "version": 1,
-    "vectors": [
-      {
-        "user_id": "user-aabbcc",
-        "pubkey_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-        "expected_checksum_hex": "3232c6ab",
-        "expected_checksum_b64": "MjLGqw==",
-        "notes": "pubkey = 0x00..0x1f (32 bytes sequential). SHA-256 input = 0x01 || b'user-aabbcc' || pubkey. Checksum is first 4 bytes."
-      }
-    ]
-  },
   "device_link_qr": {
     "description": "Binary QR blob layout for DeviceLinkBinaryQR §5.6.",
     "layout": "32B pubkey || 4B BE length || userId_utf8 || 16B auth_code",

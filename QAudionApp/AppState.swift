@@ -2371,7 +2371,10 @@ final class AppState: ObservableObject {
     /// `emitKeyConfirmationTelemetry` fed `decide()` (rather than a second,
     /// independently-hardcoded value) and the real NFC fingerprint instead
     /// of an empty placeholder.
-    private var finalAssuranceByCall: [String: (state: AssuranceState, peerId: String, selectedFp: String?, witnessOk: Bool)] = [:]
+    /// `signerIdentityKey` is the identity key that signed the round this verdict belongs to (nil unless its
+    /// signature verified): `applyPresenceAuthOutcomeIfAny` persists under it, not under a stored pin.
+    private var finalAssuranceByCall:
+        [String: (state: AssuranceState, peerId: String, selectedFp: String?, witnessOk: Bool, signerIdentityKey: Data?)] = [:]
 
     /// W372: NotificationCenter observer guard — only register the
     /// group-chat fan-out listener once per AppState lifetime.
@@ -3891,6 +3894,9 @@ final class AppState: ObservableObject {
         // KMS sweep publish the key before anyone calls. Present → untouched;
         // Keychain locked (PushKit wake before first unlock) → nothing created,
         // the handshake's own lazy read retries after unlock.
+        // The rotated ephemeral entries of the key rotation that Key management no longer has are removed
+        // once; nothing reads them.
+        KeyManagementCleanup.removeLegacyIdentityEntriesOnce()
         let bootIdentity = SovereignIdentityManager()
         let signerBoot = bootIdentity.ensureIdentity()
         RTLog.info("call", "signerboot r=\(SovereignIdentityBootstrap.logCode(signerBoot))")
@@ -13585,9 +13591,26 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// One KMS sweep, with its outcome recorded for Key management (`KmsSweepStatus`): the WebSocket event, the
+    /// periodic poller, the first sweep after sign-in and the "Aggiorna" action all come through here.
     @MainActor
     private func runKmsSweep() async {
-        guard let provider = liveProvider else { return }
+        KmsSweepStatus.shared.sweepStarted()
+        let succeeded = await performKmsSweep()
+        KmsSweepStatus.shared.sweepFinished(succeeded: succeeded)
+    }
+
+    /// Polls the KMS for delivered keys now (Key management, "Aggiorna").
+    @MainActor
+    func pollKmsNow() async {
+        await runKmsSweep()
+    }
+
+    /// - Returns: `true` when the device keys were ready and the pending list was fetched and processed; `false`
+    ///   when there is no signed-in backend or a step failed.
+    @MainActor
+    private func performKmsSweep() async -> Bool {
+        guard let provider = liveProvider else { return false }
         let vault = SovereignKeyVault()
         let manager = DeviceKeyManager(vault: vault, kmsClient: provider.kmsClient)
         do {
@@ -13691,8 +13714,10 @@ final class AppState: ObservableObject {
             // provider + device credential are confirmed available.
             wireDeviceRenewFallback(on: provider)
             scheduleProactiveTokenRefresh()
+            return true
         } catch {
             print("[AppState] KMS sweep failed: \(error)")
+            return false
         }
     }
 
@@ -15407,8 +15432,10 @@ final class AppState: ObservableObject {
         // whenever the server stamped one, and omitting it here checks a
         // different (legacy bare-contactId) account than the one that pin
         // actually landed in.
-        let verifiedPeerIdentityKey = signerIdentityKey ?? PeerIdentityPinStore().pinnedKey(
-            contactId: state.peerId, deviceId: peerDeviceId(for: state.peerId))
+        let verifiedPeerIdentityKey = AssuranceState.resolvePresenceAuthIdentityKey(
+            signerIdentityKey: signerIdentityKey,
+            pinnedKey: PeerIdentityPinStore().pinnedKey(
+                contactId: state.peerId, deviceId: peerDeviceId(for: state.peerId)))
         let priorPresenceAuth = existingContact?.presenceAuth
             .map { (peerIdentityKey: $0.peerIdentityKey, witnessTier: $0.witnessTier) }
         let (mixRoles, nfcBound, nfcWitnessOk) = AssuranceState.resolveNfcMixInputs(
@@ -15468,7 +15495,8 @@ final class AppState: ObservableObject {
         // the SAME NFC fingerprint/witness verdict computed above, not a
         // second hardcoded placeholder.
         finalAssuranceByCall[callId.lowercased()] = (
-            state: assurance, peerId: state.peerId, selectedFp: state.selectedFp, witnessOk: nfcWitnessOk
+            state: assurance, peerId: state.peerId, selectedFp: state.selectedFp, witnessOk: nfcWitnessOk,
+            signerIdentityKey: signerIdentityKey
         )
 
         // W-ASSURANCE UI — publish the LIVE verdict for LiveInCallScreen. Same
@@ -15534,8 +15562,10 @@ final class AppState: ObservableObject {
     ///
     /// No-op if this call never reached a final verdict (`finalAssuranceByCall`
     /// has no entry — e.g. torn down before `onKcMacReady` ever fired) or if
-    /// the peer has no `PeerIdentityPinStore` TOFU pin yet (nothing to bind a
-    /// presence record to). W-NFCBADGE: `keyFingerprint`/`witnessOk` now carry
+    /// there is no identity key to bind a presence record to. That key is the one
+    /// that signed this round's transcript (`KcMacReadyEvent.signerIdentityKey`,
+    /// stashed with the verdict); the `PeerIdentityPinStore` TOFU pin is the
+    /// fallback when the signature did not verify. W-NFCBADGE: `keyFingerprint`/`witnessOk` now carry
     /// the SAME `selectedFp`/witness verdict `emitKeyConfirmationTelemetry`
     /// already computed and fed to `decide()` (stashed on `finalAssuranceByCall`)
     /// — not a second, independently-hardcoded value. Using a different value
@@ -15545,9 +15575,12 @@ final class AppState: ObservableObject {
     @MainActor
     private func applyPresenceAuthOutcomeIfAny(callId: String) {
         guard let final = finalAssuranceByCall[callId] else { return }
-        // D11 fix — see peerDeviceId(for:)'s kdoc.
-        guard let peerIdentityKey = PeerIdentityPinStore().pinnedKey(
-            contactId: final.peerId, deviceId: peerDeviceId(for: final.peerId)
+        // The key that signed this round's transcript; the pin only when the signature did not verify.
+        // D11 fix — see peerDeviceId(for:)'s kdoc (the pin lives under the composite account).
+        guard let peerIdentityKey = AssuranceState.resolvePresenceAuthIdentityKey(
+            signerIdentityKey: final.signerIdentityKey,
+            pinnedKey: PeerIdentityPinStore().pinnedKey(
+                contactId: final.peerId, deviceId: peerDeviceId(for: final.peerId))
         ) else { return }
         guard let readyAt = kcCalls[callId]?.live?.readyAt else { return }
         let mediaDwellMs = Int(Date().timeIntervalSince(readyAt) * 1000)

@@ -51,6 +51,7 @@ targets:
           - EarbudCompileConditionTests.swift
           - FeatureFlagKillSwitchTests.swift
           - FileV2ImageCleanerTests.swift
+          - KmsSweepStatusTests.swift
           - LegalLinksTests.swift
           - MeshConsentPresentationTests.swift
           - MeshConsentTests.swift

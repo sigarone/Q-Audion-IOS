@@ -187,8 +187,7 @@ public final class QAudionAppState: ObservableObject {
     // `loadStoredToken()` here can never read, overwrite, or delete
     // TokenVault's real session tokens by account-name collision.
     //
-    // QAudionRootView, the only place that constructs this class, has zero
-    // instantiations anywhere in the shipped app today (QAudionApp.swift's
+    // Nothing constructs this class in the shipped app today (QAudionApp.swift's
     // real @main uses a different AppState + ContentView) — so this closes
     // a real defense-in-depth gap without being on any live user's path.
 

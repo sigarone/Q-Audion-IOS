@@ -608,6 +608,32 @@ final class AssuranceStatePolicyTests: XCTestCase {
         XCTAssertFalse(AssuranceState.qualifiesForPresenceAuthWrite(state: .nfcAuthenticated, mediaDwellMs: 0))
     }
 
+    // MARK: - resolvePresenceAuthIdentityKey (the key a call's final verdict is persisted under)
+
+    func testPresenceAuthIdentityKey_isTheKeyThatSignedTheRound_whateverTheStoredPinIs() {
+        let signer = Data(repeating: 0xAA, count: 32)
+        let otherPin = Data(repeating: 0xBB, count: 32)
+        XCTAssertEqual(
+            AssuranceState.resolvePresenceAuthIdentityKey(signerIdentityKey: signer, pinnedKey: otherPin), signer)
+    }
+
+    func testPresenceAuthIdentityKey_doesNotEvenReadThePinWhenTheSignatureVerified() {
+        var pinReads = 0
+        func pin() -> Data? {
+            pinReads += 1
+            return Data(repeating: 0xBB, count: 32)
+        }
+        let signer = Data(repeating: 0xAA, count: 32)
+        XCTAssertEqual(AssuranceState.resolvePresenceAuthIdentityKey(signerIdentityKey: signer, pinnedKey: pin()), signer)
+        XCTAssertEqual(pinReads, 0)
+    }
+
+    func testPresenceAuthIdentityKey_fallsBackToThePinOnlyWhenTheSignatureDidNotVerify() {
+        let pin = Data(repeating: 0xBB, count: 32)
+        XCTAssertEqual(AssuranceState.resolvePresenceAuthIdentityKey(signerIdentityKey: nil, pinnedKey: pin), pin)
+        XCTAssertNil(AssuranceState.resolvePresenceAuthIdentityKey(signerIdentityKey: nil, pinnedKey: nil))
+    }
+
     func testQualifiesForPresenceAuthWrite_everyNonS2State_falseRegardlessOfDwell() {
         let nonS2: [AssuranceState] = [
             .peerLegacy, .kcFailed, .nfcIdentityMismatch, .nfcUnattestable, .identityUnverified,

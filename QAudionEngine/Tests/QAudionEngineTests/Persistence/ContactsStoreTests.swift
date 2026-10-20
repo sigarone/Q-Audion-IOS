@@ -261,6 +261,39 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertEqual(store.load().first?.presenceAuth?.confirmedCallCount, 1)
     }
 
+    /// The three writes of `AppState.applyPresenceAuthOutcomeIfAny` bind to the key chosen by
+    /// `AssuranceState.resolvePresenceAuthIdentityKey`: the key that signed this round, whatever the stored pin is.
+    func test_presenceAuthOutcome_isStoredUnderTheKeyThatSignedTheRound() {
+        seedContact()
+        guard let identityKey = AssuranceState.resolvePresenceAuthIdentityKey(
+            signerIdentityKey: peerKeyA, pinnedKey: peerKeyB) else {
+            return XCTFail("a verified signer must give an identity key")
+        }
+        _ = store.applyAssuranceOutcome(
+            peerUserId: "u-1", peerIdentityKey: identityKey, keyFingerprint: "fp-1",
+            callId: "call-first", state: .nfcAuthenticated, witnessOk: true, mediaDwellMs: 10_000)
+        store.setIdentityPubkeyIfAbsent(userId: "u-1", pubkey: identityKey)
+        store.setCallVerifiedIdentityKey(peerUserId: "u-1", key: identityKey)
+
+        let stored = store.load().first
+        XCTAssertEqual(stored?.presenceAuth?.peerIdentityKey, peerKeyA)
+        XCTAssertEqual(stored?.pubkey, peerKeyA)
+        XCTAssertEqual(stored?.callVerifiedPeerIdentityKey, peerKeyA)
+        XCTAssertNotEqual(stored?.presenceAuth?.peerIdentityKey, peerKeyB)
+    }
+
+    func test_presenceAuthOutcome_usesThePinOnlyWhenTheSignatureDidNotVerify() {
+        seedContact()
+        guard let identityKey = AssuranceState.resolvePresenceAuthIdentityKey(
+            signerIdentityKey: nil, pinnedKey: peerKeyB) else {
+            return XCTFail("the pin stands in when there is no verified signer")
+        }
+        _ = store.applyAssuranceOutcome(
+            peerUserId: "u-1", peerIdentityKey: identityKey, keyFingerprint: "fp-1",
+            callId: "call-first", state: .nfcAuthenticated, witnessOk: true, mediaDwellMs: 10_000)
+        XCTAssertEqual(store.load().first?.presenceAuth?.peerIdentityKey, peerKeyB)
+    }
+
     func test_applyAssuranceOutcome_s2BelowDwellFloor_isNoOp() {
         seedContact()
         let result = store.applyAssuranceOutcome(
