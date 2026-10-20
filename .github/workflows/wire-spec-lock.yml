@@ -23,9 +23,8 @@ on:
   pull_request:
     branches: [main, release/*]
     paths: ['WIRE_SPEC.md', '.github/workflows/wire-spec-lock.yml']
-  push:
-    branches: [main]
-    paths: ['WIRE_SPEC.md', '.github/workflows/wire-spec-lock.yml']
+  # No push trigger for main: every change reaches main through a pull request whose
+  # checks are required, so a run on the merge commit would test the same code twice.
   workflow_dispatch:
 
 # Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
