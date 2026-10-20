@@ -374,6 +374,11 @@ let package = Package(
                 // MessageReplyKatTests pins its SHA-256 and .gitattributes marks it -text so a CRLF checkout cannot change it.
                 // Re-copy it, never edit it.
                 .copy("Resources/kat/reply-kat.json"),
+                // NFC pairing v2 (docs/security/NFC_PAIRING_V2.md): the known-answer vectors, a BYTE-FOR-BYTE copy of
+                // scripts/kat/nfc-pairing-kat.json (written by scripts/kat/gen_nfc_pairing_kat.py, an independent
+                // implementation; the Android app runs the same file). NfcPairingV2KatTests pins its SHA-256 and
+                // .gitattributes marks it -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
+                .copy("Resources/kat/nfc-pairing-kat.json"),
                 // Remote-voice analysis: the expected output of the reference implementation of the
                 // specification in docs/voice-analysis-spec.md (28 synthetic cases, 804 steps, the input of each
                 // described by generator parameters). A BYTE-FOR-BYTE copy of the file that ships with the

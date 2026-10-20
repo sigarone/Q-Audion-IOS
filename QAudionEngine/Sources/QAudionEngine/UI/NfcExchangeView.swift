@@ -3,11 +3,19 @@ import SwiftUI
 import CryptoKit
 
 public struct NfcExchangeView: View {
-    @StateObject private var driver = NfcExchangeDriver()
+    @StateObject private var driver: NfcExchangeDriver
     private let availability: NfcAvailability
 
-    public init(availability: NfcAvailability = .device) {
+    /// - Parameters:
+    ///   - localUserId: this phone's account id, sent sealed to the other phone (empty: no account id).
+    ///   - serverIdentityKeys: optional lookup of the identity keys an account publishes; a proven key that is not
+    ///     among them adds a warning to the confirmation screen.
+    public init(availability: NfcAvailability = .device,
+                localUserId: String = "",
+                serverIdentityKeys: ((String) async -> Set<Data>)? = nil) {
         self.availability = availability
+        _driver = StateObject(wrappedValue: NfcExchangeDriver(localUserId: localUserId,
+                                                              serverIdentityKeys: serverIdentityKeys))
     }
 
     public var body: some View {
@@ -50,6 +58,13 @@ public struct NfcExchangeView: View {
             } else {
                 stateHelp
             }
+            if let warning = driver.identityWarning {
+                Text(warning)
+                    .font(.caption.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal)
+            }
             Spacer()
             actionButton
             Spacer().frame(height: 32)
@@ -63,7 +78,11 @@ public struct NfcExchangeView: View {
             case .waiting:     Image(systemName: "antenna.radiowaves.left.and.right")
             case .exchanging:  Image(systemName: "arrow.triangle.2.circlepath")
             case .sasConfirm:  Image(systemName: "text.magnifyingglass")
+            case .holdAgain:   Image(systemName: "iphone.radiowaves.left.and.right")
+            case .confirming:  Image(systemName: "arrow.triangle.2.circlepath")
+            case .waitingForPeer: Image(systemName: "person.wave.2")
             case .success:     Image(systemName: "checkmark.shield.fill")
+            case .peerRejected: Image(systemName: "xmark.shield.fill")
             case .error:       Image(systemName: "exclamationmark.triangle.fill")
             }
         }
@@ -74,10 +93,10 @@ public struct NfcExchangeView: View {
     private var stateColor: Color {
         switch driver.state {
         case .idle: return .secondary
-        case .waiting, .exchanging: return .blue
-        case .sasConfirm: return .orange
+        case .waiting, .exchanging, .confirming: return .blue
+        case .sasConfirm, .holdAgain, .waitingForPeer: return .orange
         case .success: return .green
-        case .error: return .red
+        case .error, .peerRejected: return .red
         }
     }
 
@@ -95,6 +114,14 @@ public struct NfcExchangeView: View {
             return String(localized: "nfc.state.exchanging", defaultValue: "Scambio chiavi\u{2026}", comment: "NFC pairing screen: keys are being exchanged.")
         case .sasConfirm(_, let peer):
             return String(localized: "nfc.state.compare", defaultValue: "Confronta questo codice con \(peer)", comment: "NFC pairing screen: compare the 6-digit code with the one on the other phone; %@ is the other phone's name.")
+        case .holdAgain:
+            return String(localized: "nfc.state.hold_again", defaultValue: "Avvicina di nuovo l\u{2019}iPhone all\u{2019}altro telefono per terminare", comment: "NFC pairing screen: the code was confirmed here; hold the iPhone to the other phone again to finish.")
+        case .confirming:
+            return String(localized: "nfc.state.confirming", defaultValue: "Conferma in corso\u{2026}", comment: "NFC pairing screen: the second tap is running.")
+        case .waitingForPeer:
+            return String(localized: "nfc.state.waiting_peer", defaultValue: "In attesa dell\u{2019}altra persona", comment: "NFC pairing screen: the other person has not confirmed the code yet.")
+        case .peerRejected:
+            return String(localized: "nfc.state.peer_rejected", defaultValue: "L\u{2019}altra persona ha rifiutato", comment: "NFC pairing screen: the other person did not confirm the code; nothing was saved.")
         case .success(let peer):
             return String(localized: "nfc.state.success", defaultValue: "Associato con \(peer)", comment: "NFC pairing screen: pairing completed; %@ is the other phone's name.")
         case .error(let msg):
@@ -103,25 +130,28 @@ public struct NfcExchangeView: View {
     }
 
     private var stateHelp: some View {
-        Text("L\u{2019}iPhone funge da lettore NFC. Il telefono Android deve avere Q-Audion attivo.")
+        Text(stateHelpText)
             .font(.caption)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
             .padding(.horizontal)
     }
 
-    /// W-NFCSAS — the tap-time SAS confirm screen. Shows the 6-digit code
-    /// (`NfcSasComputation`, byte-exact with Android's `SasComputation.kt`)
-    /// grouped in pairs for readability — this module has no access to the
-    /// app's design-system environment values, so it uses plain SwiftUI
-    /// styling consistent with this view's OWN existing conventions rather
-    /// than importing app-specific tokens.
+    private var stateHelpText: String {
+        switch driver.state {
+        case .holdAgain:
+            return String(localized: "nfc.state.hold_again_help", defaultValue: "L\u{2019}altra persona deve confermare il codice sul suo telefono. Tieni i telefoni vicini fino alla fine.", comment: "NFC pairing screen help: both people confirm, the phones are held together a second time.")
+        case .confirming, .waitingForPeer:
+            return String(localized: "nfc.state.waiting_peer_help", defaultValue: "L\u{2019}altra persona deve confermare il codice sul suo telefono. Non allontanare i telefoni.", comment: "NFC pairing screen help: waiting for the other person to confirm.")
+        default:
+            return String(localized: "nfc.state.idle_help", defaultValue: "L\u{2019}iPhone funge da lettore NFC. Sul telefono Android apri l\u{2019}associazione NFC di Q-Audion e premi Pronto.", comment: "NFC pairing screen help: the iPhone reads, the Android phone must show its pairing screen in the ready state.")
+        }
+    }
+
+    /// The code of the first tap, grouped in threes for readability (`123 456`, as on the other phone). This
+    /// module has no access to the app's design-system environment values, so it uses plain SwiftUI styling.
     private func sasDigitsCode(_ sas: String) -> some View {
-        let grouped = stride(from: 0, to: sas.count, by: 2).map { i -> String in
-            let start = sas.index(sas.startIndex, offsetBy: i)
-            let end = sas.index(start, offsetBy: 2, limitedBy: sas.endIndex) ?? sas.endIndex
-            return String(sas[start..<end])
-        }.joined(separator: " ")
+        let grouped = NfcApduExchange.groupedCode(sas)
         return VStack(spacing: 14) {
             Text("CONFRONTA QUESTO CODICE")
                 .font(.caption.weight(.semibold))
@@ -131,6 +161,11 @@ public struct NfcExchangeView: View {
                 .font(.system(.largeTitle, design: .monospaced).weight(.bold))
                 .tracking(4)
             Text("Leggi ad alta voce e confronta con lo schermo dell\u{2019}altro dispositivo prima di confermare.")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            Text(String(localized: "nfc.state.after_confirm_hint", defaultValue: "Conferma solo se i due schermi mostrano lo stesso codice nello stesso momento. Dopo la conferma, avvicina di nuovo l\u{2019}iPhone all\u{2019}altro telefono.", comment: "NFC pairing screen: confirm only when both screens show the same code; a second hold of the phones finishes the pairing."))
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -148,7 +183,7 @@ public struct NfcExchangeView: View {
                     .frame(maxWidth: 240)
                     .background(.blue).foregroundStyle(.white).clipShape(Capsule())
             }
-        case .waiting, .exchanging:
+        case .waiting, .exchanging, .confirming, .waitingForPeer:
             Button(action: driver.cancel) {
                 Label("Annulla", systemImage: "xmark")
                     .font(.title3).padding()
@@ -156,11 +191,8 @@ public struct NfcExchangeView: View {
                     .background(.gray).foregroundStyle(.white).clipShape(Capsule())
             }
         case .sasConfirm:
-            // W-NFCSAS — confirm/reject, mirroring the in-call SAS ceremony's
-            // own "confirm or it stays unconfirmed" shape. Rejecting routes
-            // through `driver.rejectSas()` -> `NfcApduExchange.rejectSas()`,
-            // which throws BEFORE `onPskDerived` -- no key is ever persisted
-            // for a rejected tap.
+            // Confirming opens the second tap; rejecting sends nothing and discards everything, so no key is ever
+            // stored for a rejected code.
             VStack(spacing: 12) {
                 Button(action: driver.confirmSas) {
                     Label("Coincidono, conferma", systemImage: "checkmark")
@@ -175,7 +207,22 @@ public struct NfcExchangeView: View {
                         .foregroundStyle(.red)
                 }
             }
-        case .success:
+        case .holdAgain:
+            VStack(spacing: 12) {
+                Button(action: driver.holdAgain) {
+                    Label("Avvicina di nuovo", systemImage: "iphone.radiowaves.left.and.right")
+                        .font(.title3).padding()
+                        .frame(maxWidth: 280)
+                        .background(.blue).foregroundStyle(.white).clipShape(Capsule())
+                }
+                Button(action: driver.cancel) {
+                    Label("Annulla", systemImage: "xmark")
+                        .font(.subheadline).padding(.vertical, 8)
+                        .frame(maxWidth: 280)
+                        .foregroundStyle(.red)
+                }
+            }
+        case .success, .peerRejected:
             Button(action: driver.reset) {
                 Label("Fatto", systemImage: "checkmark")
                     .font(.title3).padding()
@@ -189,48 +236,37 @@ public struct NfcExchangeView: View {
 @MainActor
 private final class NfcExchangeDriver: ObservableObject {
     @Published private(set) var state: NfcExchangeViewModel.State = .idle
+    @Published private(set) var identityWarning: String?
 
-    // The only reader we can actually run. See init() for why the anonymous
-    // exchange this used to fall back to is gone entirely (deleted, not just
-    // unwired).
+    // The only reader we can actually run: NFC pairing v2 (docs/security/NFC_PAIRING_V2.md), iPhone as the reader.
     private var apduExchange: NfcApduExchange?
 
-    init() {
+    init(localUserId: String, serverIdentityKeys: ((String) async -> Set<Data>)?) {
         let idManager = SovereignIdentityManager()
         if let identity = idManager.loadIdentity(), identity.signingPublic.count == 32 {
-            setupApduExchange(identityPub: identity.signingPublic)
+            setupApduExchange(identityPub: identity.signingPublic, localUserId: localUserId,
+                              serverIdentityKeys: serverIdentityKeys)
         } else {
-            // W-NFCIOS — an anonymous X25519-over-INS-0xCA fallback used to run
-            // here (`NfcCollaborativeExchange`, deleted — confirmed dead: zero
-            // production call sites once this identity-required path replaced
-            // it). It could never succeed against anything: its exchange step
-            // was INS 0xCA (GET DATA) and the only peer that exists, the
-            // Android HCE service, dispatches SELECT / 0xC4 / 0xC5 / 0x01 and
-            // answers SW_INS_NOT_SUPPORTED to everything else
-            // (NfcApduService.kt:141-153). iPhones cannot emulate a card, so
-            // there is no iOS peer either. Running it produced a tap that
-            // "did nothing" and then timed out, which reads as broken hardware
-            // rather than as a missing prerequisite.
-            //
-            // Failing here instead is also the honest answer: without a local
-            // identity there is nothing to bind the pairing to, and Android
-            // refuses the mirror-image case for the same reason — its HCE
-            // service returns SW_TECHNICAL_PROBLEM with "Identità non ancora
-            // inizializzata" when its own identity provider has nothing
-            // (NfcApduService.kt onGetIdentityKey).
+            // Without a local identity there is nothing to bind the pairing to, and the other phone refuses the
+            // mirror-image case for the same reason.
             state = .error(message: String(localized: "nfc.error.identity_not_initialized", defaultValue: "Identità non ancora inizializzata: completa la configurazione prima di scambiare una chiave via NFC", comment: "NFC pairing error: this phone has no identity yet, finish the setup first."))
         }
     }
 
     // MARK: - Setup
 
-    private func setupApduExchange(identityPub: Data) {
+    private func setupApduExchange(identityPub: Data, localUserId: String,
+                                   serverIdentityKeys: ((String) async -> Set<Data>)?) {
         let exchange = NfcApduExchange()
         exchange.localIdentityPublicKey = identityPub
-        exchange.onStateChanged = { [weak self] apduState in
+        exchange.localUserId = localUserId
+        exchange.serverIdentityKeys = serverIdentityKeys
+        exchange.onStateChanged = { [weak self, weak exchange] apduState in
             let mapped = Self.mapApduState(apduState)
+            let warning = exchange?.identityWarning
             Task { @MainActor [weak self] in
                 self?.state = mapped
+                self?.identityWarning = warning
             }
         }
         exchange.onPskDerived = { psk, peerIdPub in
@@ -242,13 +278,7 @@ private final class NfcExchangeDriver: ObservableObject {
     // MARK: - Lifecycle
 
     func start() {
-        // 2026-08-06 fix: this used to set state = .idle BEFORE checking
-        // apduExchange, so when identity init failed (line ~184's honest
-        // Italian error) tapping "Start pairing" silently discarded that
-        // error and reset to a blank "ready" screen with no explanation --
-        // recoverable only by dismissing and reopening the sheet. Check
-        // the guard first so a real init failure stays visible instead of
-        // being wiped by a no-op tap.
+        // Check the guard first so a real init failure stays visible instead of being wiped by a no-op tap.
         guard let ex = apduExchange else { return }
         state = .idle
         ex.start()
@@ -256,28 +286,34 @@ private final class NfcExchangeDriver: ObservableObject {
 
     func cancel() {
         apduExchange?.cancel()
-        if case .waiting = state { state = .idle }
-        if case .exchanging = state { state = .idle }
-        if case .sasConfirm = state { state = .idle }
+        switch state {
+        case .waiting, .exchanging, .sasConfirm, .holdAgain, .confirming, .waitingForPeer:
+            state = .idle
+            identityWarning = nil
+        default:
+            break
+        }
     }
 
     func reset() {
         cancel()
         state = .idle
+        identityWarning = nil
     }
 
-    /// W-NFCSAS — user confirmed the SAS words match. No-op if not
-    /// currently at `.sasConfirm`.
+    /// The user confirmed the codes match: opens the second tap. No-op unless the code is on screen.
     func confirmSas() {
         apduExchange?.confirmSas()
     }
 
-    /// W-NFCSAS — user rejected the SAS (or the words didn't match).
-    /// `NfcApduExchange` throws before `onPskDerived` is ever called, so
-    /// nothing is persisted; the ceremony surfaces as `.error` via the
-    /// normal `onStateChanged` -> failure path, same as any other abort.
+    /// The user rejected the code (or it did not match). Nothing is sent and nothing is stored.
     func rejectSas() {
         apduExchange?.rejectSas()
+    }
+
+    /// Opens the second tap again.
+    func holdAgain() {
+        apduExchange?.holdAgain()
     }
 
     // MARK: - Helpers (nonisolated for use in non-actor closures)
@@ -288,58 +324,41 @@ private final class NfcExchangeDriver: ObservableObject {
         case .waiting:                      return .waiting
         case .exchanging:                   return .exchanging
         case .sasConfirm(let sas, let peer): return .sasConfirm(sas: sas, peerDeviceName: peer)
+        case .holdAgain(let peer):          return .holdAgain(peerDeviceName: peer)
+        case .confirming(let peer):         return .confirming(peerDeviceName: peer)
+        case .waitingForPeer(let peer):     return .waitingForPeer(peerDeviceName: peer)
         case .success(let peer):            return .success(peerDeviceName: peer)
+        case .peerRejected(let peer):       return .peerRejected(peerDeviceName: peer)
         case .error(let msg):               return .error(message: msg)
         }
     }
 
-    /// Persist the derived PSK into SovereignKeyVault. The Keychain entry
-    /// NAME still keys off the peer pubkey (unique per-peer, unrelated to
-    /// the wire protocol) — but the stored `fingerprint` label MUST be
-    /// `PskAdvertising.canonicalFingerprint(forPsk: psk)` (`lc_hex(SHA-256(psk))`),
-    /// the same value `pskIfFingerprintMatches`/the OFFER advertiser compute
-    /// fresh from the raw material and the ONLY form Android/Desktop ever
-    /// show for the same key. Storing `hex(peerIdPub)` here instead (the
-    /// prior bug) meant the Settings vault list displayed the PEER'S
-    /// IDENTITY PUBKEY hex as if it were the PSK's fingerprint — never equal
-    /// to the SHA-256(psk) shown on the other platform for the byte-identical
-    /// shared secret, even when the handshake itself matched correctly (the
-    /// real matching path never reads this label, so the bug was display-only,
-    /// but it made a correct NFC pairing look broken to the user).
-    private static func persistPsk(_ psk: Data, peerIdPub: Data) throws {
+    /// Stores and finalizes the key of a confirmed pairing in the SovereignKeyVault (docs/security/NFC_PAIRING_V2.md
+    /// section 9, F1). Called by `NfcApduExchange` once, and only after this phone's user confirmed and the other
+    /// phone proved, with its confirmation tag, that it stored the key: a rejected, cancelled or timed-out
+    /// ceremony never gets here, so an earlier key stays as it was.
+    ///
+    /// The Keychain entry NAME keys off the peer identity key and the first 8 hex characters of the key's
+    /// fingerprint; the stored `fingerprint` label is `PskAdvertising.canonicalFingerprint(forPsk:)`
+    /// (`lc_hex(SHA-256(psk))`), the only form the other platforms show for the same key.
+    private static func persistPsk(_ psk: Data, peerIdPub: Data) throws -> NfcApduExchange.StoreOutcome {
         let peerHex: String = peerIdPub.map { String(format: "%02x", $0) }.joined()
         let fingerprint: String = PskAdvertising.canonicalFingerprint(forPsk: psk)
-        // "nfc-<16 hex of the peer's identity key>" names the device; the first 8 hex characters of the key's
-        // fingerprint make the name of THIS key, so a later tap with the same phone does not overwrite it.
-        let name: String = CallKeyPriority.inPersonAccountName(
-            device: "nfc-" + peerHex.prefix(16), keyFingerprint: fingerprint)
+        let device: String = "nfc-" + peerHex.prefix(16)
+        let name: String = CallKeyPriority.inPersonAccountName(device: device, keyFingerprint: fingerprint)
         let vault = SovereignKeyVault()
-        // W-NFCBIND — record the provenance at write time. Without it the entry
-        // relies on `PskOrigin.inferred`, which reads the "nfc-" prefix of this
-        // very name; that fallback exists for keys stored before the tag did,
-        // and a renamed convention should not be able to quietly turn an NFC
-        // key back into an exportable one.
-        //
-        // W-NFCIDBIND (2026-07-29) — `peerIdPub` (the full 32-byte Ed25519
-        // identity captured at THIS tap, per `NfcApduExchange.onPskDerived`'s
-        // own contract) is now ALSO persisted verbatim in the vault blob, not
-        // just truncated to 16 hex chars in the entry name. `resolveNfcMixInputs`'s
-        // `nfcBound` check needs the real captured identity to compare against
-        // the peer's verified identity key at call time, and a 16-hex-char
-        // (8-byte) prefix is not a sound basis for that comparison — this app's
-        // security floor elsewhere is full 256-bit fingerprints and 32-byte
-        // identity keys throughout, never a truncated one.
-        //
-        // A repeated tap with the same phone stores a second entry (docs/security/CALL_KEY_PRIORITY.md section 4a):
-        // the new key takes the place and the "placed by hand" mark of the device's highest-ranked key, the earlier
-        // key stays directly below it, still live, until a call (or the other phone's message) confirms the new
-        // one. This runs from `onPskDerived`, which `NfcApduExchange` calls only after the user confirmed the SAS: a
-        // tap that is rejected, cancelled or left to time out never gets here, and the earlier key stays as it was.
+        let hadEarlierKey: Bool = vault.listPskNames().contains { CallKeyPriority.inPersonDevice(ofAccount: $0) == device }
+        // W-NFCBIND: the provenance is recorded at write time, and the full 32-byte identity key of the peer that
+        // was proven at THIS ceremony is kept in the blob (W-NFCIDBIND), not a prefix of it.
         try vault.storePsk(name: name, key: psk, fingerprint: fingerprint,
                            keyClass: nil, origin: .nfc, nfcPeerIdentityKey: peerIdPub)
-        // A new key takes its place in the call-key list (section 3), or the place of the earlier key of the same
-        // device (section 4a).
-        CallKeyPriorityStore.live(vault: vault).syncWithVault()
+        // Store: the new key takes the place and the "placed by hand" mark of the device's highest-ranked key; the
+        // earlier key stays directly below it (CALL_KEY_PRIORITY.md section 4a). Finalize (F1): the other phone
+        // proved it holds the new key, so the keys of that device stored before it are deleted.
+        let order = CallKeyPriorityStore.live(vault: vault)
+        order.syncWithVault()
+        let finalized = order.finalize(name)
+        return NfcApduExchange.StoreOutcome(replaced: hadEarlierKey, deleted: finalized.deleted.count)
     }
 }
 

@@ -555,7 +555,10 @@ struct ContactsListView: View {
         }
         .sheet(isPresented: $showingNfcPair) {
             NavigationStack {
-                NfcExchangeView()
+                NfcExchangeView(localUserId: appState.currentUserId ?? "",
+                                serverIdentityKeys: { (userId: String) async -> Set<Data> in
+                                    await container.publishedIdentityKeys(userId)
+                                })
                     .navigationTitle("Pair via NFC")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {

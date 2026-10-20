@@ -23,9 +23,6 @@ public enum HkdfLabels {
     /// Hybrid PQC session key (post ML-KEM-1024 + X25519 combined KDF).
     public static let hybridPqcSessionKey: Data = Data("q-audion-session-key".utf8)
 
-    /// NFC collaborative pairing PSK info (§5.5). Used by `NfcPskDerivation`.
-    public static let nfcCollaborativePsk: Data = Data("Q-Audion NFC Collaborative PSK v1".utf8)
-
     /// Device-link PSK info (§5.3 row "Device-link PSK"). NOT YET IMPLEMENTED on iOS.
     public static let deviceLinkPsk: Data = Data("qaudion-device-link-v1".utf8)
 
@@ -99,7 +96,7 @@ public enum HkdfLabels {
     /// encoding bugs.
     public static func verifyAllUtf8RoundTrip() -> Bool {
         let labels: [Data] = [
-            messageKey, hybridPqcSessionKey, nfcCollaborativePsk,
+            messageKey, hybridPqcSessionKey,
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
             deviceLinkSalt, frameKeyInfoPrefixV5, frameKeySaltV5,
