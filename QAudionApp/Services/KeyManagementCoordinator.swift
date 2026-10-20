@@ -10,6 +10,9 @@ struct KeyManagementRow: Identifiable, Equatable {
     let fingerprint: String
     /// 1 is the key the caller advertises first.
     let priority: Int
+    /// `.waiting`: stored by a new pairing with the same device and not confirmed yet. `.retiring`: the earlier key
+    /// it replaces, still live. Deleting either may leave the two phones without a common key.
+    let pending: CallKeyPriority.Pending
 }
 
 /// The list of Key management: the keys that take part in calls, in the order the caller advertises them
@@ -57,14 +60,15 @@ final class KeyManagementCoordinator: ObservableObject {
     /// Reads the list again from the vault and the stored order.
     func loadKeys() {
         let vault = SovereignKeyVault()
-        let ids = CallKeyPriorityStore.live(vault: vault).current().ids
+        let list = CallKeyPriorityStore.live(vault: vault).current()
         var rows: [KeyManagementRow] = []
-        for (index, id) in ids.enumerated() {
+        for (index, id) in list.ids.enumerated() {
             rows.append(KeyManagementRow(
                 id: id,
                 origin: vault.origin(name: id),
                 fingerprint: CallKeyPriorityStore.shortFingerprint(label: vault.getFingerprint(name: id)),
-                priority: index + 1))
+                priority: index + 1,
+                pending: list.pending(id)))
         }
         keys = rows
     }

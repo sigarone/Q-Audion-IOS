@@ -53,6 +53,15 @@ struct VaultCallKeyPriorityBacking: CallKeyPriorityBacking {
     }
 }
 
+/// What a finalize did (section 4a).
+public struct CallKeyPriorityFinalize: Equatable, Sendable {
+    /// The keys deleted from the vault: the keys of the device stored before the finalized one.
+    public let deleted: [String]
+    /// `false` when the finalize could not be carried out: the stored list cannot be read now (the sequence of the
+    /// keys is unknown, so nothing is deleted), or a key could not be deleted. Nothing is lost by retrying.
+    public let complete: Bool
+}
+
 /// The list after an arrow press, and whether the new order is stored.
 public struct CallKeyPriorityMove: Equatable, Sendable {
     /// The list as it is stored: the moved one when `saved`, the one before the press otherwise.
@@ -66,25 +75,40 @@ public struct CallKeyPriorityMove: Equatable, Sendable {
 ///
 /// The list is keyed by the account name of each key in the vault (a KMS key id, `nfc-…`, `prox-…`). Every
 /// reader goes through `current()`: it drops what the vault no longer holds, puts a key the vault holds and the
-/// list does not know through the rule of the document, and writes only when something changed. A failed read
-/// never overwrites what is stored.
+/// list does not know through the rule of the document (an in-person key of a device already held is stored as
+/// the replacement of that device's key, section 4a), and writes only when something changed. A failed read
+/// never overwrites what is stored. `finalize` is the only deletion the store makes.
 public final class CallKeyPriorityStore {
 
     private static let lock = NSLock()
 
     private let backing: CallKeyPriorityBacking
     private let candidateSource: () -> [CallKeyPriority.Candidate]
+    private let deleteKey: (String) -> Bool
 
-    public init(backing: CallKeyPriorityBacking, candidates: @escaping () -> [CallKeyPriority.Candidate]) {
+    /// - Parameter deleteKey: removes a key from the vault; true when it is gone. Called by `finalize` only, and never
+    ///   while the store holds its lock.
+    public init(backing: CallKeyPriorityBacking,
+                candidates: @escaping () -> [CallKeyPriority.Candidate],
+                deleteKey: @escaping (String) -> Bool = { _ in false }) {
         self.backing = backing
         self.candidateSource = candidates
+        self.deleteKey = deleteKey
     }
 
     /// The store over the real vault.
     public static func live(vault: SovereignKeyVault = SovereignKeyVault()) -> CallKeyPriorityStore {
         CallKeyPriorityStore(
             backing: VaultCallKeyPriorityBacking(vault: vault),
-            candidates: { CallKeyPriorityStore.vaultCandidates(vault: vault) })
+            candidates: { CallKeyPriorityStore.vaultCandidates(vault: vault) },
+            deleteKey: { name in
+                do {
+                    try vault.deletePsk(name: name)
+                    return true
+                } catch {
+                    return false
+                }
+            })
     }
 
     /// The keys that take part in calls, as the call path sees them: every vault entry except device keys,
@@ -95,7 +119,11 @@ public final class CallKeyPriorityStore {
             let origin = vault.origin(name: entry.name)
             guard PskAdvertising.isEligibleMatchCandidate(origin: origin) else { return nil }
             let group = CallKeyPriority.group(origin: origin, keyClass: vault.getKeyClass(name: entry.name))
-            return CallKeyPriority.Candidate(id: entry.name, group: group, createdAt: entry.createdAt)
+            // A key with no bound identity (stored before the identity was kept) belongs to no device: never replaced.
+            let device = group == .other && (origin == .nfc || origin == .proximity)
+                && vault.nfcPeerIdentityKey(name: entry.name) != nil
+                ? CallKeyPriority.inPersonDevice(ofAccount: entry.name) : nil
+            return CallKeyPriority.Candidate(id: entry.name, group: group, createdAt: entry.createdAt, device: device)
         }
     }
 
@@ -118,6 +146,33 @@ public final class CallKeyPriorityStore {
     /// one and its mark) at that moment.
     public func syncWithVault() {
         current()
+    }
+
+    // MARK: - Finalizing (section 4a)
+
+    /// Finalize: `id` is known to be held by the other phone, so every key of its device stored before it is deleted
+    /// from the vault and leaves the list. A key of the device stored after it stays. Nothing else deletes.
+    ///
+    /// The caller decides that the evidence is there (`InPersonKeyFinalize` for a call). Deleting happens outside the
+    /// store's lock: a vault delete announces itself on `.sovereignVaultDidChange`.
+    @discardableResult
+    public func finalize(_ id: String) -> CallKeyPriorityFinalize {
+        let toDelete: [String]
+        do {
+            Self.lock.lock()
+            defer { Self.lock.unlock() }
+            let loaded = load()
+            // Without the stored sequence numbers the order of storing is unknown: delete nothing.
+            guard loaded.writable else { return CallKeyPriorityFinalize(deleted: [], complete: false) }
+            var list = CallKeyPriority.reconciled(stored: loaded.stored, candidates: candidateSource())
+            toDelete = list.finalize(id)
+        }
+        var deleted: [String] = []
+        for name in toDelete where deleteKey(name) {
+            deleted.append(name)
+        }
+        if !toDelete.isEmpty { syncWithVault() }
+        return CallKeyPriorityFinalize(deleted: deleted, complete: deleted.count == toDelete.count)
     }
 
     // MARK: - Moving

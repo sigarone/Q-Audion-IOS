@@ -33,10 +33,11 @@ public enum ProximityPairingStore {
 
     // MARK: - Vault naming
 
-    /// `"prox-"` followed by the first 16 lowercase hex characters (8 bytes) of
+    /// The name of the DEVICE: `"prox-"` followed by the first 16 lowercase hex characters (8 bytes) of
     /// `peerSigningPublicKey`. Accepts `Data` slices. A key shorter than 8
     /// bytes yields fewer hex characters; `persist` refuses such keys before
-    /// ever naming an entry.
+    /// ever naming an entry. An entry is named by `vaultEntryName(peerSigningPublicKey:keyFingerprint:)`, which
+    /// adds the key's own fingerprint to this name.
     public static func vaultEntryName(peerSigningPublicKey: Data) -> String {
         let key: Data = Data(peerSigningPublicKey)
         let byteCount: Int = min(key.count, vaultEntryHexCharacters / 2)
@@ -54,6 +55,14 @@ public enum ProximityPairingStore {
         let suffix: String = String(characters)
         let name: String = vaultEntryPrefix + suffix
         return name
+    }
+
+    /// The name of the entry of one key: the device name and the first 8 hex characters of the key's fingerprint
+    /// (docs/security/CALL_KEY_PRIORITY.md section 4a), so a second pairing with the same phone does not overwrite
+    /// the first key.
+    public static func vaultEntryName(peerSigningPublicKey: Data, keyFingerprint: String) -> String {
+        CallKeyPriority.inPersonAccountName(device: vaultEntryName(peerSigningPublicKey: peerSigningPublicKey),
+                                            keyFingerprint: keyFingerprint)
     }
 
     // MARK: - Identity policy (spec §12)
@@ -131,7 +140,7 @@ public enum ProximityPairingStore {
     // MARK: - Persistence (spec §12)
 
     /// Stores the PSK of a COMPLETED pairing:
-    /// - name `vaultEntryName(peerSigningPublicKey:)`;
+    /// - name `vaultEntryName(peerSigningPublicKey:keyFingerprint:)`;
     /// - fingerprint label `lowercase_hex(SHA-256(psk))`, recomputed here and
     ///   required to equal `result.pskFingerprint`;
     /// - origin `.proximity` (non-exportable);
@@ -139,10 +148,11 @@ public enum ProximityPairingStore {
     ///   (`nfcpid`), so call-time binding can compare it with the verified caller.
     ///
     /// Called only for a pairing both users confirmed (`ProximityPairingViewDriver.finish`, on `.completed`). A
-    /// repeated pairing with the same phone has the same name, so the vault updates that entry in place
-    /// (docs/security/CALL_KEY_PRIORITY.md section 4a): the new key replaces the earlier one and keeps its place in
-    /// the call-key list and its "placed by hand" mark. Another phone of the same person has another name and is a
-    /// new key. Input that fails the checks below throws before the vault is touched, so the earlier key stays.
+    /// repeated pairing with the same phone stores a second entry (docs/security/CALL_KEY_PRIORITY.md section 4a):
+    /// the new key takes the place and the "placed by hand" mark of the phone's highest-ranked key, the earlier key
+    /// stays directly below it, still live, until a call confirms the new one. Another phone of the same person has
+    /// another device name and is a new key. Input that fails the checks below throws before the vault is touched,
+    /// so the earlier key stays.
     ///
     /// Throws `ProximityPairingError.cryptoFailure` on any malformed input
     /// (checked before the Keychain is touched) and rethrows the vault's
@@ -169,15 +179,15 @@ public enum ProximityPairingStore {
             throw ProximityPairingError.cryptoFailure("psk fingerprint")
         }
 
-        let name: String = vaultEntryName(peerSigningPublicKey: peerKey)
+        let name: String = vaultEntryName(peerSigningPublicKey: peerKey, keyFingerprint: fingerprint)
         try vault.storePsk(name: name,
                            key: psk,
                            fingerprint: fingerprint,
                            keyClass: nil,
                            origin: .proximity,
                            nfcPeerIdentityKey: peerKey)
-        // A new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md section 3); a key
-        // that replaced an earlier one is already in it and stays where it was.
+        // A new key takes its place in the call-key list (section 3), or the place of the earlier key of the same
+        // device (section 4a).
         CallKeyPriorityStore.live(vault: vault).syncWithVault()
     }
 

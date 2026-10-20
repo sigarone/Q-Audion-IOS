@@ -47540,6 +47540,90 @@
           }
         }
       }
+    },
+    "key_management.waiting_confirmation": {
+      "extractionState": "manual",
+      "comment": "Key management — label on a key stored by a new in-person pairing with a device, waiting to be confirmed by a call or by the other phone",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "in attesa di conferma"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "waiting for confirmation"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en espera de confirmación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "en attente de confirmation"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "wartet auf Bestätigung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "aguardando confirmação"
+          }
+        }
+      }
+    },
+    "key_management.delete_pending_warning": {
+      "extractionState": "manual",
+      "comment": "Key management — warning before deleting a key of a device that has a newer or an older key waiting for confirmation",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa chiave fa parte di un nuovo abbinamento ancora in attesa di conferma. Potrebbe essere l'unica chiave che l'altro telefono possiede: se la elimini, le chiamate con questo telefono potrebbero non avere più una chiave in comune. La chiave verrà rimossa dal vault locale."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This key is part of a new pairing that is still waiting for confirmation. It may be the only key the other phone holds: if you delete it, calls with that phone may be left without a common key. The key will be removed from the local vault."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta clave forma parte de un nuevo emparejamiento que aún espera confirmación. Puede ser la única clave que tiene el otro teléfono: si la eliminas, las llamadas con ese teléfono podrían quedarse sin una clave en común. La clave se quitará del almacén local."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette clé fait partie d'un nouvel appairage encore en attente de confirmation. Ce peut être la seule clé que possède l'autre téléphone : si vous la supprimez, les appels avec ce téléphone risquent de n'avoir plus de clé en commun. La clé sera retirée du coffre local."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Schlüssel gehört zu einer neuen Kopplung, die noch auf Bestätigung wartet. Er kann der einzige Schlüssel sein, den das andere Telefon besitzt: Wenn du ihn löschst, haben Anrufe mit diesem Telefon möglicherweise keinen gemeinsamen Schlüssel mehr. Der Schlüssel wird aus dem lokalen Tresor entfernt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta chave faz parte de um novo pareamento que ainda aguarda confirmação. Ela pode ser a única chave que o outro telefone possui: se você a excluir, as chamadas com esse telefone podem ficar sem uma chave em comum. A chave será removida do cofre local."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

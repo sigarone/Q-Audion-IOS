@@ -2269,6 +2269,9 @@ final class AppState: ObservableObject {
         /// `PskOrigin` and (for an NFC-origin entry) the peer identity it was
         /// bound to at tap time.
         let selectedFp: String?
+        /// The peer's advertisement of this round was read as v3 tags (`KcMacReadyEvent.advertIsBlinded`): evidence
+        /// F2(b) of docs/security/CALL_KEY_PRIORITY.md section 4a.
+        let advertIsBlinded: Bool
         var kcStatus: KeyConfirmation.Status = .absent
         /// Set once the FINAL verdict (verified / wrong / timed-out-absent) is
         /// recorded, so a late-arriving duplicate KCMAC or a race between the
@@ -2314,6 +2317,7 @@ final class AppState: ObservableObject {
             signerIdentityKey = event.signerIdentityKey
             mutualFingerprints = event.mutualFingerprints
             selectedFp = event.selectedFp
+            advertIsBlinded = event.advertIsBlinded
         }
     }
     /// One call's KCMAC context (R-KCMAC-ROUNDS, §3.7.1): the pure `KcMacRoundBook` (pending rounds with their expected
@@ -2339,6 +2343,8 @@ final class AppState: ObservableObject {
         }
     }
     private var kcCalls: [String: KeyConfirmationCall] = [:]
+    /// In-person key finalizations held while a rekey of this phone waits for its ACCEPT (`DeferredInPersonFinalize`).
+    private var deferredInPersonFinalize = DeferredInPersonFinalize()
     /// The callee's own round-1 `kc_mac`, held (lowercased callId) until the caller's REVEAL verified: a
     /// callee device that turns out not to be the one the caller bound (a sibling) must never send a
     /// KCMAC for the call (R-COMMIT-SIBLING, D1). Sent by `handleInboundSasReveal` on `.sasReady`,
@@ -14422,6 +14428,26 @@ final class AppState: ObservableObject {
         return vault.nfcPeerIdentityKey(name: name)
     }
 
+    /// The in-person keys (NFC tap, QR + Bluetooth pairing) among the vault entries whose key material has one of
+    /// `fingerprints`, with the identity each was bound to. The fingerprint is recomputed from the raw material,
+    /// never read from the cached label (same as `resolveNfcPeerIdentityKey`).
+    static func resolveInPersonKeys(fingerprints: [String]) -> [InPersonKeyFinalize.Key] {
+        guard !fingerprints.isEmpty else { return [] }
+        let wanted = Set(fingerprints)
+        let vault = SovereignKeyVault()
+        return vault.listPskNames().compactMap { n -> InPersonKeyFinalize.Key? in
+            if n.hasPrefix("__") { return nil }
+            let origin = vault.origin(name: n)
+            guard origin == .nfc || origin == .proximity,
+                  CallKeyPriority.inPersonDevice(ofAccount: n) != nil,
+                  let raw = (try? vault.loadPsk(name: n)) ?? nil, !raw.isEmpty else { return nil }
+            let fingerprint = PskAdvertising.canonicalFingerprint(forPsk: raw)
+            guard wanted.contains(fingerprint) else { return nil }
+            return InPersonKeyFinalize.Key(name: n, fingerprint: fingerprint,
+                                           boundIdentityKey: vault.nfcPeerIdentityKey(name: n))
+        }
+    }
+
     /// The vault entries behind a call's mutual advert fingerprints, reduced to what
     /// `AssuranceState.resolveNfcConfirmed` judges: each key's OWN origin and the peer
     /// identity captured when it was created. One scan of the vault, matching the
@@ -15125,6 +15151,9 @@ final class AppState: ObservableObject {
             state.kcStatus = .verified
             state.resultRecorded = true
             state.deadlineTask?.cancel()
+            // Section 4a, F2: a verified round (signature and the peer's MAC) that proves the other phone holds a new
+            // in-person key finalizes it.
+            finalizeInPersonKeys(provenBy: state, callId: callId)
             if state === call.live {
                 emitKeyConfirmationTelemetry(callId: callId, state: state)
             } else {
@@ -15134,6 +15163,43 @@ final class AppState: ObservableObject {
             guard let state = call.states[round], !state.resultRecorded else { return }
             print("[AppState] KCMAC role mismatch callId=\(callId.prefix(8))… round=\(round)")
             failKeyConfirmation(callId: callId, state: state)
+        }
+    }
+
+    /// F2 of docs/security/CALL_KEY_PRIORITY.md section 4a, for the flows of today (QR + Bluetooth v1, NFC v1): the
+    /// round's handshake signature verified under the identity key an in-person key is bound to, the peer's KCMAC
+    /// verified (this runs on the verdict), and either (a) the round's selected PSK is that key or (b) the peer's
+    /// signed advertisement matched it through a v3 tag. The keys of that device stored before it are then deleted;
+    /// nothing else deletes. Skipped, without reading the vault, when no key waits for its confirmation.
+    @MainActor
+    private func finalizeInPersonKeys(provenBy state: KeyConfirmationCallState, callId: String) {
+        guard state.sigOk, state.signerIdentityKey != nil else { return }
+        let order = CallKeyPriorityStore.live()
+        guard order.current().hasWaitingKey else { return }
+        var fingerprints = state.mutualFingerprints
+        if let selected = state.selectedFp, !selected.isEmpty { fingerprints.append(selected) }
+        let round = InPersonKeyFinalize.Round(
+            sigOk: state.sigOk, signerIdentityKey: state.signerIdentityKey, kcmacVerified: true,
+            selectedFingerprint: state.selectedFp, advertIsBlinded: state.advertIsBlinded,
+            matchedFingerprints: state.mutualFingerprints)
+        let names = InPersonKeyFinalize.namesToFinalize(
+            round: round, localKeys: AppState.resolveInPersonKeys(fingerprints: fingerprints))
+        // A rekey this phone started resolves its ACCEPT against the vault: nothing is deleted until it is done.
+        let rekeyWaiting = callService.callIntegration?.hasPendingReKeyAttempt ?? false
+        let now = deferredInPersonFinalize.submit(callId: callId, names: names, rekeyWaitingForAccept: rekeyWaiting)
+        runInPersonFinalize(now)
+    }
+
+    @MainActor
+    private func runInPersonFinalize(_ names: [String]) {
+        guard !names.isEmpty else { return }
+        let order = CallKeyPriorityStore.live()
+        var replaced = 0
+        for name in names {
+            replaced += order.finalize(name).deleted.count
+        }
+        if replaced > 0 {
+            RTLog.info("call", "in-person key confirmed by call, earlier keys removed=\(replaced)")
         }
     }
 
@@ -21469,6 +21535,10 @@ extension AppState {
         // ring screen must never outlive the call it was ringing for.
         incomingCallRingVisible = false
         guard let teardownToken = teardownLatch.begin() else { return }
+        // Finalizations held for a rekey that was waiting for its ACCEPT run now: the call is over.
+        for callId in Array(kcCalls.keys) {
+            runInPersonFinalize(deferredInPersonFinalize.flush(callId: callId))
+        }
         // Group calls v2 — however the 1:1 leg ends (the hand-over itself, the peer
         // hanging up, media dead, End on its CallKit entry): a pending hand-over is
         // moot, and a live group call that shared the 1:1's audio unit must take it

@@ -98,9 +98,9 @@ public enum PskOrigin: String {
     /// vaults become non-exportable the moment this ships, with no migration to
     /// run and none to forget.
     public static func inferred(fromAccountName name: String) -> PskOrigin {
-        // `NfcExchangeView.persistPsk` names its entries "nfc-<peerIdPub[0..16]>".
+        // `NfcExchangeView.persistPsk` names its entries "nfc-<peerIdPub[0..16]>-<key fingerprint[0..8]>" (earlier ones lack the suffix).
         if name.hasPrefix("nfc-") { return .nfc }
-        // `ProximityPairingStore.persist` names its entries "prox-<peerIdPub[0..16]>".
+        // `ProximityPairingStore.persist` names its entries "prox-<peerIdPub[0..16]>-<key fingerprint[0..8]>" (earlier ones lack the suffix).
         if name.hasPrefix("prox-") { return .proximity }
         // `DeviceKeyManager` (`__device.*`) plus the KMS bookkeeping sidecars
         // (`__kmsname.*`, `__kms.active_epoch.*`). Nothing under this prefix is

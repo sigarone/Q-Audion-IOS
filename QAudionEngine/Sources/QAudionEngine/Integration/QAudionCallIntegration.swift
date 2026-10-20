@@ -265,6 +265,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return id
     }
 
+    /// A rekey this phone started is waiting for its ACCEPT, or is processing it: the vault keys it advertised must
+    /// stay until it is done (`DeferredInPersonFinalize`).
+    public var hasPendingReKeyAttempt: Bool {
+        lock.withLock { pendingReKeyAttempt != nil || reKeysInProgress > 0 }
+    }
+
+    func beginReKeyInProgress() { lock.withLock { reKeysInProgress += 1 } }
+    func endReKeyInProgress() { lock.withLock { reKeysInProgress = max(0, reKeysInProgress - 1) } }
+
     /// Test seam: the rekey attempt in flight, if any, as `(id, round, acceptReached)`.
     var reKeyAttemptForTesting: (id: UUID, round: Int, acceptReached: Bool)? {
         lock.withLock { pendingReKeyAttempt.map { (id: $0.id, round: $0.round, acceptReached: $0.acceptReached) } }
@@ -334,6 +343,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let resume: (Data?) -> Void
     }
     private var pendingReKeyAttempt: PendingReKeyAttempt?
+    /// Rekeys this phone is building or awaiting, counted from the first line of `performPqcReKey` (before the vault
+    /// is read for the advert) until it returns. Part of `hasPendingReKeyAttempt`.
+    private var reKeysInProgress = 0
 
     /// R-REKEY-ACCEPT-WAIT, reach: the first ACCEPT for the waiting rekey round `round` has reached this offerer. One
     /// step under `lock`: the round stops waiting at once (its deadline can no longer abandon it, a second ACCEPT can
@@ -963,12 +975,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         /// `KcMacWindow` (A1 caller 30 s, A5 callee 15 s after its REVEAL verified); every later round waits
         /// `CONFIRM_TIMEOUT` (15 s).
         public let round: UInt32
+        /// The peer's advertisement of this round was read as v3 tags (`PskAdvertResolver.Dialect.v3Blinded`), so
+        /// `mutualFingerprints` are keys it matched through a tag. A static match does not set it. Evidence F2(b) of
+        /// docs/security/CALL_KEY_PRIORITY.md section 4a.
+        public let advertIsBlinded: Bool
 
         public init(
             peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
             kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
             sigOk: Bool, signerIdentityKey: Data?, mutualFingerprints: [String],
-            selectedFp: String? = nil, round: UInt32 = 1
+            selectedFp: String? = nil, round: UInt32 = 1, advertIsBlinded: Bool = false
         ) {
             self.peerId = peerId
             self.callId = callId
@@ -983,6 +999,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             self.mutualFingerprints = mutualFingerprints
             self.selectedFp = selectedFp
             self.round = round
+            self.advertIsBlinded = advertIsBlinded
         }
     }
     public var onKcMacReady: ((KcMacReadyEvent) -> Void)?
@@ -1648,6 +1665,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             print("[QAudionCallIntegration] performPqcReKey skipped (isCaller/state/in-flight guard) callId=\(callId.prefix(8))… peer=\(peerId.prefix(8))…")
             return false
         }
+        // From here until the function returns, the vault keys the advert reads must stay (DeferredInPersonFinalize).
+        beginReKeyInProgress()
+        defer { endReKeyInProgress() }
 
         let pqcKp: PqcKeyExchange.KeyPair
         let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
@@ -2623,7 +2643,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
                     signerIdentityKey: offerSigOk ? v4PeerSik : nil,
                     mutualFingerprints: kcMutualFingerprints, selectedFp: selectedFp,
-                    round: innerAadEpoch
+                    round: innerAadEpoch, advertIsBlinded: resolvedAdvert.dialect == .v3Blinded
                 ))
 
                 // Pre-negotiation: the PQC OFFER is fully deserialised and our ACCEPT is on the
@@ -3263,7 +3283,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // branch of AssuranceState.decide() unreachable whenever iOS
                 // placed the call — see establishedPskFp's derivation at :2177.
                 selectedFp: establishedPskFp,
-                round: innerAadEpochCaller
+                round: innerAadEpochCaller,
+                advertIsBlinded: kcCallerResolved.dialect == .v3Blinded
             ))
 
             // W529: caller's ACCEPT decapsulation succeeded → cancel

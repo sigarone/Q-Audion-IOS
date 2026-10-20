@@ -340,6 +340,12 @@ public final class KmsPollerService {
             print("[KmsPollerService] notifyRevoked: empty keyId — nothing to delete")
             return
         }
+        // A revocation names a KMS key. An in-person key (nfc-, prox-) or any other entry is never deleted by it,
+        // whatever key_id the event carries.
+        guard Self.revocationMayDelete(origin: vault.origin(name: keyId)) else {
+            print("[KmsPollerService] notifyRevoked: key_id=\(keyId.prefix(8))… is not a KMS key — nothing deleted")
+            return
+        }
         // Load first so we can zeroize the material in memory before deletion.
         // loadPsk returns nil when the item doesn't exist, so this is a no-op
         // for keys that were never stored on this device (sovereign/not delivered).
@@ -357,6 +363,11 @@ public final class KmsPollerService {
         } catch {
             print("[KmsPollerService] notifyRevoked: vault delete failed for key_id=\(keyId.prefix(8))…: \(error)")
         }
+    }
+
+    /// Only an entry whose origin is KMS may be deleted by a `kms_key_revoked` event.
+    static func revocationMayDelete(origin: PskOrigin) -> Bool {
+        origin == .kms
     }
 
     public enum KmsPollerError: Error {

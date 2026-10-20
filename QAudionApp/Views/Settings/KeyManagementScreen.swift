@@ -73,7 +73,11 @@ struct KeyManagementScreen: View {
                 pendingDeleteKeyId = nil
             }
         } message: {
-            Text("La chiave verrà rimossa dal vault locale. Se serve di nuovo, andrà ri-scambiata con il contatto.")
+            if deletionNeedsWarning {
+                Text("key_management.delete_pending_warning")
+            } else {
+                Text("La chiave verrà rimossa dal vault locale. Se serve di nuovo, andrà ri-scambiata con il contatto.")
+            }
         }
         .sheet(isPresented: $showingProximityPair) {
             ProximityPairingChooserSheet(
@@ -86,6 +90,12 @@ struct KeyManagementScreen: View {
         .sheet(item: $proximityOutcome) { outcome in
             ProximityOutcomeResultSheet(outcome: outcome) { proximityOutcome = nil }
         }
+    }
+
+    /// The key about to be deleted is part of a pairing still waiting for confirmation (section 4a).
+    private var deletionNeedsWarning: Bool {
+        guard let id = pendingDeleteKeyId, let row = coordinator.keys.first(where: { $0.id == id }) else { return false }
+        return row.pending != .none
     }
 
     // MARK: - KMS
@@ -267,6 +277,11 @@ struct KeyManagementScreen: View {
             Text("Priorità \(row.priority)")
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
+            if row.pending == .waiting {
+                Text("key_management.waiting_confirmation")
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
         }
     }
 

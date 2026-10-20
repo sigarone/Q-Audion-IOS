@@ -17,7 +17,29 @@ delete_then_new_kms	+O1 +K1 ^O1 -K1 +K2	O1 K2	NFC placed by hand above KMS; afte
 delete_then_new_kms_not_placed	+O1 +K1 -K1 +K2	K2 O1	nothing placed by hand: after deleting every KMS key a new KMS key goes to the top
 placed_mark_is_per_key	+O1 +O2 +K1 -K1 ^O2 +K2	O2 K2 O1	only the moved key is placed: a new KMS key goes above the first key not placed by hand
 placed_mark_cleared_on_delete	+O1 +K1 ^O1 -O1 +O1 -K1 +K2	K2 O1	deleting a placed key clears its mark
-pair_again_keeps_place	+O1 +K1 ^O1 =O1 +K2	O1 K2 K1	pairing again with the same device keeps the key's place above KMS and its mark
-pair_again_default_place	+K1 +O1 =O1	K1 O1	pairing again with the same device keeps the default place below KMS
 other_device_is_new	+K1 +O1 ^O1 +O2	O1 K1 O2	a pairing with another device of the same person is a new key at the end
 mixed_sequence	+O1 +K1 +O2 ^O2 ^O2 +K2 +H1 vH1 -O1 +K3	O2 K3 K2 H1 K1	a longer mixed sequence
+pair_again_store_default_place	+K1 +O1 ~O1>O2	K1 O2 O1	store: the new key takes the earlier key's place below KMS, the earlier key goes directly below it
+pair_again_store_keeps_place	+O1 +K1 ^O1 ~O1>O2	O2 O1 K1	store: the new key takes the place above KMS, the earlier key goes directly below it
+pair_again_store_moves_mark	+O1 +K1 -K1 ^O1 ~O1>O2 +K2	O2 K2 O1	store moves the mark: a new KMS key then goes below the new key but above the unmarked earlier key
+pair_again_finalize	+O1 +K1 ^O1 ~O1>O2 !O2 +K2	O2 K2 K1	finalize deletes the earlier key: the new key keeps the place and mark
+pair_again_finalize_default_place	+K1 +O1 ~O1>O2 !O2	K1 O2	finalize with the default place below KMS
+finalize_twice	+K1 +O1 ~O1>O2 !O2 !O2	K1 O2	finalizing twice changes nothing
+finalize_keeps_later_key	+K1 +O1 ~O1>O2 ~O2>O3 !O2	K1 O3 O2	finalizing a key never deletes a key of the same device stored after it
+finalize_newest_deletes_all_older	+K1 +O1 ~O1>O2 ~O2>O3 !O3	K1 O3	finalizing the newest key deletes every older key of the device
+finalize_other_device_untouched	+O1 +O2 ~O1>O3 !O3	O3 O2	finalizing touches only the keys of that device
+user_deletes_waiting_key	+K1 +O1 ~O1>O2 -O2	K1 O1	the user deletes a stored key that never finalized: the earlier key stays
+user_deletes_retiring_key	+O1 ~O1>O2 -O1 !O2	O2	the user deletes the retiring key, then the new key finalizes
+loss_none_reader	+K1 +O1 ~O1>O2 !O2	K1 O2	NFC v2, nothing lost, reader: stores and finalizes on the card's confirmation
+loss_none_card	+K1 +O1 ~O1>O2 !O2	K1 O2	NFC v2, nothing lost, card: stores, then finalizes on FINALIZE
+loss_finalize_reader	+K1 +O1 ~O1>O2 !O2	K1 O2	NFC v2, FINALIZE lost, reader
+loss_finalize_card_before_call	+K1 +O1 ~O1>O2	K1 O2 O1	NFC v2, FINALIZE lost, card before any call: O1 retiring stays live
+loss_finalize_card_after_call	+K1 +O1 ~O1>O2 !O2	K1 O2	NFC v2, FINALIZE lost, card after a call that proved O2 (F2)
+loss_confirm_reader	+K1 +O1	K1 O1	NFC v2, card's confirmation lost, no re-tap, reader: nothing stored, O1 is the common key
+loss_confirm_card	+K1 +O1 ~O1>O2	K1 O2 O1	NFC v2, card's confirmation lost, no re-tap, card: O2 waits and is never selected
+loss_two_ceremonies_reader	+K1 +O1 ~O1>O2 !O2	K1 O2	NFC v2, FINALIZE of ceremony 1 lost, confirmation of ceremony 2 lost, a call, a re-tap answered 03, reader
+loss_two_ceremonies_card	+K1 +O1 ~O1>O2 ~O2>O3 !O2	K1 O3 O2	same, card: the call finalizes O2 and deletes only O1, the ceremony-2 key O3 stays
+loss_role_swap_reader	+K1 +O1 ~O1>O2 ~O2>O3 !O3	K1 O3	Android to Android: a phone holding a waiting key from an earlier ceremony as card is now the reader and finalizes the new key
+loss_proximity_completed_side	+K1 +O1 ~O1>O2	K1 O2 O1	QR + Bluetooth v1, last CONFIRM lost, the side that completed: O2 stored, waits for a call (F2 only)
+loss_proximity_other_side	+K1 +O1	K1 O1	QR + Bluetooth v1, last CONFIRM lost, the other side: nothing stored, O1 is the common key
+loss_proximity_both_completed_after_call	+K1 +O1 ~O1>O2 !O2	K1 O2	QR + Bluetooth v1, both completed, after the first call that proved O2
