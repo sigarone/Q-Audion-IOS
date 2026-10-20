@@ -2,7 +2,7 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
-/// Cross-platform KAT (Known-Answer Test) vectors for the 5 protocol invariants.
+/// Cross-platform KAT (Known-Answer Test) vectors for the 4 protocol invariants.
 ///
 /// These tests load `cross_platform_vectors.json` from the test bundle and assert
 /// byte-identical output from the iOS implementation. Android and Desktop test
@@ -19,8 +19,7 @@ import CryptoKit
 /// 1. `phone_hash_v1`         — SHA-256(E.164), no salt/pepper
 /// 2. `peppered_phone_hash_v2`— SHA-256(pepper_utf8 ‖ E.164_utf8)
 /// 3. `nfc_psk_v1`            — HKDF-SHA256 over X25519 shared secret, sorted-concat salt
-/// 4. `identity_qr_v1`        — 4-byte checksum: first 4B of SHA-256(v_byte ‖ userId ‖ pubkey)
-/// 5. `device_link_qr`        — Binary blob layout + base64url URL round-trip
+/// 4. `device_link_qr`        — Binary blob layout + base64url URL round-trip
 final class KatVectorsTests: XCTestCase {
 
     // MARK: - JSON loader
@@ -191,68 +190,7 @@ final class KatVectorsTests: XCTestCase {
         )
     }
 
-    // MARK: - Invariant 4: IdentityQrCode v1 checksum
-
-    /// first 4 bytes of SHA-256(0x01 ‖ userId_utf8 ‖ pubkey).
-    func test_identityQrV1_checksumKatVector() throws {
-        let section = try XCTUnwrap(
-            json["identity_qr_v1"] as? [String: Any],
-            "identity_qr_v1 section missing from cross_platform_vectors.json"
-        )
-        let entries = try XCTUnwrap(
-            section["vectors"] as? [[String: Any]],
-            "identity_qr_v1.vectors must be an array"
-        )
-        XCTAssertFalse(entries.isEmpty, "identity_qr_v1.vectors must not be empty")
-
-        for v in entries {
-            let userId   = try XCTUnwrap(v["user_id"]    as? String, "Missing user_id")
-            let pubkeyHex = try XCTUnwrap(v["pubkey_hex"] as? String, "Missing pubkey_hex")
-            let pubkey   = try XCTUnwrap(fromHex(pubkeyHex), "pubkey_hex not valid hex")
-
-            let identity = IdentityQrCode.Identity(userId: userId, pubkey: pubkey)
-
-            // Encode → decode round-trip verifies the checksum internally
-            let encoded = try IdentityQrCode.encode(identity: identity)
-            let decoded = try IdentityQrCode.decode(string: encoded)
-            XCTAssertEqual(decoded, identity, "IdentityQrCode round-trip failed for userId=\(userId)")
-
-            // The vector is a v1 pin — "4-byte integrity checksum for
-            // IdentityQrCode v1", per its own `description` — while `encode`
-            // has emitted v2 (8-byte, SECURITY M-29) since that change
-            // landed. Comparing the v2 output against it produced the
-            // "iOS↔Android divergence" message that was never a divergence:
-            // Android has no identity-QR encoder at all (grepped: the only
-            // `QAUDION:` in that repo is an unrelated Telecom URI scheme),
-            // so there is no second platform to diverge from here.
-            //
-            // v1 is still a LIVE format — `decode` explicitly accepts it for
-            // backward compatibility with QR codes already in the wild — so
-            // the vector keeps its value: it pins the legacy checksum those
-            // codes carry. Assert it where it belongs, by rebuilding a v1
-            // string from the vector and requiring `decode` to accept it.
-            // The v2 format stays pinned by the encode→decode round-trip
-            // just above, so both paths are now covered instead of neither.
-            let expectedChecksumHex = (v["expected_checksum_hex"] as? String) ?? ""
-            if !expectedChecksumHex.isEmpty {
-                let cksumB64 = try XCTUnwrap(v["expected_checksum_b64"] as? String,
-                    "identity_qr_v1 vector must carry expected_checksum_b64 alongside the hex")
-                let legacyString = "QAUDION:1:\(userId):\(pubkey.base64EncodedString()):\(cksumB64)"
-                let legacyDecoded = try IdentityQrCode.decode(string: legacyString)
-                XCTAssertEqual(legacyDecoded, identity,
-                    "identity_qr_v1: legacy v1 QR must still decode — old codes in the wild depend on it")
-            } else {
-                // Extract and print for pinning
-                let parts = encoded.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
-                if parts.count == 5, let cksumBytes = Data(base64Encoded: String(parts[4])) {
-                    let computedChecksumHex = cksumBytes.map { String(format: "%02x", $0) }.joined()
-                    print("[KAT] identity_qr_v1 userId=\(userId) → checksum=\(computedChecksumHex) (unverified)")
-                }
-            }
-        }
-    }
-
-    // MARK: - Invariant 5: DeviceLinkBinaryQR blob layout
+    // MARK: - Invariant 4: DeviceLinkBinaryQR blob layout
 
     /// Verifies [32B pubkey ‖ 4B BE length ‖ userId UTF-8 ‖ 16B auth code] layout
     /// and round-trip with deterministic inputs.

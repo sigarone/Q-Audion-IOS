@@ -2773,48 +2773,6 @@
         }
       }
     },
-    "key_management.rotation_started": {
-      "extractionState": "manual",
-      "comment": "Snackbar — X25519 ephemeral key rotation started after the user confirms the rotate-keys alert",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotazione chiavi avviata."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Key rotation started."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotación de claves iniciada."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotation des clés lancée."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Schlüsselrotation gestartet."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotação de chaves iniciada."
-          }
-        }
-      }
-    },
     "my_phones.number_removed": {
       "extractionState": "manual",
       "comment": "Snackbar — a phone number was removed from the account's list",
@@ -15971,47 +15929,6 @@
         }
       }
     },
-    "Chiedi al tuo contatto di toccare **+ → Scansiona QR** nella tab Contatti e di puntare la fotocamera su questo codice. Dopo la conferma, sarete entrambi nella lista dei contatti verificati.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chiedi al tuo contatto di toccare **+ → Scansiona QR** nella tab Contatti e di puntare la fotocamera su questo codice. Dopo la conferma, sarete entrambi nella lista dei contatti verificati."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ask your contact to tap **+ → Scan QR** in the Contacts tab and point the camera at this code. Once confirmed, you'll both be on each other's verified contacts list."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pide a tu contacto que toque **+ → Escanear QR** en la pestaña Contactos y apunte la cámara a este código. Tras la confirmación, ambos quedarán en la lista de contactos verificados."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Demande à ton contact d'appuyer sur **+ → Scanner le QR** dans l'onglet Contacts et de pointer l'appareil photo sur ce code. Après confirmation, vous serez tous les deux dans la liste des contacts vérifiés."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bitten Sie Ihren Kontakt, im Tab Kontakte auf **+ → QR scannen** zu tippen und die Kamera auf diesen Code zu richten. Nach der Bestätigung stehen Sie beide in der Liste der verifizierten Kontakte."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Peça para seu contato tocar em **+ → Escanear QR** na aba Contatos e apontar a câmera para este código. Depois da confirmação, vocês dois estarão na lista de contatos verificados."
-          }
-        }
-      }
-    },
     "Chiudi": {
       "extractionState": "manual",
       "localizations": {
@@ -20112,88 +20029,6 @@
         }
       }
     },
-    "Genera un nuovo keypair X25519 effimero locale. Aggiorna il fingerprint e il QR mostrati sopra. Non modifica la tua identità sovrana (userId). Per ora la chiave è solo locale — il push al server arriverà quando il backend esporrà l'endpoint di aggiornamento chiave.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Genera un nuovo keypair X25519 effimero locale. Aggiorna il fingerprint e il QR mostrati sopra. Non modifica la tua identità sovrana (userId). Per ora la chiave è solo locale — il push al server arriverà quando il backend esporrà l'endpoint di aggiornamento chiave."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Generates a new local ephemeral X25519 keypair. Updates the fingerprint and QR code shown above. Doesn't change your sovereign identity (userId). For now the key is local only — the push to the server will arrive once the backend exposes the key-update endpoint."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Genera un nuevo keypair X25519 efímero local. Actualiza el fingerprint y el QR mostrados arriba. No modifica tu identidad soberana (userId). Por ahora la clave es solo local — el envío al servidor llegará cuando el backend exponga el endpoint de actualización de clave."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Génère une nouvelle paire de clés X25519 éphémère locale. Met à jour l'empreinte et le QR affichés ci-dessus. Ne modifie pas ton identité souveraine (userId). Pour l'instant la clé est uniquement locale — l'envoi au serveur arrivera quand le backend exposera l'endpoint de mise à jour de clé."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erzeugt ein neues, lokales, ephemeres X25519-Schlüsselpaar. Aktualisiert den oben angezeigten Fingerabdruck und QR-Code. Ändert nicht Ihre souveräne Identität (userId). Der Schlüssel ist vorerst nur lokal — die Übertragung an den Server erfolgt, sobald das Backend den Endpunkt zur Schlüsselaktualisierung bereitstellt."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gera um novo keypair X25519 efêmero local. Atualiza o fingerprint e o QR mostrados acima. Não altera sua identidade soberana (userId). Por enquanto a chave é só local — o envio ao servidor vai acontecer quando o backend expuser o endpoint de atualização de chave."
-          }
-        }
-      }
-    },
-    "Generazione QR fallita": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Generazione QR fallita"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "QR generation failed"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error al generar el QR"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échec de la génération du QR"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "QR-Generierung fehlgeschlagen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Falha ao gerar o QR"
-          }
-        }
-      }
-    },
     "Generazione QR…": {
       "extractionState": "manual",
       "localizations": {
@@ -21834,47 +21669,6 @@
         }
       }
     },
-    "Impronta identità": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impronta identità"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identity fingerprint"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Huella de identidad"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Empreinte d'identité"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identitätsfingerabdruck"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Impressão da identidade"
-          }
-        }
-      }
-    },
     "In ascolto…": {
       "extractionState": "manual",
       "localizations": {
@@ -23434,47 +23228,6 @@
         }
       }
     },
-    "La mia identità": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La mia identità"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "My identity"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mi identidad"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mon identité"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meine Identität"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Minha identidade"
-          }
-        }
-      }
-    },
     "La modalità background è controllata dall'entitlement UIBackgroundModes.": {
       "extractionState": "manual",
       "localizations": {
@@ -24746,47 +24499,6 @@
         }
       }
     },
-    "Mostra come testo": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostra come testo"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show as text"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar como texto"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Afficher comme texte"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Als Text anzeigen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar como texto"
-          }
-        }
-      }
-    },
     "Mostra i dettagli": {
       "extractionState": "manual",
       "localizations": {
@@ -24824,88 +24536,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mostrar detalhes"
-          }
-        }
-      }
-    },
-    "Mostra la mia identità": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostra la mia identità"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show my identity"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar mi identidad"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Afficher mon identité"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meine Identität anzeigen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar minha identidade"
-          }
-        }
-      }
-    },
-    "Mostra la tua identità": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostra la tua identità"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show your identity"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar tu identidad"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Afficher ton identité"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ihre Identität anzeigen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar sua identidade"
           }
         }
       }
@@ -25849,47 +25479,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nenhuma chamada recente"
-          }
-        }
-      }
-    },
-    "Nessuna chiave salvata. Scansiona il QR di un contatto per aggiungerne una.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessuna chiave salvata. Scansiona il QR di un contatto per aggiungerne una."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No keys saved. Scan a contact's QR code to add one."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No hay ninguna clave guardada. Escanea el QR de un contacto para añadir una."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucune clé enregistrée. Scanne le QR d'un contact pour en ajouter une."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kein Schlüssel gespeichert. Scannen Sie den QR-Code eines Kontakts, um einen hinzuzufügen."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhuma chave salva. Escaneie o QR de um contato para adicionar uma."
           }
         }
       }
@@ -27903,47 +27492,6 @@
         }
       }
     },
-    "QR identità non ancora disponibile — accedi prima.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "QR identità non ancora disponibile — accedi prima."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identity QR not available yet — sign in first."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "QR de identidad aún no disponible — inicia sesión primero."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "QR d'identité pas encore disponible — connecte-toi d'abord."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identitäts-QR-Code noch nicht verfügbar — bitte zuerst anmelden."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "QR de identidade ainda não disponível — faça login primeiro."
-          }
-        }
-      }
-    },
     "QR non disponibile": {
       "extractionState": "manual",
       "localizations": {
@@ -28108,43 +27656,43 @@
         }
       }
     },
-    "Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (identità, device-link, configurazione rapida o invito gruppo).": {
+    "Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (device-link, configurazione rapida o invito gruppo).": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (identità, device-link, configurazione rapida o invito gruppo)."
+            "value": "Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (device-link, configurazione rapida o invito gruppo)."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This QR code doesn't match any Q-Audion format. Make sure you're scanning a code generated by Q-Audion (identity, device link, quick setup, or group invite)."
+            "value": "This QR code doesn't match any Q-Audion format. Make sure you're scanning a code generated by Q-Audion (device link, quick setup, or group invite)."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Este QR no corresponde a ningún formato de Q-Audion. Asegúrate de escanear un código generado por Q-Audion (identidad, device-link, configuración rápida o invitación a grupo)."
+            "value": "Este QR no corresponde a ningún formato de Q-Audion. Asegúrate de escanear un código generado por Q-Audion (device-link, configuración rápida o invitación a grupo)."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ce QR ne correspond à aucun format Q-Audion. Assure-toi de scanner un code généré par Q-Audion (identité, device-link, configuration rapide ou invitation de groupe)."
+            "value": "Ce QR ne correspond à aucun format Q-Audion. Assure-toi de scanner un code généré par Q-Audion (device-link, configuration rapide ou invitation de groupe)."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dieser QR-Code entspricht keinem Q-Audion-Format. Stellen Sie sicher, dass Sie einen von Q-Audion generierten Code scannen (Identität, Geräteverknüpfung, Schnellkonfiguration oder Gruppeneinladung)."
+            "value": "Dieser QR-Code entspricht keinem Q-Audion-Format. Stellen Sie sicher, dass Sie einen von Q-Audion generierten Code scannen (Geräteverknüpfung, Schnellkonfiguration oder Gruppeneinladung)."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Este QR não corresponde a nenhum formato do Q-Audion. Confira se você está escaneando um código gerado pelo Q-Audion (identidade, vínculo de dispositivo, configuração rápida ou convite de grupo)."
+            "value": "Este QR não corresponde a nenhum formato do Q-Audion. Confira se você está escaneando um código gerado pelo Q-Audion (vínculo de dispositivo, configuração rápida ou convite de grupo)."
           }
         }
       }
@@ -29461,129 +29009,6 @@
         }
       }
     },
-    "Ruota": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ruota"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotate"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Girar"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pivoter"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Drehen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotacionar"
-          }
-        }
-      }
-    },
-    "Ruota chiavi": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ruota chiavi"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotate keys"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotar claves"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Faire pivoter les clés"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Schlüssel rotieren"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotacionar chaves"
-          }
-        }
-      }
-    },
-    "Ruotare le chiavi?": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ruotare le chiavi?"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotate keys?"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "¿Rotar las claves?"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Faire pivoter les clés ?"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Schlüssel rotieren?"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rotacionar as chaves?"
-          }
-        }
-      }
-    },
     "SECURE COMMS": {
       "extractionState": "manual",
       "localizations": {
@@ -30236,47 +29661,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Escanear QR"
-          }
-        }
-      }
-    },
-    "Scansiona il QR del tuo contatto per salvare la sua chiave pubblica nel vault. Puoi anche condividere il tuo QR qui sopra.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scansiona il QR del tuo contatto per salvare la sua chiave pubblica nel vault. Puoi anche condividere il tuo QR qui sopra."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan your contact's QR code to save their public key in the vault. You can also share your own QR code above."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escanea el QR de tu contacto para guardar su clave pública en el vault. También puedes compartir tu QR de arriba."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scanne le QR de ton contact pour enregistrer sa clé publique dans le vault. Tu peux aussi partager ton QR ci-dessus."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scannen Sie den QR-Code Ihres Kontakts, um dessen öffentlichen Schlüssel im Vault zu speichern. Sie können auch Ihren eigenen QR-Code oben teilen."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escaneie o QR do seu contato para salvar a chave pública dele no vault. Você também pode compartilhar o seu QR aqui em cima."
           }
         }
       }
@@ -31963,47 +31347,6 @@
         }
       }
     },
-    "Testo identità": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Testo identità"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identity text"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Texto de identidad"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Texte d'identité"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identitätstext"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Texto da identidade"
-          }
-        }
-      }
-    },
     "Ti invieremo un codice via SMS per verificare questo numero.": {
       "extractionState": "manual",
       "localizations": {
@@ -33189,47 +32532,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verificar vibração · requer Taptic Engine"
-          }
-        }
-      }
-    },
-    "Verranno generate nuove chiavi. Tutti i contatti dovranno ri-verificare la tua identità. Continuare?": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verranno generate nuove chiavi. Tutti i contatti dovranno ri-verificare la tua identità. Continuare?"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New keys will be generated. All your contacts will need to re-verify your identity. Continue?"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se generarán nuevas claves. Todos tus contactos tendrán que volver a verificar tu identidad. ¿Continuar?"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "De nouvelles clés seront générées. Tous les contacts devront revérifier ton identité. Continuer ?"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Es werden neue Schlüssel generiert. Alle Kontakte müssen Ihre Identität erneut verifizieren. Fortfahren?"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Novas chaves serão geradas. Todos os contatos vão precisar reverificar sua identidade. Continuar?"
           }
         }
       }
@@ -47696,6 +46998,545 @@
           "stringUnit": {
             "state": "translated",
             "value": "Remover %@?"
+          }
+        }
+      }
+    },
+    "Aggiorna": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiorna"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualizar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualiser"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualisieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atualizar"
+          }
+        }
+      }
+    },
+    "Funziona con un telefono Android": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funziona con un telefono Android"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Works with an Android phone"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funciona con un teléfono Android"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fonctionne avec un téléphone Android"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funktioniert mit einem Android-Telefon"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Funciona com um telefone Android"
+          }
+        }
+      }
+    },
+    "Aumenta priorità": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aumenta priorità"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Increase priority"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aumentar prioridad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Augmenter la priorité"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Priorität erhöhen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aumentar prioridade"
+          }
+        }
+      }
+    },
+    "Riduci priorità": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riduci priorità"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decrease priority"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disminuir prioridad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diminuer la priorité"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Priorität verringern"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diminuir prioridade"
+          }
+        }
+      }
+    },
+    "Priorità %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Priorità %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Priority %lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prioridad %lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Priorité %lld"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Priorität %lld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prioridade %lld"
+          }
+        }
+      }
+    },
+    "Nessuna chiave presente": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna chiave presente"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No keys yet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aún no hay claves"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune clé pour le moment"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch keine Schlüssel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhuma chave ainda"
+          }
+        }
+      }
+    },
+    "Usa Associa di persona o NFC con un'altra persona, oppure aggiorna il KMS per ricevere le chiavi del server.": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa Associa di persona o NFC con un'altra persona, oppure aggiorna il KMS per ricevere le chiavi del server."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Pair in person or NFC with another person, or refresh the KMS to receive the server's keys."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa Emparejar en persona o NFC con otra persona, o actualiza el KMS para recibir las claves del servidor."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilise Associer en personne ou le NFC avec une autre personne, ou actualise le KMS pour recevoir les clés du serveur."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verwenden Sie „Persönlich koppeln“ oder NFC mit einer anderen Person, oder aktualisieren Sie das KMS, um die Schlüssel des Servers zu erhalten."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Parear pessoalmente ou NFC com outra pessoa, ou atualize o KMS para receber as chaves do servidor."
+          }
+        }
+      }
+    },
+    "key_management.kms_idle": {
+      "extractionState": "manual",
+      "comment": "Key management, KMS row — status line before any key delivery check has finished",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il server consegna le chiavi qui appena disponibili."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server delivers keys here as soon as they're available."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servidor entrega las claves aquí tan pronto como están disponibles."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le serveur livre les clés ici dès qu'elles sont disponibles."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Server liefert Schlüssel hier, sobald sie verfügbar sind."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O servidor entrega as chaves aqui assim que estiverem disponíveis."
+          }
+        }
+      }
+    },
+    "key_management.kms_running": {
+      "extractionState": "manual",
+      "comment": "Key management, KMS row — status line while the app asks the server for new keys",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiornamento in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualizando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualisation en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird aktualisiert…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atualizando…"
+          }
+        }
+      }
+    },
+    "key_management.kms_last_update": {
+      "extractionState": "manual",
+      "comment": "Key management, KMS row — status line after a successful check; %@ is the time of day",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ultimo aggiornamento: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last update: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última actualización: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernière actualisation : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Letzte Aktualisierung: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última atualização: %@"
+          }
+        }
+      }
+    },
+    "key_management.kms_failed": {
+      "extractionState": "manual",
+      "comment": "Key management, KMS row — status line after the check for new keys failed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiornamento non riuscito."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update failed."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al actualizar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'actualisation."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualisierung fehlgeschlagen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na atualização."
+          }
+        }
+      }
+    },
+    "key_management.section_keys": {
+      "extractionState": "manual",
+      "comment": "Key management — header above the list of call keys; %lld is how many there are",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHIAVI DISPONIBILI (%lld)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AVAILABLE KEYS (%lld)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLAVES DISPONIBLES (%lld)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CLÉS DISPONIBLES (%lld)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VERFÜGBARE SCHLÜSSEL (%lld)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CHAVES DISPONÍVEIS (%lld)"
+          }
+        }
+      }
+    },
+    "key_management.order_not_saved": {
+      "extractionState": "manual",
+      "comment": "Key management — error banner when an arrow press could not be stored",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile salvare il nuovo ordine delle chiavi. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The new key order could not be saved. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo guardar el nuevo orden de las claves. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'enregistrer le nouvel ordre des clés. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die neue Reihenfolge der Schlüssel konnte nicht gespeichert werden. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível salvar a nova ordem das chaves. Tente novamente."
           }
         }
       }

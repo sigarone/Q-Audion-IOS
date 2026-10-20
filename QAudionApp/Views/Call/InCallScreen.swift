@@ -276,9 +276,9 @@ struct InCallScreen: View {
     /// "PQC session key" row without an epoch/countdown line rather than
     /// fabricating one. Currently sourced from `AppState.rekeyCount`,
     /// which increments only if a live rotation hook exists (see
-    /// CallSessionKeyBroker / KeyRotationCoordinator — as of this pass
-    /// neither exposes an in-call rekey EVENT, only the one-time initial
-    /// key registration, so this is expected to render nil / omitted).
+    /// CallSessionKeyBroker — as of this pass it exposes no in-call rekey
+    /// EVENT, only the one-time initial key registration, so this is
+    /// expected to render nil / omitted).
     let keyEpoch: Int?
     /// Unified call UI — live crypto-engine rate: real AES-256-GCM frame
     /// operations per second (seal(TX)+open(RX)), sampled once/sec by

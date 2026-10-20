@@ -2,8 +2,6 @@ import XCTest
 @testable import QAudionEngine
 
 /// Fuzz / property tests for the QR decode parsers:
-/// - `IdentityQrCode.decode(string:)` — scheme / version / `:`-split /
-///   base64 / checksum path.
 /// - `DeviceLinkBinaryQR.decodeBlob(_:)` — 32B pubkey ‖ 4B length ‖
 ///   userId ‖ 16B auth, plus the trailing-byte / length-field math.
 /// - `FastSetupQrCode.decode(url:)` — base64url ‖ JSON ‖ field coercion.
@@ -18,49 +16,6 @@ import XCTest
 ///   2. `FastSetupQrCode.decode` did `Int64(Double)` on the
 ///      `expires_at` field → trap on +inf / NaN / out-of-range.
 final class QrPayloadFuzzTests: XCTestCase {
-
-    // MARK: IdentityQrCode (string decode)
-
-    func testIdentityQrStringDecodeFailsSoft() {
-        // Random UTF-8-ish strings.
-        var rng = FuzzRng(seed: 0x1DE0_0001)
-        let charset = Array("ABCDEFabcdef0123456789:+/=qaudion-id .\u{0000}\u{FFFF}")
-        for _ in 0..<6000 {
-            let len = rng.int(80)
-            var s = ""
-            for _ in 0..<len { s.append(charset[rng.int(charset.count)]) }
-            _ = try? (IdentityQrCode.decode(string: s))
-        }
-        // Structured-but-broken: right prefix, wrong everything else.
-        let crafted = [
-            "", ":", "::::", "qaudion-id", "qaudion-id:",
-            "qaudion-id:abc:user:pk:ck",
-            "qaudion-id:2:user:!!!notbase64!!!:ck",
-            "qaudion-id:2:user::",
-            "qaudion-id:999999999999999999999999:u:p:c",
-            "qaudion-id:2:u:" + String(repeating: "A", count: 100000) + ":c",
-            "qaudion-id:1:u:AAAA:BB",
-            String(repeating: ":", count: 5000),
-        ]
-        for s in crafted {
-            _ = try? (IdentityQrCode.decode(string: s))
-        }
-    }
-
-    func testIdentityQrRoundTripStillWorks() throws {
-        let id = IdentityQrCode.Identity(
-            userId: "alice", pubkey: Data(repeating: 7, count: 32))
-        let s = try IdentityQrCode.encode(identity: id)
-        let back = try IdentityQrCode.decode(string: s)
-        XCTAssertEqual(back.userId, "alice")
-        XCTAssertEqual(back.pubkey, id.pubkey)
-        // Mutating the encoded string must never crash the decoder.
-        for m in FuzzCorpus.mutations(of: Data(s.utf8),
-                                      count: 3000, rngSeed: 0xABCD) {
-            let str = String(decoding: m, as: UTF8.self)
-            _ = try? (IdentityQrCode.decode(string: str))
-        }
-    }
 
     // MARK: DeviceLinkBinaryQR (blob decode)
 

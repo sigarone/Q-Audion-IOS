@@ -328,6 +328,8 @@ private final class NfcExchangeDriver: ObservableObject {
         // identity keys throughout, never a truncated one.
         try vault.storePsk(name: name, key: psk, fingerprint: fingerprint,
                            keyClass: nil, origin: .nfc, nfcPeerIdentityKey: peerIdPub)
+        // The new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md).
+        CallKeyPriorityStore.live(vault: vault).syncWithVault()
     }
 }
 

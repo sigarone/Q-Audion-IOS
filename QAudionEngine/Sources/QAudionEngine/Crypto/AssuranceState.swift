@@ -358,6 +358,24 @@ public enum AssuranceState: Equatable {
         }
     }
 
+    /// The identity key a call's final verdict is persisted under: the contact's `presenceAuth`, the fill-if-absent
+    /// `pubkey` and `callVerifiedPeerIdentityKey` that the mesh radar matches a nearby device by.
+    ///
+    /// It is the key that SIGNED this round's OFFER/ACCEPT transcript (`signerIdentityKey`, set only when the
+    /// signature verified): the verified identity of the peer device that is on this call. The pin of
+    /// `PeerIdentityPinStore` is the answer only when the signature did not verify.
+    ///
+    /// - Parameters:
+    ///   - signerIdentityKey: `KcMacReadyEvent.signerIdentityKey` of the round the verdict belongs to.
+    ///   - pinnedKey: the stored pin for the peer and device; read only when there is no verified signer.
+    public static func resolvePresenceAuthIdentityKey(
+        signerIdentityKey: Data?,
+        pinnedKey: @autoclosure () -> Data?
+    ) -> Data? {
+        if let signerIdentityKey { return signerIdentityKey }
+        return pinnedKey()
+    }
+
     // MARK: - W-ASSURANCE/W-FLOOR (ship steps 6/8) — persistence-write POLICY
     // (mechanism lives in ContactsStore.applyAssuranceOutcome)
 

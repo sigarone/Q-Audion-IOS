@@ -174,7 +174,6 @@ private struct DecodedDetailView: View {
 
     private var title: String {
         switch decoded {
-        case .identity:    return "Identità contatto"
         case .deviceLink:  return "Accoppiamento dispositivo"
         case .fastSetup:   return "Configurazione rapida"
         case .groupInvite: return "Invito al gruppo"
@@ -200,7 +199,6 @@ private struct DecodedDetailView: View {
     private var iconView: some View {
         let (system, color): (String, Color) = {
             switch decoded {
-            case .identity: return ("person.text.rectangle.fill", .blue)
             case .deviceLink: return ("ipad.and.iphone", .purple)
             case .fastSetup: return ("bolt.shield.fill", .orange)
             case .groupInvite: return ("person.3.fill", .green)
@@ -219,7 +217,6 @@ private struct DecodedDetailView: View {
         // resolved human name — the full technical id stays available in
         // the labeled monospaced rows of `detailSection` below.
         switch decoded {
-        case .identity(let id): return DisplayName.forUser(id.userId)
         case .deviceLink(let dl): return DisplayName.forUser(dl.userId)
         case .fastSetup(let fs): return DisplayName.forUser(fs.userId)
         case .groupInvite(let gi):
@@ -231,7 +228,6 @@ private struct DecodedDetailView: View {
 
     private var headerSubtitle: String {
         switch decoded {
-        case .identity: return "QR identità (stampabile)"
         case .deviceLink: return "Codice di accoppiamento dispositivo"
         case .fastSetup: return "Codice di onboarding emesso dal server"
         case .groupInvite: return "Invito client-generated a un gruppo"
@@ -243,27 +239,6 @@ private struct DecodedDetailView: View {
     @ViewBuilder
     private var detailSection: some View {
         switch decoded {
-        case .identity(let identity):
-            Section("Identità") {
-                LabeledContent("User ID") {
-                    Text(identity.userId)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                LabeledContent("Chiave pubblica") {
-                    Text(identity.pubkey.map { String(format: "%02x", $0) }.joined()
-                            .prefix(32) + "…")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                }
-                LabeledContent("Fingerprint") {
-                    Text((try? Fingerprint.format(pubkey: identity.pubkey)) ?? "????.????.????.????")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
         case .deviceLink(let dl):
             Section("Dispositivo") {
                 LabeledContent("User ID") {
@@ -349,7 +324,7 @@ private struct DecodedDetailView: View {
             }
         case .unknown:
             Section {
-                Text("Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (identità, device-link, configurazione rapida o invito gruppo).")
+                Text("Questo QR non corrisponde a nessun formato Q-Audion. Assicurati di scansionare un codice generato da Q-Audion (device-link, configurazione rapida o invito gruppo).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -360,7 +335,7 @@ private struct DecodedDetailView: View {
     private var actionSection: some View {
         Section {
             switch decoded {
-            case .identity, .deviceLink, .fastSetup, .groupInvite:
+            case .deviceLink, .fastSetup, .groupInvite:
                 Button {
                     onAccept()
                 } label: {
@@ -380,7 +355,6 @@ private struct DecodedDetailView: View {
 
     private var acceptLabel: String {
         switch decoded {
-        case .identity:    return "Aggiungi come contatto"
         case .deviceLink:  return "Accoppia questo dispositivo"
         case .fastSetup:   return "Usa questo codice di setup"
         case .groupInvite: return "Richiedi ingresso al gruppo"

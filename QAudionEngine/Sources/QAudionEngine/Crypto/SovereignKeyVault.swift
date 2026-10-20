@@ -104,6 +104,60 @@ public final class SovereignKeyVault {
 
     public init() {}
 
+    /// Whether a write or a delete of this account tells the listeners of `.sovereignVaultDidChange`.
+    ///
+    /// The notification is for the listing UIs, so it covers the keys a user can see. The device-internal entries
+    /// (`__` prefix: this device's own keys, the KMS sidecars, the call-key order) never show in a list and stay
+    /// quiet. That matters beyond tidiness: `CallKeyPriorityStore` writes its entry while it holds its lock, and a
+    /// notification posted there would run the block observers inside the critical section, and a block observer
+    /// registered on another queue makes the poster wait for that queue.
+    static func announcesChange(ofAccount name: String) -> Bool {
+        !name.hasPrefix("__")
+    }
+
+    /// How an entry is protected at rest.
+    ///
+    /// A key (a call key, the device keys, the KMS sidecars) follows the key policy: the user-presence access
+    /// control when biometric key protection is on, the plain class of `KeychainAccessibilityPolicy` otherwise.
+    /// The order of the call keys is metadata, not a secret, so it is pinned to a class with no access control: it
+    /// is read on the main thread and while a call is being set up, where a prompt must never appear, and a
+    /// background wake has to be able to read it after the first unlock.
+    enum EntryProtection: Equatable {
+        case followsKeyPolicy
+        /// No access control; readable after the first unlock since boot; never synced to another device.
+        case deviceMetadata
+
+        static func forAccount(_ name: String) -> EntryProtection {
+            name == VaultCallKeyPriorityBacking.accountName ? .deviceMetadata : .followsKeyPolicy
+        }
+
+        /// The class the entry is pinned to, with no access control; nil when it follows the key policy.
+        var pinnedAccessClass: KeychainAccessibilityPolicy.AccessClass? {
+            switch self {
+            case .followsKeyPolicy: return nil
+            case .deviceMetadata: return .afterFirstUnlockThisDeviceOnly
+            }
+        }
+    }
+
+    /// The Keychain attributes that protect a fresh item of this account: either the pinned class, or, for a key,
+    /// the access control when there is one and the plain class of the session keys when there is none.
+    /// `accessControl` is the `SecAccessControl` a key takes when biometric protection is on; an entry pinned as
+    /// device metadata never takes it.
+    static func protectionAttributes(forAccount name: String, accessControl: Any?) -> [String: Any] {
+        if let pinned = EntryProtection.forAccount(name).pinnedAccessClass {
+            let attribute: CFString = KeychainAccessibilityPolicy.secAttrAccessible(pinned)
+                ?? kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            return [kSecAttrAccessible as String: attribute]
+        }
+        if let accessControl {
+            return [kSecAttrAccessControl as String: accessControl]
+        }
+        // The plain class comes from the one policy (AfterFirstUnlockThisDeviceOnly today) so a key is readable on
+        // a VoIP-push wake with the phone locked. See KeychainAccessibilityPolicy.
+        return [kSecAttrAccessible as String: KeychainAccessibilityPolicy.secAttrAccessible(for: .sessionPsk)]
+    }
+
     /// Phase-1 (D1) overload — store a PSK WITH its key_class. The class is
     /// persisted in `kSecAttrGeneric`; everything else is byte-identical to the
     /// legacy `storePsk(name:key:fingerprint:)` path (which now forwards here
@@ -139,7 +193,9 @@ public final class SovereignKeyVault {
         // access control; otherwise the plain class from
         // `KeychainAccessibilityPolicy` (W-KCAFTERUNLOCK). Existing items are
         // re-protected via `migratePskProtection(enable:)`, not here, because
-        // SecItemUpdate cannot change an item's access-control class.
+        // SecItemUpdate cannot change an item's access-control class. The
+        // order of the call keys is the one entry that never takes the
+        // access control (see `EntryProtection`).
         // D1: the key_class string (if any) goes into kSecAttrGeneric — a raw
         // byte blob attribute that does NOT collide with the fingerprint label.
         // W-NFCBIND: with `origin: nil` this encodes to exactly the old bytes,
@@ -157,15 +213,13 @@ public final class SovereignKeyVault {
             kSecAttrLabel as String: fingerprint
         ]
         if let classBlob { query[kSecAttrGeneric as String] = classBlob }
-        if let ac = KeychainProtectionPolicy.shared.makeAccessControl() {
-            query[kSecAttrAccessControl as String] = ac
-        } else {
-            // W-KCAFTERUNLOCK (2026-09-01) — the plain class comes from the one
-            // policy (AfterFirstUnlockThisDeviceOnly today) so a PSK is readable
-            // on a VoIP-push wake with the phone locked; the `.userPresence`
-            // branch above is untouched. See KeychainAccessibilityPolicy.
-            query[kSecAttrAccessible as String] = KeychainAccessibilityPolicy.secAttrAccessible(for: .sessionPsk)
-        }
+        // A key takes the `.userPresence` access control when biometric protection is on, the plain class of the
+        // session keys otherwise (see KeychainAccessibilityPolicy). The order of the call keys is metadata and takes
+        // neither: see `EntryProtection`.
+        query.merge(
+            Self.protectionAttributes(
+                forAccount: name, accessControl: KeychainProtectionPolicy.shared.makeAccessControl()),
+            uniquingKeysWith: { _, new in new })
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem {
             var update: [String: Any] = [kSecValueData as String: key, kSecAttrLabel as String: fingerprint]
@@ -188,13 +242,15 @@ public final class SovereignKeyVault {
         // `.contactsDidChange` post: every write funnels through here (both
         // `storePsk` overloads), so this is the ONE place that needs to
         // notify for a listing UI (`KeyManagementScreen`'s
-        // `KeyRotationCoordinator.vaultKeys`) to refresh reactively instead
+        // `KeyManagementCoordinator.keys`) to refresh reactively instead
         // of only at its own one-shot `init()`. Fixes: a PSK written by a
         // path that doesn't itself know about that coordinator (e.g.
         // `NfcExchangeView.persistPsk` after an NFC tap) previously left the
         // vault list stale until the whole screen was torn down and
         // recreated (leave/re-enter) — see that coordinator's doc.
-        NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
+        if Self.announcesChange(ofAccount: name) {
+            NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
+        }
     }
 
     /// Legacy 3-arg overload — preserves the EXACT pre-Phase-1 call sites
@@ -373,7 +429,9 @@ public final class SovereignKeyVault {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeyVaultError.deleteFailed(status) }
         // W-VAULTREFRESH — see `storeInternal`'s matching post; a deletion
         // changes vault membership exactly as much as a write does.
-        NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
+        if Self.announcesChange(ofAccount: name) {
+            NotificationCenter.default.post(name: .sovereignVaultDidChange, object: nil)
+        }
     }
 
     /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — bulk wipe for
@@ -452,6 +510,10 @@ public final class SovereignKeyVault {
     ///                     class `KeychainAccessibilityPolicy` assigns to
     ///                     `.sessionPsk`).
     ///
+    /// The order of the call keys is not a key: it never takes the access
+    /// control and stays `AfterFirstUnlockThisDeviceOnly` either way
+    /// (`EntryProtection`).
+    ///
     /// SAFETY: each item's value is read into memory BEFORE the item is
     /// deleted, and is restored under its prior protection if the re-add
     /// fails — so a PSK is never lost. (Only a process crash in the
@@ -487,6 +549,15 @@ public final class SovereignKeyVault {
                   let value = attrs[kSecValueData as String] as? Data else {
                 throw KeyVaultError.loadFailed(rs)
             }
+            // The order of the call keys is pinned to a class with no access control (`EntryProtection`): an
+            // entry already in that class is left as it is, so it is not deleted and re-added, and a concurrent
+            // write of the order cannot fall into that window. The class alone tells the two shapes apart: an
+            // item created with user presence reports the class of its access control, never the pinned one. One
+            // in another class is re-added below in its pinned class.
+            if let pinned = EntryProtection.forAccount(name).pinnedAccessClass,
+               KeychainAccessibilityPolicy.accessClass(fromAttribute: attrs[kSecAttrAccessible as String]) == pinned {
+                continue
+            }
             let fingerprint = attrs[kSecAttrLabel as String] as? String ?? ""
             // D1: carry the persisted key_class blob through the delete→re-add so
             // a biometric-protection toggle does NOT silently reset a hw_only
@@ -511,14 +582,12 @@ public final class SovereignKeyVault {
                 kSecAttrLabel as String: fingerprint
             ]
             if let classBlob { add[kSecAttrGeneric as String] = classBlob }
-            if let ac = targetAC {
-                add[kSecAttrAccessControl as String] = ac
-            } else {
-                // W-KCAFTERUNLOCK — the plain (no access control) class is the
-                // policy's, so disabling protection lands on the same class a
-                // fresh `storePsk` writes.
-                add[kSecAttrAccessible as String] = KeychainAccessibilityPolicy.secAttrAccessible(for: .sessionPsk)
-            }
+            // A key lands on the access control when enabling and on the plain class of the policy when
+            // disabling, the same class a fresh `storePsk` writes. The order of the call keys stays in its pinned
+            // class whichever way the toggle goes.
+            add.merge(
+                Self.protectionAttributes(forAccount: name, accessControl: targetAC),
+                uniquingKeysWith: { _, new in new })
             let addStatus = SecItemAdd(add as CFDictionary, nil)
             if addStatus != errSecSuccess {
                 // Roll back: restore the item under its PRIOR protection so the
@@ -531,7 +600,11 @@ public final class SovereignKeyVault {
                     kSecAttrLabel as String: fingerprint
                 ]
                 if let classBlob { restore[kSecAttrGeneric as String] = classBlob }
-                if enable {
+                if EntryProtection.forAccount(name) == .deviceMetadata {
+                    restore.merge(
+                        Self.protectionAttributes(forAccount: name, accessControl: nil),
+                        uniquingKeysWith: { _, new in new })
+                } else if enable {
                     restore[kSecAttrAccessible as String] = KeychainAccessibilityPolicy.secAttrAccessible(for: .sessionPsk)
                 } else {
                     var e2: Unmanaged<CFError>?
@@ -574,9 +647,11 @@ public extension Notification.Name {
     /// W-VAULTREFRESH — posted by `SovereignKeyVault.storePsk`/`deletePsk`
     /// (every write/delete path) whenever the vault's PSK membership may have
     /// changed. Mirrors `ContactsStore`'s own `.contactsDidChange` convention
-    /// exactly, for the same reason: a listing UI (`KeyRotationCoordinator
-    /// .vaultKeys`) needs to refresh reactively instead of only once at
-    /// `init()`, regardless of WHICH code path wrote the new entry (QR
-    /// import, NFC pairing, KMS delivery, rotation, …).
+    /// exactly, for the same reason: a listing UI (`KeyManagementCoordinator
+    /// .keys`) needs to refresh reactively instead of only once at
+    /// `init()`, regardless of WHICH code path wrote the new entry (NFC
+    /// pairing, in-person pairing, KMS delivery, …). The device-internal
+    /// entries (`__` prefix) are not announced; see
+    /// `SovereignKeyVault.announcesChange(ofAccount:)`.
     static let sovereignVaultDidChange = Notification.Name("qaudion.sovereignVault.didChange")
 }

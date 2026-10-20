@@ -229,6 +229,85 @@ final class PskAdvertisingTests: XCTestCase {
         XCTAssertEqual(candidates.map { $0.staticFp }, [fp(0x02), fp(0x01)])
     }
 
+    // MARK: - 2c. The stored call-key list (docs/security/CALL_KEY_PRIORITY.md)
+
+    /// A list as Key management leaves it: the keys in that order, each placed by hand when `placed` has it.
+    private func storedList(_ keys: [(String, CallKeyPriority.Group)], placed: Set<String> = []) -> CallKeyPriority {
+        let stored = CallKeyPriority.Stored(
+            keys: keys.map { CallKeyPriority.Stored.Key(id: $0.0, placed: placed.contains($0.0)) })
+        return CallKeyPriority.reconciled(stored: stored, candidates: keys.map {
+            CallKeyPriority.Candidate(id: $0.0, group: $0.1, createdAt: nil)
+        })
+    }
+
+    func testTheAdvertFollowsTheStoredListWhenTheUserPutAnInPersonKeyAboveKms() {
+        let t0 = Date()
+        let nfc = entry("nfc-aaaa", .nfc, 0x01, at: t0)
+        let kms = entry(kmsNameA, .kms, 0x02, at: t0.addingTimeInterval(60))
+        let list = storedList([("nfc-aaaa", .other), (kmsNameA, .kms)], placed: ["nfc-aaaa"])
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([kms, nfc], priority: list), [fp(0x01), fp(0x02)])
+        XCTAssertEqual(PskAdvertising.rolesForAdvertisement([kms, nfc], priority: list),
+                       [PskAdvertV3.roleNfc, PskAdvertV3.roleOrdinary])
+        XCTAssertEqual(PskAdvertising.candidatesForAdvertisement([kms, nfc], priority: list).map { $0.staticFp },
+                       [fp(0x01), fp(0x02)])
+        // Without a stored list the default stands: the KMS key first.
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([kms, nfc]), [fp(0x02), fp(0x01)])
+    }
+
+    func testAKmsKeyDeliveredAfterTheUserPlacedTheNfcKeyGoesBelowItButAboveTheOldKmsKey() {
+        let t0 = Date()
+        let nfc = entry("nfc-aaaa", .nfc, 0x01, at: t0)
+        let kmsOld = entry(kmsNameA, .kms, 0x02, at: t0.addingTimeInterval(60))
+        let kmsNew = entry(kmsNameB, .kms, 0x03, at: t0.addingTimeInterval(120))
+        // The stored list knows only the first two keys; the third arrived after it was written.
+        let list = storedList([("nfc-aaaa", .other), (kmsNameA, .kms)], placed: ["nfc-aaaa"])
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([kmsOld, nfc, kmsNew], priority: list),
+                       [fp(0x01), fp(0x03), fp(0x02)])
+    }
+
+    func testAKeyThatIsInTheStoredListButNotInTheEntriesIsLeftOut() {
+        let t0 = Date()
+        let kms = entry(kmsNameA, .kms, 0x02, at: t0)
+        // nfc-aaaa could not be read this time: it is not among the entries, and the others keep their order.
+        let list = storedList([("nfc-aaaa", .other), (kmsNameA, .kms)], placed: ["nfc-aaaa"])
+        XCTAssertEqual(PskAdvertising.fingerprintsForAdvertisement([kms], priority: list), [fp(0x02)])
+    }
+
+    func testTheStoreFormReadsTheListThroughTheStoreAndBringsItUpToDate() {
+        final class Backing: CallKeyPriorityBacking {
+            var data: Data?
+            func read() -> CallKeyPriorityStoredRead {
+                if let data { return .found(data) }
+                return .absent
+            }
+            func write(_ data: Data) -> Bool {
+                self.data = data
+                return true
+            }
+        }
+        let t0 = Date()
+        let nfc = entry("nfc-aaaa", .nfc, 0x01, at: t0)
+        let kms = entry(kmsNameA, .kms, 0x02, at: t0.addingTimeInterval(60))
+        let entries = [nfc, kms]
+        let backing = Backing()
+        let candidates: () -> [CallKeyPriority.Candidate] = {
+            entries.map {
+                CallKeyPriority.Candidate(
+                    id: $0.name, group: CallKeyPriority.group(origin: $0.origin, keyClass: $0.keyClass),
+                    createdAt: $0.createdAt)
+            }
+        }
+        let store = CallKeyPriorityStore(backing: backing, candidates: candidates)
+
+        XCTAssertEqual(PskAdvertising.candidatesForAdvertisement(entries, store: store).map { $0.staticFp },
+                       [fp(0x02), fp(0x01)])
+        // The user moves the NFC key above the KMS key; the next advert, from a fresh store, follows it.
+        _ = store.moveUp("nfc-aaaa")
+        let restarted = CallKeyPriorityStore(backing: backing, candidates: candidates)
+        XCTAssertEqual(PskAdvertising.candidatesForAdvertisement(entries, store: restarted).map { $0.staticFp },
+                       [fp(0x01), fp(0x02)])
+    }
+
     // MARK: - 3. Fingerprint normalisation
 
     func testCanonicalFingerprintIsFullLowercase64HexSha256() {
@@ -256,7 +335,7 @@ final class PskAdvertisingTests: XCTestCase {
     }
 
     func testDottedGroupLabelledEntryIsAdvertisedInCanonical64HexForm() {
-        // Mirrors KeyRotationCoordinator's bug: entries there are labelled
+        // Mirrors the entries of the former identity QR: they are labelled
         // via `Fingerprint.format(pubkey:)` (`xxxx.xxxx.xxxx.xxxx`, the
         // display form), never the wire's 64-hex form.
         let pubkey = Data(repeating: 0x66, count: 32)

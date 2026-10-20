@@ -43,8 +43,8 @@ public final class ContactsStore {
         public private(set) var lastSeen: Date?
         public private(set) var isVerified: Bool
         /// Long-term identity public key, when known. Populated by the QR-scan
-        /// pairing flow (IdentityQrCode / DeviceLinkBinaryQR carry the pubkey
-        /// alongside the userId) and by future discover-v2 results that
+        /// pairing flow (DeviceLinkBinaryQR and the in-person pairing carry the
+        /// pubkey alongside the userId) and by future discover-v2 results that
         /// include published pubkeys. nil for legacy rows persisted before
         /// this field was added — old JSON decodes with pubkey=nil because
         /// Optional fields are absent-tolerant in Codable synthesis.

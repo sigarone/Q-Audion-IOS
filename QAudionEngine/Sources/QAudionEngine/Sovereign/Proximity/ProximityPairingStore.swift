@@ -170,6 +170,8 @@ public enum ProximityPairingStore {
                            keyClass: nil,
                            origin: .proximity,
                            nfcPeerIdentityKey: peerKey)
+        // The new key takes its place in the call-key list (docs/security/CALL_KEY_PRIORITY.md).
+        CallKeyPriorityStore.live(vault: vault).syncWithVault()
     }
 
     // MARK: - Local identity

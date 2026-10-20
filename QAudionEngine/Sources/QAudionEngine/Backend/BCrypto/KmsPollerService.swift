@@ -196,6 +196,8 @@ public final class KmsPollerService {
         case .shared: vaultClass = .shared
         }
         try vault.storePsk(name: entry.keyId, key: psk, fingerprint: fp, keyClass: vaultClass)
+        // A delivered key takes its place in the call-key list at once (docs/security/CALL_KEY_PRIORITY.md).
+        CallKeyPriorityStore.live(vault: vault).syncWithVault()
         stats.stored += 1
         // DISPLAY-ONLY: persist the server's human key name in a sidecar keyed
         // by fingerprint so the in-call panel can show "KMS · <name>" instead
@@ -300,6 +302,8 @@ public final class KmsPollerService {
         //    `name` is the server's keyId (UUID, stable across
         //    reboots; idempotent re-store updates the bytes).
         try vault.storePsk(name: entry.keyId, key: psk, fingerprint: fingerprintHex)
+        // A delivered key takes its place in the call-key list at once (docs/security/CALL_KEY_PRIORITY.md).
+        CallKeyPriorityStore.live(vault: vault).syncWithVault()
         stats.stored += 1
         // DISPLAY-ONLY: persist the server's human key name in a sidecar keyed
         // by fingerprint so the in-call panel can show "KMS · <name>" instead
@@ -347,6 +351,8 @@ public final class KmsPollerService {
         // the caller's event loop, but the warning surfaces the issue).
         do {
             try vault.deletePsk(name: keyId)
+            // The revoked key leaves the call-key list and loses its "placed by hand" mark.
+            CallKeyPriorityStore.live(vault: vault).syncWithVault()
             print("[KmsPollerService] notifyRevoked: deleted vault PSK key_id=\(keyId.prefix(8))…")
         } catch {
             print("[KmsPollerService] notifyRevoked: vault delete failed for key_id=\(keyId.prefix(8))…: \(error)")

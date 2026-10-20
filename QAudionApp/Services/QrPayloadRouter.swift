@@ -3,11 +3,9 @@ import QAudionEngine
 
 /// Routes a scanned QR-code string to one of the §5/§6/W53 payload codecs.
 ///
-/// Q-Audion has FOUR distinct QR shapes that the in-app scanner has to
+/// Q-Audion has THREE distinct QR shapes that the in-app scanner has to
 /// distinguish purely from text content:
 ///
-/// - **Identity** (`QAUDION:1:<userId>:<pubkey-b64>:<checksum-b64>`) — printable
-///   "show my identity" / "scan contact" surface (`IdentityQrCode`).
 /// - **Device link** (`qaudion://link/<base64url>`) — binary §5.6 device-linking
 ///   QR (`DeviceLinkBinaryQR`).
 /// - **Fast setup** (`qaudion://setup/<base64url>`) — server-issued onboarding
@@ -25,7 +23,6 @@ public enum QrPayloadRouter {
     /// Discriminated union of the three accepted payload shapes plus error
     /// cases for unrecognised / malformed strings.
     public enum Decoded: Equatable {
-        case identity(IdentityQrCode.Identity)
         case deviceLink(DeviceLinkBinaryQR.Decoded)
         case fastSetup(FastSetupQrCode.Payload)
         /// W53: invito a un gruppo (groupId + groupName). Engine wire
@@ -37,12 +34,11 @@ public enum QrPayloadRouter {
         case unknown(prefix: String)
 
         public enum Kind: String, Equatable {
-            case identity, deviceLink, fastSetup, groupInvite
+            case deviceLink, fastSetup, groupInvite
         }
 
         public static func == (lhs: Decoded, rhs: Decoded) -> Bool {
             switch (lhs, rhs) {
-            case (.identity(let a), .identity(let b)): return a == b
             case (.deviceLink(let a), .deviceLink(let b)): return a == b
             case (.fastSetup(let a), .fastSetup(let b)): return a == b
             case (.groupInvite(let a), .groupInvite(let b)): return a == b
@@ -59,16 +55,6 @@ public enum QrPayloadRouter {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .unknown(prefix: "")
-        }
-
-        // Identity QR: textual "QAUDION:" prefix.
-        if trimmed.hasPrefix(IdentityQrCode.prefix + ":") {
-            do {
-                let id = try IdentityQrCode.decode(string: trimmed)
-                return .identity(id)
-            } catch {
-                return .invalid(kind: .identity, reason: error.localizedDescription)
-            }
         }
 
         // qaudion:// URL — distinguish by host (link vs setup).

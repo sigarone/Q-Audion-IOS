@@ -246,7 +246,7 @@ struct ContactsScreen: View {
     }
 
     /// "Aggiungi contatto": by extension, or in person by QR — the scanner
-    /// reads identity codes and in-person pairing codes alike.
+    /// reads in-person pairing codes and device-link codes.
     private var addContactMenu: some View {
         Menu {
             Button {

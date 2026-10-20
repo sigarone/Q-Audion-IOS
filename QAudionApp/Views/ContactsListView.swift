@@ -113,43 +113,25 @@ final class ContactsListContainer: ObservableObject {
         self.service = ContactsRefreshService(appState: state, store: store)
     }
 
-    /// Persists a QR-scanned payload as a verified local contact. Identity
-    /// and device-link payloads both carry a userId + pubkey so we can render
-    /// them in the contacts list immediately; fast-setup is onboarding-time
+    /// Persists a QR-scanned payload as a verified local contact. A
+    /// device-link payload carries a userId + pubkey so we can render it in
+    /// the contacts list immediately; fast-setup is onboarding-time
     /// only and is ignored here (the OnboardingFlow path will consume it).
     /// Returns `true` if a new row was inserted (or an existing one updated).
     @discardableResult
-    /// `verified: false` is for callers whose in-person evidence does not
-    /// bind the userId (an in-person pairing whose server check failed).
-    ///
-    /// - Parameters:
-    ///   - proximityPairedAtMs: non-nil ONLY from the in-person (QR +
-    ///     Bluetooth) pairing flow — epoch ms the SAS ceremony completed.
-    ///     nil (the default) for an ordinary static-identity-QR scan, which
-    ///     is not that ceremony. When nil, any prior in-person record this
-    ///     contact already had is preserved, never cleared, by this call.
-    ///   - proximityServerConfirmed: whether the server confirmed the
-    ///     claimed account published the proved key (spec §12). Meaningless
-    ///     when `proximityPairedAtMs` is nil.
-    func addScannedContact(_ decoded: QrPayloadRouter.Decoded, verified: Bool = true,
-                           proximityPairedAtMs: Int64? = nil,
-                           proximityServerConfirmed: Bool? = nil) -> Bool {
+    func addScannedContact(_ decoded: QrPayloadRouter.Decoded) -> Bool {
         let userId: String
         let displayName: String
         let pubkey: Data
         switch decoded {
-        case .identity(let id):
-            userId = id.userId
+        case .deviceLink(let dl):
+            userId = dl.userId
             // W-UUIDSWEEP root cause: this used to persist the RAW 36-char
             // userId as the contact's displayName — the UUID then rendered
             // as the contact's NAME everywhere downstream (contacts list,
             // chat list, call screens, CarPlay). Persist the humane short
             // fallback instead; the server-lookup recovery (InCallContainer)
             // and any later rename upgrade it to the real name.
-            displayName = DisplayName.shortUserFallback(id.userId)
-            pubkey = id.pubkey
-        case .deviceLink(let dl):
-            userId = dl.userId
             displayName = DisplayName.shortUserFallback(dl.userId)
             pubkey = dl.pubkey
         case .groupInvite(let invite):
@@ -172,6 +154,28 @@ final class ContactsListContainer: ObservableObject {
             // fastSetup è onboarding-time, gestito da OnboardingFlow.
             return false
         }
+        return saveContact(userId: userId, displayName: displayName, pubkey: pubkey, verified: true,
+                           proximityPairedAtMs: nil, proximityServerConfirmed: nil)
+    }
+
+    /// Writes the contact row for a payload that carries a userId and a public key (a scanned device-link code, a
+    /// completed in-person pairing) and starts the pairwise key exchange. Returns `true` if a row was inserted (or an
+    /// existing one updated).
+    ///
+    /// `verified: false` is for callers whose in-person evidence does not
+    /// bind the userId (an in-person pairing whose server check failed).
+    ///
+    /// - Parameters:
+    ///   - proximityPairedAtMs: non-nil ONLY from the in-person (QR +
+    ///     Bluetooth) pairing flow — epoch ms the SAS ceremony completed.
+    ///     nil for an ordinary scan, which is not that ceremony. When nil,
+    ///     any prior in-person record this contact already had is
+    ///     preserved, never cleared, by this call.
+    ///   - proximityServerConfirmed: whether the server confirmed the
+    ///     claimed account published the proved key (spec §12). Meaningless
+    ///     when `proximityPairedAtMs` is nil.
+    private func saveContact(userId: String, displayName: String, pubkey: Data, verified: Bool,
+                             proximityPairedAtMs: Int64?, proximityServerConfirmed: Bool?) -> Bool {
         // Security fix (2026-08-22, W-SELFCONTACT): the app has a single
         // generic QR scanner shared between "add contact" and scanning a
         // companion-device-link QR (LinkNewDeviceScreen, whose payload
@@ -220,8 +224,8 @@ final class ContactsListContainer: ObservableObject {
             voiceVerifiedAt: existing?.voiceVerifiedAt,
             callVerifiedPeerIdentityKey: existing?.callVerifiedPeerIdentityKey,
             // W-PAIRFB — only the in-person (QR + Bluetooth) pairing flow
-            // passes a non-nil `proximityPairedAtMs`; an ordinary static-
-            // identity-QR re-scan must not wipe a prior in-person record.
+            // passes a non-nil `proximityPairedAtMs`; an ordinary re-scan
+            // must not wipe a prior in-person record.
             proximityPairedAtMs: proximityPairedAtMs ?? existing?.proximityPairedAtMs,
             proximityServerConfirmed: proximityPairedAtMs != nil
                 ? proximityServerConfirmed : existing?.proximityServerConfirmed
@@ -312,10 +316,13 @@ final class ContactsListContainer: ObservableObject {
                 comment: "In-person (QR + Bluetooth) pairing outcome — the peer was already a known contact, so only its call key was saved; the contact's own key/verified badge is unchanged. %@ in the detail line is their display name.")
             outcome = ProximityOutcome(title: title, detail: name, isError: false, kind: .existingContact)
         } else {
-            let identity = IdentityQrCode.Identity(userId: peerUserId, pubkey: result.peer.encryptionPublicKey)
-            let added: Bool = addScannedContact(.identity(identity), verified: result.serverIdentityConfirmed,
-                                                proximityPairedAtMs: pairedAtMs,
-                                                proximityServerConfirmed: result.serverIdentityConfirmed)
+            // W-UUIDSWEEP: the humane short fallback, never the raw 36-char userId, as the display name.
+            let added: Bool = saveContact(userId: peerUserId,
+                                          displayName: DisplayName.shortUserFallback(peerUserId),
+                                          pubkey: result.peer.encryptionPublicKey,
+                                          verified: result.serverIdentityConfirmed,
+                                          proximityPairedAtMs: pairedAtMs,
+                                          proximityServerConfirmed: result.serverIdentityConfirmed)
             if !added {
                 let title = String(localized: "proximity.outcome.not_added",
                     defaultValue: "Chiave salvata, contatto non aggiunto",
@@ -375,7 +382,6 @@ struct ContactsListView: View {
     @State private var showNfcUpgradeSheet: Bool = false
     @State private var searchText: String = ""
     @State private var showingQrScanner: Bool = false
-    @State private var showingMyIdentity: Bool = false
     @State private var showingNfcPair: Bool = false
     /// Whether this device can read NFC tags; the NFC row is replaced by a
     /// neutral line when it cannot.
@@ -467,9 +473,6 @@ struct ContactsListView: View {
                     Button("Scansiona QR", systemImage: "qrcode.viewfinder") {
                         showingQrScanner = true
                     }
-                    Button("Mostra la mia identità", systemImage: "qrcode") {
-                        showingMyIdentity = true
-                    }
                     // QR + Bluetooth proximity pairing (hybrid ML-KEM-1024):
                     // opens the chooser where this phone shows its code or
                     // scans the other phone's. Not capability-gated.
@@ -543,9 +546,6 @@ struct ContactsListView: View {
                 scanResultBannerView(banner)
             }
         }
-        .sheet(isPresented: $showingMyIdentity) {
-            MyIdentityQrSheet(appState: appState)
-        }
         .sheet(isPresented: $showingProximityPair) {
             ProximityPairingChooserSheet(localUserId: appState.currentUserId,
                                          serverIdentityKeys: { (userId: String) async -> Set<Data> in
@@ -587,7 +587,6 @@ struct ContactsListView: View {
                 if added {
                     let id: String = {
                         switch decoded {
-                        case .identity(let i): return i.userId
                         case .deviceLink(let d): return d.userId
                         default: return "?"
                         }
@@ -885,8 +884,7 @@ struct ContactsListView: View {
 }
 
 #Preview {
-    // Preview needs an AppState in the environment because the "+" menu
-    // presents MyIdentityQrSheet which requires it.
+    // Preview needs an AppState in the environment.
     NavigationStack { ContactsListView() }
         .environmentObject(AppState())
         .environmentObject(CapabilityGate.previewInstance())

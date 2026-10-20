@@ -108,8 +108,8 @@ final class KeyExportPolicyTests: XCTestCase {
         XCTAssertTrue(PskOrigin.inferred(fromAccountName: "chiave ufficio").isExportable)
     }
 
-    /// W-IDKEYEXCL — `KeyRotationCoordinator.importPeerIdentity`/`rotate()` name
-    /// their entries "peer.<userId>" / "rotated_ephemeral.<ts>" and share this
+    /// W-IDKEYEXCL — the former identity-QR import and key rotation of Key
+    /// management named their entries "peer.<userId>" / "rotated_ephemeral.<ts>" and share this
     /// vault's storage, but store X25519 IDENTITY public keys, not PSKs. Before
     /// this classification existed they fell to `.manual`, which
     /// `PskAdvertising.isEligibleMatchCandidate` never excluded — reachable, in
