@@ -110,7 +110,7 @@ final class VoiceDisplayFormatTests: XCTestCase {
         }
         for c in cases {
             let e = c.expected
-            check(c.id, "tone", VoiceGauges.pitch(hz: c.f0, voiced: true).value, e["tone"])
+            check(c.id, "tone", VoiceGauges.pitch(hz: c.f0).value, e["tone"])
             check(c.id, "details_it",
                   VoiceSpectralDetails.text(formant1Hz: c.f1, formant2Hz: c.f2, syllablesPerSecond: c.rate,
                                             hnrDecibels: c.hnr, rateUnit: "sill/s", locale: italian),
@@ -143,8 +143,8 @@ final class VoiceDisplayFormatTests: XCTestCase {
             // video diagnostics.
             let toneValue = e["tone"] ?? ""
             let toneText = toneValue == VoiceGauges.noValue ? toneValue : toneValue + " Hz"
-            check(c.id, "tone row text", VoiceGauges.pitch(hz: c.f0, voiced: true).text, toneText)
-            check(c.id, "tone row unit", VoiceGauges.pitch(hz: c.f0, voiced: true).unit,
+            check(c.id, "tone row text", VoiceGauges.pitch(hz: c.f0).text, toneText)
+            check(c.id, "tone row unit", VoiceGauges.pitch(hz: c.f0).unit,
                   toneValue == VoiceGauges.noValue ? "" : "Hz")
             check(c.id, "video pitch", VoiceBiometricsFormat.pitch(hz: c.f0), toneText)
         }

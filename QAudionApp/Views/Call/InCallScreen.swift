@@ -120,9 +120,10 @@ struct InCallScreen: View {
     /// `stressScore`, `breathiness` and `confidence` are carried from the engine
     /// but no longer shown anywhere: stress, breath/hoarseness and authenticity
     /// are not validated for phone-quality speech, so the UI makes no claim
-    /// from them. What is shown: the pitch (`pitchHz`, `pitchVoiced`), the first
-    /// two formants, the speech rate and the HNR on the tone row, the spectrum,
-    /// and the raw numbers in the collapsed technical-data block.
+    /// from them. What is shown: the pitch (`pitchHz`) and the word after it
+    /// (`voiceWord`), the first two formants, the speech rate and the HNR on
+    /// the tone row, the spectrum, and the raw numbers in the collapsed
+    /// technical-data block.
     ///
     /// A measurement that is not valid right now is NaN in `jitter`, `shimmer`,
     /// `hnr`, `pitchHz`, `syllablesPerSec`, `f1` and `f2` (a zero there would be a
@@ -142,24 +143,20 @@ struct InCallScreen: View {
         // spectrum bars — the bars are the actual `voiceSpectrum` bands —
         // but the fields are retained (call sites/previews already
         // populate them, and a future formant overlay may use them).
-        // `speaking` still gates the MiniSpectrum's cyan→green "active"
-        // tint (VoiceAnalysisResult.speechRate.isSpeaking && .pitch.voiced).
         // Defaulted so preview/test call sites keep compiling.
         let f1: Float                 // VoiceAnalysisResult.Formants.f1 (Hz), NaN if not found
         let f2: Float                 // .f2 (Hz), NaN if not found
         let f3: Float                 // .f3 (Hz)
         let f4: Float                 // .f4 (Hz)
-        let speaking: Bool            // .speechRate.isSpeaking && .pitch.voiced
-        /// Whether the averaged window counted as voiced (VoiceAnalysisResult.Pitch.voiced):
-        /// the pitch gauge prints no status word while it is, a dash while it is not.
-        let pitchVoiced: Bool
+        /// The word after the pitch on the tone row (VoiceAnalysisResult.voiceWord, section 12.6 of
+        /// docs/voice-analysis-spec.md). The MiniSpectrum's cyan→green "active" tint follows the same word.
+        let voiceWord: VoiceWord
 
         init(stressScore: Float, jitter: Float, shimmer: Float, hnr: Float,
              breathiness: Float, pitchHz: Float, syllablesPerSec: Float,
              confidence: Float,
              f1: Float = 0, f2: Float = 0, f3: Float = 0, f4: Float = 0,
-             speaking: Bool = false,
-             pitchVoiced: Bool? = nil) {
+             voiceWord: VoiceWord = .noWord) {
             self.stressScore = stressScore
             self.jitter = jitter
             self.shimmer = shimmer
@@ -169,8 +166,7 @@ struct InCallScreen: View {
             self.syllablesPerSec = syllablesPerSec
             self.confidence = confidence
             self.f1 = f1; self.f2 = f2; self.f3 = f3; self.f4 = f4
-            self.speaking = speaking
-            self.pitchVoiced = pitchVoiced ?? (pitchHz > 0)
+            self.voiceWord = voiceWord
         }
     }
 
@@ -1730,7 +1726,7 @@ struct InCallScreen: View {
 
             if let bio = voiceBiometrics {
                 GuardianGaugeRow(pitchHz: bio.pitchHz,
-                                 pitchVoiced: bio.pitchVoiced,
+                                 voiceWord: bio.voiceWord,
                                  formant1Hz: bio.f1,
                                  formant2Hz: bio.f2,
                                  syllablesPerSecond: bio.syllablesPerSec,
@@ -1811,7 +1807,7 @@ struct InCallScreen: View {
             for i in holder.levels.indices { holder.levels[i] *= 0.85 }
         }
 
-        let speaking = voiceBiometrics?.speaking ?? false
+        let speaking = voiceBiometrics?.voiceWord == .voice
         let n = holder.levels.count
         guard n > 0 else { return }
         let gap = min(size.width * 0.20 / CGFloat(n), 2.2)
@@ -2787,7 +2783,7 @@ struct InCallScreen: View {
             stressScore: 0.18, jitter: 0.006, shimmer: 0.021,
             hnr: 21, breathiness: 0.12, pitchHz: 142,
             syllablesPerSec: 4.1, confidence: 0.94,
-            f1: 620, f2: 1200, f3: 2600, f4: 3400, speaking: true
+            f1: 620, f2: 1200, f3: 2600, f4: 3400, voiceWord: .voice
         ),
         keyEpoch: nil,
         cryptoOpsPerSec: 96,

@@ -2618,7 +2618,9 @@ final class AppState: ObservableObject {
     /// It is the value to SHOW: the mean over the last 10 analyses (1 s of
     /// AUDIO time) by the display rule of `VoiceAnalysisSmoothing`, which the
     /// engine keeps itself and clears with its own state. Each field follows
-    /// its own validity flag. Reset in endCall().
+    /// its own validity flag. `voiceWord` is the word of the tone row, which
+    /// the engine holds over every result since its last clearing. Reset in
+    /// endCall().
     @Published var voiceAnalysis: VoiceAnalysisResult?
     /// Unix seconds of the last ``voiceAnalysis`` publish. 0 = never, so the
     /// first value of a call publishes immediately instead of making the

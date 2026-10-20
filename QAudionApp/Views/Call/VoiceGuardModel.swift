@@ -24,16 +24,15 @@ enum VoiceTone: Equatable {
 
 // MARK: - Tone row of the ribbon
 
-/// What the tone row prints: the whole-number f0, its unit (a symbol, never
-/// translated) and whether a voice is present. The unit goes with a number and
-/// never with the dash: a pitch that is not a reading is written "—", not
-/// "— Hz" (docs/voice-analysis-spec.md, section 12.5). The row never colours
-/// any of it and never adds a sentence: a pitch is a measurement, not a verdict.
+/// What the tone row prints before its word: the whole-number f0 and its unit
+/// (a symbol, never translated). The unit goes with a number and never with
+/// the dash: a pitch that is not a reading is written "—", not "— Hz"
+/// (docs/voice-analysis-spec.md, section 12.5). The row never colours any of it
+/// and never adds a sentence: a pitch is a measurement, not a verdict.
 struct VoiceToneReading: Equatable {
     let value: String
     /// "Hz" next to a number; empty next to the dash.
     let unit: String
-    let voiced: Bool
 
     /// The tone as one string, wherever it is written: "143 Hz", or the dash alone.
     var text: String {
@@ -105,25 +104,29 @@ enum VoiceGauges {
     /// The unit of the tone: a symbol, the same in every language.
     static let pitchUnit = "Hz"
 
-    /// The tone reading: the f0 as a whole number, "Hz", and whether the
-    /// segment is voiced (the row then says "voice", otherwise "silence"). A
-    /// pitch that is not a reading has the dash and no unit.
-    static func pitch(hz: Float, voiced: Bool) -> VoiceToneReading {
+    /// The tone reading: the f0 as a whole number and "Hz". A pitch that is not
+    /// a reading has the dash and no unit. The word after it is the voice word
+    /// (`VoiceToneCopy.voiceWord`), which does not depend on the pitch.
+    static func pitch(hz: Float) -> VoiceToneReading {
         let value: String = wholeNumber(hz)
-        return VoiceToneReading(value: value, unit: value == noValue ? "" : pitchUnit, voiced: voiced)
+        return VoiceToneReading(value: value, unit: value == noValue ? "" : pitchUnit)
     }
 
     /// What a screen reader says for the whole row: the label, the value with
-    /// its unit, the voice word and, when there are any, the details with their
-    /// separators turned into pauses. A dash (a value that does not exist) is
-    /// read as `unavailable`, never as a symbol.
+    /// its unit, the voice word (left out while the row shows none) and, when
+    /// there are any, the details with their separators turned into pauses. A
+    /// dash (a value that does not exist) is read as `unavailable`, never as a
+    /// symbol.
     static func spokenTone(label: String,
                            reading: VoiceToneReading,
-                           voiceWord: String,
+                           voiceWord: String?,
                            details: String?,
                            unavailable: String = VoiceToneCopy.unavailable) -> String {
         let measure: String = reading.value == noValue ? unavailable : reading.text
-        var parts: [String] = [label, measure, voiceWord]
+        var parts: [String] = [label, measure]
+        if let voiceWord = voiceWord {
+            parts.append(voiceWord)
+        }
         if let details = details, !details.isEmpty {
             let paused: String = details.replacingOccurrences(of: VoiceSpectralDetails.separator, with: ", ")
             parts.append(paused.replacingOccurrences(of: noValue, with: unavailable))
@@ -132,18 +135,24 @@ enum VoiceGauges {
     }
 }
 
-/// The two words of the tone row, for a segment with a voice and one without.
+/// The two words of the tone row, for a voice being heard and for silence.
 /// They state what was heard, nothing about the person.
 enum VoiceToneCopy {
-    static func voiceWord(voiced: Bool) -> String {
-        if voiced {
+    /// The word for `word` (docs/voice-analysis-spec.md, section 12.6), or nil
+    /// while the row shows none.
+    static func voiceWord(_ word: VoiceWord) -> String? {
+        switch word {
+        case .voice:
             return String(localized: "in_call.gauge.pitch_voiced",
                           defaultValue: "voce",
                           comment: "Call screen voice ribbon, tone row — word after the pitch value when a voice is present in the audio being measured")
+        case .silence:
+            return String(localized: "in_call.gauge.pitch_silent",
+                          defaultValue: "silenzio",
+                          comment: "Call screen voice ribbon, tone row — word after the pitch value when there is no voice in the audio being measured")
+        case .noWord:
+            return nil
         }
-        return String(localized: "in_call.gauge.pitch_silent",
-                      defaultValue: "silenzio",
-                      comment: "Call screen voice ribbon, tone row — word after the pitch value when there is no voice in the audio being measured")
     }
 
     /// What a screen reader says where the row prints a dash: a measurement that
@@ -302,8 +311,9 @@ extension InCallScreen.VoiceBiometrics {
     /// which every consumer prints as a dash, instead of as a measured 0: the
     /// pitch (`f0Valid`), the first two formants (`f1Found`, `f2Found`), the
     /// speech rate (`speechRate.valid`), the HNR (`hnrValid`) and jitter and
-    /// shimmer (`stress.valid`). The voiced flag only chooses the word of the tone
-    /// row ("voce" / "silenzio") and the tint of the spectrum.
+    /// shimmer (`stress.valid`). The word of the tone row ("voce" / "silenzio", or
+    /// none) and the tint of the spectrum come from `voiceWord`, not from the voiced
+    /// flag of the display value (docs/voice-analysis-spec.md, section 12.6).
     init(_ result: VoiceAnalysisResult) {
         self.init(
             stressScore: result.stress.score,
@@ -318,8 +328,7 @@ extension InCallScreen.VoiceBiometrics {
             f2: result.formants.f2Found ? result.formants.f2 : .nan,
             f3: result.formants.f3,
             f4: result.formants.f4,
-            speaking: result.speechRate.isSpeaking && result.pitch.voiced,
-            pitchVoiced: result.pitch.voiced)
+            voiceWord: result.voiceWord)
     }
 }
 
@@ -348,10 +357,9 @@ enum VoiceBiometricsFormat {
 
     /// The pitch in whole Hz, rounded half away from zero: "143 Hz" for 142.5, or a
     /// dash alone while it is not a reading (the analysis hands it over as NaN then).
-    /// It is the text of the tone row (`VoiceToneReading.text`); the voiced flag does
-    /// not enter it.
+    /// It is the text of the tone row (`VoiceToneReading.text`).
     static func pitch(hz: Float) -> String {
-        VoiceGauges.pitch(hz: hz, voiced: false).text
+        VoiceGauges.pitch(hz: hz).text
     }
 
     /// Harmonic-to-noise ratio in whole dB: "21 dB", or a dash while it is not valid.

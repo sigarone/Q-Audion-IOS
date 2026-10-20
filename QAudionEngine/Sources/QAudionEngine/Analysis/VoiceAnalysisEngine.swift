@@ -20,9 +20,10 @@ import Foundation
 ///   * `onResult`   the raw result of the step. Consumers that count or detect
 ///                  (the call diagnostics) use this one.
 ///   * `onDisplay`  the value to SHOW: the mean over the last 10 results by the
-///                  display rule of `VoiceAnalysisSmoothing`. The engine keeps that
-///                  window itself, in audio time, and clears it together with the
-///                  rest of its state.
+///                  display rule of `VoiceAnalysisSmoothing`, with the word of the
+///                  tone row (`VoiceWordHold`) in `voiceWord`. The engine keeps
+///                  that window and that word itself, in audio time, and clears
+///                  them together with the rest of its state.
 ///
 /// A gap in the audio is reported with `markDiscontinuity(missingSamples:)`: a gap
 /// shorter than 2 s restarts the analysis grid (the window and the 100 ms phase)
@@ -74,6 +75,8 @@ public final class VoiceAnalysisEngine: @unchecked Sendable {
 
     /// The last 10 raw results (the display window).
     private var displayHistory: [VoiceAnalysisResult] = []
+    /// The word of the tone row, counted over every result since the last clearing.
+    private var wordHold = VoiceWordHold()
 
     private struct Step {
         let result: VoiceAnalysisResult
@@ -167,6 +170,7 @@ public final class VoiceAnalysisEngine: @unchecked Sendable {
         healthMonitor.reset()
         speechRateAnalyzer.reset()
         displayHistory.removeAll(keepingCapacity: true)
+        wordHold.reset()
         restartSegmentLocked()
     }
 
@@ -206,7 +210,8 @@ public final class VoiceAnalysisEngine: @unchecked Sendable {
         framesInStep = 0
         displayHistory.append(result)
         if displayHistory.count > VoiceDsp.displaySteps { displayHistory.removeFirst() }
-        let display = VoiceAnalysisSmoothing.average(of: displayHistory) ?? result
+        var display = VoiceAnalysisSmoothing.average(of: displayHistory) ?? result
+        display.voiceWord = wordHold.update(voiced: result.pitch.voiced)
         return Step(result: result, display: display)
     }
 
