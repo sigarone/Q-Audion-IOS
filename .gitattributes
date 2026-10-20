@@ -21,3 +21,7 @@ QAudionEngine/Tests/QAudionEngineTests/Analysis/Resources/voicedsp-vectors.json 
 # The display-formatting cases (docs/voice-analysis-spec.md, section 12) are a byte-for-byte copy of the file that the
 # Android tests run too (the same inputs and the same expected strings on both apps): git must never rewrite its line endings.
 QAudionAppTests/voice-analysis/display-format-cases.tsv -text
+
+# The voice-word cases (docs/voice-analysis-spec.md, section 12.6) are a byte-for-byte copy of the file that the
+# Android tests run too: git must never rewrite its line endings.
+QAudionAppTests/voice-analysis/voice-word-cases.tsv -text

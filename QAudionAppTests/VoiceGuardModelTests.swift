@@ -15,22 +15,20 @@ final class VoiceGuardModelTests: XCTestCase {
 
     // MARK: - Tone row
 
-    func testToneReadingIsTheWholeNumberInHertzAndTheVoicedFlag() {
-        let voiced = VoiceGauges.pitch(hz: 142.7, voiced: true)
-        XCTAssertEqual(voiced.value, "143", "rounded, not cut towards zero")
-        XCTAssertEqual(VoiceGauges.pitch(hz: 142.4, voiced: true).value, "142")
-        XCTAssertEqual(VoiceGauges.pitch(hz: 142.5, voiced: true).value, "143", "an exact tie goes away from zero")
-        XCTAssertEqual(voiced.unit, "Hz")
-        XCTAssertEqual(voiced.text, "143 Hz")
-        XCTAssertTrue(voiced.voiced)
-        let silent = VoiceGauges.pitch(hz: 0, voiced: false)
+    func testToneReadingIsTheWholeNumberInHertz() {
+        let reading = VoiceGauges.pitch(hz: 142.7)
+        XCTAssertEqual(reading.value, "143", "rounded, not cut towards zero")
+        XCTAssertEqual(VoiceGauges.pitch(hz: 142.4).value, "142")
+        XCTAssertEqual(VoiceGauges.pitch(hz: 142.5).value, "143", "an exact tie goes away from zero")
+        XCTAssertEqual(reading.unit, "Hz")
+        XCTAssertEqual(reading.text, "143 Hz")
+        let silent = VoiceGauges.pitch(hz: 0)
         XCTAssertEqual(silent.value, "—", "a pitch of 0 is not a reading")
-        XCTAssertFalse(silent.voiced)
     }
 
     func testToneValueWithoutANumberReadsAsTheDash() {
-        XCTAssertEqual(VoiceGauges.pitch(hz: .nan, voiced: true).value, "—")
-        XCTAssertEqual(VoiceGauges.pitch(hz: .infinity, voiced: false).value, "—")
+        XCTAssertEqual(VoiceGauges.pitch(hz: .nan).value, "—")
+        XCTAssertEqual(VoiceGauges.pitch(hz: .infinity).value, "—")
     }
 
     /// Specification 12.5: the tone is the number and " Hz", or the dash ALONE. The unit goes with a number and
@@ -39,13 +37,11 @@ final class VoiceGuardModelTests: XCTestCase {
         let rows: [(Float, String)] = [(142.7, "143 Hz"), (142.5, "143 Hz"), (142.4, "142 Hz"), (60, "60 Hz"),
                                        (0, "—"), (-3, "—"), (.nan, "—"), (.infinity, "—"), (-.infinity, "—")]
         for (hz, expected) in rows {
-            for voiced in [true, false] {
-                let reading = VoiceGauges.pitch(hz: hz, voiced: voiced)
-                XCTAssertEqual(reading.text, expected, "\(hz)")
-                XCTAssertEqual(reading.unit.isEmpty, expected == "—", "the unit goes with a number only: \(hz)")
-                XCTAssertEqual(reading.unit, expected == "—" ? "" : "Hz", "\(hz)")
-                XCTAssertFalse(reading.text.contains("— Hz"), "\(hz)")
-            }
+            let reading = VoiceGauges.pitch(hz: hz)
+            XCTAssertEqual(reading.text, expected, "\(hz)")
+            XCTAssertEqual(reading.unit.isEmpty, expected == "—", "the unit goes with a number only: \(hz)")
+            XCTAssertEqual(reading.unit, expected == "—" ? "" : "Hz", "\(hz)")
+            XCTAssertFalse(reading.text.contains("— Hz"), "\(hz)")
         }
         XCTAssertEqual(VoiceGauges.pitchUnit, "Hz")
     }
@@ -53,7 +49,7 @@ final class VoiceGuardModelTests: XCTestCase {
     /// The diagnostics of the video call write the tone with the same text as the tone row.
     func testTheVideoDiagnosticsWriteTheSameToneAsTheToneRow() {
         for hz: Float in [142.7, 142.5, 60, 399.5, 0, -3, .nan, .infinity] {
-            XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: hz), VoiceGauges.pitch(hz: hz, voiced: true).text, "\(hz)")
+            XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: hz), VoiceGauges.pitch(hz: hz).text, "\(hz)")
         }
     }
 
@@ -64,27 +60,39 @@ final class VoiceGuardModelTests: XCTestCase {
 
     /// The row says what was heard in two words, "voice" and "silence", and they
     /// must not be the same word nor empty (a missing catalog entry falls back to
-    /// the Italian default, never to an empty string).
-    func testTheTwoVoiceWordsDiffer() {
-        let voice = VoiceToneCopy.voiceWord(voiced: true)
-        let silence = VoiceToneCopy.voiceWord(voiced: false)
+    /// the Italian default, never to an empty string). The third state of the
+    /// word (section 12.6) is no word at all.
+    func testTheTwoVoiceWordsDifferAndTheThirdStateHasNone() throws {
+        let voice = try XCTUnwrap(VoiceToneCopy.voiceWord(.voice))
+        let silence = try XCTUnwrap(VoiceToneCopy.voiceWord(.silence))
         XCTAssertFalse(voice.isEmpty)
         XCTAssertFalse(silence.isEmpty)
         XCTAssertNotEqual(voice, silence)
+        XCTAssertNil(VoiceToneCopy.voiceWord(.noWord))
     }
 
     func testTheSpokenToneReadsLabelValueUnitAndWord() {
-        let reading = VoiceGauges.pitch(hz: 142.4, voiced: true)
+        let reading = VoiceGauges.pitch(hz: 142.4)
         XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "voce", details: nil),
                        "Tono, 142 Hz, voce")
         XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "voce", details: ""),
                        "Tono, 142 Hz, voce")
     }
 
+    /// With no word the sentence goes on from the value to the details, with no empty piece between them.
+    func testTheSpokenToneLeavesOutTheWordWhileThereIsNone() {
+        let reading = VoiceGauges.pitch(hz: 142.4)
+        XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: nil, details: nil),
+                       "Tono, 142 Hz")
+        XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: nil,
+                                              details: "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB"),
+                       "Tono, 142 Hz, F1 520, F2 1480, 4,2 sill/s, HNR 18 dB")
+    }
+
     /// A dash is not read out as a symbol: the screen reader says the word for "not available", for the
     /// pitch and for every detail alike.
     func testTheSpokenToneReadsADashAsTheUnavailableWord() {
-        let reading = VoiceGauges.pitch(hz: .nan, voiced: false)
+        let reading = VoiceGauges.pitch(hz: .nan)
         XCTAssertEqual(reading.text, "—")
         XCTAssertEqual(VoiceGauges.spokenTone(label: "Tono", reading: reading, voiceWord: "silenzio",
                                               details: "F1 — · F2 1480 · — sill/s · HNR —",
@@ -95,7 +103,7 @@ final class VoiceGuardModelTests: XCTestCase {
 
     /// The details are read as pauses, not as the middle dot of the screen.
     func testTheSpokenToneReadsTheDetailsWithPauses() {
-        let reading = VoiceGauges.pitch(hz: 120, voiced: true)
+        let reading = VoiceGauges.pitch(hz: 120)
         let spoken = VoiceGauges.spokenTone(label: "Tono",
                                             reading: reading,
                                             voiceWord: "voce",

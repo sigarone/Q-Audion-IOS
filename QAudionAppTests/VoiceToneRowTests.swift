@@ -8,6 +8,8 @@ import QAudionEngine
 /// What this pins:
 ///  - every value the screens print follows the validity flag of its own measurement, and a value that
 ///    is not a reading right now reaches them as NaN (a dash), never as a zero;
+///  - the word of the row and the tint of the spectrum come from the voice word of the display value, not
+///    from its voiced flag;
 ///  - the details of the tone row are one line, "F1 520 · F2 1480 · 4,2 sill/s · HNR 18 dB", with the
 ///    syllables-per-second abbreviation and the decimal separator of the language;
 ///  - the abbreviation and the word a screen reader says in place of a dash exist in all six languages.
@@ -21,7 +23,8 @@ final class VoiceToneRowTests: XCTestCase {
     private func result(f0: Float? = 142, voiced: Bool = true,
                         f1: Float? = 524, f2: Float? = 1478,
                         hnr: Float? = 18.4, rate: Float? = 4.24,
-                        jitter: Float? = 0.012, shimmer: Float = 0.031) -> VoiceAnalysisResult {
+                        jitter: Float? = 0.012, shimmer: Float = 0.031,
+                        voiceWord: VoiceWord = .noWord) -> VoiceAnalysisResult {
         VoiceAnalysisResult(
             pitch: .init(f0Hz: f0 ?? 0, voiced: voiced, rms: 0.1, f0Valid: f0 != nil),
             stress: .init(score: 0.2, jitter: jitter ?? 0, shimmer: jitter == nil ? 0 : shimmer, valid: jitter != nil),
@@ -29,7 +32,8 @@ final class VoiceToneRowTests: XCTestCase {
             speechRate: .init(syllablesPerSec: rate ?? 0, pauseRatio: 0.2, isSpeaking: true, valid: rate != nil),
             formants: .init(f1: f1 ?? 0, f2: f2 ?? 0, f3: 0, f4: 0,
                             f1Found: f1 != nil, f2Found: f2 != nil, f3Found: false, f4Found: false),
-            confidence: 0.8)
+            confidence: 0.8,
+            voiceWord: voiceWord)
     }
 
     func testValidMeasurementsReachTheScreensAsTheyAre() {
@@ -41,7 +45,6 @@ final class VoiceToneRowTests: XCTestCase {
         XCTAssertEqual(bio.syllablesPerSec, 4.24, accuracy: 1e-5)
         XCTAssertEqual(bio.jitter, 0.012, accuracy: 1e-6)
         XCTAssertEqual(bio.shimmer, 0.031, accuracy: 1e-6)
-        XCTAssertTrue(bio.pitchVoiced)
     }
 
     func testEveryMeasurementThatIsNotValidReachesTheScreensAsNoValue() {
@@ -54,7 +57,6 @@ final class VoiceToneRowTests: XCTestCase {
         XCTAssertTrue(bio.syllablesPerSec.isNaN, "speech rate that is not valid")
         XCTAssertTrue(bio.jitter.isNaN, "jitter that is not valid")
         XCTAssertTrue(bio.shimmer.isNaN, "shimmer that is not valid")
-        XCTAssertFalse(bio.pitchVoiced)
     }
 
     func testEachMeasurementFollowsItsOwnFlagNotTheOthers() {
@@ -70,13 +72,27 @@ final class VoiceToneRowTests: XCTestCase {
         XCTAssertFalse(noF2.f1.isNaN)
     }
 
-    /// The voiced flag chooses a word and a tint, not whether a number exists: a display value whose
-    /// pitch is a reading shows it even when the majority of the last second was not voiced.
+    /// Whether a number exists follows the validity flag of the pitch alone: a display value whose pitch
+    /// is a reading shows it even when the majority of the last second was not voiced.
     func testAPitchThatIsAReadingIsShownWhateverTheVoicedMajority() {
         let bio = InCallScreen.VoiceBiometrics(result(f0: 131, voiced: false))
         XCTAssertEqual(bio.pitchHz, 131)
-        XCTAssertFalse(bio.pitchVoiced)
-        XCTAssertEqual(VoiceGauges.pitch(hz: bio.pitchHz, voiced: bio.pitchVoiced).value, "131")
+        XCTAssertEqual(VoiceGauges.pitch(hz: bio.pitchHz).value, "131")
+    }
+
+    /// The word of the tone row and the tint of the spectrum come from the voice word of the display value
+    /// (docs/voice-analysis-spec.md, section 12.6), never from its voiced flag, which is a one-second majority
+    /// that is false in ordinary speech.
+    func testTheWordOfTheRowFollowsTheVoiceWordAndNotTheVotedFlag() {
+        for voiced in [true, false] {
+            for word: VoiceWord in [.voice, .silence, .noWord] {
+                let bio = InCallScreen.VoiceBiometrics(result(voiced: voiced, voiceWord: word))
+                XCTAssertEqual(bio.voiceWord, word, "voiced flag \(voiced)")
+            }
+        }
+        let talking = InCallScreen.VoiceBiometrics(result(f0: 131, voiced: false, voiceWord: .voice))
+        XCTAssertEqual(talking.voiceWord, .voice, "a person who is talking is not silent because the majority is unvoiced")
+        XCTAssertNotNil(VoiceToneCopy.voiceWord(talking.voiceWord))
     }
 
     func testTheTechnicalBlockPrintsADashForEveryMissingValueAndNeverAZero() {
@@ -90,7 +106,7 @@ final class VoiceToneRowTests: XCTestCase {
                                                        syllableUnit: "u", locale: english), "— · —")
         XCTAssertEqual(VoiceBiometricsFormat.hnr(bio.hnr), "—")
         XCTAssertEqual(VoiceBiometricsFormat.pitch(hz: bio.pitchHz), "—")
-        let row = VoiceGauges.pitch(hz: bio.pitchHz, voiced: bio.pitchVoiced)
+        let row = VoiceGauges.pitch(hz: bio.pitchHz)
         XCTAssertEqual(row.value, "—")
         XCTAssertEqual(row.text, "—", "the dash alone, never \"— Hz\"")
         XCTAssertEqual(row.unit, "")

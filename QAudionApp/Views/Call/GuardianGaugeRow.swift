@@ -1,9 +1,11 @@
 import SwiftUI
+import QAudionEngine
 
 /// The tone row under the spectrum of the voice ribbon, on a single line: a
 /// small label ("Tono"), the whole-number pitch with its unit (or the dash alone,
-/// never "— Hz"), and the word for a voice being present or not ("voce" /
-/// "silenzio"). The spectral details (see `VoiceSpectralDetails`: "F1 520 ·
+/// never "— Hz"), and the word for a voice being heard or not ("voce" /
+/// "silenzio", held over short pauses, or no word: see `VoiceWord`). The
+/// spectral details (see `VoiceSpectralDetails`: "F1 520 ·
 /// F2 1480 · 4,2 sill/s · HNR 18 dB") follow on the same line and give way first
 /// on a narrow screen: they are drawn at one size, fitted to the widest line they
 /// can take and not to the text they show (`VoiceDetailsLine`), down to 70 % of
@@ -17,6 +19,8 @@ struct GuardianGaugeRow: View {
     @Environment(\.qaudionScheme) private var scheme
 
     private let reading: VoiceToneReading
+    /// The word after the pitch, or nil while the row shows none.
+    private let voiceWord: String?
     private let details: String?
     /// The widest line the details can take, in the language of the app: the details are sized on it.
     private let detailsTemplate: String
@@ -24,14 +28,15 @@ struct GuardianGaugeRow: View {
     /// Builds the row from the values of one analysis result (NaN where a value
     /// is not valid).
     init(pitchHz: Float,
-         pitchVoiced: Bool,
+         voiceWord: VoiceWord,
          formant1Hz: Float,
          formant2Hz: Float,
          syllablesPerSecond: Float,
          hnrDecibels: Float) {
         let rateUnit: String = VoiceTechnicalCopy.syllableUnit
         let locale: Locale = VoiceDisplayLocale.app
-        self.reading = VoiceGauges.pitch(hz: pitchHz, voiced: pitchVoiced)
+        self.reading = VoiceGauges.pitch(hz: pitchHz)
+        self.voiceWord = VoiceToneCopy.voiceWord(voiceWord)
         self.details = VoiceSpectralDetails.text(formant1Hz: formant1Hz,
                                                  formant2Hz: formant2Hz,
                                                  syllablesPerSecond: syllablesPerSecond,
@@ -48,7 +53,6 @@ struct GuardianGaugeRow: View {
     }
 
     var body: some View {
-        let voiceWord = VoiceToneCopy.voiceWord(voiced: reading.voiced)
         let spoken = VoiceGauges.spokenTone(label: label, reading: reading, voiceWord: voiceWord, details: details)
         HStack(alignment: .lastTextBaseline, spacing: 0) {
             Text(label)
@@ -73,13 +77,15 @@ struct GuardianGaugeRow: View {
                     .padding(.leading, 2)
                     .layoutPriority(1)
             }
-            Text(voiceWord)
-                .foregroundStyle(scheme.onSurfaceVariant)
-                .scaledMono(11)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .padding(.leading, 10)
-                .layoutPriority(1)
+            if let voiceWord = voiceWord {
+                Text(voiceWord)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .scaledMono(11)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .padding(.leading, 10)
+                    .layoutPriority(1)
+            }
             if let details = details {
                 // Takes the rest of the row by itself (no spacer after it).
                 VoiceDetailsLine(text: details, template: detailsTemplate)

@@ -221,6 +221,81 @@ final class VoiceAnalysisEngineTests: XCTestCase {
         }
     }
 
+    // MARK: - Voice word
+
+    /// Digital silence of `steps` analysis steps (100 ms each) at 48 kHz, 16-bit.
+    private func silence(_ steps: Int) -> Data {
+        Data(count: steps * 4_800 * 2)
+    }
+
+    /// The word of the tone row follows the results, not the voiced flag of the display value: after 6 unvoiced
+    /// results the last 10 hold only 4 voiced ones, so the display flag is already false while the word still
+    /// says voice. Silence comes with the 20th unvoiced result in a row, and a voiced result ends it at once
+    /// (docs/voice-analysis-spec.md, section 12.6).
+    func testTheVoiceWordHoldsOverAPauseAndTurnsToSilenceAfterTwoSeconds() {
+        var shown: [VoiceAnalysisResult] = []
+        engine.onDisplay = { shown.append($0) }
+        engine.processFrame(sine(24_000))                           // 5 voiced steps
+        XCTAssertEqual(shown.map { $0.voiceWord }, [VoiceWord](repeating: .voice, count: 5))
+
+        engine.processFrame(silence(6))
+        XCTAssertEqual(shown.count, 11)
+        XCTAssertFalse(shown[10].pitch.voiced, "the majority flag of the display value is already false")
+        XCTAssertEqual(shown[10].voiceWord, .voice, "the word holds over the pause")
+
+        engine.processFrame(silence(13))                            // 19 unvoiced results in a row
+        XCTAssertEqual(shown.count, 24)
+        XCTAssertEqual(shown.last?.voiceWord, .voice, "1.9 s without voice is not silence")
+
+        engine.processFrame(silence(1))                             // the 20th
+        XCTAssertEqual(shown.last?.voiceWord, .silence)
+        engine.processFrame(silence(1))
+        XCTAssertEqual(shown.last?.voiceWord, .silence)
+
+        engine.processFrame(sine(4_800))
+        XCTAssertEqual(shown.last?.voiceWord, .voice, "a voiced result shows the voice word at once")
+    }
+
+    /// Before any voice there is no word for 19 results; the 20th unvoiced one turns it to silence.
+    func testTheVoiceWordIsAbsentUntilVoiceOrTwoSeconds() {
+        var words: [VoiceWord] = []
+        engine.onDisplay = { words.append($0.voiceWord) }
+        engine.processFrame(silence(19))
+        XCTAssertEqual(words, [VoiceWord](repeating: .noWord, count: 19))
+        engine.processFrame(silence(1))
+        XCTAssertEqual(words.last, .silence)
+    }
+
+    /// A reset and a gap of 2 s or more clear what was heard; a shorter gap keeps it.
+    func testAResetAndALongGapClearTheVoiceWordAndAShortGapKeepsIt() {
+        var words: [VoiceWord] = []
+        engine.onDisplay = { words.append($0.voiceWord) }
+        engine.processFrame(sine(4_800))
+        XCTAssertEqual(words.last, .voice)
+
+        engine.reset()
+        engine.processFrame(silence(1))
+        XCTAssertEqual(words.last, .noWord, "nothing has been heard since the reset")
+
+        engine.processFrame(sine(4_800))
+        engine.markDiscontinuity(missingSamples: 95_999)
+        engine.processFrame(silence(1))
+        XCTAssertEqual(words.last, .voice, "a gap shorter than 2 s keeps what was heard")
+
+        engine.markDiscontinuity(missingSamples: 96_000)
+        engine.processFrame(silence(1))
+        XCTAssertEqual(words.last, .noWord, "a gap of 2 s or more clears it")
+    }
+
+    /// The word belongs to the value to show: a raw result does not carry one.
+    func testARawResultCarriesNoVoiceWord() {
+        var raw: [VoiceAnalysisResult] = []
+        engine.onResult = { raw.append($0) }
+        engine.processFrame(sine(24_000))
+        XCTAssertEqual(raw.count, 5)
+        XCTAssertTrue(raw.allSatisfy { $0.voiceWord == .noWord })
+    }
+
     // MARK: - Reset, gaps and re-enabling
 
     func testResetDropsTheAudioWindowAndRestartsTheCadence() {

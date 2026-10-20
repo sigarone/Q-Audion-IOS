@@ -79,14 +79,20 @@ public struct VoiceAnalysisResult {
     public var speechRate: SpeechRate
     public var formants: Formants
     public var confidence: Float
+    /// The word of the tone row (section 12.6 of the specification). The engine sets it on the display value
+    /// (`VoiceAnalysisEngine.onDisplay`) only; a raw result and a value averaged by `VoiceAnalysisSmoothing`
+    /// carry `noWord`.
+    public var voiceWord: VoiceWord
 
     public init(pitch: Pitch = Pitch(f0Hz: 0, voiced: false, rms: 0),
                 stress: Stress = Stress(score: 0, jitter: 0, shimmer: 0),
                 voiceHealth: VoiceHealth = VoiceHealth(hnr: 0, breathiness: 0),
                 speechRate: SpeechRate = SpeechRate(syllablesPerSec: 0, pauseRatio: 0, isSpeaking: false),
                 formants: Formants = Formants(f1: 0, f2: 0, f3: 0, f4: 0),
-                confidence: Float = 0) {
+                confidence: Float = 0,
+                voiceWord: VoiceWord = .noWord) {
         self.pitch = pitch; self.stress = stress; self.voiceHealth = voiceHealth
         self.speechRate = speechRate; self.formants = formants; self.confidence = confidence
+        self.voiceWord = voiceWord
     }
 }

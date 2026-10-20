@@ -66,6 +66,7 @@ targets:
           - VoiceDisplayFormatTests.swift
           - VoiceGuardModelTests.swift
           - VoiceToneRowTests.swift
+          - VoiceWordTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
