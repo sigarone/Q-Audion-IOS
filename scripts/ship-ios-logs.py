@@ -1096,6 +1096,41 @@ def _is_block_format_body(tag, norm_body):
     return bool(_RE_BLOCK_DROP_FULL.match(norm_body))
 
 
+# ---------------------------------------------------------------------------
+# PAIR (2026-10-20) -- the line the in-person pairing scanner writes when it turns a scanned QR down (tag "pair",
+# ProximityScanReport in QAudionApp/Views/Contacts/ProximityPairingSupportViews.swift):
+#   scan outcome=not_pair len=<n>
+#   scan outcome=invalid reason=<not_pair_prefix|length|alphabet|encoding|non_canonical|version|layout> len=<n>
+# It is the only evidence, in a log pull, of which check a pairing code failed. The tag was not in TAG_SCOPE_PREFIXES,
+# and the words scan / pair / invalid / alphabet / encoding / canonical / layout were not vocabulary, so the line was
+# dropped whole. Only the closed outcome and reason tokens and the length of the text are on the line, never the text.
+#
+# Same scoping reason as BLOCK_FORMAT_VOCAB above: putting these words into APP_VOCAB would make them known for EVERY
+# line of every tag. They are consulted only when the tag is "pair" (or a prefix variant) AND the whole body is one of
+# the shapes above, nothing before it, nothing after it. Pinned by test_ship_ios_pair_vocab.py.
+# ---------------------------------------------------------------------------
+PAIR_FORMAT_VOCAB = frozenset("""
+    scan pair invalid alphabet encoding canonical non layout length
+""".split())
+
+_PAIR_TAG_PREFIXES = ("pair",)
+
+_RE_PAIR_SCAN_FULL = re.compile(
+    r"^scan outcome=(?:not_pair"
+    r"|invalid reason=(?:not_pair_prefix|length|alphabet|encoding|non_canonical|version|layout))"
+    r" len=\d{1,5}$"
+)
+
+
+def _is_pair_format_body(tag, norm_body):
+    """True if `tag` is the pair RTLog scope (or a prefix variant) AND `norm_body` is, in full, one of the
+    "scan outcome=..." lines. Full-line validation, like the block lines: a body that merely starts with "scan
+    outcome=" and carries anything else does not widen the vocabulary."""
+    if not tag or not str(tag).lower().startswith(_PAIR_TAG_PREFIXES):
+        return False
+    return bool(_RE_PAIR_SCAN_FULL.match(norm_body))
+
+
 def _set_active_extra_vocab(vocab):
     """Swap the extra vocabulary _word_known() consults. _word_ok / _ident_ok /
     _kv_classify all memoise their verdicts by token text alone
@@ -1554,6 +1589,8 @@ KV_FIXED_VOCAB = frozenset([
     "P2pSrtp", "P2pDtls", "WsRelay", "Session", "Tempo", "TUS",
     "WIFI", "CELLULAR", "ETHERNET", "LOOPBACK", "OTHER", "NONE",
     "ws-relay", "media-lost", "half-open",
+    # In-person pairing -- a rejected scan's reason (RE_KV_ENUM allows one '_', this token has two).
+    "not_pair_prefix",
     # W-NATIVESRTPDIAG (this task) -- RTCAudioSession.category, read back
     # exactly as CallKitProvider.setCategory(.playAndRecord, ...) sets it.
     "playAndRecord", "AVAudioSessionCategoryPlayAndRecord",
@@ -2133,6 +2170,9 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
     elif _is_block_format_body(tag, norm):
         # BLOCK (2026-10-19) -- the "block drop=1 kind=<k>" lines, same scoping, own words.
         _scoped_vocab = BLOCK_FORMAT_VOCAB
+    elif _is_pair_format_body(tag, norm):
+        # PAIR (2026-10-20) -- the "scan outcome=..." lines of the pairing scanner, same scoping, own words.
+        _scoped_vocab = PAIR_FORMAT_VOCAB
     if _scoped_vocab is not None:
         _set_active_extra_vocab(_scoped_vocab)
     try:
@@ -2214,6 +2254,8 @@ TAG_SCOPE_PREFIXES = [
     ("featureflags", "featureflags"),
     ("bugreport", "bugreport"),
     ("videodiag", "videodiag"),
+    # 2026-10-20: the in-person pairing scanner's "scan outcome=..." lines (see PAIR_FORMAT_VOCAB).
+    ("pair", "pair"),
 ]
 
 

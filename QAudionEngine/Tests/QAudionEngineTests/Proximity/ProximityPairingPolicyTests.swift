@@ -35,7 +35,7 @@ final class ProximityPairingDriverPolicyTests: XCTestCase {
         let staying: [ProximityPairingError] = [
             .bluetoothUnavailable("off"),
             .identityUnavailable,
-            .invalidQrCode("scan"),
+            .invalidQrCode(.length),
             .protocolViolation("framing"),
             .authenticationFailed("mac"),
             .identityRejected("self"),

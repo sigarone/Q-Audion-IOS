@@ -120,20 +120,18 @@ struct QrScannerSheet: View {
     /// confirm step first, that is the point of it. Every other shape keeps
     /// the existing decode-then-confirm flow.
     private func handleScanned(_ raw: String) {
-        guard ProximityQrPayload.looksLikeProximityPairing(raw) else {
+        switch ProximityScanOutcome.classify(raw) {
+        case .notPairing:
             phase = .decoded(QrPayloadRouter.route(raw))
-            return
-        }
-        guard proximityLocalUserId != nil else {
-            phase = .proximityElsewhere
-            return
-        }
-        do {
-            let payload: ProximityQrPayload = try ProximityQrPayload.decode(text: raw)
-            phase = .proximity(payload)
-        } catch {
-            let message: String = ProximityPairingError.invalidQrCode("scan").userMessage
-            phase = .proximityInvalid(message)
+        case .pairing(let payload):
+            phase = proximityLocalUserId == nil ? .proximityElsewhere : .proximity(payload)
+        case .invalid(let reason):
+            guard proximityLocalUserId != nil else {
+                phase = .proximityElsewhere
+                return
+            }
+            ProximityScanReport.invalid(reason, textLength: raw.utf16.count)
+            phase = .proximityInvalid(ProximityScanMessages.invalid)
         }
     }
 
@@ -143,7 +141,7 @@ struct QrScannerSheet: View {
     }
 
     static let pairElsewhereMessage: String =
-        "Questo è un codice di associazione di persona. Per usarlo apri Contatti → Aggiungi contatto → Scansiona QR."
+        "Questo è un codice di associazione di persona. Per usarlo apri Contatti → Associa di persona → Scansiona un codice."
 
     private func rescan() {
         phase = .scanning

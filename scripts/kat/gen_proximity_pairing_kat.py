@@ -10,7 +10,15 @@ them, not the KEM itself. The identity keys are real Ed25519 keys from fixed
 seeds, so the signatures in the vector verify.
 
 Writes QAudionEngine/Tests/QAudionEngineTests/Proximity/Resources/
-proximity-pairing-kat.json (consumed by ProximityPairingKatTests.swift).
+proximity-pairing-kat.json (consumed by ProximityPairingKatTests.swift and
+ProximityQrPayloadTests.swift). The file is copied byte for byte into the
+Android module and both test suites pin its SHA-256, so it is written with
+LF line endings on every OS.
+
+`qrVectors` (spec section 5) are the scanned texts a pairing scanner must
+classify: valid frames, texts that start like a pairing code but fail the
+strict decoding (with the first failed check, a ProximityQrRejection token),
+and QR codes that are not pairing codes at all.
 """
 
 import base64
@@ -101,6 +109,76 @@ def filler(tag: str, n: int) -> bytes:
 
 def b64url_nopad(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+QR_PREFIX = "qaudion://pair/"
+B64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def qr_frame_bytes(session_secret: bytes, session_id: bytes, commitment: bytes, index: int, version: int = 0x01) -> bytes:
+    """The 85 QR bytes of frame `index` (spec section 5; frame key per section 6)."""
+    frame_key = hmac256(session_secret, L["frame"] + session_id + u32be(index))
+    qr_bytes = bytes([version]) + session_id + commitment + u32be(index) + frame_key
+    assert len(qr_bytes) == 85
+    return qr_bytes
+
+
+def qr_vectors(session_secret: bytes, session_id: bytes, commitment: bytes, kat_text: str, kat_bytes: bytes):
+    """Scanned texts with the scanner's expected verdict.
+
+    outcome "pairing":  a valid code; `frameIndex` and `qrBytes` are what it decodes to.
+    outcome "invalid":  starts with `qaudion://pair/` (ASCII case-insensitive, after trimming)
+                        but fails the strict decoding; `reason` is the FIRST failed check, in
+                        this order: length, alphabet, encoding, canonical form, version, layout.
+    outcome "not_pair": not a pairing code; `reason` is what the strict decoder throws for it
+                        (`not_pair_prefix`).
+    Reasons are the closed ProximityQrRejection tokens. `encoding` and `layout` cannot be
+    reached from a 114-character text, so no vector carries them."""
+    assert kat_text.startswith(QR_PREFIX)
+    kat = kat_text[len(QR_PREFIX):]
+    assert len(kat) == 114
+    vectors = []
+
+    def valid(name, text, index, qr_bytes):
+        vectors.append({"name": name, "text": text, "outcome": "pairing", "reason": None,
+                        "frameIndex": index, "qrBytes": qr_bytes.hex()})
+
+    def reject(name, text, outcome, reason):
+        assert outcome in ("invalid", "not_pair")
+        vectors.append({"name": name, "text": text, "outcome": outcome, "reason": reason,
+                        "frameIndex": None, "qrBytes": None})
+
+    for index, label in [(0, "0"), (0x80000000, "0x80000000"), (0xFFFFFFFF, "0xFFFFFFFF")]:
+        qr_bytes = qr_frame_bytes(session_secret, session_id, commitment, index)
+        valid("valid-frame-index-" + label, QR_PREFIX + b64url_nopad(qr_bytes), index, qr_bytes)
+    valid("valid-upper-case-prefix", "QAUDION://PAIR/" + kat, 7, kat_bytes)
+    valid("valid-surrounding-whitespace", "  \n\t" + kat_text + "\r\n ", 7, kat_bytes)
+
+    reject("padding-appended", kat_text + "==", "invalid", "length")
+    reject("padding-in-place", QR_PREFIX + kat[:112] + "==", "invalid", "alphabet")
+    assert "-" in kat and "_" in kat
+    reject("standard-alphabet-plus", QR_PREFIX + kat.replace("-", "+"), "invalid", "alphabet")
+    reject("standard-alphabet-slash", QR_PREFIX + kat.replace("_", "/"), "invalid", "alphabet")
+    last = B64URL_ALPHABET.index(kat[-1])
+    assert last & 0x0F == 0, "the last symbol of 85 bytes carries 2 data bits and 4 zero bits"
+    reject("non-canonical-last-character", QR_PREFIX + kat[:-1] + B64URL_ALPHABET[last | 0x01], "invalid", "non_canonical")
+    v2 = qr_frame_bytes(session_secret, session_id, commitment, 7, version=0x02)
+    reject("version-2", QR_PREFIX + b64url_nopad(v2), "invalid", "version")
+    reject("query-appended", kat_text + "?x=1", "invalid", "length")
+    reject("fragment-appended", kat_text + "#f", "invalid", "length")
+    reject("query-in-place", QR_PREFIX + kat[:-4] + "?x=1", "invalid", "alphabet")
+    reject("fragment-in-place", QR_PREFIX + kat[:-2] + "#f", "invalid", "alphabet")
+    reject("length-113", kat_text[:-1], "invalid", "length")
+    reject("length-115", kat_text + "A", "invalid", "length")
+    reject("length-0", QR_PREFIX, "invalid", "length")
+    reject("length-4", QR_PREFIX + "AAAA", "invalid", "length")
+
+    reject("identity-prefix", "QAUDION:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8", "not_pair", "not_pair_prefix")
+    reject("legacy-pair-query", "qaudion://pair?v=1&data=AAAA", "not_pair", "not_pair_prefix")
+    reject("other-host", "qaudion://link/" + kat, "not_pair", "not_pair_prefix")
+    reject("web-url", "https://example.org/x", "not_pair", "not_pair_prefix")
+    reject("empty", "", "not_pair", "not_pair_prefix")
+    return vectors
 
 
 def fragment(message: bytes, max_value_length: int):
@@ -337,11 +415,14 @@ def main() -> None:
             "fragments": [f.hex() for f in fragment(msg, mvl)],
         })
 
+    # Added last: every field above stays byte for byte what it was.
+    vec["qrVectors"] = qr_vectors(session_secret, session_id, commitment, qr_text, qr_bytes)
+
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
                        "QAudionEngine", "Tests", "QAudionEngineTests", "Proximity",
                        "Resources", "proximity-pairing-kat.json")
     out = os.path.normpath(out)
-    with open(out, "w", encoding="utf-8") as fh:
+    with open(out, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(vec, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     print(f"wrote {out}")

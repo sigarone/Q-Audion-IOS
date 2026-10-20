@@ -142,6 +142,26 @@ public enum ProximityRole: String, Equatable, Sendable {
     case scanner
 }
 
+/// Why the strict decoder (spec §5) turned a scanned text down. A closed set:
+/// the raw value is the token logs and telemetry carry, the same on every
+/// platform, and never holds any part of the scanned text.
+public enum ProximityQrRejection: String, CaseIterable, Equatable, Sendable {
+    /// The text does not start with `qaudion://pair/` (or is shorter than it).
+    case notPairPrefix = "not_pair_prefix"
+    /// The part after the prefix is not 114 characters, or the bytes are not 85.
+    case length
+    /// A character outside `[A-Za-z0-9_-]`: padding, `+`, `/`, `?`, `#`, a space, ...
+    case alphabet
+    /// Not decodable as unpadded base64url.
+    case encoding
+    /// Decodes, but is not the one text its bytes encode to (non-zero trailing bits).
+    case nonCanonical = "non_canonical"
+    /// The version byte is not `0x01`.
+    case version
+    /// The decoded bytes do not fit the 85-byte layout.
+    case layout
+}
+
 /// The 85-byte QR payload (spec §5). Construction validates every length, so a
 /// value of this type is always well-formed. Codec: `ProximityQrPayload+Codec.swift`.
 public struct ProximityQrPayload: Equatable, Sendable {
@@ -153,13 +173,13 @@ public struct ProximityQrPayload: Equatable, Sendable {
 
     public init(sessionId: Data, commitment: Data, frameIndex: UInt32, frameKey: Data) throws {
         guard sessionId.count == ProximityPairing.sessionIdBytes else {
-            throw ProximityPairingError.invalidQrCode("sessionId length")
+            throw ProximityPairingError.invalidQrCode(.length)
         }
         guard commitment.count == ProximityPairing.commitmentBytes else {
-            throw ProximityPairingError.invalidQrCode("commitment length")
+            throw ProximityPairingError.invalidQrCode(.length)
         }
         guard frameKey.count == ProximityPairing.frameKeyBytes else {
-            throw ProximityPairingError.invalidQrCode("frameKey length")
+            throw ProximityPairingError.invalidQrCode(.length)
         }
         self.version = ProximityPairing.protocolVersion
         self.sessionId = Data(sessionId)
@@ -356,6 +376,9 @@ public enum ProximityPairingTelemetryEvent: Equatable, Sendable {
     /// an explicit override.
     public enum Stage: String, Equatable, Sendable {
         case preparing
+        /// The scanner's camera is open and has not produced a code yet:
+        /// the stage of a scanned text that was turned down.
+        case scanning
         case showingCode = "showing_code"
         case connecting
         case exchanging
@@ -365,33 +388,37 @@ public enum ProximityPairingTelemetryEvent: Equatable, Sendable {
     /// Closed cause taxonomy for `failed` — mirrors `ProximityPairingError`
     /// without leaking any of its associated string payloads (those can
     /// carry the peer's userId/claims).
-    public enum FailureCause: String, Equatable, Sendable {
-        // W-PAIRFB fuzz-check: `LogRedactor.redactStructured`'s fail-closed
-        // residual sweep (`QAudionApp/Services/LogRedactor.swift`) redacts
-        // ANY run of 20+ letters/digits/`+/=_-` with no separator — a plain
-        // camelCase rawValue at or above that length would silently come
-        // back as "***REDACTED***" over the wire, not a privacy problem
-        // (nothing leaks) but a USELESS telemetry attribute (the whole
-        // point of `cause` is to say WHY, on the server, without a phone in
-        // hand). `bluetoothUnavailable`/`authenticationFailed` (auto
-        // rawValue = the case name) are exactly 20 chars — the two explicit
-        // overrides below keep every rawValue at 19 chars or under. Keep
-        // this comment in sync with any new case: check `.rawValue.count`.
-        case bluetoothUnavailable = "bleUnavailable"
-        case identityUnavailable
-        case invalidQrCode
-        case expiredQrCode
+    ///
+    /// The raw values are the wire vocabulary shared with Android
+    /// (`ProximityPairingLogic.telemetryCause`: the lower-cased name of its
+    /// `ProximityPairingText`), so a `cause` reads the same whichever phone
+    /// sent it. Android groups some errors that iOS used to tell apart
+    /// (a malformed message and a failed check are both "security check
+    /// not passed"); iOS follows that grouping. `screenCaptured` and `other`
+    /// have no Android counterpart. Keep this list in step with Android.
+    ///
+    /// `LogRedactor.redactStructured` sweeps any run of 20+ letters, digits
+    /// and `+/=_-` as an unproven secret. Several of these tokens are longer
+    /// than that, so the redactor allow-lists every raw value of this enum
+    /// (`LogRedactor.closeReasonRegex`): a new case needs nothing there, but
+    /// `ProximityPairingTelemetryRedactionTests` must still pass for it.
+    public enum FailureCause: String, CaseIterable, Equatable, Sendable {
+        case bluetoothUnavailable = "bluetooth_unavailable"
+        case identityUnavailable = "identity_unavailable"
+        case invalidQrCode = "invalid_qr"
+        case expiredQrCode = "expired_qr"
         case timeout
-        case transportFailed
-        case protocolViolation
-        case authenticationFailed = "authFailed"
-        case identityRejected
-        case sessionBusy
-        case peerAborted
-        case userRejected
-        case cryptoFailure
-        case screenCaptured
-        case qrRenderFailed
+        case transportFailed = "transport_failed"
+        case securityCheckFailed = "security_check_failed"
+        case selfPairing = "self_pairing"
+        case sessionBusy = "session_busy"
+        case peerRejected = "peer_rejected"
+        case peerSecurityCheckFailed = "peer_security_check_failed"
+        case peerAborted = "peer_aborted"
+        case cancelled
+        case cryptoFailure = "crypto_failure"
+        case qrUnavailable = "qr_unavailable"
+        case screenCaptured = "screen_captured"
         case other
 
         public init(_ error: ProximityPairingError) {
@@ -402,14 +429,23 @@ public enum ProximityPairingTelemetryEvent: Equatable, Sendable {
             case .expiredQrCode: self = .expiredQrCode
             case .timeout: self = .timeout
             case .transportFailed: self = .transportFailed
-            case .protocolViolation: self = .protocolViolation
-            case .authenticationFailed: self = .authenticationFailed
-            case .identityRejected: self = .identityRejected
+            case .protocolViolation, .authenticationFailed: self = .securityCheckFailed
+            case .identityRejected: self = .selfPairing
             case .sessionBusy: self = .sessionBusy
-            case .peerAborted: self = .peerAborted
-            case .userRejected: self = .userRejected
+            case .peerAborted(let raw): self = FailureCause(peerAbort: raw)
+            case .userRejected, .cancelled: self = .cancelled
             case .cryptoFailure: self = .cryptoFailure
-            case .cancelled: self = .other
+            }
+        }
+
+        /// An ABORT from the peer; an unknown reason code reads as a plain
+        /// "the other phone cancelled".
+        init(peerAbort raw: UInt8) {
+            switch ProximityPairing.AbortReason(rawValue: raw) {
+            case .userRejected?: self = .peerRejected
+            case .frameExpired?: self = .expiredQrCode
+            case .authenticationFailed?, .protocolViolation?: self = .peerSecurityCheckFailed
+            default: self = .peerAborted
             }
         }
     }
@@ -417,12 +453,20 @@ public enum ProximityPairingTelemetryEvent: Equatable, Sendable {
     case started(role: ProximityRole)
     case failed(cause: FailureCause, stage: Stage)
     case cancelled(stage: Stage)
+
+    /// The event for a pairing that ended with `error`: the user ending it is
+    /// `cancelled`, anything else is `failed` (the split Android makes too).
+    public static func ending(with error: ProximityPairingError, stage: Stage) -> ProximityPairingTelemetryEvent {
+        let cause = FailureCause(error)
+        if cause == .cancelled { return .cancelled(stage: stage) }
+        return .failed(cause: cause, stage: stage)
+    }
 }
 
 public enum ProximityPairingError: Error, Equatable {
     case bluetoothUnavailable(String)
     case identityUnavailable
-    case invalidQrCode(String)
+    case invalidQrCode(ProximityQrRejection)
     case expiredQrCode
     case timeout(String)
     case transportFailed(String)

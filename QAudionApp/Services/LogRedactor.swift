@@ -267,10 +267,21 @@ enum LogRedactor {
     // log lines that name it would ship as `***REDACTED***`.
     // W-CALLERBUSY -- plus the two outgoing-call outcomes (`busy`, `peer_offline`): `peer_offline` was being
     // shipped as `***REDACTED***` as the call's `end_reason`.
-    private static let closeReasonRegex = try! NSRegularExpression(
-        pattern: #"\b(?:"#
-            + (CallCloseReason.allTokens + CallerTerminalOutcome.allCases.map { $0.closeToken }).joined(separator: "|")
-            + #")\b"#)
+    // In-person pairing -- plus the closed words of its telemetry `cause` (Android's vocabulary) and of a rejected
+    // scan's `reason`. Only the underscore-joined ones can reach the 20-character bar: `bluetooth_unavailable` on
+    // its own, or `reason=not_pair_prefix` in a log line, where the `=` joins the key into the same run. A single
+    // word is far below it and needs no entry.
+    private static let proximityTokens: [String] = {
+        let causes: [String] = ProximityPairingTelemetryEvent.FailureCause.allCases.map { $0.rawValue }
+        let reasons: [String] = ProximityQrRejection.allCases.map { $0.rawValue }
+        return (causes + reasons).filter { $0.contains("_") }
+    }()
+
+    private static let closeReasonRegex: NSRegularExpression = {
+        let callTokens: [String] = CallCloseReason.allTokens + CallerTerminalOutcome.allCases.map { $0.closeToken }
+        let tokens: [String] = callTokens + proximityTokens
+        return try! NSRegularExpression(pattern: #"\b(?:"# + tokens.joined(separator: "|") + #")\b"#)
+    }()
 
     // Dot-delimited JWT: three base64url segments. Caught explicitly because
     // '.' fragments each segment below the length bars of the blob/residual

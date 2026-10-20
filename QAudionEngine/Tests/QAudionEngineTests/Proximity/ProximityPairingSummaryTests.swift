@@ -75,7 +75,7 @@ final class ProximityPairingSummaryTests: XCTestCase {
         let cases: [ProximityPairingError] = [
             .bluetoothUnavailable("claim: userId-should-never-leak"),
             .identityUnavailable,
-            .invalidQrCode("claim"),
+            .invalidQrCode(.length),
             .expiredQrCode,
             .timeout("claim"),
             .transportFailed("claim"),
@@ -97,8 +97,48 @@ final class ProximityPairingSummaryTests: XCTestCase {
         }
         XCTAssertEqual(ProximityPairingTelemetryEvent.FailureCause(.identityUnavailable), .identityUnavailable)
         XCTAssertEqual(ProximityPairingTelemetryEvent.FailureCause(.expiredQrCode), .expiredQrCode)
-        XCTAssertEqual(ProximityPairingTelemetryEvent.FailureCause(.cancelled), .other,
-                       "cancelled has no dedicated telemetry cause (cancellation is its own event kind) -- folds to .other")
+    }
+
+    /// The causes are Android's words (`ProximityPairingLogic.textFor` groups
+    /// errors the same way): a failed check and a malformed message read the
+    /// same, and the user ending the pairing is one cause whoever of the two did it.
+    func test_failureCause_followsAndroidsGrouping() {
+        typealias Cause = ProximityPairingTelemetryEvent.FailureCause
+        XCTAssertEqual(Cause(.protocolViolation("framing")), .securityCheckFailed)
+        XCTAssertEqual(Cause(.authenticationFailed("mac")), .securityCheckFailed)
+        XCTAssertEqual(Cause(.userRejected), .cancelled)
+        XCTAssertEqual(Cause(.cancelled), .cancelled)
+        XCTAssertEqual(Cause(.identityRejected("self")), .selfPairing)
+        XCTAssertEqual(Cause(.invalidQrCode(.alphabet)), .invalidQrCode)
+        XCTAssertEqual(Cause.invalidQrCode.rawValue, "invalid_qr")
+        XCTAssertEqual(Cause.securityCheckFailed.rawValue, "security_check_failed")
+    }
+
+    /// An ABORT from the other phone is told apart by its reason code, as on Android.
+    func test_failureCause_peerAbortReasons() {
+        typealias Cause = ProximityPairingTelemetryEvent.FailureCause
+        typealias Abort = ProximityPairing.AbortReason
+        XCTAssertEqual(Cause(.peerAborted(Abort.userRejected.rawValue)), .peerRejected)
+        XCTAssertEqual(Cause(.peerAborted(Abort.frameExpired.rawValue)), .expiredQrCode)
+        XCTAssertEqual(Cause(.peerAborted(Abort.authenticationFailed.rawValue)), .peerSecurityCheckFailed)
+        XCTAssertEqual(Cause(.peerAborted(Abort.protocolViolation.rawValue)), .peerSecurityCheckFailed)
+        let plain: [UInt8] = [Abort.timeout.rawValue, Abort.identityRejected.rawValue, Abort.cancelled.rawValue,
+                              Abort.internalError.rawValue, 0, 9, 255]
+        for raw in plain {
+            XCTAssertEqual(Cause(.peerAborted(raw)), .peerAborted, "reason code \(raw)")
+        }
+    }
+
+    /// The user ending a pairing is a `cancelled` event, any other end a `failed` one.
+    func test_telemetryEvent_endingWithError() {
+        XCTAssertEqual(ProximityPairingTelemetryEvent.ending(with: .userRejected, stage: .confirming),
+                       .cancelled(stage: .confirming))
+        XCTAssertEqual(ProximityPairingTelemetryEvent.ending(with: .cancelled, stage: .exchanging),
+                       .cancelled(stage: .exchanging))
+        XCTAssertEqual(ProximityPairingTelemetryEvent.ending(with: .timeout("handshake"), stage: .connecting),
+                       .failed(cause: .timeout, stage: .connecting))
+        XCTAssertEqual(ProximityPairingTelemetryEvent.ending(with: .invalidQrCode(.version), stage: .scanning),
+                       .failed(cause: .invalidQrCode, stage: .scanning))
     }
 
     func test_telemetryEvent_startedCarriesOnlyARoleEnum() {

@@ -1,10 +1,17 @@
 import XCTest
+import CryptoKit
 @testable import QAudionEngine
 
 /// Proximity pairing v1 — QR payload codec (spec §5), pinned against
 /// `proximity-pairing-kat.json` (independent Python reference implementation)
 /// plus every strictness rule the decoder must enforce.
 final class ProximityQrPayloadTests: XCTestCase {
+
+    /// SHA-256 and length of `proximity-pairing-kat.json`. The Android module holds a byte-for-byte
+    /// copy of the same file and pins the same values, so the two apps always read the same vectors.
+    /// Regenerate with `scripts/kat/gen_proximity_pairing_kat.py` and update both pins together.
+    static let pinnedKatSHA256 = "384d962d9ab2223ae5e6df7b78d26fd9343c3866f67b7a77853215a2ffb9a82d"
+    static let pinnedKatLength = 52419
 
     // MARK: - KAT
 
@@ -44,10 +51,14 @@ final class ProximityQrPayloadTests: XCTestCase {
     private static let base64UrlAlphabet: [Character] =
         Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
-    private func loadKat() throws -> QrKat {
+    private func katBytes() throws -> Data {
         let maybeUrl: URL? = Bundle.module.url(forResource: "proximity-pairing-kat", withExtension: "json")
         let url: URL = try XCTUnwrap(maybeUrl, "proximity-pairing-kat.json missing from Bundle.module")
-        let json: Data = try Data(contentsOf: url)
+        return try Data(contentsOf: url)
+    }
+
+    private func loadKat() throws -> QrKat {
+        let json: Data = try katBytes()
         let root: QrKatRoot = try JSONDecoder().decode(QrKatRoot.self, from: json)
         let sessionId: Data = try ProximityQrPayloadTests.qrHex(root.inputs.sessionId)
         let commitment: Data = try ProximityQrPayloadTests.qrHex(root.expected.commitment)
@@ -59,6 +70,14 @@ final class ProximityQrPayloadTests: XCTestCase {
                      frameKey: frameKey,
                      qrBytes: qrBytes,
                      qrText: root.expected.qrText)
+    }
+
+    func testKatFileIsThePinnedCopy() throws {
+        let bytes: Data = try katBytes()
+        XCTAssertEqual(bytes.count, ProximityQrPayloadTests.pinnedKatLength, "length of proximity-pairing-kat.json changed")
+        XCTAssertEqual(ProximityQrPayloadTests.sha256Hex(bytes), ProximityQrPayloadTests.pinnedKatSHA256,
+                       "proximity-pairing-kat.json is not the pinned file the Android module copies")
+        XCTAssertFalse(bytes.contains(0x0D), "a CR in the vector file: line endings were rewritten (.gitattributes -text)")
     }
 
     func testKatVectorShape() throws {
@@ -296,6 +315,127 @@ final class ProximityQrPayloadTests: XCTestCase {
         XCTAssertEqual(wrongErrorCount, 0)
     }
 
+    // MARK: - Rejection reasons
+
+    /// The tokens logs and telemetry carry; the same on every platform.
+    func testRejectionTokens() {
+        let tokens: [String] = ProximityQrRejection.allCases.map { $0.rawValue }
+        XCTAssertEqual(tokens, ["not_pair_prefix", "length", "alphabet", "encoding", "non_canonical", "version", "layout"])
+    }
+
+    func testDecodeBytesReportsLengthAndVersion() throws {
+        let kat = try loadKat()
+        assertBytesRejected(Data(kat.qrBytes.prefix(84)), reason: .length)
+        var otherVersion: Data = kat.qrBytes
+        otherVersion[0] = 0x02
+        assertBytesRejected(otherVersion, reason: .version)
+    }
+
+    /// The first failed check wins, in the order of the spec: prefix, length, alphabet, canonical form, version.
+    func testDecodeTextReportsTheFirstFailedCheck() throws {
+        let kat = try loadKat()
+        assertTextRejected("", reason: .notPairPrefix)
+        assertTextRejected("qaudion://pair", reason: .notPairPrefix)
+        assertTextRejected("qaudion://link/" + kat.remainder, reason: .notPairPrefix)
+        assertTextRejected(ProximityPairing.urlPrefix, reason: .length)
+        assertTextRejected(kat.qrText + "=", reason: .length)
+        assertTextRejected(String(kat.qrText.dropLast(2)) + "==", reason: .alphabet)
+        var chars: [Character] = Array(kat.remainder)
+        chars[10] = "+"
+        assertTextRejected(ProximityPairing.urlPrefix + String(chars), reason: .alphabet)
+        var bytes: Data = kat.qrBytes
+        bytes[0] = 0x02
+        let versionTwo: String = ProximityPairing.urlPrefix + ProximityQrPayloadTests.referenceBase64Url(bytes)
+        assertTextRejected(versionTwo, reason: .version)
+    }
+
+    // MARK: - ProximityScanOutcome.classify
+
+    func testClassifyValidCode() throws {
+        let kat = try loadKat()
+        let outcome: ProximityScanOutcome = ProximityScanOutcome.classify(kat.qrText)
+        guard case .pairing(let payload) = outcome else { return XCTFail("a valid code was classified \(outcome)") }
+        XCTAssertEqual(payload.encodedBytes, kat.qrBytes)
+    }
+
+    func testClassifyOtherQrCodesAreNotPairing() {
+        XCTAssertEqual(ProximityScanOutcome.classify("QAUDION:AQIDBAUGBwgJCgsMDQ4P"), .notPairing)
+        XCTAssertEqual(ProximityScanOutcome.classify("qaudion://link/AAAA"), .notPairing)
+        XCTAssertEqual(ProximityScanOutcome.classify("qaudion://pair?v=1&data=AAAA"), .notPairing)
+        XCTAssertEqual(ProximityScanOutcome.classify("https://example.org/x"), .notPairing)
+        XCTAssertEqual(ProximityScanOutcome.classify(""), .notPairing)
+    }
+
+    func testClassifyBrokenPairingCodesAreInvalidWithTheirReason() throws {
+        let kat = try loadKat()
+        XCTAssertEqual(ProximityScanOutcome.classify("qaudion://pair/AAAA"), .invalid(.length))
+        XCTAssertEqual(ProximityScanOutcome.classify(ProximityPairing.urlPrefix), .invalid(.length))
+        XCTAssertEqual(ProximityScanOutcome.classify(kat.qrText + "?x=1"), .invalid(.length))
+        XCTAssertEqual(ProximityScanOutcome.classify(String(kat.qrText.dropLast(4)) + "?x=1"), .invalid(.alphabet))
+        XCTAssertEqual(ProximityScanOutcome.classify("QAUDION://PAIR/" + String(repeating: "!", count: 114)),
+                       .invalid(.alphabet))
+    }
+
+    // MARK: - Shared QR vectors (proximity-pairing-kat.json, "qrVectors")
+
+    private struct QrVector: Decodable {
+        let name: String
+        let text: String
+        /// "pairing", "invalid" or "not_pair".
+        let outcome: String
+        let reason: String?
+        let frameIndex: UInt32?
+        let qrBytes: String?
+    }
+
+    private struct QrVectorsRoot: Decodable {
+        let qrVectors: [QrVector]
+    }
+
+    private func loadQrVectors() throws -> [QrVector] {
+        let json: Data = try katBytes()
+        let root: QrVectorsRoot = try JSONDecoder().decode(QrVectorsRoot.self, from: json)
+        return root.qrVectors
+    }
+
+    /// Every vector is classified as the reference says, and `decode(text:)` agrees with `classify`. The counts
+    /// are pinned so a vector can never be dropped without a failure here.
+    func testQrVectors() throws {
+        let vectors: [QrVector] = try loadQrVectors()
+        XCTAssertEqual(vectors.count, 24)
+        XCTAssertEqual(vectors.filter { $0.outcome == "pairing" }.count, 5)
+        XCTAssertEqual(vectors.filter { $0.outcome == "invalid" }.count, 14)
+        XCTAssertEqual(vectors.filter { $0.outcome == "not_pair" }.count, 5)
+        XCTAssertEqual(Set(vectors.map { $0.name }).count, vectors.count, "duplicate vector names")
+
+        for vector in vectors {
+            let label: String = vector.name
+            let outcome: ProximityScanOutcome = ProximityScanOutcome.classify(vector.text)
+            switch vector.outcome {
+            case "pairing":
+                guard case .pairing(let payload) = outcome else {
+                    XCTFail("\(label): classified \(outcome), expected a valid code")
+                    continue
+                }
+                let expectedBytes: Data = try ProximityQrPayloadTests.qrHex(try XCTUnwrap(vector.qrBytes, label))
+                XCTAssertEqual(payload.encodedBytes, expectedBytes, label)
+                XCTAssertEqual(payload.frameIndex, vector.frameIndex, label)
+                XCTAssertEqual(try ProximityQrPayload.decode(text: vector.text), payload, label)
+            case "invalid":
+                let token: String = try XCTUnwrap(vector.reason, label)
+                let expected: ProximityQrRejection = try XCTUnwrap(ProximityQrRejection(rawValue: token), "\(label): unknown reason \(token)")
+                XCTAssertEqual(outcome, .invalid(expected), label)
+                assertTextRejected(vector.text, reason: expected)
+            case "not_pair":
+                XCTAssertEqual(outcome, .notPairing, label)
+                assertTextRejected(vector.text, reason: .notPairPrefix)
+                XCTAssertEqual(vector.reason, ProximityQrRejection.notPairPrefix.rawValue, label)
+            default:
+                XCTFail("\(label): unknown outcome \(vector.outcome)")
+            }
+        }
+    }
+
     // MARK: - looksLikeProximityPairing
 
     func testLooksLikeProximityPairing() throws {
@@ -366,6 +506,32 @@ final class ProximityQrPayloadTests: XCTestCase {
             let isExpected: Bool = ProximityQrPayloadTests.isInvalidQrCode(error)
             XCTAssertTrue(isExpected, "expected ProximityPairingError.invalidQrCode", file: file, line: line)
         }
+    }
+
+    private func assertTextRejected(_ text: String, reason: ProximityQrRejection,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        do {
+            _ = try ProximityQrPayload.decode(text: text)
+            XCTFail("strict decoder accepted a malformed code", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? ProximityPairingError, ProximityPairingError.invalidQrCode(reason),
+                           "wrong rejection reason", file: file, line: line)
+        }
+    }
+
+    private func assertBytesRejected(_ bytes: Data, reason: ProximityQrRejection,
+                                     file: StaticString = #filePath, line: UInt = #line) {
+        do {
+            _ = try ProximityQrPayload.decode(bytes: bytes)
+            XCTFail("decoder accepted malformed bytes", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? ProximityPairingError, ProximityPairingError.invalidQrCode(reason),
+                           "wrong rejection reason", file: file, line: line)
+        }
+    }
+
+    private static func sha256Hex(_ data: Data) -> String {
+        return Data(SHA256.hash(data: data)).map { String(format: "%02x", $0) }.joined()
     }
 
     private func assertBytesRejected(_ bytes: Data, file: StaticString = #filePath, line: UInt = #line) {

@@ -44,6 +44,19 @@ enum ProximityPairingTelemetry {
         }
     }
 
+    /// A scanned text that is not a usable pairing code never reaches a
+    /// pairing session, so the engine reports nothing for it: the scanner
+    /// emits the failure itself. `cause` is Android's `invalid_qr` for both
+    /// kinds of rejection; `reason` (a `ProximityQrRejection` token) tells
+    /// them apart. No part of the scanned text is ever attached.
+    static func emitScanRejected(reason: ProximityQrRejection) {
+        TelemetryService.shared.emit(kind: failedKind, attrs: [
+            "cause": ProximityPairingTelemetryEvent.FailureCause.invalidQrCode.rawValue,
+            "stage": ProximityPairingTelemetryEvent.Stage.scanning.rawValue,
+            "reason": reason.rawValue
+        ])
+    }
+
     /// The app layer emits `completed` itself, not the engine: only
     /// `ContactsListContainer.recordProximityPairing` knows whether the peer
     /// was already a known contact, which the `outcome` attribute needs.
@@ -58,10 +71,44 @@ enum ProximityPairingTelemetry {
     }
 }
 
+// MARK: - Rejected scans
+
+/// What a scanner tells the user, the log and the telemetry about a text it
+/// turned down. Both scanners that read pairing codes (`QrScannerSheet` and
+/// the pairing-only `ProximityPairingScanScreen`) go through this, so the
+/// words are the same wherever the code was scanned.
+enum ProximityScanMessages {
+    /// A QR that is not a pairing code at all (an identity, a link ...).
+    static let notPairing = String(localized: "proximity.scan.not_pairing",
+        defaultValue: "Questo QR non è un codice di associazione. Sull'altro telefono apri Contatti → Associa di persona → Mostra il mio codice.",
+        comment: "Shown when the in-person pairing scanner reads a QR that is not a pairing code; tells where the other phone shows the right one")
+
+    /// A pairing code that fails the strict decoding.
+    static let invalid = String(localized: "proximity.scan.invalid",
+        defaultValue: "Questo non è un codice di associazione Q-Audion valido.",
+        comment: "Shown when the in-person pairing scanner reads a pairing code that is damaged or not valid")
+}
+
+/// One log line and one telemetry event per rejected scan. Only the closed
+/// outcome and reason tokens and the length of the text leave the scanner:
+/// never the text, an id or a key.
+enum ProximityScanReport {
+    static func notPairing(textLength: Int) {
+        RTLog.info("pair", "scan outcome=not_pair len=\(textLength)")
+        ProximityPairingTelemetry.emitScanRejected(reason: .notPairPrefix)
+    }
+
+    static func invalid(_ reason: ProximityQrRejection, textLength: Int) {
+        RTLog.info("pair", "scan outcome=invalid reason=\(reason.rawValue) len=\(textLength)")
+        ProximityPairingTelemetry.emitScanRejected(reason: reason)
+    }
+}
+
 // MARK: - "Novità" one-time entry-point hint
 
 /// Tracks whether the user has already opened the in-person pairing screen
-/// since this feature's feedback sweep shipped, so the Contacts "+" menu row
+/// since this feature's feedback sweep shipped, so its entry points (the
+/// "Associa di persona" button of the Contacts tab, the legacy "+" menu row)
 /// can carry a one-time "Novità" marker until they do (audit finding: the
 /// feature was never announced). Independent of `WhatsNewData.swift`'s
 /// changelog entry — that is opt-in browsing; this is the proactive nudge.
@@ -77,8 +124,14 @@ enum ProximityEntryPointHint {
         UserDefaults.standard.set(true, forKey: seenKey)
     }
 
-    /// The Contacts "+" menu row title: the ordinary label, plus a one-time
-    /// "Novità" marker appended until `markSeen()` has run once.
+    /// The marker itself, for an entry point that shows it as a badge next to
+    /// its own title (`menuTitle` carries it inside one string).
+    static let badgeTitle = String(localized: "proximity.entry.badge_new",
+        defaultValue: "Novità",
+        comment: "Small badge on the Contacts tab's 'Pair in person' button until the user has opened the pairing screen once")
+
+    /// The legacy Contacts "+" menu row title: the ordinary label, plus a
+    /// one-time "Novità" marker appended until `markSeen()` has run once.
     static var menuTitle: String {
         let base = "Associa di persona (QR + Bluetooth)"
         guard isUnseen else { return base }

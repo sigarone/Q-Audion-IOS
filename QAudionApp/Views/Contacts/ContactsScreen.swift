@@ -131,12 +131,16 @@ struct ContactsScreen: View {
             }
         }
         // One labelled primary action, always present, instead of a bare
-        // glyph in the header whose only word lived in .accessibilityLabel.
-        // Placed on the ZStack rather than inside a tab branch so it sits
-        // over TUTTI, SCOPRI and BLOCCATI alike.
+        // glyph in the header whose only word lived in .accessibilityLabel,
+        // with the in-person pairing action stacked above it. Placed on the
+        // ZStack rather than inside a tab branch so they sit over TUTTI,
+        // SCOPRI and BLOCCATI alike.
         .overlay(alignment: .bottomTrailing) {
-            addContactMenu
-                .padding(16)
+            VStack(alignment: .trailing, spacing: 12) {
+                pairInPersonButton
+                addContactMenu
+            }
+            .padding(16)
         }
         // W460: same fix as SettingsScreen — replace deprecated API.
         .toolbar(.hidden, for: .navigationBar)
@@ -176,7 +180,7 @@ struct ContactsScreen: View {
                            onProximityCompleted: { result in handleProximityPaired(result) })
         }
         .sheet(isPresented: $showingProximityPair) {
-            ProximityPairingDisplaySheet(localUserId: appState.currentUserId,
+            ProximityPairingChooserSheet(localUserId: appState.currentUserId,
                                          serverIdentityKeys: { (userId: String) async -> Set<Data> in
                                              await container.publishedIdentityKeys(userId)
                                          },
@@ -212,9 +216,37 @@ struct ContactsScreen: View {
         }
     }
 
-    /// "Aggiungi contatto": by extension, or in person by QR — the same
-    /// scanner reads identity codes and in-person pairing codes, and the
-    /// last entry shows this phone's own rotating pairing code.
+    /// "Associa di persona": the secondary action, above "Aggiungi contatto".
+    /// Opens the chooser where this phone either shows its pairing code or
+    /// scans the other phone's code; a one-time "Novità" badge marks it until
+    /// the pairing screen has been opened once.
+    private var pairInPersonButton: some View {
+        Button {
+            showingProximityPair = true
+        } label: {
+            HStack(spacing: 8) {
+                Label("Associa di persona", systemImage: "person.2.wave.2")
+                if ProximityEntryPointHint.isUnseen {
+                    Text(ProximityEntryPointHint.badgeTitle)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(scheme.onPrimary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(scheme.primary))
+                }
+            }
+            .qaudionStyle(type.labelMedium)
+            .foregroundStyle(scheme.onSecondaryContainer)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(Capsule().fill(scheme.secondaryContainer))
+            .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// "Aggiungi contatto": by extension, or in person by QR — the scanner
+    /// reads identity codes and in-person pairing codes alike.
     private var addContactMenu: some View {
         Menu {
             Button {
@@ -226,11 +258,6 @@ struct ContactsScreen: View {
                 showingQrScanner = true
             } label: {
                 Label("Scansiona QR", systemImage: "qrcode.viewfinder")
-            }
-            Button {
-                showingProximityPair = true
-            } label: {
-                Label(ProximityEntryPointHint.menuTitle, systemImage: "person.2.wave.2")
             }
         } label: {
             Label("Aggiungi contatto", systemImage: "person.badge.plus")
