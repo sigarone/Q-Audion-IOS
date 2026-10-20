@@ -51,11 +51,11 @@ extension ProximityQrPayload {
         defer { CryptoConstants.zeroize(&raw) }
 
         guard raw.count == ProximityPairing.qrPayloadBytes else {
-            throw ProximityPairingError.invalidQrCode("payload length")
+            throw ProximityPairingError.invalidQrCode(.length)
         }
         let versionByte: UInt8 = raw[0]
         guard versionByte == ProximityPairing.protocolVersion else {
-            throw ProximityPairingError.invalidQrCode("unsupported version")
+            throw ProximityPairingError.invalidQrCode(.version)
         }
 
         let sessionIdStart: Int = 1
@@ -64,7 +64,7 @@ extension ProximityQrPayload {
         let frameKeyStart: Int = frameIndexStart + 4
         let frameKeyEnd: Int = frameKeyStart + ProximityPairing.frameKeyBytes
         guard frameKeyEnd == raw.count else {
-            throw ProximityPairingError.invalidQrCode("payload layout")
+            throw ProximityPairingError.invalidQrCode(.layout)
         }
 
         let sessionId: Data = raw.subdata(in: sessionIdStart..<commitmentStart)
@@ -94,31 +94,31 @@ extension ProximityQrPayload {
         let prefix: [UInt8] = Array(ProximityPairing.urlPrefix.utf8)
 
         guard scanned.count >= prefix.count else {
-            throw ProximityPairingError.invalidQrCode("not a pairing code")
+            throw ProximityPairingError.invalidQrCode(.notPairPrefix)
         }
         guard ProximityQrBase64Url.hasAsciiCaseInsensitivePrefix(scanned, prefix: prefix) else {
-            throw ProximityPairingError.invalidQrCode("not a pairing code")
+            throw ProximityPairingError.invalidQrCode(.notPairPrefix)
         }
 
         let remainder: [UInt8] = Array(scanned[prefix.count...])
         guard remainder.count == ProximityPairing.qrBase64Characters else {
-            throw ProximityPairingError.invalidQrCode("payload length")
+            throw ProximityPairingError.invalidQrCode(.length)
         }
         guard ProximityQrBase64Url.isAlphabetOnly(remainder) else {
-            throw ProximityPairingError.invalidQrCode("payload alphabet")
+            throw ProximityPairingError.invalidQrCode(.alphabet)
         }
         guard var decoded: Data = ProximityQrBase64Url.decode(remainder) else {
-            throw ProximityPairingError.invalidQrCode("payload encoding")
+            throw ProximityPairingError.invalidQrCode(.encoding)
         }
         defer { CryptoConstants.zeroize(&decoded) }
         guard decoded.count == ProximityPairing.qrPayloadBytes else {
-            throw ProximityPairingError.invalidQrCode("payload length")
+            throw ProximityPairingError.invalidQrCode(.length)
         }
 
         // Canonical form only: the one encoding we would have produced.
         let reencoded: [UInt8] = Array(ProximityQrBase64Url.encode(decoded).utf8)
         guard reencoded == remainder else {
-            throw ProximityPairingError.invalidQrCode("non-canonical encoding")
+            throw ProximityPairingError.invalidQrCode(.nonCanonical)
         }
 
         return try ProximityQrPayload.decode(bytes: decoded)
@@ -133,6 +133,35 @@ extension ProximityQrPayload {
         let head: [UInt8] = Array(trimmed.utf8.prefix(prefix.count))
         guard head.count == prefix.count else { return false }
         return ProximityQrBase64Url.hasAsciiCaseInsensitivePrefix(head, prefix: prefix)
+    }
+}
+
+/// What a scanner makes of the text the camera returned (spec §5). Every
+/// scanner that can read a pairing code asks `classify` and nothing else, so
+/// "some other QR" and "a pairing code that does not decode" are told apart
+/// the same way everywhere.
+public enum ProximityScanOutcome: Equatable, Sendable {
+    /// A valid pairing code.
+    case pairing(ProximityQrPayload)
+    /// Some other QR (an identity, a link, a URL ...): not a pairing code.
+    case notPairing
+    /// Starts like a pairing code but fails the strict decoding; the value is
+    /// the first check that failed.
+    case invalid(ProximityQrRejection)
+
+    /// `looksLikeProximityPairing` only decides which of the two failures a
+    /// text is; `decode(text:)` stays the sole acceptance test.
+    public static func classify(_ text: String) -> ProximityScanOutcome {
+        guard ProximityQrPayload.looksLikeProximityPairing(text) else { return .notPairing }
+        do {
+            let payload: ProximityQrPayload = try ProximityQrPayload.decode(text: text)
+            return .pairing(payload)
+        } catch ProximityPairingError.invalidQrCode(let reason) {
+            return .invalid(reason)
+        } catch {
+            // `decode(text:)` throws nothing but `invalidQrCode`.
+            return .invalid(.layout)
+        }
     }
 }
 

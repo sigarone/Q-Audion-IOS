@@ -24,6 +24,9 @@ struct QrScannerView: View {
     let onScanned: (String) -> Void
     /// Invoked when the user taps the Cancel button.
     let onCancel: () -> Void
+    /// The line under the camera preview. A scanner that reads one kind of
+    /// code (in-person pairing) says which; the default fits any Q-Audion QR.
+    var hint: LocalizedStringKey = "Punta la fotocamera su un QR Q-Audion"
 
     @State private var permissionState: PermissionState = .checking
     @State private var hasScanned: Bool = false
@@ -77,7 +80,7 @@ struct QrScannerView: View {
                 .padding()
                 Spacer()
                 if permissionState == .granted {
-                    Text("Punta la fotocamera su un QR Q-Audion")
+                    Text(hint)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.white)
                         .padding()

@@ -471,8 +471,8 @@ struct ContactsListView: View {
                         showingMyIdentity = true
                     }
                     // QR + Bluetooth proximity pairing (hybrid ML-KEM-1024):
-                    // this phone shows the code, the other scans it with
-                    // "Scansiona QR" above. Not capability-gated.
+                    // opens the chooser where this phone shows its code or
+                    // scans the other phone's. Not capability-gated.
                     Button(ProximityEntryPointHint.menuTitle, systemImage: "person.2.wave.2") {
                         showingProximityPair = true
                     }
@@ -547,7 +547,7 @@ struct ContactsListView: View {
             MyIdentityQrSheet(appState: appState)
         }
         .sheet(isPresented: $showingProximityPair) {
-            ProximityPairingDisplaySheet(localUserId: appState.currentUserId,
+            ProximityPairingChooserSheet(localUserId: appState.currentUserId,
                                          serverIdentityKeys: { (userId: String) async -> Set<Data> in
                                              await container.publishedIdentityKeys(userId)
                                          },

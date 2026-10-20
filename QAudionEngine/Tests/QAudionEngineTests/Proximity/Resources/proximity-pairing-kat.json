@@ -171,5 +171,199 @@
         "02035b9bcfa991884164870d183f45f4d8ebae29fa0269c3838a159ff2325edf21be7e330d9e2ca8847622a91c4fbc2f6227b3ab1b4fa18ef80049dc46b1caad26b44dff61b708add09140f40478fad142e0fd9d48e59a81c966f4e194e908a3f127c9f925c4f90e53fd96b6ea882d2f7e2b474f7b44d47e72e822077e4a0e4721ecb80e3fe7cf8d49bb3fbc4807c68432cd73ea2b3f4cab82fc6015f6048d883a3855a73cc51faf016ed68d21e8ba37252d06bcbc71ea85873ff7763a1c43ea55220eb47df70054b7f04c3bda558021f9e381563026a2dcd150ef63330398614dfde11adacc26770ba16b911ca297b2852aab45cf7eefb0abc293d4042539ca5390bd4fce2ba86dd49ccbc2fd6f724064296baff9d7544ed8b65c87bea03bfea181b628aefed105fa3af997c57389a9430ca40120973256acc47a3f7ba59d99768c7c95533cbd54ba20b9ddcbf00e7a03fedc65da216e6fd4b5338533afe673519f15aa46daf3abf6facb9b38d8382a31855f78a39b18d21766008c01b974d71e0f4aeb7a3099a95b4c1de56d"
       ]
     }
+  ],
+  "qrVectors": [
+    {
+      "name": "valid-frame-index-0",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAABSR46RoZWGW9T4qZSbdnBr9X0md1toWYynOMzBK342uw",
+      "outcome": "pairing",
+      "reason": null,
+      "frameIndex": 0,
+      "qrBytes": "01404142434445464748494a4b4c4d4e4f11d2db699fa0bed5cc12c91e3b4a7e3a19b351a5232cc87b16367130232a151c0000000052478e91a195865bd4f8a9949b76706bf57d26775b68598ca738ccc12b7e36bb"
+    },
+    {
+      "name": "valid-frame-index-0x80000000",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHIAAAADi0rUdf4l5hbup753uIkbkNFG4M1I3pd9i9Ytzifv30g",
+      "outcome": "pairing",
+      "reason": null,
+      "frameIndex": 2147483648,
+      "qrBytes": "01404142434445464748494a4b4c4d4e4f11d2db699fa0bed5cc12c91e3b4a7e3a19b351a5232cc87b16367130232a151c80000000e2d2b51d7f897985bba9ef9dee2246e43451b8335237a5df62f58b7389fbf7d2"
+    },
+    {
+      "name": "valid-frame-index-0xFFFFFFFF",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHP____8x_0_vd0osyL9fzjZa7gGIf0YRbmwr-dBN7Kiz4yiDYA",
+      "outcome": "pairing",
+      "reason": null,
+      "frameIndex": 4294967295,
+      "qrBytes": "01404142434445464748494a4b4c4d4e4f11d2db699fa0bed5cc12c91e3b4a7e3a19b351a5232cc87b16367130232a151cffffffff31ff4fef774a2cc8bf5fce365aee01887f46116e6c2bf9d04deca8b3e3288360"
+    },
+    {
+      "name": "valid-upper-case-prefix",
+      "text": "QAUDION://PAIR/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g",
+      "outcome": "pairing",
+      "reason": null,
+      "frameIndex": 7,
+      "qrBytes": "01404142434445464748494a4b4c4d4e4f11d2db699fa0bed5cc12c91e3b4a7e3a19b351a5232cc87b16367130232a151c000000072290d1a8ac29f31310ca106a9e14154e42cb9757cd7650f59f23f768b0caccda"
+    },
+    {
+      "name": "valid-surrounding-whitespace",
+      "text": "  \n\tqaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g\r\n ",
+      "outcome": "pairing",
+      "reason": null,
+      "frameIndex": 7,
+      "qrBytes": "01404142434445464748494a4b4c4d4e4f11d2db699fa0bed5cc12c91e3b4a7e3a19b351a5232cc87b16367130232a151c000000072290d1a8ac29f31310ca106a9e14154e42cb9757cd7650f59f23f768b0caccda"
+    },
+    {
+      "name": "padding-appended",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g==",
+      "outcome": "invalid",
+      "reason": "length",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "padding-in-place",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM==",
+      "outcome": "invalid",
+      "reason": "alphabet",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "standard-alphabet-plus",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C+1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g",
+      "outcome": "invalid",
+      "reason": "alphabet",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "standard-alphabet-slash",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI/dosMrM2g",
+      "outcome": "invalid",
+      "reason": "alphabet",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "non-canonical-last-character",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2h",
+      "outcome": "invalid",
+      "reason": "non_canonical",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "version-2",
+      "text": "qaudion://pair/AkBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g",
+      "outcome": "invalid",
+      "reason": "version",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "query-appended",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g?x=1",
+      "outcome": "invalid",
+      "reason": "length",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "fragment-appended",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g#f",
+      "outcome": "invalid",
+      "reason": "length",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "query-in-place",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosM?x=1",
+      "outcome": "invalid",
+      "reason": "alphabet",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "fragment-in-place",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM#f",
+      "outcome": "invalid",
+      "reason": "alphabet",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "length-113",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2",
+      "outcome": "invalid",
+      "reason": "length",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "length-115",
+      "text": "qaudion://pair/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2gA",
+      "outcome": "invalid",
+      "reason": "length",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "length-0",
+      "text": "qaudion://pair/",
+      "outcome": "invalid",
+      "reason": "length",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "length-4",
+      "text": "qaudion://pair/AAAA",
+      "outcome": "invalid",
+      "reason": "length",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "identity-prefix",
+      "text": "QAUDION:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8",
+      "outcome": "not_pair",
+      "reason": "not_pair_prefix",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "legacy-pair-query",
+      "text": "qaudion://pair?v=1&data=AAAA",
+      "outcome": "not_pair",
+      "reason": "not_pair_prefix",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "other-host",
+      "text": "qaudion://link/AUBBQkNERUZHSElKS0xNTk8R0ttpn6C-1cwSyR47Sn46GbNRpSMsyHsWNnEwIyoVHAAAAAcikNGorCnzExDKEGqeFBVOQsuXV812UPWfI_dosMrM2g",
+      "outcome": "not_pair",
+      "reason": "not_pair_prefix",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "web-url",
+      "text": "https://example.org/x",
+      "outcome": "not_pair",
+      "reason": "not_pair_prefix",
+      "frameIndex": null,
+      "qrBytes": null
+    },
+    {
+      "name": "empty",
+      "text": "",
+      "outcome": "not_pair",
+      "reason": "not_pair_prefix",
+      "frameIndex": null,
+      "qrBytes": null
+    }
   ]
 }

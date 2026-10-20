@@ -1,7 +1,7 @@
 # Proximity pairing v1 — QR + Bluetooth LE, hybrid ML-KEM-1024
 
-Status: **shipped on iOS and Android** (Contacts → Aggiungi contatto →
-"Associa di persona (QR + Bluetooth)"). Desktop: **not implemented** — this
+Status: **shipped on iOS and Android** (Contatti → "Associa di persona", then
+"Mostra il mio codice" or "Scansiona un codice"). Desktop: **not implemented** — this
 document remains the normative spec for that port. Every byte, label and
 check below is normative unless marked "informative". Test vectors: §15.
 
@@ -129,6 +129,37 @@ decoding to exactly 85 bytes, version `0x01`. Anything else is rejected.
 Leading/trailing whitespace and newlines (Unicode `White_Space`, i.e.
 Foundation's `.whitespacesAndNewlines`) of the scanned string are trimmed
 first; nothing inside the string is.
+
+**Scanner verdicts.** A scanner that reads pairing codes MUST tell two
+rejections apart and say which one it is to the person, because they call
+for different actions:
+
+- *not a pairing code* — the text does not start with `qaudion://pair/`
+  (ASCII case-insensitive, after trimming), or is shorter than that prefix:
+  some other QR (an identity code, a link, a URL). The message names the place
+  where the other phone shows the right code.
+- *invalid pairing code* — the text does start with the prefix but fails the
+  strict decoding above. The message says the code is not a valid pairing code.
+
+The scanner reports the FIRST failed check as one token of a closed set, the
+same on every platform, in this order:
+
+| Token | Failed check |
+|---|---|
+| `not_pair_prefix` | no `qaudion://pair/` prefix (reported for *not a pairing code*) |
+| `length` | not exactly 114 characters after the prefix, or not 85 bytes |
+| `alphabet` | a character outside `[A-Za-z0-9_-]` (padding, `+`, `/`, `?`, `#`, a space, ...) |
+| `encoding` | not decodable as unpadded base64url |
+| `non_canonical` | decodes, but is not the one text its bytes encode to (non-zero trailing bits) |
+| `version` | version byte is not `0x01` |
+| `layout` | decoded bytes do not fit the 85-byte layout |
+
+`encoding` and `layout` cannot be reached from a text of the right length,
+but they belong to the set. Logs and telemetry carry only the outcome
+(`not_pair` or `invalid`), this token and the length of the scanned text,
+never the text, an identifier or a key; telemetry `pairing.proximity.failed`
+adds `cause` `invalid_qr` and `reason` set to the token. Test vectors for each
+verdict are in §15 (`qrVectors`).
 
 ## 6. Displayer session setup and frame rotation
 
@@ -450,5 +481,10 @@ vector's signatures verify, and RFC 8032 signers (BouncyCastle) reproduce
 them exactly; CryptoKit signs with randomness, so the Swift test verifies
 them instead. The vector pins both sealed boxes byte-for-byte (AES-GCM with
 the fixed zero nonce is deterministic), the full ACCEPT and FINISH messages,
-ABORT and BUSY, and lists valid and invalid userIds for the §8 grammar. Regenerate with
-`python3 scripts/kat/gen_proximity_pairing_kat.py`.
+ABORT and BUSY, and lists valid and invalid userIds for the §8 grammar. The
+`qrVectors` array lists scanned texts with the verdict a scanner must reach
+(§5): valid frames (index 0, `0x80000000`, `0xFFFFFFFF`), texts that start like a
+pairing code but fail the strict decoding (each with its first failed check),
+and QR codes that are not pairing codes. Regenerate with
+`python3 scripts/kat/gen_proximity_pairing_kat.py`. The file is copied byte for
+byte into the Android module and both test suites pin its SHA-256.

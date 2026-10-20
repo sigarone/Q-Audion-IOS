@@ -25,3 +25,7 @@ QAudionAppTests/voice-analysis/display-format-cases.tsv -text
 # The voice-word cases (docs/voice-analysis-spec.md, section 12.6) are a byte-for-byte copy of the file that the
 # Android tests run too: git must never rewrite its line endings.
 QAudionAppTests/voice-analysis/voice-word-cases.tsv -text
+
+# The proximity pairing known-answer vectors are copied byte for byte into the Android module and both test suites pin
+# their SHA-256 (scripts/kat/gen_proximity_pairing_kat.py writes the file with LF): git must never rewrite its line endings.
+QAudionEngine/Tests/QAudionEngineTests/Proximity/Resources/proximity-pairing-kat.json -text

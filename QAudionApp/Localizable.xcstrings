@@ -35183,6 +35183,296 @@
         }
       }
     },
+    "Mostra il mio codice": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostra il mio codice"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show my code"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meinen Code zeigen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar mi código"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher mon code"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar meu código"
+          }
+        }
+      }
+    },
+    "Scansiona un codice": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scansiona un codice"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan a code"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code scannen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escanear un código"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanner un code"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escanear um código"
+          }
+        }
+      }
+    },
+    "L'altra persona inquadra il codice con il suo telefono.": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'altra persona inquadra il codice con il suo telefono."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other person scans the code with their phone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die andere Person scannt den Code mit ihrem Telefon."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La otra persona escanea el código con su teléfono."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'autre personne scanne le code avec son téléphone."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A outra pessoa escaneia o código com o telefone dela."
+          }
+        }
+      }
+    },
+    "Inquadra il codice mostrato sull'altro telefono.": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inquadra il codice mostrato sull'altro telefono."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan the code shown on the other phone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scannen Sie den Code, den das andere Telefon anzeigt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escanea el código que muestra el otro teléfono."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanne le code affiché sur l'autre téléphone."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escaneie o código exibido no outro telefone."
+          }
+        }
+      }
+    },
+    "proximity.scan.not_pairing": {
+      "extractionState": "manual",
+      "comment": "Shown when the in-person pairing scanner reads a QR that is not a pairing code; tells where the other phone shows the right one",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo QR non è un codice di associazione. Sull'altro telefono apri Contatti → Associa di persona → Mostra il mio codice."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This QR is not a pairing code. On the other phone, open Contacts → Pair in person → Show my code."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser QR-Code ist kein Kopplungscode. Öffnen Sie auf dem anderen Telefon Kontakte → Persönlich koppeln → Meinen Code zeigen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este QR no es un código de emparejamiento. En el otro teléfono abre Contactos → Emparejar en persona → Mostrar mi código."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce QR n'est pas un code d'association. Sur l'autre téléphone, ouvre Contacts → Associer en personne → Afficher mon code."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este QR não é um código de pareamento. No outro telefone, abra Contatos → Parear pessoalmente → Mostrar meu código."
+          }
+        }
+      }
+    },
+    "proximity.scan.invalid": {
+      "extractionState": "manual",
+      "comment": "Shown when the in-person pairing scanner reads a pairing code that is damaged or not valid",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo non è un codice di associazione Q-Audion valido."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is not a valid Q-Audion pairing code."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das ist kein gültiger Q-Audion-Kopplungscode."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este no es un código de emparejamiento de Q-Audion válido."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce n'est pas un code d'association Q-Audion valide."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este não é um código de pareamento Q-Audion válido."
+          }
+        }
+      }
+    },
+    "proximity.entry.badge_new": {
+      "extractionState": "manual",
+      "comment": "Small badge on the Contacts tab's 'Pair in person' button until the user has opened the pairing screen once",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Novità"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neu"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Novedad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nouveau"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Novo"
+          }
+        }
+      }
+    },
     "proximity.entry.menu_title_new": {
       "extractionState": "manual",
       "comment": "Contacts '+' menu row for in-person pairing, with a one-time 'New' marker shown until the user opens the screen once after the update that added this row's feedback (verified badge, explanation, telemetry)",

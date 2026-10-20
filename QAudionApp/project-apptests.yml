@@ -59,6 +59,7 @@ targets:
           - NoticeServiceTests.swift
           - PersistentCallRecordStoreTests.swift
           - PhoneEntryScreenInviteTests.swift
+          - ProximityPairingTelemetryRedactionTests.swift
           - RecoveryEnrollmentStatusTests.swift
           - ReKeyAvatarRingTests.swift
           - RuntimeLogSinkTeeTests.swift

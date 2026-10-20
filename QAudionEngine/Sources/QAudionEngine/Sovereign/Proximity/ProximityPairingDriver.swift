@@ -308,8 +308,7 @@ final class ProximityPairingViewDriver: ObservableObject {
             halt(showing: nil)
             suspendedInBackground = true
         } else {
-            // No dedicated FailureCause for "backgrounded" — folds to
-            // .other, same as FailureCause(.cancelled) would.
+            // No dedicated FailureCause for "backgrounded" — reported as .other.
             onTelemetryEvent?(.failed(cause: .other, stage: lastStage))
             halt(showing: ProximityPairingError.cancelled.userMessage)
         }
@@ -445,7 +444,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         case .failed(let error):
             clearCode()
             setPhase(.failed(error.userMessage))
-            onTelemetryEvent?(.failed(cause: .init(error), stage: lastStage))
+            onTelemetryEvent?(.ending(with: error, stage: lastStage))
             if ProximityPairingViewDriver.restartsOnItsOwn(error) && isActive {
                 scheduleAutoRestart()
             }
@@ -472,7 +471,7 @@ final class ProximityPairingViewDriver: ObservableObject {
             finish(result)
         case .failed(let error):
             setPhase(.failed(error.userMessage))
-            onTelemetryEvent?(.failed(cause: .init(error), stage: lastStage))
+            onTelemetryEvent?(.ending(with: error, stage: lastStage))
         }
     }
 
@@ -634,7 +633,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         tearDownSession()
         clearCode()
         setPhase(.failed(ProximityPairingViewDriver.qrUnavailableText))
-        onTelemetryEvent?(.failed(cause: .qrRenderFailed, stage: lastStage))
+        onTelemetryEvent?(.failed(cause: .qrUnavailable, stage: lastStage))
     }
 
     private static func renderQr(_ text: String, context: CIContext) -> UIImage? {

@@ -105,8 +105,7 @@ public struct ProximityPairingScannerView: View {
 
 private enum ProximityPairingCopy {
     static let displayerCaption: String =
-        "Fai inquadrare questo codice dall'altro telefono con Q-Audion (Contatti → Aggiungi contatto → Scansiona QR). "
-        + "Tieni i telefoni vicini: il Bluetooth li collega da solo."
+        "Fai inquadrare questo codice dall'altro telefono: Contatti → Associa di persona → Scansiona un codice."
     static let preparingCode: String = "Preparazione del codice…"
     static let preparing: String = "Preparazione…"
     static let confirmHint: String = "Controlla che l'altro telefono mostri lo stesso codice, poi conferma."
