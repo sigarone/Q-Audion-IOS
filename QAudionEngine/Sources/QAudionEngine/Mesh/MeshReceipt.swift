@@ -76,8 +76,19 @@ public struct MeshReceipt: Codable, Equatable, Sendable {
         self.recipientNodeHex = recipientNodeHex
     }
 
+    /// Canonical wire JSON: `v, s, r, c, m, k, ts, sn, rn` (docs/mesh/MESH_LINK_SPEC.md section 14).
     public func encode() -> Data {
-        (try? JSONEncoder().encode(self)) ?? Data()
+        MeshCanonicalJSON.object([
+            ("v", MeshCanonicalJSON.int(version)),
+            ("s", MeshCanonicalJSON.string(senderUserId)),
+            ("r", MeshCanonicalJSON.string(recipientUserId)),
+            ("c", MeshCanonicalJSON.string(receiptId)),
+            ("m", MeshCanonicalJSON.string(messageClientMsgId)),
+            ("k", MeshCanonicalJSON.string(kind)),
+            ("ts", MeshCanonicalJSON.int64(atMs)),
+            ("sn", MeshCanonicalJSON.string(senderNodeHex)),
+            ("rn", MeshCanonicalJSON.string(recipientNodeHex)),
+        ])
     }
 
     public static func decode(_ data: Data) -> MeshReceipt? {

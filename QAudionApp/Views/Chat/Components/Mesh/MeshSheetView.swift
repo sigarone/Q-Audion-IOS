@@ -97,7 +97,7 @@ struct MeshSheetView: View {
             // see MeshBluetoothCapabilityProbe's kdoc. It builds a
             // CBCentralManager, which asks for the Bluetooth permission, so
             // it waits for the consent: no Bluetooth before the user said yes.
-            if consent.isAccepted { btProbe.start() }
+            if consentAnswered { btProbe.start() }
         }
         // Single-parameter onChange on purpose: every other call site in this
         // app uses it, and the two-parameter form is iOS 17+.
@@ -105,7 +105,7 @@ struct MeshSheetView: View {
             viewModel.autoSelectChatPeer(visibleNodeHexes: hexes)
         }
         .onChange(of: consent.state) { state in
-            if state == .accepted { btProbe.start() }
+            if state != .undecided { btProbe.start() }
         }
         .meshConsentSheet(
             wanted: $showingConsent,
@@ -113,6 +113,12 @@ struct MeshSheetView: View {
             onAccept: acceptConsent,
             onDecline: declineConsent
         )
+    }
+
+    /// The consent screen was answered (either way): the Bluetooth may be probed and a mode may be started, within
+    /// what the answer allows (`MeshModePolicy`).
+    private var consentAnswered: Bool {
+        consent.state != .undecided
     }
 
     /// "Attiva" on the consent screen: starts the mode the user had tapped.
@@ -123,11 +129,13 @@ struct MeshSheetView: View {
         runtime.acceptConsentAndStart(mode: mode)
     }
 
-    /// "Non ora": the mesh stays off.
+    /// "Solo i miei messaggi": relaying stays off and the antenna comes up in direct mode (or in the visible-only mode
+    /// the user had tapped); nothing is forwarded for anyone else.
     private func declineConsent() {
+        let tapped: MeshAntennaMode? = pendingConsentMode
         pendingConsentMode = nil
         showingConsent = false
-        runtime.declineConsentAndStop()
+        runtime.declineRelayAndUseDirect(startIfOff: true, preferred: tapped)
     }
 
     private var header: some View {
@@ -163,7 +171,7 @@ struct MeshSheetView: View {
     private var antennaSubtitle: String {
         // Before the consent the Bluetooth is not even probed, so the only
         // truth is "off"; the chips below open the consent screen.
-        guard consent.isAccepted else { return antennaOffLabel }
+        guard consentAnswered else { return antennaOffLabel }
         switch btProbe.status {
         case .checking:
             return "Verifica del Bluetooth in corso…"
@@ -192,6 +200,9 @@ struct MeshSheetView: View {
                 return MeshFeature.enabled ? antennaOffLabel : featureUnavailableLabel
             case .visibleOnly:
                 return "Visibile · raggiungibile dai vicini"
+            case .direct:
+                if case .scanningOnly = runtime.radioState { return "Diretta · scansione in corso…" }
+                return "Diretta · \(runtime.peers.count) dispositivi raggiungibili"
             case .fullMesh:
                 if case .scanningOnly = runtime.radioState { return "Mesh completa · scansione in corso…" }
                 return "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili"
@@ -213,10 +224,13 @@ struct MeshSheetView: View {
         return runtime.antennaMode != nil ? scheme.primary : scheme.onSurfaceVariant
     }
 
-    /// Three explicit intents rather than an on/off toggle-of-a-toggle: off,
+    /// Four explicit intents rather than an on/off toggle-of-a-toggle: off,
     /// `.visibleOnly` (reachable — advertise + accept incoming connections,
-    /// no scan/connect-out, no relay for others), and `.fullMesh` (the
-    /// original behaviour). 1:1 port of the Android sibling's `AntennaRow`.
+    /// no scan/connect-out, no relay for others; lowest power), `.direct`
+    /// (advertise + scan + connect out, own messages only, no relay: what a
+    /// user who did not allow relaying gets by default), and `.fullMesh` (the
+    /// original behaviour, which also relays). Port of the Android sibling's
+    /// `AntennaRow` plus the direct mode.
     ///
     /// W-MESHDEAD (2026-08-15) — reported live: tapping "Visibile"/"Mesh
     /// completa" never selected them, the row always read "Spenta", and
@@ -246,15 +260,22 @@ struct MeshSheetView: View {
             } else if btProbe.status == .unsupported {
                 EmptyView() // nothing tappable fixes this; the subtitle already says so
             } else {
-                HStack(spacing: 8) {
-                    antennaModeChip(label: antennaOffLabel, selected: runtime.antennaMode == nil) {
-                        handleAntennaSelect(nil)
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        antennaModeChip(label: antennaOffLabel, selected: runtime.antennaMode == nil) {
+                            handleAntennaSelect(nil)
+                        }
+                        antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
+                            handleAntennaSelect(.visibleOnly)
+                        }
                     }
-                    antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
-                        handleAntennaSelect(.visibleOnly)
-                    }
-                    antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
-                        handleAntennaSelect(.fullMesh)
+                    HStack(spacing: 8) {
+                        antennaModeChip(label: "Diretta", selected: runtime.antennaMode == .direct) {
+                            handleAntennaSelect(.direct)
+                        }
+                        antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
+                            handleAntennaSelect(.fullMesh)
+                        }
                     }
                 }
             }
@@ -329,11 +350,11 @@ struct MeshSheetView: View {
             onToast("La mesh Bluetooth non è disponibile al momento.")
             return
         }
-        // Turning the radio ON relays other people's messages through this
-        // phone, so it needs the user's explicit consent first: ask, and
-        // start in the tapped mode only if they accept. Turning it OFF never
-        // needs asking.
-        if let mode, !consent.isAccepted {
+        // Turning the radio ON needs the consent screen to have been answered
+        // first, and full mesh (which relays other people's messages through
+        // this phone) needs a yes to relaying: ask, and start in the tapped
+        // mode only if they accept. Turning it OFF never needs asking.
+        if let mode, !MeshModePolicy.mayStart(featureEnabled: true, consent: consent.state, mode: mode) {
             pendingConsentMode = mode
             showingConsent = true
             return
@@ -452,7 +473,7 @@ struct MeshSheetView: View {
         if !runtime.antennaOn {
             hintText("Accendi l'antenna per cercare dispositivi Q-Audion nel raggio del Bluetooth.")
         } else if runtime.antennaMode == .visibleOnly {
-            hintText("Sei visibile — chi ti cerca può raggiungerti. Passa a \"Mesh completa\" per vedere anche tu i dispositivi vicini.")
+            hintText("Sei visibile — chi ti cerca può raggiungerti, ma solo finché l'app è aperta. Passa a \"Diretta\" o \"Mesh completa\" per vedere anche tu i dispositivi vicini e restare raggiungibile in secondo piano.")
         } else if runtime.peers.isEmpty {
             hintText("Nessun dispositivo raggiungibile al momento.")
         } else {
@@ -584,7 +605,7 @@ struct MeshSheetView: View {
         if runtime.antennaMode == .visibleOnly {
             onToast(
                 "Invio via mesh attivato — \(displayName). In modalità Visibile questo telefono non avvia "
-                    + "il collegamento: la consegna dipende dall'altro dispositivo. Passa a Mesh completa per inviare subito."
+                    + "il collegamento: la consegna dipende dall'altro dispositivo. Passa a Diretta o Mesh completa per inviare subito."
             )
         } else {
             onToast("Invio via mesh attivato — \(displayName)")

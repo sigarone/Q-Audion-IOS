@@ -86,7 +86,7 @@
 	<!-- NSBluetoothPeripheralUsageDescription (deprecated since iOS 13) is
 	     intentionally absent: the Always key covers every supported iOS. -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Q-Audion uses Bluetooth to exchange encryption keys with a contact's phone when you pair in person (one phone shows a QR code, the other scans it), and for Bluetooth mesh, which relays encrypted messages of other Q-Audion users between nearby devices when there is no network. While the mesh is on, the phone also announces a fixed identifier that other Q-Audion phones nearby can see. The mesh starts only after you accept it on its consent screen, and you can turn it off at any time in Settings or from the Bluetooth mesh panel of a chat.</string>
+	<string>Q-Audion uses Bluetooth to exchange encryption keys with a contact's phone when you pair in person (one phone shows a QR code, the other scans it), and for Bluetooth mesh, which finds nearby Q-Audion contacts and exchanges your messages with them over Bluetooth when there is no network and, if you allow it, relays encrypted messages of other Q-Audion users between nearby devices. The mesh keeps working while the app is in the background. While the mesh is on, the phone also announces a fixed identifier that other Q-Audion phones nearby can see. The mesh starts only after you answer its consent screen, and you can turn it off at any time in Settings or from the Bluetooth mesh panel of a chat.</string>
 	<!-- WebRTC gathers host ICE candidates, so a call between two devices on
 	     the same Wi-Fi can connect directly; iOS 14+ shows the local-network
 	     prompt for that and requires this string to be present. -->
@@ -138,6 +138,8 @@
 		<string>voip</string>
 		<string>audio</string>
 		<string>fetch</string>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>

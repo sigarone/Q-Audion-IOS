@@ -104,9 +104,12 @@ for tag, text in [
     if got is not None and ("Anna" in got or "00000000-0000-4000-8000-000000000001" in got):
         failures.append("[%s] identity leaked: %r -> %r" % (tag, text, got))
 
-# The mesh packet used to be logged under the tag "mesh", which the shipper's tag gate drops: it must stay under "chat".
-if shipped(kind("mesh"), "mesh") is not None:
-    failures.append("the tag 'mesh' ships now: re-check this test's premise (the app logs kind=mesh under 'chat')")
+# The blocked mesh packet is logged under the tag "chat", not under "mesh" (the tag "mesh" belongs to the mesh
+# diagnostic events, test_ship_ios_mesh_vocab.py): the line in the app must still say so.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "QAudionApp", "AppState.swift"),
+          encoding="utf-8") as fh:
+    if 'RTLog.info("chat", "block drop=1 kind=mesh")' not in fh.read():
+        failures.append("AppState.swift no longer logs the blocked mesh packet under the tag 'chat'")
 
 # --- Scoping: the block-only words are not general vocabulary -------------------------------------------------------
 BLOCK_WORDS = ["svc", "file", "missed", "notif", "grpcall", "opaque"]

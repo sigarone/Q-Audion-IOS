@@ -113,7 +113,7 @@ struct HomeView: View {
             wanted: meshConsentWanted,
             callBusy: callIsBusy,
             onAccept: { MeshRuntime.shared.acceptConsentAndStart() },
-            onDecline: { MeshRuntime.shared.declineConsentAndStop() }
+            onDecline: { MeshRuntime.shared.declineRelayAndUseDirect(startIfOff: true) }
         )
         .onChange(of: appState.isInCall) { isInCall in
             // Single-param form for iOS 16 compat. Auto-dismiss the cover

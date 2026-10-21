@@ -48,18 +48,13 @@ public enum MeshFeature {
     }
 
     /// Derive this device's own mesh node id from its long-term identity
-    /// public key (raw bytes, whatever format the caller's identity/signing
-    /// layer produces — the derivation is SHA-256 truncation, format
-    /// agnostic). Returns a random-but-stable-for-this-call id when no
-    /// identity key is available yet, mirroring
-    /// `BleMeshTransportImpl.localNodeId`'s Android fallback, so a transport
-    /// can still start (and simply be unreachable/unrecognized by anyone)
-    /// before identity bootstrap completes.
-    public static func localNodeId(identityKeyRaw raw: Data?) -> MeshNodeId {
-        if let raw, let id = MeshNodeId.from(identityKeyRaw: raw) {
-            return id
-        }
-        return MeshNodeId.random()
+    /// public key (the raw 32-byte Ed25519 key, the same one the key bundle
+    /// publishes). Returns nil when there is no usable key: there is NO random
+    /// fallback id, so a device without its identity cannot put a packet on the
+    /// air under any other id (docs/mesh/MESH_LINK_SPEC.md section 1.2).
+    public static func localNodeId(identityKeyRaw raw: Data?) -> MeshNodeId? {
+        guard let raw, raw.count == 32 else { return nil }
+        return MeshNodeId.from(identityKeyRaw: raw)
     }
 
     /// The mesh node id a given contact would advertise, derived from their

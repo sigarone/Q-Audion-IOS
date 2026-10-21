@@ -2,10 +2,12 @@ import SwiftUI
 
 /// The one-time Bluetooth mesh consent screen.
 ///
-/// Says in plain words what turning the mesh on means: this phone relays the
-/// encrypted messages of other app users who are nearby, it cannot read them, and
-/// it can be turned off in Settings. Two answers and no way to slide the sheet
-/// away without choosing: "Attiva" starts the mesh, "Non ora" leaves it off.
+/// Says in plain words what each answer lets this phone do: "Attiva" finds
+/// nearby contacts, exchanges the user's own messages and relays the encrypted
+/// messages of other app users who are nearby (it cannot read them); "Solo i
+/// miei messaggi" finds nearby contacts and exchanges only the user's own
+/// messages, relaying nothing. Two answers and no way to slide the sheet away
+/// without choosing; both start the radio, in full mesh and in direct mode.
 ///
 /// Takes no AppState (CLAUDE.md section 16): what happens on each answer is the
 /// caller's closure. Shown by HomeView the first time, and again from the chat's
@@ -82,10 +84,10 @@ struct MeshConsentSheet: View {
     // formatting inside view builders). Keyed by identifier like the Enigma settings texts; the Italian default is the source.
     private static var title: String { String(localized: "mesh_consent.title", defaultValue: "Mesh Bluetooth", comment: "Title of the one-time consent screen for the Bluetooth mesh.") }
     private static var bodyOne: String { String(localized: "mesh_consent.body_1", defaultValue: "Quando non c'è rete, Q-Audion può far arrivare i messaggi cifrati passando da un telefono all'altro, via Bluetooth.", comment: "Consent screen for the Bluetooth mesh, first paragraph: what the mesh is.") }
-    private static var bodyTwo: String { String(localized: "mesh_consent.body_2", defaultValue: "Se attivi la mesh, questo telefono inoltra anche i messaggi cifrati di altri utenti dell'app che si trovano vicino a te. Non può leggerli: restano cifrati da chi li scrive a chi li riceve. Finché la mesh è accesa, il telefono annuncia anche un identificativo fisso che gli altri telefoni Q-Audion vicini possono vedere.", comment: "Consent screen for the Bluetooth mesh, second paragraph: this phone relays encrypted messages of other app users nearby and cannot read them, and while the mesh is on it announces a fixed identifier that other Q-Audion phones nearby can see. This is the thing the user consents to.") }
-    private static var bodyThree: String { String(localized: "mesh_consent.body_3", defaultValue: "L'inoltro usa il Bluetooth e un po' di batteria. Puoi spegnerlo quando vuoi con l'interruttore Mesh Bluetooth nelle Impostazioni.", comment: "Consent screen for the Bluetooth mesh, third paragraph: the cost, and where to turn it off. 'Mesh Bluetooth' is the title of the switch in Settings.") }
-    private static var acceptLabel: String { String(localized: "mesh_consent.accept", defaultValue: "Attiva", comment: "Consent screen for the Bluetooth mesh: button that turns the mesh on.") }
-    private static var declineLabel: String { String(localized: "mesh_consent.decline", defaultValue: "Non ora", comment: "Consent screen for the Bluetooth mesh: button that leaves the mesh off.") }
+    private static var bodyTwo: String { String(localized: "mesh_consent.body_2", defaultValue: "Scegli cosa può fare questo telefono. Con «Attiva» trova i contatti vicini, scambia i tuoi messaggi con loro e inoltra anche i messaggi cifrati di altri utenti dell'app che si trovano vicino a te: non può leggerli, restano cifrati da chi li scrive a chi li riceve. Con «Solo i miei messaggi» trova i contatti vicini e scambia solo i tuoi messaggi con loro, senza inoltrare quelli degli altri. In entrambi i casi, finché la mesh è accesa il telefono annuncia un identificativo fisso che gli altri telefoni Q-Audion vicini possono vedere.", comment: "Consent screen for the Bluetooth mesh, second paragraph: what each answer lets this phone do. 'Attiva' finds nearby contacts, exchanges the user's own messages and relays encrypted messages of other app users (it cannot read them); 'Solo i miei messaggi' finds nearby contacts and exchanges only the user's own messages and relays nothing. In both cases the phone announces a fixed identifier that other Q-Audion phones nearby can see. This is the thing the user consents to.") }
+    private static var bodyThree: String { String(localized: "mesh_consent.body_3", defaultValue: "Il Bluetooth resta attivo anche quando l'app è in secondo piano e usa un po' di batteria. Puoi cambiare scelta con l'interruttore Mesh Bluetooth nelle Impostazioni e spegnere l'antenna quando vuoi dal pannello mesh di una chat.", comment: "Consent screen for the Bluetooth mesh, third paragraph: Bluetooth stays active while the app is in the background and uses some battery; where to change the choice (the 'Mesh Bluetooth' switch in Settings) and where to turn the antenna off (the mesh panel of a chat).") }
+    private static var acceptLabel: String { String(localized: "mesh_consent.accept", defaultValue: "Attiva", comment: "Consent screen for the Bluetooth mesh: button that turns the mesh on, including relaying encrypted messages of other app users.") }
+    private static var declineLabel: String { String(localized: "mesh_consent.decline", defaultValue: "Solo i miei messaggi", comment: "Consent screen for the Bluetooth mesh: button that keeps relaying off. The phone still finds nearby contacts and exchanges the user's own messages with them (direct mode).") }
 }
 
 // MARK: - Who goes first: the call

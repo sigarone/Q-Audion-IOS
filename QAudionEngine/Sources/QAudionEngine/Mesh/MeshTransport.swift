@@ -29,16 +29,27 @@ public enum MeshRadioState: Equatable {
     case error(String)
 }
 
-/// Which radio role(s) `MeshTransport.start(schedule:mode:)` activates.
+/// Which radio role(s) `MeshTransport.start(schedule:mode:)` activates
+/// (docs/mesh/MESH_LINK_SPEC.md section 2).
 ///
-/// `.visibleOnly` is for a user who wants to be reachable — advertise +
-/// accept incoming GATT connections — without paying the scan/connect-out
-/// battery cost or volunteering as a flood-relay hop for other people's
-/// packets. `.fullMesh` is the original behaviour: both roles, plus
-/// relaying. Mirrors the Android sibling's `MeshAntennaMode` one-for-one.
+/// - `.fullMesh`: advertise + GATT server, scan + connect out, and relay other
+///   people's packets. Needs the user's consent to relay.
+/// - `.direct`: advertise + GATT server, scan + connect out, never relay. The
+///   mode of a user who has not consented to relaying: the phone still reaches
+///   the contacts around it and exchanges its own messages with them.
+/// - `.visibleOnly`: advertise + GATT server only. Lowest power, never opens a
+///   link by itself, so two phones in this mode never connect. An explicit
+///   choice, not a default.
 public enum MeshAntennaMode: Equatable {
     case visibleOnly
+    case direct
     case fullMesh
+
+    /// Scans for peers and opens links to them.
+    public var connectsOut: Bool { self != .visibleOnly }
+
+    /// Forwards packets that are not for this device.
+    public var relays: Bool { self == .fullMesh }
 }
 
 public struct MeshPeerInfo: Equatable, Hashable {
@@ -71,6 +82,20 @@ public struct MeshInboundPacket: Equatable {
         self.packet = packet
         self.fromNodeId = fromNodeId
         self.rssi = rssi
+    }
+}
+
+/// What a send did, with the number of links involved (section 10.1): `okLinks`
+/// is the number of links on which EVERY frame of the packet was accepted.
+public struct MeshSendReport: Equatable {
+    public let result: MeshSendResult
+    public let links: Int
+    public let okLinks: Int
+
+    public init(result: MeshSendResult, links: Int, okLinks: Int) {
+        self.result = result
+        self.links = links
+        self.okLinks = okLinks
     }
 }
 
@@ -113,11 +138,13 @@ public protocol MeshTransport: AnyObject {
     /// profile than the one currently active.
     func updateSchedule(_ schedule: MeshRadioSchedule.Profile)
 
-    /// Best-effort single-packet send.
+    /// Best-effort single-packet send. The completion reports what actually
+    /// happened on the links (`MeshSendReport`), once every frame of the packet
+    /// has a result.
     ///
     /// - Parameter preferredNextHop: a direct-connect hint from a caller
     ///   that already resolved one via `MeshTopology.nextHop(for:)`.
     ///   Implementations SHOULD prefer a direct GATT write to that peer over
     ///   an advertise-based flood fan-out.
-    func send(_ packet: MeshPacket, preferredNextHop: MeshNodeId?, completion: @escaping (MeshSendResult) -> Void)
+    func send(_ packet: MeshPacket, preferredNextHop: MeshNodeId?, completion: @escaping (MeshSendReport) -> Void)
 }

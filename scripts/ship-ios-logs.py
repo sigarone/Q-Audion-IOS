@@ -1131,6 +1131,87 @@ def _is_pair_format_body(tag, norm_body):
     return bool(_RE_PAIR_SCAN_FULL.match(norm_body))
 
 
+# ---------------------------------------------------------------------------
+# CLOSED-GRAMMAR LINES (2026-10-21): the Bluetooth mesh diagnostic events.
+#
+# They are written by one formatter (QAudionEngine/.../Mesh/MeshLog.swift), which accepts only closed tokens, numbers
+# and short hex prefixes as values, so the line carries no identifier, no name and no byte of content by construction.
+# A mesh line is accepted by the shipper only when the WHOLE body
+# matches the grammar below (an alternative per event, every value a closed token or a bounded number / hex prefix) and
+# its tag is the right one; it then ships verbatim. Anything else on those tags goes through the ordinary gates exactly as
+# before, so the grammar widens nothing for any other line. The generic vocabulary / structure gates cannot read these
+# lines (the link handles c1 / p2, three-part tokens like too_many_frames, one-letter keys like p= and l=), which is why
+# they were being summarised or dropped. Pinned by test_ship_ios_mesh_vocab.py, which reads the event names and the
+# tokens from the Swift sources.
+#
+# MESH -- docs/mesh/MESH_LINK_SPEC.md section 13, tag "mesh" (the Android client writes the same events). Before this,
+# the tag "mesh" was not in TAG_SCOPE_PREFIXES, so every mesh line the app wrote was dropped at the tag gate. The only
+# identifiers on a line are a 6-hex node hash (nh), an 8-hex payload hash (ph) and a per-process link handle (c1, p2):
+#   identity ok=1 nh=<6 hex> src=key | identity ok=0 src=locked|missing
+#   radio state=<off|starting|on|error> mode=<full|direct|visible> reason=<token>
+#   link.up link=<handle> role=<c|p> n=<n>            link.ready link=.. mtu=0 l=<n> sub=<0|1>
+#   link.down link=.. reason=<token> heldMs=<n>        link.refused reason=<cap|blocked> role=<c|p>
+#   ann.tx link=.. nbrs=<n> bytes=<n> ok=<0|1>         ann.rx link=.. nh=<6 hex> nbrs=<n> bound=<0|1>
+#   tx ph=<8 hex> type=<n> bytes=<n> route=<direct|flood> links=<n> okLinks=<n> frames=<n> l=<n> result=<token> reason=<token> ms=<n>
+#   tx.frame.fail link=.. ph=<8 hex> idx=<n> total=<n> reason=<token>
+#   rx link=.. ph=<8 hex> type=<n> bytes=<n> frames=<n> forUs=<0|1> relay=<0|1>
+#   rx.drop link=.. reason=<token> streak=<n>          guard.block link=.. streak=<n> ms=<n>
+#   relay ph=<8 hex> ttl=<n> p=<n> fwd=<n> okLinks=<n> [reason=<rate|dup|mode|ttl>]
+#   app.tx ph=<8 hex> kind=<msg|rcpt> state=<sent|queued|failed> attempt=<n>
+#   app.rx ph=<8 hex> kind=<msg|rcpt> result=<token>   outbox pending=<n> retried=<n> gaveUp=<n>
+# ---------------------------------------------------------------------------
+_MESH_TAG_PREFIXES = ("mesh",)
+
+_MESH_LINK = r"link=[cp]\d{1,6}"
+_MESH_PH = r"ph=[0-9a-f]{8}"
+_MESH_FRAME_REASONS = r"(?:too_big|rejected|timeout|not_ready|link_lost|too_many_frames)"
+_MESH_TX_REASONS = r"(?:none|no_links|write_failed|too_big|rejected|timeout|not_ready|link_lost|too_many_frames)"
+_MESH_DROP_REASONS = (
+    r"(?:short_frame|bad_header|total_mismatch|set_too_large|decode|ann_decrypt|ann_parse|set_expired|set_evicted|blocked)"
+)
+_MESH_RADIO_REASONS = (
+    r"(?:start|stop|powered_on|background|foreground|advertising|advertise_failed|bluetooth_unavailable"
+    r"|gatt_add_failed|no_identity)"
+)
+_MESH_APP_RESULTS = (
+    r"(?:stored|dup|unknown_sender|refresh_hit|undecryptable|bad_envelope|readdressed|service|blocked|applied)"
+)
+
+_RE_MESH_FULL = re.compile(
+    r"\A(?:"
+    r"identity ok=1 nh=[0-9a-f]{6} src=key"
+    r"|identity ok=0 src=(?:locked|missing)"
+    r"|radio state=(?:off|starting|on|error) mode=(?:full|direct|visible) reason=" + _MESH_RADIO_REASONS +
+    r"|link\.up " + _MESH_LINK + r" role=[cp] n=\d{1,3}"
+    r"|link\.ready " + _MESH_LINK + r" mtu=0 l=\d{1,5} sub=[01]"
+    r"|link\.down " + _MESH_LINK + r" reason=(?:remote|timeout|evicted|blocked|stop) heldMs=\d{1,9}"
+    r"|link\.refused reason=(?:cap|blocked) role=[cp]"
+    r"|ann\.tx " + _MESH_LINK + r" nbrs=\d{1,2} bytes=\d{1,5} ok=[01]"
+    r"|ann\.rx " + _MESH_LINK + r" nh=[0-9a-f]{6} nbrs=\d{1,2} bound=[01]"
+    r"|tx " + _MESH_PH + r" type=\d{1,3} bytes=\d{1,5} route=(?:direct|flood) links=\d{1,2} okLinks=\d{1,2}"
+    r" frames=\d{1,3} l=\d{1,5} result=(?:sent|queued|failed) reason=" + _MESH_TX_REASONS + r" ms=\d{1,7}"
+    r"|tx\.frame\.fail " + _MESH_LINK + " " + _MESH_PH + r" idx=\d{1,3} total=\d{1,3} reason=" + _MESH_FRAME_REASONS +
+    r"|rx " + _MESH_LINK + " " + _MESH_PH + r" type=\d{1,3} bytes=\d{1,5} frames=\d{1,3} forUs=[01] relay=[01]"
+    r"|rx\.drop " + _MESH_LINK + r" reason=" + _MESH_DROP_REASONS + r" streak=\d{1,2}"
+    r"|guard\.block " + _MESH_LINK + r" streak=\d{1,2} ms=\d{1,6}"
+    r"|relay " + _MESH_PH + r" ttl=\d{1,3} p=\d{1,4} fwd=\d{1,2} okLinks=\d{1,2}(?: reason=(?:rate|dup|mode|ttl))?"
+    r"|app\.tx " + _MESH_PH + r" kind=(?:msg|rcpt) state=(?:sent|queued|failed) attempt=\d{1,6}"
+    r"|app\.rx " + _MESH_PH + r" kind=(?:msg|rcpt) result=" + _MESH_APP_RESULTS +
+    r"|outbox pending=\d{1,4} retried=\d{1,4} gaveUp=\d{1,4}"
+    r")\Z"
+)
+
+def _is_closed_grammar_line(tag, norm_body):
+    """True if `tag` is the mesh scope and `norm_body` is, in full, one of the mesh diagnostic events. Full-line
+    validation: a body that merely starts with an event name and carries anything else (a full node id, an address,
+    free text) is not one."""
+    if not tag:
+        return False
+    if str(tag).lower().startswith(_MESH_TAG_PREFIXES):
+        return bool(_RE_MESH_FULL.match(norm_body))
+    return False
+
+
 def _set_active_extra_vocab(vocab):
     """Swap the extra vocabulary _word_known() consults. _word_ok / _ident_ok /
     _kv_classify all memoise their verdicts by token text alone
@@ -2139,6 +2220,12 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
         return False, ""
 
     norm = _nfkc(orig_body)
+
+    # 0 -- the closed-grammar lines (mesh events): nothing but closed tokens, numbers and short hex prefixes can be in
+    # a body that matches the whole grammar (see the block above), so it ships verbatim.
+    if tag_is_safe and _is_closed_grammar_line(tag, norm):
+        return True, norm
+
     # Format characters (zero-width space / joiner, soft hyphen, BOM, ...) are
     # dropped from the matching copy: a needle split by one of them
     # ("ms<ZWSP>g=..") must not slip past the DROP-list. `norm` (what gets
@@ -2256,6 +2343,8 @@ TAG_SCOPE_PREFIXES = [
     ("videodiag", "videodiag"),
     # 2026-10-20: the in-person pairing scanner's "scan outcome=..." lines (see PAIR_FORMAT_VOCAB).
     ("pair", "pair"),
+    # 2026-10-21: the Bluetooth mesh diagnostic events (see the closed-grammar block).
+    ("mesh", "mesh"),
 ]
 
 

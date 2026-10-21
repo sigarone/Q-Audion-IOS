@@ -78,15 +78,6 @@ public struct MeshNodeId: Equatable, Hashable, Sendable, Codable, CustomStringCo
         return out
     }
 
-    public static func random() -> MeshNodeId {
-        var bytes = Data(count: sizeBytes)
-        _ = bytes.withUnsafeMutableBytes { ptr -> Int32 in
-            guard let base = ptr.baseAddress else { return errSecParam }
-            return SecRandomCopyBytes(kSecRandomDefault, sizeBytes, base)
-        }
-        return fromBytes(bytes) ?? broadcast
-    }
-
     /// Derive a stable 8-byte node id from a peer's long-term identity
     /// public key by truncating SHA-256(key) to the first 8 bytes.
     /// Observer-independent — the same key always yields the same node id

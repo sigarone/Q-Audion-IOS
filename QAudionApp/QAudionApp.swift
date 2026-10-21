@@ -12,6 +12,18 @@ import QAudionEngine
 /// static AppState reference (same pattern as the BGTask bridge). When the flag
 /// is OFF, AppState.handleApnsDeviceToken ignores the token → no behavior change.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// The BLE mesh must be up as soon as the process is: when the system relaunches the app for a Bluetooth event
+    /// (`bluetooth-central` / `bluetooth-peripheral` state restoration) there is no scene, so the root view's
+    /// `onAppear` never runs. Boot the mesh identity and, if allowed, the radio here, which recreates the managers
+    /// with their restore identifiers.
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        MainActor.assumeIsolated {
+            MeshBoot.bootIdentityAndRadio()
+        }
+        return true
+    }
+
     func application(_ application: UIApplication,
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02hhx", $0) }.joined()
@@ -47,7 +59,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct QAudionApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var appState = AppState()
+    @StateObject private var appState = AppState.shared
     /// W441: App lock service. isLocked drives the gate overlay in body.
     @StateObject private var lockService = AppLockService()
     @Environment(\.scenePhase) private var scenePhase

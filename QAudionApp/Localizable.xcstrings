@@ -42199,91 +42199,91 @@
     },
     "mesh_consent.body_2": {
       "extractionState": "manual",
-      "comment": "Consent screen for the Bluetooth mesh, second paragraph: this phone relays encrypted messages of other app users nearby and cannot read them, and while the mesh is on it announces a fixed identifier that other Q-Audion phones nearby can see. This is the thing the user consents to.",
+      "comment": "Consent screen for the Bluetooth mesh, second paragraph: what each answer lets this phone do. 'Attiva' finds nearby contacts, exchanges the user's own messages and relays encrypted messages of other app users (it cannot read them); 'Solo i miei messaggi' finds nearby contacts and exchanges only the user's own messages and relays nothing. In both cases the phone announces a fixed identifier that other Q-Audion phones nearby can see. This is the thing the user consents to.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Se attivi la mesh, questo telefono inoltra anche i messaggi cifrati di altri utenti dell'app che si trovano vicino a te. Non può leggerli: restano cifrati da chi li scrive a chi li riceve. Finché la mesh è accesa, il telefono annuncia anche un identificativo fisso che gli altri telefoni Q-Audion vicini possono vedere."
+            "value": "Scegli cosa può fare questo telefono. Con «Attiva» trova i contatti vicini, scambia i tuoi messaggi con loro e inoltra anche i messaggi cifrati di altri utenti dell'app che si trovano vicino a te: non può leggerli, restano cifrati da chi li scrive a chi li riceve. Con «Solo i miei messaggi» trova i contatti vicini e scambia solo i tuoi messaggi con loro, senza inoltrare quelli degli altri. In entrambi i casi, finché la mesh è accesa il telefono annuncia un identificativo fisso che gli altri telefoni Q-Audion vicini possono vedere."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "If you turn the mesh on, this phone also relays encrypted messages of other app users who are near you. It cannot read them: they stay encrypted from the sender to the recipient. While the mesh is on, the phone also announces a fixed identifier that other Q-Audion phones nearby can see."
+            "value": "Choose what this phone may do. With “Turn on” it finds nearby contacts, exchanges your own messages with them, and also relays encrypted messages of other app users who are near you: it cannot read them, they stay encrypted from the sender to the recipient. With “Only my messages” it finds nearby contacts and exchanges only your own messages with them, without relaying anyone else's. In both cases, while the mesh is on, the phone announces a fixed identifier that other Q-Audion phones nearby can see."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wenn Sie das Mesh aktivieren, leitet dieses Telefon auch verschlüsselte Nachrichten anderer App-Nutzer in Ihrer Nähe weiter. Es kann sie nicht lesen: Sie bleiben vom Absender bis zum Empfänger verschlüsselt. Solange das Mesh an ist, sendet das Telefon außerdem eine feste Kennung, die andere Q-Audion-Telefone in der Nähe sehen können."
+            "value": "Legen Sie fest, was dieses Telefon tun darf. Mit „Aktivieren“ findet es Kontakte in der Nähe, tauscht Ihre eigenen Nachrichten mit ihnen aus und leitet außerdem verschlüsselte Nachrichten anderer App-Nutzer in Ihrer Nähe weiter: Es kann sie nicht lesen, sie bleiben vom Absender bis zum Empfänger verschlüsselt. Mit „Nur meine Nachrichten“ findet es Kontakte in der Nähe und tauscht nur Ihre eigenen Nachrichten mit ihnen aus, ohne die anderer weiterzuleiten. In beiden Fällen sendet das Telefon, solange das Mesh an ist, eine feste Kennung, die andere Q-Audion-Telefone in der Nähe sehen können."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Si activas la mesh, este teléfono también retransmite mensajes cifrados de otros usuarios de la app que estén cerca de ti. No puede leerlos: siguen cifrados de quien los escribe a quien los recibe. Mientras la mesh está activada, el teléfono también anuncia un identificador fijo que otros teléfonos Q-Audion cercanos pueden ver."
+            "value": "Elige qué puede hacer este teléfono. Con «Activar» encuentra los contactos cercanos, intercambia tus mensajes con ellos y además retransmite mensajes cifrados de otros usuarios de la app que estén cerca de ti: no puede leerlos, siguen cifrados de quien los escribe a quien los recibe. Con «Solo mis mensajes» encuentra los contactos cercanos e intercambia solo tus mensajes con ellos, sin retransmitir los de otras personas. En ambos casos, mientras la mesh esté activada, el teléfono anuncia un identificador fijo que otros teléfonos Q-Audion cercanos pueden ver."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Si tu actives le mesh, ce téléphone relaie aussi les messages chiffrés d'autres utilisateurs de l'app qui se trouvent près de toi. Il ne peut pas les lire : ils restent chiffrés de l'expéditeur au destinataire. Tant que le mesh est activé, le téléphone annonce aussi un identifiant fixe que les autres téléphones Q-Audion proches peuvent voir."
+            "value": "Choisis ce que ce téléphone peut faire. Avec « Activer », il trouve les contacts proches, échange tes messages avec eux et relaie aussi les messages chiffrés d'autres utilisateurs de l'app qui se trouvent près de toi : il ne peut pas les lire, ils restent chiffrés de l'expéditeur au destinataire. Avec « Seulement mes messages », il trouve les contacts proches et n'échange que tes propres messages avec eux, sans relayer ceux des autres. Dans les deux cas, tant que le mesh est activé, le téléphone annonce un identifiant fixe que les autres téléphones Q-Audion proches peuvent voir."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Se você ativar a mesh, este telefone também retransmite mensagens criptografadas de outros usuários do app que estejam perto de você. Ele não consegue lê-las: elas continuam criptografadas de quem envia até quem recebe. Enquanto a mesh estiver ligada, o telefone também anuncia um identificador fixo que outros telefones Q-Audion próximos podem ver."
+            "value": "Escolha o que este telefone pode fazer. Com “Ativar” ele encontra os contatos próximos, troca suas mensagens com eles e também retransmite mensagens criptografadas de outros usuários do app que estejam perto de você: ele não consegue lê-las, elas continuam criptografadas de quem envia até quem recebe. Com “Só minhas mensagens” ele encontra os contatos próximos e troca apenas as suas mensagens com eles, sem retransmitir as de outras pessoas. Nos dois casos, enquanto a mesh estiver ligada, o telefone anuncia um identificador fixo que outros telefones Q-Audion próximos podem ver."
           }
         }
       }
     },
     "mesh_consent.body_3": {
       "extractionState": "manual",
-      "comment": "Consent screen for the Bluetooth mesh, third paragraph: the cost, and where to turn it off. 'Mesh Bluetooth' is the title of the switch in Settings.",
+      "comment": "Consent screen for the Bluetooth mesh, third paragraph: Bluetooth stays active while the app is in the background and uses some battery; where to change the choice (the 'Mesh Bluetooth' switch in Settings) and where to turn the antenna off (the mesh panel of a chat).",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'inoltro usa il Bluetooth e un po' di batteria. Puoi spegnerlo quando vuoi con l'interruttore Mesh Bluetooth nelle Impostazioni."
+            "value": "Il Bluetooth resta attivo anche quando l'app è in secondo piano e usa un po' di batteria. Puoi cambiare scelta con l'interruttore Mesh Bluetooth nelle Impostazioni e spegnere l'antenna quando vuoi dal pannello mesh di una chat."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Relaying uses Bluetooth and some battery. You can turn it off at any time with the Bluetooth mesh switch in Settings."
+            "value": "Bluetooth stays active while the app is in the background and uses some battery. You can change your choice with the Bluetooth mesh switch in Settings and turn the antenna off at any time from the mesh panel of a chat."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Das Weiterleiten nutzt Bluetooth und etwas Akku. Sie können es jederzeit mit dem Schalter Bluetooth-Mesh in den Einstellungen ausschalten."
+            "value": "Bluetooth bleibt auch aktiv, wenn die App im Hintergrund läuft, und verbraucht etwas Akku. Sie können Ihre Auswahl mit dem Schalter Bluetooth-Mesh in den Einstellungen ändern und die Antenne jederzeit im Mesh-Bereich eines Chats ausschalten."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "La retransmisión usa Bluetooth y algo de batería. Puedes desactivarla cuando quieras con el interruptor Mesh Bluetooth en Ajustes."
+            "value": "El Bluetooth sigue activo también cuando la app está en segundo plano y usa algo de batería. Puedes cambiar tu elección con el interruptor Mesh Bluetooth en Ajustes y apagar la antena cuando quieras desde el panel mesh de un chat."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le relais utilise le Bluetooth et un peu de batterie. Tu peux le désactiver à tout moment avec l'interrupteur Mesh Bluetooth dans Réglages."
+            "value": "Le Bluetooth reste actif même quand l'app est en arrière-plan et utilise un peu de batterie. Tu peux changer ton choix avec l'interrupteur Mesh Bluetooth dans Réglages et éteindre l'antenne à tout moment depuis le panneau mesh d'une discussion."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A retransmissão usa Bluetooth e um pouco de bateria. Você pode desativá-la quando quiser com a chave Mesh Bluetooth em Ajustes."
+            "value": "O Bluetooth continua ativo mesmo quando o app está em segundo plano e usa um pouco de bateria. Você pode mudar sua escolha pela chave Mesh Bluetooth em Ajustes e desligar a antena quando quiser pelo painel mesh de uma conversa."
           }
         }
       }
     },
     "mesh_consent.accept": {
       "extractionState": "manual",
-      "comment": "Consent screen for the Bluetooth mesh: button that turns the mesh on.",
+      "comment": "Consent screen for the Bluetooth mesh: button that turns the mesh on, including relaying encrypted messages of other app users.",
       "localizations": {
         "it": {
           "stringUnit": {
@@ -42325,42 +42325,42 @@
     },
     "mesh_consent.decline": {
       "extractionState": "manual",
-      "comment": "Consent screen for the Bluetooth mesh: button that leaves the mesh off.",
+      "comment": "Consent screen for the Bluetooth mesh: button that keeps relaying off. The phone still finds nearby contacts and exchanges the user's own messages with them (direct mode).",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Non ora"
+            "value": "Solo i miei messaggi"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not now"
+            "value": "Only my messages"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nicht jetzt"
+            "value": "Nur meine Nachrichten"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ahora no"
+            "value": "Solo mis mensajes"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pas maintenant"
+            "value": "Seulement mes messages"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Agora não"
+            "value": "Só minhas mensagens"
           }
         }
       }
@@ -42451,7 +42451,7 @@
     },
     "mesh_settings.subtitle": {
       "extractionState": "manual",
-      "comment": "Subtitle of the Bluetooth mesh switch in Settings: this phone relays encrypted messages of nearby app users and cannot read them.",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings: the switch is the consent to relay. On, this phone relays encrypted messages of nearby app users and cannot read them.",
       "localizations": {
         "it": {
           "stringUnit": {
@@ -42493,126 +42493,126 @@
     },
     "mesh_settings.status_radio_off": {
       "extractionState": "manual",
-      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the consent is given but the radio is off: it is turned on from the mesh panel of a chat.",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the consent screen was answered but the antenna is off: it is turned on from the mesh panel of a chat.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consenso dato. La mesh è spenta: la accendi dal pannello mesh di una chat."
+            "value": "La mesh è spenta: la accendi dal pannello mesh di una chat."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consent given. The mesh is off: you turn it on from the mesh panel of a chat."
+            "value": "The mesh is off: you turn it on from the mesh panel of a chat."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Einwilligung erteilt. Das Mesh ist aus: Sie schalten es im Mesh-Bereich eines Chats ein."
+            "value": "Das Mesh ist aus: Sie schalten es im Mesh-Bereich eines Chats ein."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentimiento dado. La mesh está apagada: la enciendes desde el panel mesh de un chat."
+            "value": "La mesh está apagada: la enciendes desde el panel mesh de un chat."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentement donné. Le mesh est éteint : tu l'actives depuis le panneau mesh d'une discussion."
+            "value": "Le mesh est éteint : tu l'actives depuis le panneau mesh d'une discussion."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentimento dado. A mesh está desligada: você a liga pelo painel mesh de uma conversa."
+            "value": "A mesh está desligada: você a liga pelo painel mesh de uma conversa."
           }
         }
       }
     },
     "mesh_settings.status_visible_only": {
       "extractionState": "manual",
-      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the consent is given and the radio is on in visible-only mode: nearby phones can see this one but it relays nothing.",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the antenna is on in visible-only mode: nearby phones can see this one, it opens no connections and relays nothing.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consenso dato. Il telefono è visibile ai vicini, ma non inoltra messaggi."
+            "value": "Il telefono è visibile ai vicini, ma non apre collegamenti e non inoltra messaggi."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consent given. This phone is visible to people nearby, but it does not relay messages."
+            "value": "This phone is visible to people nearby, but it opens no connections and relays no messages."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Einwilligung erteilt. Das Telefon ist für Personen in der Nähe sichtbar, leitet aber keine Nachrichten weiter."
+            "value": "Das Telefon ist für Personen in der Nähe sichtbar, stellt aber selbst keine Verbindungen her und leitet keine Nachrichten weiter."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentimiento dado. El teléfono es visible para quienes están cerca, pero no retransmite mensajes."
+            "value": "El teléfono es visible para quienes están cerca, pero no abre conexiones ni retransmite mensajes."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentement donné. Le téléphone est visible des personnes proches, mais il ne relaie aucun message."
+            "value": "Le téléphone est visible des personnes proches, mais il n'ouvre aucune connexion et ne relaie aucun message."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentimento dado. O telefone fica visível para quem está perto, mas não retransmite mensagens."
+            "value": "O telefone fica visível para quem está perto, mas não abre conexões nem retransmite mensagens."
           }
         }
       }
     },
     "mesh_settings.status_on": {
       "extractionState": "manual",
-      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the consent is given and the radio is on in full mesh mode: this phone relays encrypted messages of nearby app users.",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the user allowed relaying and the antenna is on in full mesh mode: this phone relays encrypted messages of nearby app users.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consenso dato. La mesh è accesa: questo telefono inoltra i messaggi cifrati di chi ti sta vicino."
+            "value": "La mesh è accesa: questo telefono inoltra i messaggi cifrati di chi ti sta vicino."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consent given. The mesh is on: this phone relays encrypted messages of people near you."
+            "value": "The mesh is on: this phone relays encrypted messages of people near you."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Einwilligung erteilt. Das Mesh ist an: Dieses Telefon leitet verschlüsselte Nachrichten von Personen in Ihrer Nähe weiter."
+            "value": "Das Mesh ist an: Dieses Telefon leitet verschlüsselte Nachrichten von Personen in Ihrer Nähe weiter."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentimiento dado. La mesh está encendida: este teléfono retransmite los mensajes cifrados de quienes están cerca."
+            "value": "La mesh está encendida: este teléfono retransmite los mensajes cifrados de quienes están cerca."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentement donné. Le mesh est activé : ce téléphone relaie les messages chiffrés des personnes proches."
+            "value": "Le mesh est activé : ce téléphone relaie les messages chiffrés des personnes proches."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consentimento dado. A mesh está ligada: este telefone retransmite as mensagens criptografadas de quem está perto."
+            "value": "A mesh está ligada: este telefone retransmite as mensagens criptografadas de quem está perto."
           }
         }
       }
@@ -50148,6 +50148,48 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pré-visualizar"
+          }
+        }
+      }
+    },
+    "mesh_settings.status_direct": {
+      "extractionState": "manual",
+      "comment": "Subtitle of the Bluetooth mesh switch in Settings when the user did not allow relaying and the antenna is on in direct mode: this phone finds nearby contacts and exchanges the user's own messages with them, relaying nothing.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il telefono trova i contatti vicini e scambia i tuoi messaggi con loro, senza inoltrare quelli degli altri."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This phone finds nearby contacts and exchanges your own messages with them, without relaying anyone else's."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Telefon findet Kontakte in der Nähe und tauscht Ihre eigenen Nachrichten mit ihnen aus, ohne die anderer weiterzuleiten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El teléfono encuentra los contactos cercanos e intercambia tus mensajes con ellos, sin retransmitir los de otras personas."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le téléphone trouve les contacts proches et échange tes messages avec eux, sans relayer ceux des autres."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O telefone encontra os contatos próximos e troca suas mensagens com eles, sem retransmitir as de outras pessoas."
           }
         }
       }
