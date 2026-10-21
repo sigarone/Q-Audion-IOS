@@ -1,20 +1,18 @@
 import Foundation
+import QAudionEngine
 
-/// The answer to the one-time Bluetooth mesh consent screen.
+/// The answer to the one-time Bluetooth mesh consent screen, about one thing: may this phone relay the encrypted
+/// messages of OTHER app users who are nearby (it cannot read them)?
 ///
-/// With the mesh on, this phone relays the encrypted messages of OTHER app
-/// users who are nearby (it cannot read them). Using the user's device for the
-/// benefit of other people needs the user's explicit consent, so the radio never
-/// starts on its own: it starts only after the user taps "Attiva" on the consent
-/// screen (or turns the mesh on in Settings, which opens that same screen).
-enum MeshConsentState: String, Equatable {
-    /// The screen has never been answered. The mesh stays off.
-    case undecided
-    /// "Attiva": this phone may relay other users' encrypted messages.
-    case accepted
-    /// "Non ora", or the Settings switch turned off. The mesh stays off.
-    case declined
-}
+/// Using the user's device for the benefit of other people needs the user's explicit consent, so the radio never starts
+/// on its own and never relays by default:
+///   - "Attiva" (`accepted`): this phone finds nearby contacts, exchanges its own messages with them and relays other
+///     people's encrypted messages (full mesh);
+///   - "Solo i miei messaggi" (`declined`): this phone still finds nearby contacts and exchanges its own messages with
+///     them (direct mode) but never forwards anyone else's;
+///   - not answered yet (`undecided`): nothing starts and no Bluetooth permission is asked for.
+/// The rules for which mode each answer allows live in the engine (`MeshModePolicy`).
+typealias MeshConsentState = MeshRelayConsent
 
 /// Where the answer is kept. The `UserDefaults` is a parameter so the rules can
 /// be tested against a throwaway suite. Anything stored that is not one of the
@@ -41,15 +39,20 @@ struct MeshConsentStore {
     }
 }
 
-/// The two decisions the app takes from the feature gate and the consent. Plain
-/// values in, plain answer out, so the rules are tested without a radio.
+/// The two decisions the app takes from the feature gate and the consent. Plain values in, plain answer out, so the rules
+/// are tested without a radio.
 enum MeshStartGate {
 
-    /// The radio may be brought up only when the feature is available (compiled
-    /// on and not switched off by the remote kill switch) AND the user accepted
-    /// the consent screen. "Undecided" and "declined" both keep it off.
+    /// The radio may be brought up in SOME mode when the feature is available (compiled on and not switched off by the
+    /// remote kill switch) AND the consent screen was answered. "Undecided" keeps it off; "declined" allows the
+    /// non-relaying modes only (`mayStart(featureEnabled:consent:mode:)`).
     static func mayStart(featureEnabled: Bool, consent: MeshConsentState) -> Bool {
-        featureEnabled && consent == .accepted
+        featureEnabled && consent != .undecided
+    }
+
+    /// The radio may be brought up in `mode`: full mesh needs the consent to relay.
+    static func mayStart(featureEnabled: Bool, consent: MeshConsentState, mode: MeshAntennaMode) -> Bool {
+        MeshModePolicy.mayStart(featureEnabled: featureEnabled, consent: consent, mode: mode)
     }
 
     /// The consent screen is offered on its own only while the feature is available and the user has not answered yet. Whether
@@ -60,23 +63,31 @@ enum MeshStartGate {
     }
 }
 
-/// What the Settings switch says about the radio, under the switch itself. The switch only ever shows the consent; this
-/// says what the antenna is doing because of it, so a user who gave the consent and then turned the antenna off in the mesh
-/// panel is not told the phone is relaying.
+/// What the Settings switch says about the radio, under the switch itself. The switch only ever shows the consent to relay;
+/// this says what the antenna is doing because of it, so a user who gave the consent and then turned the antenna off in the
+/// mesh panel is not told the phone is relaying, and a user who declined relaying is told the phone still talks to nearby
+/// contacts.
 enum MeshSettingsStatus: Equatable {
-    /// No consent (never answered, or declined): the switch is off and nothing is relayed.
+    /// The consent screen was never answered: nothing is on.
     case notAllowed
-    /// Consent given, antenna off.
+    /// The antenna is off.
     case radioOff
-    /// Consent given, antenna on in "Visibile": nearby phones can see this one, nothing is relayed.
+    /// The antenna is on in "Visibile": nearby phones can see this one, it opens no link and relays nothing.
     case visibleOnly
-    /// Consent given, antenna on in "Mesh completa" (or coming up): this phone relays.
+    /// The antenna is on in "Diretta": it finds nearby contacts and exchanges its own messages, relaying nothing.
+    case direct
+    /// The antenna is on in "Mesh completa" (or coming up): this phone relays.
     case on
 
-    static func resolve(consent: MeshConsentState, antennaOn: Bool, visibleOnly: Bool) -> MeshSettingsStatus {
-        guard consent == .accepted else { return .notAllowed }
+    static func resolve(consent: MeshConsentState, antennaOn: Bool, mode: MeshAntennaMode?) -> MeshSettingsStatus {
+        guard consent != .undecided else { return .notAllowed }
         guard antennaOn else { return .radioOff }
-        return visibleOnly ? .visibleOnly : .on
+        switch mode {
+        case .visibleOnly: return .visibleOnly
+        case .direct: return .direct
+        case .fullMesh: return consent == .accepted ? .on : .direct
+        case nil: return consent == .accepted ? .on : .direct
+        }
     }
 }
 
@@ -192,6 +203,7 @@ final class MeshConsent: ObservableObject {
         state = .accepted
     }
 
+    /// "Solo i miei messaggi", or the Settings switch turned off: relaying is not allowed. Direct mode stays available.
     func decline() {
         store.record(.declined)
         state = .declined

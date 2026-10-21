@@ -315,6 +315,9 @@ let package = Package(
                 // independent hashlib/hmac reference implementation of
                 // docs/security/PROXIMITY_PAIRING_QR_BLE_SPEC.md. Android reuses it.
                 .copy("Proximity/Resources/proximity-pairing-kat.json"),
+                // BLE mesh link layer (docs/mesh/MESH_LINK_SPEC.md): byte-for-byte copy of the vectors the Android
+                // tests run too (docs/mesh/gen_mesh_vectors.py); MeshLinkVectorsTests pins its SHA-256.
+                .copy("Mesh/Resources/mesh-vectors.json"),
                 .copy("Resources/kat/kms-psk-v2-kat.json"),
                 .copy("Resources/kat/kms-pop-v1-kat.json"),
                 // kms-rotation-v2 Phase-1 frozen KATs (byte-copies of

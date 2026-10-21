@@ -31,12 +31,17 @@ struct MeshTargetSelection: Equatable {
 /// (`ChatContainer`'s send path, `AppState`'s receive path) call in through
 /// `sendData`/`onInboundData` with only primitives crossing the boundary.
 ///
+/// ## Startup order (docs/mesh/MESH_LINK_SPEC.md section 1.2)
+/// The identity comes first. `configureLocalIdentity` derives the node id from the
+/// device's long-term key, and only then can a transport exist (`MeshTransportSlot`):
+/// there is no random fallback id, and the radio refuses to start until the identity
+/// is known. If the identity changes while the process runs, the old transport is
+/// stopped and discarded and, if the radio was on, a new one is started with the new
+/// node id. `localNodeIdHex` is the one source of the id for every component.
+///
 /// Mirrors the Android sibling's `MeshService` (antenna + peer list +
-/// per-conversation target) but folds in the packet construction that
-/// Android split across `MeshSendCoordinator`/`MeshReceiveCoordinator` too
-/// — there is no outbox/store-and-forward tier on iOS yet (see
-/// `docs/ble-mesh/` for that scoping note), so one runtime object covers
-/// what three Android classes do.
+/// per-conversation target); the outbox with its retry until a delivery receipt is
+/// `MeshOutboxDrain` + `MeshOutboxStore`.
 @MainActor
 final class MeshRuntime: ObservableObject {
 
@@ -53,39 +58,42 @@ final class MeshRuntime: ObservableObject {
         }
     }
 
-    /// Which of the two radio roles is active — nil when the antenna is
-    /// off. Derived from `radioState` (itself computed live off
-    /// `CBCentralManager.isScanning`/`CBPeripheralManager.isAdvertising` by
-    /// `BleMeshTransport.currentRadioState()`), so this never drifts out of
-    /// sync with what the radio is actually doing.
+    /// Which radio mode is active — nil when the antenna is off. Derived from
+    /// `radioState` (itself computed live off `CBCentralManager.isScanning` /
+    /// `CBPeripheralManager.isAdvertising`), so it never drifts out of sync with
+    /// what the radio is actually doing; scanning + advertising is full mesh or
+    /// direct, which differ only in relaying, so `requestedMode` tells them apart.
     var antennaMode: MeshAntennaMode? {
         switch radioState {
-        case .scanningAndAdvertising: return .fullMesh
+        case .scanningAndAdvertising: return requestedMode == .direct ? .direct : .fullMesh
         case .advertisingOnly: return .visibleOnly
         default: return nil
         }
     }
 
-    /// The mode last ASKED for, as opposed to [antennaMode], which reports what
-    /// the radio is doing at this instant.
+    /// The mode last ASKED for (after the consent rules), as opposed to
+    /// [antennaMode], which reports what the radio is doing at this instant.
     ///
     /// They differ during every transitional window — powering on, an advert
     /// not yet accepted, a scan between duty cycles — and [setAntenna] needs
     /// the intent, not the instantaneous truth, to decide whether a restart is
-    /// required. Reading the derived value there made mode switches vanish
-    /// silently; see the comment at that call site.
-    private var requestedMode: MeshAntennaMode?
+    /// required.
+    private(set) var requestedMode: MeshAntennaMode?
+
+    /// Whether a phone in the current mode can be reached while the app is in the
+    /// background (see `MeshModePolicy.reachableInBackground`): false only for "Visibile".
+    var reachableInBackground: Bool {
+        guard let mode = requestedMode else { return false }
+        return MeshModePolicy.reachableInBackground(mode: mode)
+    }
 
     /// Fired for every `.data` packet addressed to us, once per inbound
     /// message. `fromNodeHex` is the ORIGINATING sender's node id (not
     /// necessarily the immediate radio hop, if the packet was relayed).
     /// `payload` is the still-opaque `MeshChatMessage` envelope bytes —
     /// this runtime never parses it; that's the receive-side integration's
-    /// job (see `AppState`'s mesh receive hook). `@MainActor`-typed (same
-    /// convention as `LiveLogStreamer.TokenProvider`) so it's always
-    /// invoked already on the main actor — see `meshTransport(_:didReceive:)`
-    /// below — and a caller like `AppState` can assign a plain closure that
-    /// touches `@MainActor` state directly, no extra `Task` hop needed.
+    /// job (see `AppState`'s mesh receive hook). `@MainActor`-typed so it's
+    /// always invoked already on the main actor.
     var onInboundData: (@MainActor (_ fromNodeHex: String, _ payload: Data) -> Void)?
 
     /// Same shape as ``onInboundData`` but for `.receipt` packets — a delivery
@@ -94,22 +102,39 @@ final class MeshRuntime: ObservableObject {
     /// handles messages cannot mistake a receipt for one.
     var onInboundReceipt: (@MainActor (_ fromNodeHex: String, _ payload: Data) -> Void)?
 
-    private(set) var localNodeIdHex: String
-    private var transport: BleMeshTransport?
+    /// This device's node id, derived from its identity key. Nil until
+    /// `configureLocalIdentity` succeeded; callers that need it to seal or check a
+    /// packet do nothing while it is nil.
+    var localNodeIdHex: String? { slot.nodeId?.hex }
+
+    /// True once the identity is known (a transport can be built).
+    var hasIdentity: Bool { slot.nodeId != nil }
+
+    /// The transport of the process, built only once the identity is known.
+    private let slot: MeshTransportSlot<BleMeshTransport>
     /// Rebuilt from every `knownPeers` update (each `MeshPeerInfo` already
     /// carries its own announced-neighbor set) rather than fed from raw
-    /// ANNOUNCE payloads directly — see the file-level doc for why this
-    /// runtime doesn't need its own announce parsing.
+    /// ANNOUNCE payloads directly.
     private let topology = MeshTopology()
 
-    /// The user's one-time answer to the consent screen. The radio never starts
-    /// without it (see `startAllowed`).
+    /// The user's answer to the consent screen. The radio never starts without one
+    /// (see `startAllowed`), and never relays without a yes.
     private let consent: MeshConsent
     private var flagRefreshObserver: NSObjectProtocol?
 
+    private static func makeSlot() -> MeshTransportSlot<BleMeshTransport> {
+        MeshTransportSlot<BleMeshTransport>(
+            factory: { nodeId in BleMeshTransport(localNodeId: nodeId) },
+            retire: { transport in
+                transport.delegate = nil
+                transport.stop()
+            }
+        )
+    }
+
     private init() {
         consent = MeshConsent.shared
-        localNodeIdHex = MeshNodeId.random().hex
+        slot = Self.makeSlot()
         observeFlagRefresh()
     }
 
@@ -117,12 +142,12 @@ final class MeshRuntime: ObservableObject {
     /// never touch `shared` or the user's stored answer. No observer is armed.
     init(forTesting consent: MeshConsent) {
         self.consent = consent
-        localNodeIdHex = MeshNodeId.random().hex
+        slot = Self.makeSlot()
     }
 
-    /// The radio may start only when the feature is available (compiled on and
-    /// not switched off by the remote kill switch) AND the user accepted the
-    /// consent screen. The rule itself lives in `MeshStartGate`.
+    /// The radio may start, in some mode, when the feature is available (compiled on and
+    /// not switched off by the remote kill switch) AND the consent screen was answered.
+    /// Full mesh additionally needs the consent to relay; the rule is `MeshModePolicy`.
     var startAllowed: Bool {
         MeshStartGate.mayStart(featureEnabled: MeshFeature.enabled, consent: consent.state)
     }
@@ -150,7 +175,7 @@ final class MeshRuntime: ObservableObject {
         setAntenna(mode: nil)
     }
 
-    /// "Attiva": records the consent and brings the antenna up in `mode`
+    /// "Attiva": records the consent to relay and brings the antenna up in `mode`
     /// (full mesh unless the caller asks for another). The user just said they
     /// want the mesh, so the stored "antenna off" choice is cleared too.
     func acceptConsentAndStart(mode: MeshAntennaMode = .fullMesh) {
@@ -159,18 +184,59 @@ final class MeshRuntime: ObservableObject {
         setAntenna(mode: mode)
     }
 
-    /// "Non ora", or the Settings switch turned off: records it and switches the
-    /// radio off. The mesh stays off until the user accepts again.
-    func declineConsentAndStop() {
+    /// "Solo i miei messaggi", or the Settings switch turned off: relaying is not
+    /// allowed from now on. The phone does not go silent because of it: a radio that
+    /// is running drops to direct mode (it still finds nearby contacts and exchanges
+    /// the user's own messages, and forwards nothing), and with `startIfOff` a radio
+    /// that is off comes up in direct mode too. A user who turned the antenna off
+    /// ("Spenta") and then switches the relay consent off keeps it off.
+    func declineRelayAndUseDirect(startIfOff: Bool, preferred: MeshAntennaMode? = nil) {
         consent.decline()
-        setAntenna(mode: nil)
+        if let running = requestedMode {
+            // A visible-only antenna stays what it is; full mesh falls back to direct.
+            setAntenna(mode: MeshModePolicy.allowedMode(running, consent: .declined))
+        } else if startIfOff {
+            setAutoStart(true)
+            // The mode the user had tapped before the consent screen came up, if relaying does not stop it.
+            let tapped: MeshAntennaMode? = preferred.flatMap { MeshModePolicy.allowedMode($0, consent: .declined) }
+            setAntenna(mode: tapped ?? MeshModePolicy.defaultMode(consent: .declined))
+        }
     }
 
-    /// Call once identity bootstrap has produced a long-term key (or
-    /// whenever it rotates). Safe to call before the antenna is ever
-    /// turned on — it only affects what node id a FUTURE `start()` uses.
-    func configureLocalIdentity(identityKeyRaw: Data?) {
-        localNodeIdHex = MeshFeature.localNodeId(identityKeyRaw: identityKeyRaw).hex
+    /// Call once identity bootstrap has produced a long-term key (or whenever it
+    /// changes). `identityKeyRaw` is the raw 32-byte Ed25519 public key; anything
+    /// else leaves the runtime without an identity and the radio off. A changed
+    /// identity retires the transport built for the old node id; if the radio was
+    /// on it is brought back up, on a new transport, under the new id.
+    /// - Parameter source: `locked` or `missing`, only for the log line when there is no key.
+    func configureLocalIdentity(identityKeyRaw: Data?, source: String = "missing") {
+        let result = slot.configure(identityKeyRaw: identityKeyRaw)
+        switch result {
+        case .unavailable:
+            MeshLog.emit(.identity, [("ok", "0"), ("src", source)])
+        case .unchanged(let nodeId):
+            MeshLog.emit(.identity, [("ok", "1"), ("nh", MeshLog.nodeHash(nodeId.hex)), ("src", "key")])
+        case .changed(let nodeId, let retired):
+            MeshLog.emit(.identity, [("ok", "1"), ("nh", MeshLog.nodeHash(nodeId.hex)), ("src", "key")])
+            if retired {
+                peers = []
+                if let mode = requestedMode {
+                    requestedMode = nil
+                    setAntenna(mode: mode)
+                }
+            }
+        }
+    }
+
+    /// The account left (logout, remote wipe, account deletion): the radio stops, the identity and the transport built
+    /// for it are dropped, and what the old account had queued is cleared. A new account starts from nothing and
+    /// brings the radio up again once its own identity is known.
+    func accountLeft() {
+        setAntenna(mode: nil)
+        slot.reset()
+        peers = []
+        radioState = .idle
+        MeshOutboxStore.shared.removeAll()
     }
 
     /// UserDefaults key recording that the user turned the antenna OFF.
@@ -179,28 +245,28 @@ final class MeshRuntime: ObservableObject {
     /// `autoStartIfEnabled`.
     private static let autoStartKey = "qaudion.mesh.autostart"
 
-    /// Bring the antenna up at app start, in full mesh, unless the user
-    /// switched it off. Only after the user accepted the consent screen: a
-    /// phone that never said "Attiva" stays silent.
+    /// Bring the antenna up at app start, in the mode the consent allows (full mesh for
+    /// a user who accepted relaying, direct for one who declined it), unless the user
+    /// switched the antenna off. Only after the consent screen was answered: a phone
+    /// that never answered stays silent, and so does a phone whose identity is not
+    /// known yet (the caller retries once it is).
     ///
     /// A mesh only exists while devices are advertising, so an antenna that
     /// comes up only when somebody opens the radar is a mesh nobody can be
-    /// reached on: both phones had to be looking at the same screen at the same
-    /// moment for a link to exist at all. Starting it with the app is what
-    /// makes "this contact is reachable over Bluetooth" a fact the app knows
-    /// rather than one the user has to go and check.
-    ///
-    /// Full mesh, not visible-only: visible advertises but never scans or
-    /// connects out, so two visible-only phones sit next to each other seeing
-    /// nothing. Default has to be the mode that can actually form a link.
+    /// reached on. Starting it with the app is what makes "this contact is
+    /// reachable over Bluetooth" a fact the app knows rather than one the user has
+    /// to go and check. The default is a mode that can actually form a link:
+    /// visible-only advertises but never scans or connects out, so two visible-only
+    /// phones sit next to each other seeing nothing.
     func autoStartIfEnabled() {
-        guard startAllowed else { return }
+        guard startAllowed, hasIdentity else { return }
         if UserDefaults.standard.object(forKey: Self.autoStartKey) != nil,
            UserDefaults.standard.bool(forKey: Self.autoStartKey) == false {
             return
         }
         guard requestedMode == nil else { return }
-        setAntenna(mode: .fullMesh)
+        guard let mode = MeshModePolicy.defaultMode(consent: consent.state) else { return }
+        setAntenna(mode: mode)
     }
 
     /// Remember the user's own on/off decision, so `autoStartIfEnabled`
@@ -213,44 +279,50 @@ final class MeshRuntime: ObservableObject {
     /// that ever touches CoreBluetooth — the antenna selector in
     /// `MeshSheetView`, the consent screen and the Settings switch. Switching
     /// OFF is always allowed, whatever the gate says (a kill switch must be
-    /// able to stop the radio). Switching ON silently refuses unless
-    /// `startAllowed`: the feature flag is on AND the user accepted the consent
-    /// screen, so a stray call (a race with a flag flip, a screen that forgot
-    /// to ask) can never bypass the gate.
+    /// able to stop the radio). Switching ON silently refuses unless the feature
+    /// flag is on AND the consent screen was answered AND the identity is known; a
+    /// mode the consent does not allow becomes the strongest one it does (a user who
+    /// declined relaying never ends up in full mesh), so a stray call cannot bypass
+    /// the gate.
     func setAntenna(mode: MeshAntennaMode?) {
         guard let mode else {
-            transport?.stop()
+            let wasRunning = requestedMode != nil
+            slot.existingTransport?.stop()
             requestedMode = nil
             activeTargets.removeAll()
-            MeshOutboxDrain.shared.stop()
+            if wasRunning { MeshOutboxDrain.shared.stop() }
             return
         }
-        guard startAllowed else { return }
-        // Switching .fullMesh <-> .visibleOnly mid-session: BleMeshTransport
-        // .start() is a no-op while already active (it can't reconcile
-        // "already active, but in the other mode" mid-call), so stop first —
-        // the cost (re-advertise/re-discover) is small.
+        guard startAllowed, let allowed = MeshModePolicy.allowedMode(mode, consent: consent.state) else { return }
+        guard let transport = slot.acquire() else {
+            // No identity yet: the radio must not start under any other id.
+            MeshLog.emit(.radio, [("state", "error"), ("mode", Self.modeToken(allowed)), ("reason", "no_identity")])
+            return
+        }
+        // Switching modes mid-session: BleMeshTransport.start() is a no-op while
+        // already active (it can't reconcile "already active, but in the other
+        // mode"), so stop first — the cost (re-advertise/re-discover) is small.
         //
         // The guard is on `requestedMode`, NOT on `antennaMode`. antennaMode is
         // derived live from isScanning/isAdvertising, so it reads nil during
-        // every window where the radio is up but a role has not settled yet —
-        // powering on, an advert not yet accepted, a scan between duty cycles.
-        // The old `if let current = antennaMode` skipped the stop in exactly
-        // those windows, start() then no-op'd on the active transport, and the
-        // mode change was dropped on the floor with no error anywhere: the
-        // selector showed the new mode while the radio kept the old behaviour,
-        // including relaying other people's traffic, which BleMeshTransport
-        // gates on .fullMesh.
-        if transport != nil, requestedMode != mode {
-            transport?.stop()
+        // every window where the radio is up but a role has not settled yet; the
+        // old `if let current = antennaMode` skipped the stop in exactly those
+        // windows and the mode change was dropped on the floor.
+        if requestedMode != nil, requestedMode != allowed {
+            transport.stop()
         }
-        let localId = (try? MeshNodeId(hex: localNodeIdHex)) ?? MeshNodeId.random()
-        let t = transport ?? BleMeshTransport(localNodeId: localId)
-        t.delegate = self
-        transport = t
-        requestedMode = mode
-        t.start(schedule: MeshRadioSchedule.backgroundIdle, mode: mode)
+        transport.delegate = self
+        requestedMode = allowed
+        transport.start(schedule: MeshRadioSchedule.backgroundIdle, mode: allowed)
         MeshOutboxDrain.shared.start()
+    }
+
+    private static func modeToken(_ mode: MeshAntennaMode) -> String {
+        switch mode {
+        case .fullMesh: return "full"
+        case .direct: return "direct"
+        case .visibleOnly: return "visible"
+        }
     }
 
     func selectTarget(conversationId: String, nodeHex: String, displayName: String) {
@@ -318,19 +390,22 @@ final class MeshRuntime: ObservableObject {
     /// opaque envelope bytes the caller wants delivered. Wraps it in a
     /// `MeshPacket`, resolves a known multi-hop next-hop when one exists
     /// (preferring a direct send over a flood, same as the relay policy's
-    /// own rule), and hands it to the transport.
+    /// own rule), and hands it to the transport. The completion reports what the
+    /// links did (`MeshSendReport`): `sentDirect` / `sentViaRelay` only if the
+    /// packet was accepted by the first hop (every frame of it), otherwise
+    /// `queued` / `failed` with the reason.
     func sendData(
         toNodeHex: String,
         payload: Data,
         type: MeshPacketType = .data,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping (MeshSendReport) -> Void
     ) {
-        guard let transport else {
-            completion(false)
+        guard let transport = slot.existingTransport, requestedMode != nil else {
+            completion(MeshSendReport(result: .failed("antenna_off"), links: 0, okLinks: 0))
             return
         }
         guard let recipient = try? MeshNodeId(hex: toNodeHex) else {
-            completion(false)
+            completion(MeshSendReport(result: .failed("bad_recipient"), links: 0, okLinks: 0))
             return
         }
         guard let packet = try? MeshPacket(
@@ -338,19 +413,13 @@ final class MeshRuntime: ObservableObject {
             ttl: MeshPacket.defaultTTL, timestampMs: Int64(Date().timeIntervalSince1970 * 1000),
             payload: payload
         ) else {
-            completion(false)
+            completion(MeshSendReport(result: .failed("payload_too_large"), links: 0, okLinks: 0))
             return
         }
         let preferredNextHop = topology.nextHop(for: recipient)
-        transport.send(packet, preferredNextHop: preferredNextHop) { [weak self] result in
+        transport.send(packet, preferredNextHop: preferredNextHop) { report in
             Task { @MainActor in
-                _ = self // keep the runtime alive across the hop; no state touched here
-                switch result {
-                case .sentDirect, .sentViaRelay:
-                    completion(true)
-                case .queued, .failed:
-                    completion(false)
-                }
+                completion(report)
             }
         }
     }
@@ -373,9 +442,8 @@ final class MeshRuntime: ObservableObject {
                 )
             }
         // A peer that just became reachable may be the target of a queued
-        // outbox entry — retry now rather than waiting out the drain
-        // coordinator's backstop timer.
-        MeshOutboxDrain.shared.drainAndSweep()
+        // outbox entry — retry now rather than waiting out the retry interval.
+        MeshOutboxDrain.shared.reachabilityChanged()
     }
 
     private static let rssiStrong = -40
@@ -423,7 +491,8 @@ extension MeshRuntime: MeshTransportDelegate {
     nonisolated func meshTransport(_ transport: MeshTransport, didReceive packet: MeshInboundPacket) {
         let type = packet.packet.type
         guard type == .data || type == .receipt else { return }
-        let fromHex = packet.fromNodeId.hex
+        // The ORIGINATING sender (the packet header), not the immediate radio hop.
+        let fromHex = packet.packet.senderId.hex
         let payload = packet.packet.payload
         Task { @MainActor in
             if type == .receipt {

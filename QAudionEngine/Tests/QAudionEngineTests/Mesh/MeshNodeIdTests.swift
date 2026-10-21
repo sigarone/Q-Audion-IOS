@@ -38,15 +38,6 @@ final class MeshNodeIdTests: XCTestCase {
         XCTAssertEqual(MeshNodeId.broadcast.hex, String(repeating: "f", count: 16))
     }
 
-    func testRandomProducesValidId() {
-        let a = MeshNodeId.random()
-        let b = MeshNodeId.random()
-        XCTAssertEqual(a.hex.count, MeshNodeId.hexLength)
-        // Astronomically unlikely to collide; guards against a broken RNG
-        // that always returns the same bytes.
-        XCTAssertNotEqual(a, b)
-    }
-
     func testIdentityKeyDerivationIsStableAndObserverIndependent() {
         let key = Data(repeating: 0x42, count: 32)
         let a = MeshNodeId.from(identityKeyRaw: key)

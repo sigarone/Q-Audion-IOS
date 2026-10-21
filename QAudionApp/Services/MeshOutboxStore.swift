@@ -1,127 +1,118 @@
 import Foundation
+import QAudionEngine
 
-/// A mesh send waiting for its target to become reachable again.
+/// Persisted mesh outbox (docs/mesh/MESH_LINK_SPEC.md section 10.2): the sends the
+/// mesh is still responsible for. The rules themselves (what is due, when to retry,
+/// when to give up, which entries a receipt removes) are the engine's
+/// `MeshOutboxQueue`; this type only keeps it in `UserDefaults` under a lock.
 ///
-/// `sealedShellB64` is the exact bytes `ChatContainer.completeMeshSend`
-/// would otherwise have handed straight to `MeshRuntime.sendData` — the
-/// already-encrypted `MeshSealedShell.encode()` output, base64'd for JSON
-/// storage. This type carries no plaintext and no key material: it is a
-/// retry queue for bytes that are already opaque ciphertext.
-struct MeshPendingSend: Codable, Equatable {
-    let messageId: String
-    let conversationId: String
-    let peerUserId: String
-    let targetNodeHex: String
-    let sealedShellB64: String
-    let createdAtMs: Int64
-    var attempts: Int
-}
-
-/// Persisted queue of mesh sends waiting for their target to become
-/// reachable, so a send to a peer that's briefly out of range gets retried
-/// instead of failing on the spot.
+/// A MESSAGE entry stays here after a first hop accepted it and is retransmitted
+/// every 20 s until a valid delivery receipt arrives (`acknowledge`) or the outbox
+/// gives up after an hour. A RECEIPT entry is removed once a first hop accepted it.
+/// Entries carry the already-sealed `MeshSealedShell` bytes (base64), so there is no
+/// plaintext and no key material here.
 ///
-/// Before this existed, `BleMeshTransport.sendLocked` failing once meant
-/// the message failed, full stop — the single largest functional gap
-/// against the Android sibling's real store-and-forward outbox
-/// (`PendingSendOrchestrator` draining `KIND_BLE_MESH` rows). This closes
-/// it on iOS with a much smaller footprint than Android's: a handful of
-/// queued sends doesn't need a GRDB table and migration, so this is a
-/// plain Codable array under one UserDefaults key — the same persistence
-/// style `ConversationStore` itself used before message history moved to
-/// GRDB (see that file's `migrateIfNeeded`).
-///
-/// Not `@MainActor`: `MeshOutboxDrain` (the only writer/reader today) does
-/// all its work on the main actor already, and every method here is a
-/// short, synchronous, lock-guarded read-modify-write — safe to call from
-/// anywhere.
+/// Not `@MainActor`: every method is a short, synchronous, lock-guarded
+/// read-modify-write, safe to call from anywhere.
 final class MeshOutboxStore {
     static let shared = MeshOutboxStore()
 
-    /// A retryable send gives up after this long without a successful
-    /// delivery — same order of magnitude as the Android sibling's
-    /// `MAX_MESH_ATTEMPTS` ceiling (~1h), past which a dead peer's row
-    /// would otherwise retry forever.
-    static let maxAgeMs: Int64 = 60 * 60 * 1000
+    /// An entry gives up after this long (kept for callers that show the number).
+    static let maxAgeMs: Int64 = MeshOutboxPolicy.giveUpMs
 
     private let defaults: UserDefaults
     private let lock = NSLock()
-    private static let storageKey = "qaudion.mesh.outbox.v1"
+    private static let storageKey = "qaudion.mesh.outbox.v2"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
-    /// Replaces any existing entry for the same message (retrying an
-    /// enqueue is idempotent, not a duplicate).
-    func enqueue(_ entry: MeshPendingSend) {
-        lock.lock()
-        defer { lock.unlock() }
-        var all = loadLocked()
-        all.removeAll { $0.messageId == entry.messageId }
-        all.append(entry)
-        saveLocked(all)
+    /// Replaces any existing entry with the same id (an enqueue is idempotent).
+    func enqueue(_ entry: MeshOutboxEntry) {
+        mutate { $0.enqueue(entry) }
     }
 
-    func remove(messageId: String) {
+    /// Drops everything (the account left).
+    func removeAll() {
         lock.lock()
         defer { lock.unlock() }
-        var all = loadLocked()
-        all.removeAll { $0.messageId == messageId }
-        saveLocked(all)
+        defaults.removeObject(forKey: Self.storageKey)
     }
 
-    func bumpAttempts(messageId: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        var all = loadLocked()
-        guard let idx = all.firstIndex(where: { $0.messageId == messageId }) else { return }
-        all[idx].attempts += 1
-        saveLocked(all)
+    func remove(id: String) {
+        mutate { $0.remove(id: id) }
     }
 
-    /// W-MSGOUTBOX (2026-09-01) — is this message waiting on the mesh? A
-    /// mesh-routed row stays `.sending` while it sits here (see
-    /// `ChatContainer.finishMeshSend`), which is the same status the
-    /// network outbox drainer (`ChatOutboxDrain`) looks for; this is how
-    /// that drainer knows to leave a mesh-owned row alone instead of
-    /// re-sending it over the WebSocket the user chose not to use.
+    /// A delivery (or read) receipt for `clientMsgId` arrived: the message leaves the outbox. Returns the entry, if any.
+    @discardableResult
+    func acknowledge(clientMsgId: String) -> MeshOutboxEntry? {
+        var removed: MeshOutboxEntry?
+        mutate { removed = $0.acknowledge(clientMsgId: clientMsgId) }
+        return removed
+    }
+
+    /// Is this MESSAGE waiting on the mesh? A mesh-routed row stays `.sending` while it has no first-hop acceptance,
+    /// which is the same status the network outbox drainer (`ChatOutboxDrain`) looks for; this is how that drainer
+    /// knows to leave a mesh-owned row alone instead of re-sending it over the WebSocket the user chose not to use.
     func contains(messageId: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return loadLocked().contains { $0.messageId == messageId }
+        return load().contains(id: messageId)
     }
 
-    /// Entries whose target is currently reachable, oldest first — the
-    /// order a drain pass should attempt them in.
-    func pending(reachableNodeHexes: Set<String>) -> [MeshPendingSend] {
+    func entry(id: String) -> MeshOutboxEntry? {
         lock.lock()
         defer { lock.unlock() }
-        return loadLocked()
-            .filter { reachableNodeHexes.contains($0.targetNodeHex) }
-            .sorted { $0.createdAtMs < $1.createdAtMs }
+        return load().entry(id: id)
     }
 
-    /// Entries older than `maxAgeMs`. This store never marks a message
-    /// failed on its own — the caller (`MeshOutboxDrain`) owns that
-    /// decision and the `ConversationStore` write that goes with it; this
-    /// only reports which rows have aged out.
-    func expired(nowMs: Int64) -> [MeshPendingSend] {
+    /// Entries to send now, oldest first.
+    func due(nowMs: Int64, reachableTargets: Set<String>) -> [MeshOutboxEntry] {
         lock.lock()
         defer { lock.unlock() }
-        return loadLocked().filter { nowMs - $0.createdAtMs > Self.maxAgeMs }
+        return load().due(nowMs: nowMs, reachableTargets: reachableTargets)
     }
 
-    private func loadLocked() -> [MeshPendingSend] {
+    /// Entries the outbox gives up on. The caller owns the `ConversationStore` write that goes with it.
+    func expired(nowMs: Int64) -> [MeshOutboxEntry] {
+        lock.lock()
+        defer { lock.unlock() }
+        return load().expired(nowMs: nowMs)
+    }
+
+    @discardableResult
+    func recordAttempt(id: String, nowMs: Int64, accepted: Bool) -> MeshOutboxQueue.AttemptOutcome {
+        var outcome: MeshOutboxQueue.AttemptOutcome = .removed
+        mutate { outcome = $0.recordAttempt(id: id, nowMs: nowMs, accepted: accepted) }
+        return outcome
+    }
+
+    /// Entries currently held, for the `outbox` log line.
+    func pendingCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return load().entries.count
+    }
+
+    private func mutate(_ change: (inout MeshOutboxQueue) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        var queue = load()
+        change(&queue)
+        save(queue)
+    }
+
+    private func load() -> MeshOutboxQueue {
         guard let data = defaults.data(forKey: Self.storageKey),
-              let all = try? JSONDecoder().decode([MeshPendingSend].self, from: data) else {
-            return []
+              let queue = try? JSONDecoder().decode(MeshOutboxQueue.self, from: data) else {
+            return MeshOutboxQueue()
         }
-        return all
+        return queue
     }
 
-    private func saveLocked(_ all: [MeshPendingSend]) {
-        guard let data = try? JSONEncoder().encode(all) else { return }
+    private func save(_ queue: MeshOutboxQueue) {
+        guard let data = try? JSONEncoder().encode(queue) else { return }
         defaults.set(data, forKey: Self.storageKey)
     }
 }

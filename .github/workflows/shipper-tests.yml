@@ -25,7 +25,10 @@
 # del test con quelle scritte da QAudionApp/AppState.swift e
 # QAudionApp/Services/NotificationCenterService.swift. E test_ship_ios_pair_vocab.py
 # legge i motivi di scarto di un QR dal sorgente
-# QAudionEngine/.../Proximity/ProximityPairingTypes.swift.
+# QAudionEngine/.../Proximity/ProximityPairingTypes.swift. test_ship_ios_mesh_vocab.py
+# legge gli eventi e i motivi del log mesh dai sorgenti Swift del motore e dell'app
+# (Mesh/MeshLog.swift, MeshLinkFraming.swift, MeshRelayGate.swift, BleMeshTransport.swift,
+# MeshRuntime.swift, MeshOutboxDrain.swift, AppState.swift);
 #
 # Nessun segreto, nessuna rete; sola lettura del repository.
 
@@ -42,6 +45,12 @@ on:
       - 'QAudionApp/AppState.swift'
       - 'QAudionApp/Services/NotificationCenterService.swift'
       - 'QAudionEngine/Sources/QAudionEngine/Sovereign/Proximity/ProximityPairingTypes.swift'
+      - 'QAudionEngine/Sources/QAudionEngine/Mesh/MeshLog.swift'
+      - 'QAudionEngine/Sources/QAudionEngine/Mesh/MeshLinkFraming.swift'
+      - 'QAudionEngine/Sources/QAudionEngine/Mesh/MeshRelayGate.swift'
+      - 'QAudionApp/Services/BleMeshTransport.swift'
+      - 'QAudionApp/Services/MeshRuntime.swift'
+      - 'QAudionApp/Services/MeshOutboxDrain.swift'
       - '.github/workflows/shipper-tests.yml'
   # No push trigger for main: every change reaches main through a pull request whose
   # checks are required, so a run on the merge commit would test the same code twice.

@@ -1,4 +1,5 @@
 import XCTest
+import QAudionEngine
 @testable import QAudionApp
 
 /// The call goes first. The Bluetooth mesh consent screen is a sheet; a ringing, connecting or running call is a full-screen
@@ -181,26 +182,36 @@ final class MeshConsentPresentationTests: XCTestCase {
 
     // MARK: - What the Settings switch says
 
-    func test_withoutTheConsentTheSwitchSaysNothingAboutTheRadioWhateverItDoes() {
-        for consent in [MeshConsentState.undecided, .declined] {
-            for antennaOn in [true, false] {
-                for visibleOnly in [true, false] {
-                    XCTAssertEqual(
-                        MeshSettingsStatus.resolve(consent: consent, antennaOn: antennaOn, visibleOnly: visibleOnly),
-                        .notAllowed)
-                }
+    func test_beforeTheConsentIsAnsweredTheSwitchSaysNothingAboutTheRadioWhateverItDoes() {
+        for antennaOn in [true, false] {
+            for mode in [MeshAntennaMode.visibleOnly, .direct, .fullMesh] {
+                XCTAssertEqual(
+                    MeshSettingsStatus.resolve(consent: .undecided, antennaOn: antennaOn, mode: mode), .notAllowed)
             }
+            XCTAssertEqual(MeshSettingsStatus.resolve(consent: .undecided, antennaOn: antennaOn, mode: nil), .notAllowed)
         }
     }
 
-    func test_withTheConsentTheSwitchSaysWhatTheRadioIsDoing() {
-        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: false, visibleOnly: false), .radioOff,
+    func test_withTheConsentToRelayTheSwitchSaysWhatTheRadioIsDoing() {
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: false, mode: nil), .radioOff,
                        "consent given and the antenna turned off in the mesh panel: the phone relays nothing")
-        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: true, visibleOnly: true), .visibleOnly)
-        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: true, visibleOnly: false), .on)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: true, mode: .visibleOnly), .visibleOnly)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: true, mode: .direct), .direct)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: true, mode: .fullMesh), .on)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: true, mode: nil), .on,
+                       "a radio that is coming up under a relaying consent")
+    }
+
+    func test_aUserWhoDeclinedRelayingIsNeverToldThePhoneRelays() {
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .declined, antennaOn: false, mode: nil), .radioOff)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .declined, antennaOn: true, mode: .direct), .direct)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .declined, antennaOn: true, mode: .visibleOnly), .visibleOnly)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .declined, antennaOn: true, mode: nil), .direct)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .declined, antennaOn: true, mode: .fullMesh), .direct)
     }
 
     func test_anAntennaThatIsOffIsNeverReportedAsOnEvenIfAModeIsStillSet() {
-        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: false, visibleOnly: true), .radioOff)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .accepted, antennaOn: false, mode: .visibleOnly), .radioOff)
+        XCTAssertEqual(MeshSettingsStatus.resolve(consent: .declined, antennaOn: false, mode: .direct), .radioOff)
     }
 }

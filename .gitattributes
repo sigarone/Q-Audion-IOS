@@ -42,3 +42,9 @@ docs/security/NFC_PAIRING_V2.md -text
 scripts/kat/gen_nfc_pairing_kat.py -text
 scripts/kat/nfc-pairing-kat.json -text
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/nfc-pairing-kat.json -text
+# The BLE mesh link-layer spec, its generator and its known-answer vectors are byte-for-byte copies of the files the
+# Android repository holds (the vectors are produced by gen_mesh_vectors.py, and MeshLinkVectorsTests pins their
+# SHA-256): git must never rewrite their line endings.
+docs/mesh/MESH_LINK_SPEC.md -text
+docs/mesh/gen_mesh_vectors.py -text
+QAudionEngine/Tests/QAudionEngineTests/Mesh/Resources/mesh-vectors.json -text

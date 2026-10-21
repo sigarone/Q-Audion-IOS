@@ -536,6 +536,9 @@ final class ChatContainer: ObservableObject {
     /// transport writes over links that already exist and never dials one on
     /// demand.
     private func resolveMeshRoute() -> MeshTargetSelection? {
+        // No identity, no mesh: the node id the packet is sealed to and sent under comes from the identity key, and
+        // there is no random stand-in (docs/mesh/MESH_LINK_SPEC.md section 1.2). The message takes the network.
+        guard MeshRuntime.shared.hasIdentity else { return nil }
         if let armed = MeshRuntime.shared.activeTarget(for: conversationId.uuidString) {
             return armed
         }
@@ -561,12 +564,11 @@ final class ChatContainer: ObservableObject {
         case .sendOverMesh, .queueForMesh:
             // queueForMesh only arises from "solo Bluetooth": that choice asks
             // for the message to go out over mesh even when the peer isn't
-            // reachable right now. sendViaMesh below still attempts an
-            // immediate write, but a failed one no longer ends the story —
-            // finishMeshSend hands it to MeshOutboxStore, which
-            // MeshOutboxDrain retries once the peer is back in range (or
-            // gives up past MeshOutboxStore.maxAgeMs). See
-            // docs/ble-mesh/IOS_BLE_MESH_DESIGN.md §6.
+            // reachable right now. sendViaMesh below hands the sealed message
+            // to MeshOutboxStore; MeshOutboxDrain sends it at once, keeps it
+            // after the first hop accepted it and retransmits it every 20 s
+            // until the peer's delivery receipt arrives (or it gives up after
+            // an hour). See docs/mesh/MESH_LINK_SPEC.md section 10.2.
             //
             // W-MESHUNKNOWN-IOS: prefer the hex a peer is actually
             // advertising right now (a source may have gone stale); fall
@@ -591,6 +593,12 @@ final class ChatContainer: ObservableObject {
                 await MainActor.run { self.markFailed(messageId: messageId, reason: .notAuthenticated) }
                 return
             }
+            // The one source of the sender node id: the runtime's, derived from the identity key.
+            let localNodeHex: String? = await MainActor.run { MeshRuntime.shared.localNodeIdHex }
+            guard let localNodeHex else {
+                await MainActor.run { self.markFailed(messageId: messageId, reason: .notAuthenticated) }
+                return
+            }
             // v2 seals the ENVELOPE, so what goes into the cipher is the
             // serialised envelope rather than the bare body. Everything that
             // identifies the parties travels inside it; see MeshChatMessage.
@@ -601,7 +609,7 @@ final class ChatContainer: ObservableObject {
                 conversationId: conversationId.uuidString,
                 body: wireText,
                 sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-                senderNodeHex: MeshRuntime.shared.localNodeIdHex,
+                senderNodeHex: localNodeHex,
                 recipientNodeHex: target.nodeHex
             )
             let envelopeText = String(data: envelope.encode(), encoding: .utf8) ?? ""
@@ -610,14 +618,12 @@ final class ChatContainer: ObservableObject {
             // rather than something misattributed. Android has always sealed
             // mesh traffic this way; on the legacy v2 path this side rebuilt
             // its own AAD instead, and the two could not open each other.
-            let aad = await MainActor.run { () -> Data in
-                meshPacketAad(
-                    version: MeshPacket.wireVersion,
-                    typeWireCode: MeshPacketType.data.rawValue,
-                    senderId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast,
-                    recipientId: (try? MeshNodeId(hex: target.nodeHex)) ?? MeshNodeId.broadcast
-                )
-            }
+            let aad = meshPacketAad(
+                version: MeshPacket.wireVersion,
+                typeWireCode: MeshPacketType.data.rawValue,
+                senderId: (try? MeshNodeId(hex: localNodeHex)) ?? MeshNodeId.broadcast,
+                recipientId: (try? MeshNodeId(hex: target.nodeHex)) ?? MeshNodeId.broadcast
+            )
             let outcome = await sender.encryptForWire(
                 messageId: messageId, peerUserId: peerUserId, plaintext: envelopeText,
                 aadOverride: aad
@@ -659,51 +665,21 @@ final class ChatContainer: ObservableObject {
                 sealedB64: sealed.base64EncodedString()
             )
             let shellBytes = shell.encode()
-            // Built up front, not just on failure: if the immediate write
-            // fails, this is exactly the entry MeshOutboxStore needs to
-            // retry later — no re-deriving it from a failure callback that
-            // only has `delivered: Bool` to work with.
-            let pending = MeshPendingSend(
+            // The outbox owns the message from here (docs/mesh/MESH_LINK_SPEC.md 10.2): it is sent now, marked
+            // "sent" when a first hop accepted every frame of it, and then kept and retransmitted every 20 s until
+            // the peer's delivery receipt arrives (or it gives up after an hour and the message fails). The message
+            // stays `.sending` until that first acceptance.
+            let entry = MeshOutboxEntry(
+                id: messageId.uuidString,
+                kind: .message,
                 messageId: messageId.uuidString,
                 conversationId: conversationId.uuidString,
                 peerUserId: peerUserId,
                 targetNodeHex: target.nodeHex,
-                sealedShellB64: shellBytes.base64EncodedString(),
-                createdAtMs: Int64(Date().timeIntervalSince1970 * 1000),
-                attempts: 0
+                payloadB64: shellBytes.base64EncodedString(),
+                createdAtMs: Int64(Date().timeIntervalSince1970 * 1000)
             )
-            MeshRuntime.shared.sendData(toNodeHex: target.nodeHex, payload: shellBytes) { [weak self] delivered in
-                self?.finishMeshSend(delivered: delivered, conversationId: conversationId, messageId: messageId, pending: pending)
-            }
-        }
-    }
-
-    private func finishMeshSend(delivered: Bool, conversationId: UUID, messageId: UUID, pending: MeshPendingSend) {
-        if delivered {
-            // R4 — mark the row as having gone over the mesh, so the sender's
-            // own transcript distinguishes it from a normal network message.
-            // The flag, its column and its rendering all existed; nothing on
-            // the SEND side ever set it, so the glyph only ever appeared on
-            // received messages — while MessageBubble's accessibility label
-            // already read "Inviato via mesh Bluetooth", describing a case that
-            // could not occur.
-            // .sent, not .delivered: the radio accepted the write, which says
-            // the bytes left this phone and nothing about whether the other one
-            // stored them. The second tick now has its own evidence — the
-            // peer's MeshReceipt — and claiming it here would make that receipt
-            // decorative.
-            store.updateMessageStatus(
-                id: messageId, conversationId: conversationId,
-                newStatus: .sent, deliveredAt: nil,
-                viaMesh: true
-            )
-        } else {
-            // Not a terminal failure: an unreachable/busy target is exactly
-            // what MeshOutboxStore exists for. The message stays `.sending`
-            // (its status at creation) until MeshOutboxDrain either lands it
-            // (`.sent`) or gives up past MeshOutboxStore.maxAgeMs (`.failed`)
-            // — see IOS_BLE_MESH_DESIGN.md §6 for the gap this closes.
-            MeshOutboxStore.shared.enqueue(pending)
+            MeshOutboxDrain.shared.submit(entry)
         }
         refreshFromStore()
     }

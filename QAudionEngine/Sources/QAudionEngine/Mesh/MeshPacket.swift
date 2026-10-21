@@ -156,37 +156,73 @@ public struct MeshPacket: Equatable, Sendable {
         return out
     }
 
-    /// Never throws — malformed/truncated bytes from a hostile or buggy
-    /// peer simply yield `nil`.
-    public static func decode(_ bytes: Data) -> MeshPacket? {
+    /// Why a received packet was rejected (docs/mesh/MESH_LINK_SPEC.md section 7.2).
+    /// The raw values are the reason tokens of the shared test vectors.
+    public enum DecodeError: String, Error, Equatable, Sendable {
+        case truncated
+        case unsupportedVersion = "unsupported_version"
+        case unknownType = "unknown_type"
+        case unknownFlagBits = "unknown_flag_bits"
+        case emptyRouteWithFlag = "empty_route_with_flag"
+        case payloadTooLarge = "payload_too_large"
+        case trailingBytes = "trailing_bytes"
+    }
+
+    /// The largest encoded packet: the longest header (ttl, 255 hops) plus the
+    /// largest payload.
+    /// version, type, sender, recipient (18), flags, ttl, hop count (3), 255 hops, timestamp (8), length (4), payload.
+    public static let maxEncodedBytes = 18 + 3 + 255 * MeshNodeId.sizeBytes + 8 + 4 + maxPayloadBytes
+
+    /// Strict decoder. Rejects, with a reason: a packet shorter than its declared
+    /// fields, a version other than 1, a type that is not 1...5, any flag bit
+    /// besides bit0/bit1, bit1 with a hop count of zero, a payload length above
+    /// 16384, and any byte after the payload. Never traps.
+    public static func decodeStrict(_ bytes: Data) -> Result<MeshPacket, DecodeError> {
         var reader = ByteReader(bytes)
-        guard let versionByte = reader.readUInt8() else { return nil }
-        guard let typeByte = reader.readUInt8(), let type = MeshPacketType(rawValue: typeByte) else { return nil }
-        guard let senderBytes = reader.readBytes(MeshNodeId.sizeBytes), let senderId = MeshNodeId.fromBytes(senderBytes) else { return nil }
-        guard let recipientBytes = reader.readBytes(MeshNodeId.sizeBytes), let recipientId = MeshNodeId.fromBytes(recipientBytes) else { return nil }
-        guard let flags = reader.readUInt8() else { return nil }
+        guard let versionByte = reader.readUInt8() else { return .failure(.truncated) }
+        guard Int(versionByte) == wireVersion else { return .failure(.unsupportedVersion) }
+        guard let typeByte = reader.readUInt8() else { return .failure(.truncated) }
+        guard let type = MeshPacketType(rawValue: typeByte) else { return .failure(.unknownType) }
+        guard let senderBytes = reader.readBytes(MeshNodeId.sizeBytes),
+              let senderId = MeshNodeId.fromBytes(senderBytes) else { return .failure(.truncated) }
+        guard let recipientBytes = reader.readBytes(MeshNodeId.sizeBytes),
+              let recipientId = MeshNodeId.fromBytes(recipientBytes) else { return .failure(.truncated) }
+        guard let flags = reader.readUInt8() else { return .failure(.truncated) }
+        guard flags & ~(flagHasTTL | flagHasSourceRoute) == 0 else { return .failure(.unknownFlagBits) }
 
         var ttl: Int? = nil
         if flags & flagHasTTL != 0 {
-            guard let t = reader.readUInt8() else { return nil }
+            guard let t = reader.readUInt8() else { return .failure(.truncated) }
             ttl = Int(t)
         }
         var sourceRoute: [MeshNodeId] = []
         if flags & flagHasSourceRoute != 0 {
-            guard let hopCount = reader.readUInt8() else { return nil }
+            guard let hopCount = reader.readUInt8() else { return .failure(.truncated) }
+            guard hopCount > 0 else { return .failure(.emptyRouteWithFlag) }
             for _ in 0..<hopCount {
-                guard let hopBytes = reader.readBytes(MeshNodeId.sizeBytes), let hop = MeshNodeId.fromBytes(hopBytes) else { return nil }
+                guard let hopBytes = reader.readBytes(MeshNodeId.sizeBytes),
+                      let hop = MeshNodeId.fromBytes(hopBytes) else { return .failure(.truncated) }
                 sourceRoute.append(hop)
             }
         }
-        guard let timestampMs = reader.readInt64() else { return nil }
-        guard let payloadLen = reader.readUInt32() else { return nil }
-        guard payloadLen <= UInt32(maxPayloadBytes), let payload = reader.readBytes(Int(payloadLen)) else { return nil }
+        guard let timestampMs = reader.readInt64() else { return .failure(.truncated) }
+        guard let payloadLen = reader.readUInt32() else { return .failure(.truncated) }
+        guard payloadLen <= UInt32(maxPayloadBytes) else { return .failure(.payloadTooLarge) }
+        guard let payload = reader.readBytes(Int(payloadLen)) else { return .failure(.truncated) }
+        guard reader.isAtEnd else { return .failure(.trailingBytes) }
 
-        return try? MeshPacket(
+        guard let packet = try? MeshPacket(
             version: Int(versionByte), type: type, senderId: senderId, recipientId: recipientId,
             ttl: ttl, sourceRoute: sourceRoute, timestampMs: timestampMs, payload: payload
-        )
+        ) else { return .failure(.truncated) }
+        return .success(packet)
+    }
+
+    /// Never throws — malformed/truncated bytes from a hostile or buggy
+    /// peer simply yield `nil`. See ``decodeStrict(_:)`` for the rules.
+    public static func decode(_ bytes: Data) -> MeshPacket? {
+        if case .success(let packet) = decodeStrict(bytes) { return packet }
+        return nil
     }
 }
 
@@ -221,6 +257,8 @@ struct ByteReader {
         self.data = data
         self.offset = data.startIndex
     }
+
+    var isAtEnd: Bool { offset == data.endIndex }
 
     mutating func readUInt8() -> UInt8? {
         guard offset < data.endIndex else { return nil }

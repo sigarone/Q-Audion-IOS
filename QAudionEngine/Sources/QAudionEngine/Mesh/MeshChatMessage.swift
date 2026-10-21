@@ -83,10 +83,19 @@ public struct MeshChatMessage: Equatable, Sendable, Codable {
         self.sentAtMs = sentAtMs
     }
 
+    /// Canonical wire JSON: `v, s, r, c, conv, b, ts, sn, rn` (docs/mesh/MESH_LINK_SPEC.md section 14).
     public func encode() -> Data {
-        // Every field is a String/Int — a hand-authored Codable struct like
-        // this never actually throws from JSONEncoder.
-        try! JSONEncoder().encode(self)
+        MeshCanonicalJSON.object([
+            ("v", MeshCanonicalJSON.int(version)),
+            ("s", MeshCanonicalJSON.string(senderUserId)),
+            ("r", MeshCanonicalJSON.string(recipientUserId)),
+            ("c", MeshCanonicalJSON.string(clientMsgId)),
+            ("conv", MeshCanonicalJSON.string(conversationId)),
+            ("b", MeshCanonicalJSON.string(body)),
+            ("ts", MeshCanonicalJSON.int64(sentAtMs)),
+            ("sn", MeshCanonicalJSON.string(senderNodeHex)),
+            ("rn", MeshCanonicalJSON.string(recipientNodeHex)),
+        ])
     }
 
     public static func decode(_ bytes: Data) -> MeshChatMessage? {
@@ -126,10 +135,12 @@ public struct MeshSealedShell: Equatable, Sendable, Codable {
         self.sealedB64 = sealedB64
     }
 
+    /// Canonical wire JSON: `c, e`.
     public func encode() -> Data {
-        // Both fields are Strings — a hand-authored Codable struct like this
-        // never actually throws from JSONEncoder.
-        try! JSONEncoder().encode(self)
+        MeshCanonicalJSON.object([
+            ("c", MeshCanonicalJSON.string(clientMsgId)),
+            ("e", MeshCanonicalJSON.string(sealedB64)),
+        ])
     }
 
     public static func decode(_ bytes: Data) -> MeshSealedShell? {

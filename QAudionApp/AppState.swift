@@ -3878,36 +3878,18 @@ final class AppState: ObservableObject {
         // Harmless while the mesh is off (kill switch pulled, or the user has
         // not accepted the consent screen yet): MeshRuntime.setAntenna refuses
         // to start the radio, so this callback simply never fires.
-        MeshRuntime.shared.onInboundData = { [weak self] fromNodeHex, payload in
-            self?.handleIncomingMeshMessage(fromNodeHex: fromNodeHex, payload: payload)
-        }
-        MeshRuntime.shared.onInboundReceipt = { [weak self] fromNodeHex, payload in
-            self?.handleIncomingMeshReceipt(fromNodeHex: fromNodeHex, payload: payload)
-        }
-        // Bring the radio up with the app, in full mesh, so a contact standing
-        // nearby is reachable without both people having opened the radar
-        // first. Only once the user has accepted the one-time consent screen
-        // (relaying other people's messages needs an explicit yes); until
-        // then this is a no-op. Honours an explicit "Spenta" and the remote
-        // kill switch.
-        MeshRuntime.shared.autoStartIfEnabled()
-
-        // Derive this device's own mesh node id from its long-term Ed25519
-        // identity key, which is what every other device derives it from when
-        // resolving a contact to a device.
+        MeshBoot.installLogSink()
+        wireMeshInbound()
+        // The mesh identity comes FIRST (docs/mesh/MESH_LINK_SPEC.md 1.2): identity
+        // key -> node id -> transport -> radio. This device's node id is derived
+        // from its long-term Ed25519 identity key, which is what every other device
+        // derives it from when resolving a contact to a device; the radio is
+        // brought up only after that, never under a stand-in id. A random id would
+        // never meet the id a peer computes as SHA-256(identity key)[0..8], and
+        // would make the header sender, the sealed `sn`/`rn` and the associated
+        // data disagree inside this very phone.
         //
-        // MeshRuntime.configureLocalIdentity existed and had no caller, so
-        // localNodeIdHex kept the `MeshNodeId.random()` value its init assigns.
-        // This phone therefore advertised a random id — a different one after
-        // every launch — while a peer looking for it computes
-        // SHA-256(identity key)[0..8]. The two can never meet: the id an
-        // Android device expects for this contact is not the id this device
-        // broadcasts, so it renders as an unidentified stranger no matter how
-        // many calls the two have had. That is the cross-platform half of R1,
-        // and no amount of fixing the contact-side lookup would have touched it.
-        //
-        // Same key the KMS bundle publishes as `ed25519Pub`, so the id a peer
-        // derives from the directory matches the id this device advertises.
+        // Same key the KMS bundle publishes as `ed25519Pub`.
         //
         // W-SIGNERBOOT (2026-10-07) — make sure the identity EXISTS first.
         // Nothing at account setup used to create it (only the first key
@@ -3923,17 +3905,7 @@ final class AppState: ObservableObject {
         let bootIdentity = SovereignIdentityManager()
         let signerBoot = bootIdentity.ensureIdentity()
         RTLog.info("call", "signerboot r=\(SovereignIdentityBootstrap.logCode(signerBoot))")
-        if let signingPublic = bootIdentity.loadIdentity()?.signingPublic,
-           signingPublic.count == 32 {
-            MeshRuntime.shared.configureLocalIdentity(identityKeyRaw: signingPublic)
-            RTLog.info("mesh", "localNodeId derived=1")
-        } else {
-            // The identity could not be read or created right now (Keychain
-            // locked). The random id stays until the next launch, which is
-            // correct: advertising a stable id derived from a key this device
-            // does not have would be a lie.
-            RTLog.info("mesh", "localNodeId derived=0")
-        }
+        bootMeshIdentity(bootIdentity)
 
         // CarPlay — wire the call bridge so the in-car CarPlay scene (a separate
         // UIScene that must NOT import AppState, CLAUDE.md §16) can place
@@ -4226,6 +4198,9 @@ final class AppState: ObservableObject {
             let flagChanged = AppBackgroundFlag.shared.set(isInBackground: false)
             Task { @MainActor [weak self] in
                 self?.noteDisplayWorkTransition(changed: flagChanged, background: false)
+            }
+            Task { @MainActor [weak self] in
+                self?.retryMeshIdentityIfNeeded()
             }
             // The notification closure is `@Sendable` per the iOS 18+
             // signature; mutating main-actor-isolated state must hop
@@ -12502,6 +12477,54 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - BLE mesh identity (startup order)
+
+    /// The one process-wide instance. The app creates its `@StateObject` from it, so the app delegate can reach the
+    /// same object when the system relaunches the process for a Bluetooth event with no scene.
+    static let shared = AppState()
+
+    /// Routes the mesh's inbound messages and receipts to the receive path below. Called from `initialize()` and, on a
+    /// launch with no scene (a Bluetooth relaunch), from `MeshBoot` before the radio comes up, so a backgrounded phone
+    /// stores incoming mesh messages and sends their receipts. It also loads the two things the receive path reads
+    /// that `initialize()` would otherwise have loaded: the signed-in user id and the contacts snapshot.
+    func wireMeshInbound() {
+        if currentUserId == nil {
+            // The id lives in the Keychain (AuthService removes the old UserDefaults copy at launch).
+            currentUserId = TokenVault.loadUserId()
+        }
+        if cachedContacts.isEmpty {
+            refreshContactsCache()
+        }
+        MeshRuntime.shared.onInboundData = { [weak self] fromNodeHex, payload in
+            self?.handleIncomingMeshMessage(fromNodeHex: fromNodeHex, payload: payload)
+        }
+        MeshRuntime.shared.onInboundReceipt = { [weak self] fromNodeHex, payload in
+            self?.handleIncomingMeshReceipt(fromNodeHex: fromNodeHex, payload: payload)
+        }
+    }
+
+    /// Step 1-4 of the mesh startup order (docs/mesh/MESH_LINK_SPEC.md 1.2): read the identity key, derive the node
+    /// id and hand it to `MeshRuntime` (which builds the transport with it), then bring the radio up if the user's
+    /// consent and the antenna choice allow it. If the key cannot be read (Keychain locked) the radio does NOT start;
+    /// `retryMeshIdentityIfNeeded` tries again at the next foreground transition.
+    private func bootMeshIdentity(_ identity: SovereignIdentityManager) {
+        if let signingPublic = identity.loadIdentity()?.signingPublic, signingPublic.count == 32 {
+            MeshRuntime.shared.configureLocalIdentity(identityKeyRaw: signingPublic)
+            MeshRuntime.shared.autoStartIfEnabled()
+        } else {
+            MeshRuntime.shared.configureLocalIdentity(identityKeyRaw: nil, source: "locked")
+        }
+    }
+
+    /// Called when the app returns to the foreground: a mesh that could not start for want of an identity key
+    /// (storage locked at launch, or a new account after a logout) gets another try.
+    func retryMeshIdentityIfNeeded() {
+        guard !MeshRuntime.shared.hasIdentity else { return }
+        let identity = SovereignIdentityManager()
+        _ = identity.ensureIdentity()
+        bootMeshIdentity(identity)
+    }
+
     // MARK: - BLE mesh receive
     //
     // `MeshRuntime` (QAudionApp/Services/MeshRuntime.swift) is a primitive-
@@ -12509,6 +12532,65 @@ final class AppState: ObservableObject {
     // the one place that bridges its inbound-data callback back into the
     // app's real state, wired from `initialize()` via
     // `MeshRuntime.shared.onInboundData = { ... }`.
+    //
+    // Every outcome is one `app.rx` line (docs/mesh/MESH_LINK_SPEC.md section 13): the short payload hash,
+    // the kind and the result token, never an id, a name or a byte of content.
+
+    private func logMeshRx(_ payload: Data, kind: String, result: String) {
+        MeshLog.emit(.appRx, [("ph", MeshLog.payloadHash(payload)), ("kind", kind), ("result", result)])
+    }
+
+    /// The contact whose authenticated identity key(s) derive `nodeHex` (directory, in-person pairing, verified call).
+    private func meshSenderContact(forNodeHex nodeHex: String) -> ContactsStore.StoredContact? {
+        cachedContacts.first(where: { MeshFeature.matchesNodeHex(nodeHex, contact: $0) })
+    }
+
+    /// Unknown-sender recovery (docs/mesh/MESH_LINK_SPEC.md section 11): refresh the identity keys of the contacts
+    /// from the directory (at most once per 60 s across all callers) and look the sender up again, once. The device
+    /// is never named or trusted on the strength of an ANNOUNCE alone: only a key the directory published in a
+    /// self-signed bundle that verifies is learned.
+    private func recoverUnknownMeshSender(
+        fromNodeHex: String,
+        onResolved: @escaping @MainActor () -> Void,
+        onUnresolved: @escaping @MainActor () -> Void
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let learned = await self.refreshMeshContactKeys()
+            if learned && self.meshSenderContact(forNodeHex: fromNodeHex) != nil {
+                onResolved()
+            } else {
+                onUnresolved()
+            }
+        }
+    }
+
+    /// Fetches the self-signed identity bundle of the contacts this device has no authenticated key for, verifies it,
+    /// and stores the key (fill-if-absent: never overwrites a different one). Rate limited to once per 60 s.
+    /// Returns whether any key was learned.
+    private func refreshMeshContactKeys() async -> Bool {
+        guard MeshReceiveSupport.shared.mayRefreshContacts() else { return false }
+        guard let provider = liveProvider else { return false }
+        let selfId = currentUserId ?? ""
+        var candidates: [String] = []
+        for contact in cachedContacts where contact.userId != selfId {
+            if MeshFeature.nodeHexes(forContact: contact).isEmpty { candidates.append(contact.userId) }
+            if candidates.count >= 20 { break }
+        }
+        var learned = false
+        let deadline = Date().addingTimeInterval(15)
+        for userId in candidates {
+            if Date() > deadline { break }
+            guard let bundle = await provider.kmsClient.fetchUserIdentityBundleV2(userId: userId),
+                  bundle.ed25519Pub.count == 32,
+                  Self.verifyPeerBundleSelfSig(bundle) else { continue }
+            if case .filled = ContactsStore().setIdentityPubkeyIfAbsent(userId: userId, pubkey: bundle.ed25519Pub) {
+                learned = true
+            }
+        }
+        if learned { refreshContactsCache() }
+        return learned
+    }
 
     /// Persists a chat message that arrived over the BLE mesh transport,
     /// mirroring `handleIncomingMessage`'s WS-side decrypt+persist shape.
@@ -12517,51 +12599,75 @@ final class AppState: ObservableObject {
     /// routing stay WS-only for this increment; a mesh-delivered qa_ctl/
     /// qa_grp envelope (any service payload, an attachment descriptor
     /// included) is DROPPED below, never rendered as text: service traffic
-    /// must not become a chat row (2026-09-19). `MeshChatMessage.senderUserId`/
-    /// `recipientUserId` are the SAME cleartext routing metadata the WS
-    /// transport already sends — not secret, and needed to rebuild the
-    /// Associated Data the sender bound the ciphertext to.
-    private func handleIncomingMeshMessage(fromNodeHex: String, payload: Data) {
+    /// must not become a chat row (2026-09-19). The sender and recipient user ids are
+    /// inside the sealed envelope (wire v2), and the receive obligations of
+    /// WIRE_SPEC section 9.4 run in order.
+    private func handleIncomingMeshMessage(fromNodeHex: String, payload: Data, afterRefresh: Bool = false) {
         // Wire v2 — the payload is a thin shell around ONE sealed blob. Nothing
         // about the parties is readable until it is opened, which is the point:
         // v1 shipped real user UUIDs in the clear over the air.
-        guard let shell = MeshSealedShell.decode(payload) else { return }
-        guard let selfId = currentUserId else { return }
+        guard let shell = MeshSealedShell.decode(payload) else {
+            logMeshRx(payload, kind: "msg", result: "bad_envelope")
+            return
+        }
+        guard let selfId = currentUserId, let localNodeHex = MeshRuntime.shared.localNodeIdHex else { return }
         let store = ConversationStore()
-        // Duplicate delivery — a flood-relay mesh can legitimately deliver the
-        // same packet more than once. Checked on the public message id, before
-        // spending a decryption on it.
-        guard store.findByClientMsgId(shell.clientMsgId) == nil else { return }
-        guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else { return }
+        // Duplicate delivery — a flood-relay mesh legitimately delivers the same
+        // packet more than once, and the sender retransmits every 20 s until it
+        // holds a delivery receipt. Checked on the public message id, before
+        // spending a decryption on it. The copy is answered with a fresh delivery
+        // receipt (rate limited), because the first one may be what got lost.
+        if store.findByClientMsgId(shell.clientMsgId) != nil {
+            logMeshRx(payload, kind: "msg", result: "dup")
+            answerDuplicateMeshMessage(clientMsgId: shell.clientMsgId, fromNodeHex: fromNodeHex)
+            return
+        }
+        guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else {
+            logMeshRx(payload, kind: "msg", result: "bad_envelope")
+            return
+        }
         // 2026-09-19 service-message root fix (IOS-21) — channel-is-kind on the
         // mesh too: a chat MESSAGE never rides CONTROL (0xE6 is service traffic
         // only), so a message packet sealed as one is dropped before any
         // decryption is spent on it.
         guard InboundWireClass.of(sealedBytes) == .chat else {
-            RTLog.warn("mesh", "msg_receive control=1 dropped=1")
+            logMeshRx(payload, kind: "msg", result: "service")
             return
         }
 
         // The key is chosen from the only identifier the public header carries:
         // the sender's node id. Resolving it through the contact list also means
-        // an unknown device's traffic is dropped without a decryption attempt.
-        guard let senderContact = cachedContacts.first(where: {
-            MeshFeature.matchesNodeHex(fromNodeHex, contact: $0)
-        }) else {
-            RTLog.warn("mesh", "msg_receive unknownsender=1")
+        // an unknown device's traffic is dropped without a decryption attempt. An
+        // unknown sender triggers one directory refresh, then one more lookup.
+        guard let senderContact = meshSenderContact(forNodeHex: fromNodeHex) else {
+            if afterRefresh {
+                logMeshRx(payload, kind: "msg", result: "unknown_sender")
+                return
+            }
+            recoverUnknownMeshSender(
+                fromNodeHex: fromNodeHex,
+                onResolved: { [weak self] in
+                    self?.handleIncomingMeshMessage(fromNodeHex: fromNodeHex, payload: payload, afterRefresh: true)
+                },
+                onUnresolved: { [weak self] in
+                    self?.logMeshRx(payload, kind: "msg", result: "unknown_sender")
+                }
+            )
             return
         }
+        if afterRefresh { logMeshRx(payload, kind: "msg", result: "refresh_hit") }
         let senderId = senderContact.userId
         // Our own id in the contact cache would otherwise open a conversation with
         // ourselves (IOS-20 does the same for the WS path); nothing to decrypt.
         guard senderId != selfId else {
-            RTLog.warn("mesh", "msg_receive self=1 dropped=1")
+            logMeshRx(payload, kind: "msg", result: "blocked")
             return
         }
         // BLOCK — a mesh packet from a contact the user blocked is dropped before any decryption is spent on
         // it (the mesh has no server in the path to filter it, and no ack to send).
         guard !BlockedContactsStore.isBlocked(senderId) else {
             RTLog.info("chat", "block drop=1 kind=mesh")
+            logMeshRx(payload, kind: "msg", result: "blocked")
             return
         }
 
@@ -12571,24 +12677,27 @@ final class AppState: ObservableObject {
                 version: MeshPacket.wireVersion,
                 typeWireCode: MeshPacketType.data.rawValue,
                 senderId: (try? MeshNodeId(hex: fromNodeHex)) ?? MeshNodeId.broadcast,
-                recipientId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast
+                recipientId: (try? MeshNodeId(hex: localNodeHex)) ?? MeshNodeId.broadcast
             )
         ) else {
-            RTLog.warn("mesh", "msg_receive undec=1")
+            logMeshRx(payload, kind: "msg", result: "undecryptable")
             return
         }
         guard let envelope = MeshChatMessage.decode(decrypted) else {
-            RTLog.warn("mesh", "msg_receive badenvelope=1")
+            logMeshRx(payload, kind: "msg", result: "bad_envelope")
             return
         }
-        guard envelope.recipientUserId == selfId, envelope.senderUserId == senderId else { return }
+        guard envelope.recipientUserId == selfId, envelope.senderUserId == senderId else {
+            logMeshRx(payload, kind: "msg", result: "readdressed")
+            return
+        }
         // The sealed copies of the addressing fields against what actually
         // arrived. A relay that re-addresses a packet it forwards cannot repair
         // these without the message key.
         guard envelope.senderNodeHex == fromNodeHex,
-              envelope.recipientNodeHex == MeshRuntime.shared.localNodeIdHex,
+              envelope.recipientNodeHex == localNodeHex,
               envelope.clientMsgId == shell.clientMsgId else {
-            RTLog.warn("mesh", "msg_receive readdressed=1")
+            logMeshRx(payload, kind: "msg", result: "readdressed")
             return
         }
         let plaintext = envelope.body
@@ -12597,7 +12706,7 @@ final class AppState: ObservableObject {
         // service envelope (or an attachment descriptor, which the mesh does not
         // carry) is dropped, never rendered as raw JSON.
         guard ServicePayloadDetector.classify(plaintext) == .notService else {
-            RTLog.warn("mesh", "msg_receive service=1 dropped=1")
+            logMeshRx(payload, kind: "msg", result: "service")
             return
         }
 
@@ -12628,9 +12737,11 @@ final class AppState: ObservableObject {
         let meshRecorded = store.recordInboundUserMessage(
             msg, preview: plaintext, incrementUnread: !conv.muted, kind: .text)
         guard meshRecorded == .inserted else {
-            RTLog.warn("mesh", "msg_receive record=0")
+            logMeshRx(payload, kind: "msg", result: "dup")
             return
         }
+        logMeshRx(payload, kind: "msg", result: "stored")
+        notifyStoredMeshMessage(conversation: conv, senderId: senderId, text: plaintext)
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification, object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": conv.id]
@@ -12644,11 +12755,53 @@ final class AppState: ObservableObject {
         )
     }
 
-    /// Seal an acknowledgement and put it on the mesh. Best-effort: a receipt
-    /// that cannot be sealed or sent is dropped rather than failing anything —
-    /// the message it acknowledges has already arrived.
+    /// The banner for a mesh message that was just stored, the same one a server-delivered message gets (same
+    /// category, title, body rules and userInfo, so a tap opens the conversation and `BlockPolicy` can filter it): a
+    /// phone that was woken in the background for a Bluetooth event would otherwise store the message silently.
+    /// Whether to show it is `MeshMessageBanner.shouldNotify`; quiet hours are applied by `scheduleLocal`, and the
+    /// notification delegate decides how a banner looks when the app is in the foreground.
+    private func notifyStoredMeshMessage(conversation conv: Conversation, senderId: String, text: String) {
+        let bannersEnabled: Bool = (UserDefaults.standard.object(
+            forKey: "qaudion.notifications.banners_enabled") as? Bool) ?? true
+        guard MeshMessageBanner.shouldNotify(
+            bannersEnabled: bannersEnabled, muted: conv.muted,
+            activePeerUserId: activePeerUserId, senderUserId: senderId) else { return }
+        let title: String = conv.peerDisplayName.isEmpty
+            ? DisplayName.forUser(senderId, contacts: self.cachedContacts)
+            : conv.peerDisplayName
+        let hideContent: Bool = (UserDefaults.standard.object(
+            forKey: "qaudion.privacy.hide_notification_content") as? Bool) ?? false
+        let shown: String = FileV2ChatBody.classify(text: text).displayText ?? MessageReplyCodec.shownText(ofBody: text)
+        let bodyText: String = MeshMessageBanner.body(
+            displayText: shown, hideContent: hideContent, previewAllowed: PrivacyGate.messagePreviewInNotifications)
+        let info: [AnyHashable: Any] = ["conversationId": conv.id.uuidString, "peerUserId": senderId]
+        Task { @MainActor in
+            await NotificationCenterService.shared.scheduleLocal(
+                category: .messageDelivered, title: title, body: bodyText, userInfo: info, delay: 0.1)
+        }
+    }
+
+    /// A message this device already stored arrived again. The sender keeps retransmitting until it holds a delivery
+    /// receipt, so the copy is answered with a fresh one — to the contact the stored message belongs to, at most every
+    /// 10 s per message.
+    private func answerDuplicateMeshMessage(clientMsgId: String, fromNodeHex: String) {
+        guard MeshReceiveSupport.shared.mayAnswerDuplicate(clientMsgId: clientMsgId) else { return }
+        let store = ConversationStore()
+        guard let found = store.findByClientMsgId(clientMsgId), found.message.direction == .incoming,
+              let contact = meshSenderContact(forNodeHex: fromNodeHex),
+              !BlockedContactsStore.isBlocked(contact.userId) else { return }
+        guard let conversation = store.loadConversations().first(where: { $0.id == found.conversationId }),
+              conversation.peerUserId == contact.userId else { return }
+        sendMeshReceipt(
+            toNodeHex: fromNodeHex, peerUserId: contact.userId,
+            messageClientMsgId: clientMsgId, kind: MeshReceipt.kindDelivered
+        )
+    }
+
+    /// Seal an acknowledgement and put it on the mesh through the outbox: sent at once, and kept (a newer receipt
+    /// for the same message and kind replaces a queued one) until a first hop accepted it.
     func sendMeshReceipt(toNodeHex: String, peerUserId: String, messageClientMsgId: String, kind: String) {
-        guard let selfId = currentUserId else { return }
+        guard let selfId = currentUserId, let localNodeHex = MeshRuntime.shared.localNodeIdHex else { return }
         // The receipt's OWN id is what travels outside the seal. Reusing the
         // acknowledged message's id there would publish, in the clear, that
         // this exact message had just been read.
@@ -12660,7 +12813,7 @@ final class AppState: ObservableObject {
             messageClientMsgId: messageClientMsgId,
             kind: kind,
             atMs: Int64(Date().timeIntervalSince1970 * 1000),
-            senderNodeHex: MeshRuntime.shared.localNodeIdHex,
+            senderNodeHex: localNodeHex,
             recipientNodeHex: toNodeHex
         )
         let receiptText = String(data: receipt.encode(), encoding: .utf8) ?? ""
@@ -12669,7 +12822,7 @@ final class AppState: ObservableObject {
         let aad = meshPacketAad(
             version: MeshPacket.wireVersion,
             typeWireCode: MeshPacketType.receipt.rawValue,
-            senderId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast,
+            senderId: (try? MeshNodeId(hex: localNodeHex)) ?? MeshNodeId.broadcast,
             recipientId: (try? MeshNodeId(hex: toNodeHex)) ?? MeshNodeId.broadcast
         )
         let sender = ChatMessageSendService(appState: self)
@@ -12684,19 +12837,25 @@ final class AppState: ObservableObject {
                 aadOverride: aad, payloadClass: .service
             )
             guard case .success(let sealed) = outcome else {
-                RTLog.warn("mesh", "receipt_send undec=0 sealfail=1")
+                MeshLog.emit(.appTx, [("ph", "x"), ("kind", "rcpt"), ("state", "failed"), ("attempt", "0")])
                 return
             }
             let shell = MeshSealedShell(
                 clientMsgId: receiptId.uuidString,
                 sealedB64: sealed.base64EncodedString()
             )
+            let entry = MeshOutboxEntry(
+                id: MeshOutboxEntry.receiptKey(acknowledging: messageClientMsgId, kind: kind),
+                kind: .receipt,
+                messageId: messageClientMsgId,
+                conversationId: "",
+                peerUserId: peerUserId,
+                targetNodeHex: toNodeHex,
+                payloadB64: shell.encode().base64EncodedString(),
+                createdAtMs: Int64(Date().timeIntervalSince1970 * 1000)
+            )
             await MainActor.run {
-                MeshRuntime.shared.sendData(
-                    toNodeHex: toNodeHex, payload: shell.encode(), type: .receipt
-                ) { ok in
-                    RTLog.info("mesh", "receipt_send kind=\(kind == MeshReceipt.kindRead ? 1 : 0) ok=\(ok ? 1 : 0)")
-                }
+                MeshOutboxDrain.shared.submit(entry)
             }
         }
     }
@@ -12708,22 +12867,42 @@ final class AppState: ObservableObject {
     /// matches the header, the sealed id matches the shell, and the message
     /// being acknowledged is one we sent to that contact. A receipt is small
     /// and boring, which is exactly why it would be the cheap way to make
-    /// someone's chat claim a message was read when it never was.
-    private func handleIncomingMeshReceipt(fromNodeHex: String, payload: Data) {
-        guard let shell = MeshSealedShell.decode(payload) else { return }
-        guard let selfId = currentUserId else { return }
-        guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else { return }
-        guard let senderContact = cachedContacts.first(where: {
-            MeshFeature.matchesNodeHex(fromNodeHex, contact: $0)
-        }) else {
-            RTLog.warn("mesh", "receipt_receive unknownsender=1")
+    /// someone's chat claim a message was read when it never was. A valid
+    /// receipt also releases the message from the outbox, which has been
+    /// retransmitting it until now.
+    private func handleIncomingMeshReceipt(fromNodeHex: String, payload: Data, afterRefresh: Bool = false) {
+        guard let shell = MeshSealedShell.decode(payload) else {
+            logMeshRx(payload, kind: "rcpt", result: "bad_envelope")
             return
         }
+        guard let selfId = currentUserId, let localNodeHex = MeshRuntime.shared.localNodeIdHex else { return }
+        guard let sealedBytes = Data(base64Encoded: shell.sealedB64) else {
+            logMeshRx(payload, kind: "rcpt", result: "bad_envelope")
+            return
+        }
+        guard let senderContact = meshSenderContact(forNodeHex: fromNodeHex) else {
+            if afterRefresh {
+                logMeshRx(payload, kind: "rcpt", result: "unknown_sender")
+                return
+            }
+            recoverUnknownMeshSender(
+                fromNodeHex: fromNodeHex,
+                onResolved: { [weak self] in
+                    self?.handleIncomingMeshReceipt(fromNodeHex: fromNodeHex, payload: payload, afterRefresh: true)
+                },
+                onUnresolved: { [weak self] in
+                    self?.logMeshRx(payload, kind: "rcpt", result: "unknown_sender")
+                }
+            )
+            return
+        }
+        if afterRefresh { logMeshRx(payload, kind: "rcpt", result: "refresh_hit") }
         let senderId = senderContact.userId
         // BLOCK — same gate as mesh messages: no server filters the mesh, so a blocked contact's
         // receipt must not reach the message status.
         guard !BlockedContactsStore.isBlocked(senderId) else {
             RTLog.info("chat", "block drop=1 kind=mesh")
+            logMeshRx(payload, kind: "rcpt", result: "blocked")
             return
         }
         guard let decrypted = attemptDecryptMeshWireBlob(
@@ -12732,22 +12911,26 @@ final class AppState: ObservableObject {
                 version: MeshPacket.wireVersion,
                 typeWireCode: MeshPacketType.receipt.rawValue,
                 senderId: (try? MeshNodeId(hex: fromNodeHex)) ?? MeshNodeId.broadcast,
-                recipientId: (try? MeshNodeId(hex: MeshRuntime.shared.localNodeIdHex)) ?? MeshNodeId.broadcast
+                recipientId: (try? MeshNodeId(hex: localNodeHex)) ?? MeshNodeId.broadcast
             )
         ) else {
-            RTLog.warn("mesh", "receipt_receive undec=1")
+            logMeshRx(payload, kind: "rcpt", result: "undecryptable")
             return
         }
         guard let receipt = MeshReceipt.decode(decrypted) else {
-            RTLog.warn("mesh", "receipt_receive badenvelope=1")
+            logMeshRx(payload, kind: "rcpt", result: "bad_envelope")
             return
         }
         guard receipt.recipientUserId == selfId, receipt.senderUserId == senderId,
               receipt.senderNodeHex == fromNodeHex,
-              receipt.recipientNodeHex == MeshRuntime.shared.localNodeIdHex,
+              receipt.recipientNodeHex == localNodeHex,
               receipt.receiptId == shell.clientMsgId else {
-            RTLog.warn("mesh", "receipt_receive readdressed=1")
+            logMeshRx(payload, kind: "rcpt", result: "readdressed")
             return
+        }
+        // The outbox stops retransmitting a message only for a receipt from the contact it was sent to.
+        if let queued = MeshOutboxStore.shared.entry(id: receipt.messageClientMsgId), queued.peerUserId == senderId {
+            MeshOutboxDrain.shared.acknowledged(clientMsgId: receipt.messageClientMsgId)
         }
         let store = ConversationStore()
         guard let found = store.findByClientMsgId(receipt.messageClientMsgId) else { return }
@@ -12757,12 +12940,11 @@ final class AppState: ObservableObject {
         // `c` is visible to every listener and every relay hop), so without
         // this a contact could acknowledge a message addressed to somebody
         // else and write blue ticks onto a conversation they were never part
-        // of. Android drops the same packet; this half of the check was
-        // missing here. iOS's Message has no recipient field, so the peer
-        // comes from the conversation the message belongs to.
+        // of. iOS's Message has no recipient field, so the peer comes from the
+        // conversation the message belongs to.
         guard let conversation = store.loadConversations().first(where: { $0.id == found.conversationId }),
               conversation.peerUserId == senderId else {
-            RTLog.warn("mesh", "receipt_receive foreignmsg=1")
+            logMeshRx(payload, kind: "rcpt", result: "readdressed")
             return
         }
         guard let next = meshReceiptStatusUpdate(current: found.message.status, kind: receipt.kind) else { return }
@@ -12771,7 +12953,7 @@ final class AppState: ObservableObject {
             deliveredAt: found.message.deliveredAt ?? Date(),
             readAt: next == .read ? Date() : found.message.readAt
         )
-        RTLog.info("mesh", "receipt_receive applied=\(next == .read ? 1 : 0)")
+        logMeshRx(payload, kind: "rcpt", result: "applied")
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification, object: nil,
             userInfo: ["peerUserId": senderId, "conversationId": found.conversationId]
@@ -17755,6 +17937,9 @@ final class AppState: ObservableObject {
         // after the wipe, so the cache is emptied here, in the one function every
         // wipe path (logout, remote wipe, account deletion) already calls.
         cachedContacts = []
+        // The mesh radio and the identity it runs under belong to the account that left: stop it, drop the
+        // transport built for that node id, and clear what the account had queued.
+        MeshRuntime.shared.accountLeft()
         // BLOCK — the blocked list belongs to the account that left: the next account starts with none and
         // loads its own from the server at sign-in (`ContactBlockService.refreshFromServerIfDue`).
         ContactBlockService.shared.forgetAccount()

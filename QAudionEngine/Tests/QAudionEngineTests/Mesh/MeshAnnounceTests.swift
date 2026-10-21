@@ -7,11 +7,14 @@ final class MeshAnnounceTests: XCTestCase {
         let announce = MeshAnnounce(
             nodeIdHex: "a13f0c8e77b20001",
             identityFingerprintHex: "a13f0c8e77b20001",
-            displayHint: "Marco",
             neighborNodeIdsHex: ["1111111111111111", "2222222222222222"]
         )
         let decoded = MeshAnnounce.decode(announce.encode())
         XCTAssertEqual(decoded, announce)
+
+        // A sender never writes `hint` (docs/mesh/MESH_LINK_SPEC.md 8.2), even if the value carries one.
+        let hinted = MeshAnnounce(nodeIdHex: "a13f0c8e77b20001", identityFingerprintHex: "a13f0c8e77b20001", displayHint: "Marco")
+        XCTAssertNil(MeshAnnounce.decode(hinted.encode())?.displayHint)
     }
 
     func testEncodeDecodeRoundTripWithNoNeighborsOrHint() {
