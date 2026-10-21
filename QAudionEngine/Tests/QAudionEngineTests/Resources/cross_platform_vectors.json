@@ -119,22 +119,6 @@
       "comment": "E.164 requires country digit 1-9 plus 7..14 more digits — must throw"
     }
   ],
-  "nfc_psk_v1": {
-    "description": "NFC Collaborative PSK derivation via HKDF-SHA256 with sorted-concat salt",
-    "algorithm": "X25519 + HKDF-SHA256",
-    "hkdf_info_string": "Q-Audion NFC Collaborative PSK v1",
-    "hkdf_info_encoding": "UTF-8",
-    "hkdf_output_bytes": 32,
-    "salt_construction": "SHA256(sorted_concat(pubA, pubB)) where sorted by lexicographic byte order",
-    "a_priv_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
-    "b_priv_hex": "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40",
-    "a_pub_hex": "07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c",
-    "b_pub_hex": "5869aff450549732cbaaed5e5df9b30a6da31cb0e5742bad5ad4a1a768f1a67b",
-    "shared_secret_hex": "a84dc7c3c8f058b1b2dc4cd1e9b5dc0a7987f88b6a9564cde3391fc421159e77",
-    "salt_hex": "d02fdb03b9860ce0d22113e1b906845443df3a17739627f32f1077b11f1956f2",
-    "expected_psk_hex": "7f8ee62f6120d66711a560104dc89531e4ff7a11fbec49bf0a52fc8a11d66b34",
-    "notes": "SUPERSEDED 2026-07-22 by nfc_psk_v2 (W-NFCIOS). This vector describes the ecdh-only shape iOS used to implement. Android never matched it and there is no NFC KAT in that repo, so the tap could never have worked; the two entropies the wire already exchanged were transmitted and discarded here. Retained only so the change is traceable. Do NOT implement against it. Still consumed by NfcPskDerivation/KatVectorsTests, which cover the anonymous reader that is no longer wired into the pairing flow."
-  },
   "phone_hash_v1": {
     "description": "SHA-256 of E.164 (no salt/pepper). PhoneHash.hash() on iOS.",
     "algorithm": "SHA-256(e164_utf8)",
@@ -205,24 +189,5 @@
     "sample_rate": 48000,
     "samples_per_frame": 960,
     "cbr_frame_size": 256
-  },
-  "nfc_psk_v2": {
-    "description": "NFC Collaborative PSK derivation, cross-platform. Both peers' entropy contributions are folded into the HKDF IKM alongside the ECDH secret.",
-    "algorithm": "X25519 + HKDF-SHA256",
-    "ikm_construction": "ecdh_shared(32) || entropy_a(32) || entropy_b(32) — a = APDU initiator (reader), b = responder (HCE card)",
-    "salt_construction": "SHA256(sorted_concat(ephPubA, ephPubB)) where sorted by unsigned lexicographic byte order",
-    "hkdf_info_string": "Q-Audion NFC Collaborative PSK v1",
-    "hkdf_info_encoding": "UTF-8",
-    "hkdf_output_bytes": 32,
-    "a_priv_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-    "b_priv_hex": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0",
-    "a_pub_hex": "8f40c5adb68f25624ae5b214ea767a6ec94d829d3d7b5e1ad1ba6f3e2138285f",
-    "b_pub_hex": "3ebcb692149344dc54e58160cf90bed9eea1dd14e81c8e91de557af7d7afd915",
-    "entropy_a_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
-    "entropy_b_hex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebfb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
-    "salt_hex": "ccd45db329da8553a66126af50dd5f505b51276e3642aef5e03ee6dadb3a60c5",
-    "expected_psk_hex": "4ba71e8285d957bcb62d6688368e1c0fb4b8e228335959c100d85b6de65388a3",
-    "expected_psk_fingerprint_hex": "a803f0a621d8c4418757c9b6a49fa63ee6bc2b74d7053599be056a52dedbdeb7",
-    "notes": "W-NFCIOS. Pre-computed with the Python cryptography library from the construction in Android NfcProtocol.kt:291-321, so it checks a platform against the other platform's specification rather than against itself. No ML-KEM leg: the Android HCE service dispatches SELECT / 0xC4 / 0xC5 / 0x01 only, so pqcActive is false on that side and the info label stays HKDF_INFO_COLLAB. iOS consumer: NfcCollaborativePskKatTests. ANDROID CONSUMER STILL MISSING — NfcProtocol.deriveCollaborativePsk reads its ephemeral key and entropy from state set by prepareCollaborativeExchange(), with no seam to inject fixed values. Adding that seam is what turns this from 'iOS matches the spec I read' into 'both platforms match each other'."
   }
 }

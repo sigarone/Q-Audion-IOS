@@ -12,8 +12,6 @@ public struct DeviceManagementView: View {
         self.onRevoke = onRevoke
     }
 
-    @State private var showingNfcPairing: Bool = false
-
     public var body: some View {
         List {
             ForEach(viewModel.devices, id: \.deviceId) { d in
@@ -21,21 +19,6 @@ public struct DeviceManagementView: View {
             }
         }
         .navigationTitle("Devices")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Link new", systemImage: "plus") {
-                    // W72: open the existing NFC pairing surface.
-                    showingNfcPairing = true
-                }
-            }
-        }
-        .sheet(isPresented: $showingNfcPairing) {
-            NavigationStack {
-                NfcExchangeView()
-                    .navigationTitle("Link new device")
-                    .navigationBarTitleDisplayMode(.inline)
-            }
-        }
     }
 
     @ViewBuilder

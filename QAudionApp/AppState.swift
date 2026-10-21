@@ -15183,7 +15183,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// F2 of docs/security/CALL_KEY_PRIORITY.md section 4a, for the flows of today (QR + Bluetooth v1, NFC v1): the
+    /// F2 of docs/security/CALL_KEY_PRIORITY.md section 4a, for the flows of today (QR + Bluetooth v1, NFC v2): the
     /// round's handshake signature verified under the identity key an in-person key is bound to, the peer's KCMAC
     /// verified (this runs on the verdict), and either (a) the round's selected PSK is that key or (b) the peer's
     /// signed advertisement matched it through a v3 tag. The keys of that device stored before it are then deleted;

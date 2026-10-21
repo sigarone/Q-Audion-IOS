@@ -115,4 +115,42 @@ final class NfcExchangeViewModelTests: XCTestCase {
         vm.transition(to: .idle)
         XCTAssertEqual(vm.state, .exchanging)
     }
+
+    // MARK: - NFC pairing v2: the second tap
+
+    func test_twoTapFlow_isAChainOfLegalHops() {
+        var vm = NfcExchangeViewModel.mock
+        vm.transition(to: .waiting)
+        vm.transition(to: .exchanging)
+        vm.transition(to: .sasConfirm(sas: "123456", peerDeviceName: "Anna"))
+        vm.transition(to: .holdAgain(peerDeviceName: "Anna"))
+        XCTAssertEqual(vm.state, .holdAgain(peerDeviceName: "Anna"))
+        vm.transition(to: .confirming(peerDeviceName: "Anna"))
+        vm.transition(to: .waitingForPeer(peerDeviceName: "Anna"))
+        XCTAssertEqual(vm.state, .waitingForPeer(peerDeviceName: "Anna"))
+        vm.transition(to: .success(peerDeviceName: "Anna"))
+        XCTAssertEqual(vm.state, .success(peerDeviceName: "Anna"))
+        vm.transition(to: .idle)
+        XCTAssertEqual(vm.state, .idle)
+    }
+
+    func test_secondTapThatEndsUndecidedGoesBackToHoldAgain() {
+        var vm = NfcExchangeViewModel.mock
+        vm.transition(to: .holdAgain(peerDeviceName: "Anna"))
+        vm.transition(to: .confirming(peerDeviceName: "Anna"))
+        vm.transition(to: .waitingForPeer(peerDeviceName: "Anna"))
+        vm.transition(to: .holdAgain(peerDeviceName: "Anna"))
+        XCTAssertEqual(vm.state, .holdAgain(peerDeviceName: "Anna"))
+    }
+
+    func test_peerRejectedIsTerminalUntilDismissed() {
+        var vm = NfcExchangeViewModel.mock
+        vm.transition(to: .confirming(peerDeviceName: "Anna"))
+        vm.transition(to: .peerRejected(peerDeviceName: "Anna"))
+        XCTAssertEqual(vm.state, .peerRejected(peerDeviceName: "Anna"))
+        vm.transition(to: .confirming(peerDeviceName: "Anna"))
+        XCTAssertEqual(vm.state, .peerRejected(peerDeviceName: "Anna"), "no way back into the exchange")
+        vm.transition(to: .idle)
+        XCTAssertEqual(vm.state, .idle)
+    }
 }

@@ -11,8 +11,8 @@ import CryptoKit
 /// These cases store real keys through `ProximityPairingStore.persist` (the NFC path writes with the same
 /// `SovereignKeyVault.storePsk` call), so they need the Keychain: they skip on a host that has none, such as the CI
 /// simulator, and must pass wherever it works (`KeychainAvailability`). The order of the list, the store and the
-/// finalize are covered without the Keychain in `CallKeyPriorityTests`, and the tap that is not confirmed in
-/// `NfcApduExchangeSasGateTests`.
+/// finalize are covered without the Keychain in `CallKeyPriorityTests`, and the NFC ceremony that is not confirmed
+/// (nothing is stored, nothing is sent) in `NfcReaderCeremonyTests`.
 final class PairingAgainTests: XCTestCase {
 
     private var storedNames: [String] = []

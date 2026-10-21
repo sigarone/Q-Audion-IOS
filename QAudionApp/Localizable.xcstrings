@@ -39981,6 +39981,1139 @@
         }
       }
     },
+    "nfc.error.update_other_app": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the other phone runs an older version of the app.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altro telefono usa una versione di Q-Audion non compatibile. Aggiorna l’app sull’altro telefono."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other phone runs a version of Q-Audion that is not compatible. Update the app on the other phone."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El otro teléfono usa una versión de Q-Audion que no es compatible. Actualiza la app en el otro teléfono."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre téléphone utilise une version de Q-Audion non compatible. Mets à jour l’app sur l’autre téléphone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das andere Telefon verwendet eine nicht kompatible Version von Q-Audion. Aktualisieren Sie die App auf dem anderen Telefon."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O outro telefone usa uma versão do Q-Audion que não é compatível. Atualize o app no outro telefone."
+          }
+        }
+      }
+    },
+    "nfc.error.not_ready": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the other phone is not showing its pairing screen in the ready state.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sull’altro telefono apri la schermata di associazione NFC e premi Pronto, poi riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On the other phone, open the NFC pairing screen and tap Ready, then try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En el otro teléfono, abre la pantalla de emparejamiento NFC y pulsa Listo; luego inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sur l’autre téléphone, ouvre l’écran d’association NFC et appuie sur Prêt, puis réessaie."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnen Sie auf dem anderen Telefon den NFC-Kopplungsbildschirm und tippen Sie auf Bereit, dann versuchen Sie es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No outro telefone, abra a tela de pareamento NFC e toque em Pronto; depois tente de novo."
+          }
+        }
+      }
+    },
+    "nfc.error.self_pairing": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the other phone presented this phone's own identity.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non puoi associare il telefono con se stesso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You cannot pair the phone with itself."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No puedes emparejar el teléfono consigo mismo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu ne peux pas associer le téléphone à lui-même."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie können das Telefon nicht mit sich selbst koppeln."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você não pode parear o telefone com ele mesmo."
+          }
+        }
+      }
+    },
+    "nfc.error.identity_invalid": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the identity key of the other phone is not acceptable.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altro telefono ha presentato una chiave di identità non valida."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other phone presented an identity key that is not valid."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El otro teléfono presentó una clave de identidad no válida."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre téléphone a présenté une clé d’identité non valide."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das andere Telefon hat einen ungültigen Identitätsschlüssel vorgelegt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O outro telefone apresentou uma chave de identidade inválida."
+          }
+        }
+      }
+    },
+    "nfc.error.too_slow": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the answer of the other phone took too long.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altro telefono ha risposto troppo lentamente. Tieni i telefoni fermi e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other phone answered too slowly. Hold the phones still and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El otro teléfono respondió demasiado despacio. Mantén los teléfonos quietos e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre téléphone a répondu trop lentement. Garde les téléphones immobiles et réessaie."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das andere Telefon hat zu langsam geantwortet. Halten Sie die Telefone ruhig und versuchen Sie es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O outro telefone respondeu devagar demais. Mantenha os telefones parados e tente de novo."
+          }
+        }
+      }
+    },
+    "nfc.error.timeout": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the time for the pairing ran out.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tempo scaduto. Ricomincia l’associazione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time ran out. Start the pairing again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se acabó el tiempo. Empieza de nuevo el emparejamiento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le temps est écoulé. Recommence l’association."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Zeit ist abgelaufen. Beginnen Sie die Kopplung erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O tempo acabou. Comece o pareamento de novo."
+          }
+        }
+      }
+    },
+    "nfc.error.peer_rejected": {
+      "extractionState": "manual",
+      "comment": "NFC pairing: the other person did not confirm the code.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altra persona ha rifiutato l’associazione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other person declined the pairing."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La otra persona rechazó el emparejamiento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre personne a refusé l’association."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die andere Person hat die Kopplung abgelehnt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A outra pessoa recusou o pareamento."
+          }
+        }
+      }
+    },
+    "nfc.error.no_ceremony": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the other phone no longer holds this pairing.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altro telefono non ha più questa associazione. Ricomincia."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other phone no longer holds this pairing. Start again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El otro teléfono ya no tiene este emparejamiento. Empieza de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre téléphone n’a plus cette association. Recommence."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das andere Telefon hat diese Kopplung nicht mehr. Beginnen Sie von vorn."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O outro telefone não tem mais este pareamento. Comece de novo."
+          }
+        }
+      }
+    },
+    "nfc.error.store_failed_here": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the key could not be saved on this phone.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile salvare la chiave su questo telefono. Ricomincia."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The key could not be saved on this phone. Start again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo guardar la clave en este teléfono. Empieza de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clé n’a pas pu être enregistrée sur ce téléphone. Recommence."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Schlüssel konnte auf diesem Telefon nicht gespeichert werden. Beginnen Sie von vorn."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível salvar a chave neste telefone. Comece de novo."
+          }
+        }
+      }
+    },
+    "nfc.error.store_failed_there": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the other phone could not save the key.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altro telefono non è riuscito a salvare la chiave. Ricomincia."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other phone could not save the key. Start again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El otro teléfono no pudo guardar la clave. Empieza de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre téléphone n’a pas pu enregistrer la clé. Recommence."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das andere Telefon konnte den Schlüssel nicht speichern. Beginnen Sie von vorn."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O outro telefone não conseguiu salvar a chave. Comece de novo."
+          }
+        }
+      }
+    },
+    "nfc.error.field_lost": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: the NFC connection to the other phone was lost.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione NFC interrotta. Avvicina di nuovo i telefoni e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The NFC connection was interrupted. Hold the phones together again and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se interrumpió la conexión NFC. Acerca de nuevo los teléfonos e inténtalo otra vez."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connexion NFC a été interrompue. Rapproche à nouveau les téléphones et réessaie."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die NFC-Verbindung wurde unterbrochen. Halten Sie die Telefone erneut aneinander und versuchen Sie es noch einmal."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A conexão NFC foi interrompida. Aproxime os telefones de novo e tente outra vez."
+          }
+        }
+      }
+    },
+    "nfc.error.security_check": {
+      "extractionState": "manual",
+      "comment": "NFC pairing error: a check of the exchange failed, nothing was saved.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica di sicurezza non riuscita. Ricomincia l’associazione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A security check failed. Start the pairing again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falló una comprobación de seguridad. Empieza de nuevo el emparejamiento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une vérification de sécurité a échoué. Recommence l’association."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine Sicherheitsprüfung ist fehlgeschlagen. Beginnen Sie die Kopplung erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uma verificação de segurança falhou. Comece o pareamento de novo."
+          }
+        }
+      }
+    },
+    "nfc.session.code": {
+      "extractionState": "manual",
+      "comment": "Final text of the system NFC sheet after the first tap; %@ is the 6-digit code grouped as 123 456.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice: %@. Confrontalo con l’altro telefono."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code: %@. Compare it with the other phone."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código: %@. Compáralo con el otro teléfono."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code : %@. Compare-le avec l’autre téléphone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code: %@. Vergleichen Sie ihn mit dem anderen Telefon."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código: %@. Compare com o outro telefone."
+          }
+        }
+      }
+    },
+    "nfc.session.hold_again": {
+      "extractionState": "manual",
+      "comment": "System NFC sheet message: the pairing is not finished, hold the phones together again.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avvicina di nuovo i telefoni per terminare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold the phones together again to finish."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acerca de nuevo los teléfonos para terminar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapproche à nouveau les téléphones pour terminer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halten Sie die Telefone zum Abschluss erneut aneinander."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aproxime os telefones de novo para concluir."
+          }
+        }
+      }
+    },
+    "nfc.session.hold_again_start": {
+      "extractionState": "manual",
+      "comment": "System NFC sheet message of the second tap: hold the iPhone to the other phone again to finish.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avvicina di nuovo l’iPhone all’altro telefono per terminare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold your iPhone to the other phone again to finish."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acerca de nuevo el iPhone al otro teléfono para terminar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapproche à nouveau l’iPhone de l’autre téléphone pour terminer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halten Sie das iPhone zum Abschluss erneut an das andere Telefon."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aproxime o iPhone do outro telefone de novo para concluir."
+          }
+        }
+      }
+    },
+    "nfc.peer_unknown": {
+      "extractionState": "manual",
+      "comment": "Name shown for the other phone in NFC pairing when its identity matches no contact. Used mid-sentence after \"con\" / \"with\", so it carries its own article.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "un telefono sconosciuto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "an unknown phone"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "un teléfono desconocido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "un téléphone inconnu"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "einem unbekannten Telefon"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "um telefone desconhecido"
+          }
+        }
+      }
+    },
+    "nfc.warning.pin_changed": {
+      "extractionState": "manual",
+      "comment": "NFC pairing: the other phone proved a different identity key than the one pinned for this contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attenzione: la chiave di identità di questo contatto è diversa da quella verificata in precedenza. Conferma solo se sei sicuro che la persona davanti a te sia davvero questo contatto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning: this contact’s identity key differs from the one verified before. Confirm only if you are sure the person in front of you really is this contact."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atención: la clave de identidad de este contacto es distinta de la verificada antes. Confirma solo si estás seguro de que la persona que tienes delante es de verdad este contacto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attention : la clé d’identité de ce contact est différente de celle vérifiée précédemment. Ne confirme que si tu es sûr que la personne en face de toi est bien ce contact."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Achtung: Der Identitätsschlüssel dieses Kontakts weicht von dem zuvor überprüften ab. Bestätigen Sie nur, wenn Sie sicher sind, dass die Person vor Ihnen wirklich dieser Kontakt ist."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atenção: a chave de identidade deste contato é diferente da verificada antes. Confirme só se tiver certeza de que a pessoa à sua frente é mesmo este contato."
+          }
+        }
+      }
+    },
+    "nfc.warning.server_mismatch": {
+      "extractionState": "manual",
+      "comment": "NFC pairing: the account the other phone names has not published the identity key it proved.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attenzione: l’account indicato da questo telefono non ha pubblicato questa chiave di identità."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning: the account this phone names has not published this identity key."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atención: la cuenta que indica este teléfono no ha publicado esta clave de identidad."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attention : le compte indiqué par ce téléphone n’a pas publié cette clé d’identité."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Achtung: Das von diesem Telefon genannte Konto hat diesen Identitätsschlüssel nicht veröffentlicht."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atenção: a conta indicada por este telefone não publicou esta chave de identidade."
+          }
+        }
+      }
+    },
+    "nfc.state.hold_again": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen: the code was confirmed here; hold the iPhone to the other phone again to finish.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avvicina di nuovo l’iPhone all’altro telefono per terminare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold your iPhone to the other phone again to finish"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acerca de nuevo el iPhone al otro teléfono para terminar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapproche à nouveau l’iPhone de l’autre téléphone pour terminer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halten Sie das iPhone zum Abschluss erneut an das andere Telefon"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aproxime o iPhone do outro telefone de novo para concluir"
+          }
+        }
+      }
+    },
+    "nfc.state.confirming": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen: the second tap is running.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conferma in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirming…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmation en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätigung läuft …"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmando…"
+          }
+        }
+      }
+    },
+    "nfc.state.waiting_peer": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen: the other person has not confirmed the code yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa dell’altra persona"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the other person"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esperando a la otra persona"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente de l’autre personne"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten auf die andere Person"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aguardando a outra pessoa"
+          }
+        }
+      }
+    },
+    "nfc.state.peer_rejected": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen: the other person did not confirm the code; nothing was saved.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altra persona ha rifiutato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other person declined"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La otra persona rechazó"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre personne a refusé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die andere Person hat abgelehnt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A outra pessoa recusou"
+          }
+        }
+      }
+    },
+    "nfc.state.hold_again_help": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen help: both people confirm, the phones are held together a second time.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altra persona deve confermare il codice sul suo telefono. Tieni i telefoni vicini fino alla fine."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other person must confirm the code on their phone. Keep the phones close until it is done."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La otra persona debe confirmar el código en su teléfono. Mantén los teléfonos cerca hasta el final."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre personne doit confirmer le code sur son téléphone. Garde les téléphones proches jusqu’à la fin."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die andere Person muss den Code auf ihrem Telefon bestätigen. Halten Sie die Telefone bis zum Ende nahe beieinander."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A outra pessoa precisa confirmar o código no telefone dela. Mantenha os telefones próximos até o fim."
+          }
+        }
+      }
+    },
+    "nfc.state.waiting_peer_help": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen help: waiting for the other person to confirm.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’altra persona deve confermare il codice sul suo telefono. Non allontanare i telefoni."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other person must confirm the code on their phone. Do not move the phones apart."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La otra persona debe confirmar el código en su teléfono. No separes los teléfonos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’autre personne doit confirmer le code sur son téléphone. Ne sépare pas les téléphones."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die andere Person muss den Code auf ihrem Telefon bestätigen. Entfernen Sie die Telefone nicht voneinander."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A outra pessoa precisa confirmar o código no telefone dela. Não afaste os telefones."
+          }
+        }
+      }
+    },
+    "nfc.state.idle_help": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen help: the iPhone reads, the Android phone must show its pairing screen in the ready state.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’iPhone funge da lettore NFC. Sul telefono Android apri l’associazione NFC di Q-Audion e premi Pronto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The iPhone acts as the NFC reader. On the Android phone, open Q-Audion NFC pairing and tap Ready."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El iPhone actúa como lector NFC. En el teléfono Android, abre el emparejamiento NFC de Q-Audion y pulsa Listo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’iPhone sert de lecteur NFC. Sur le téléphone Android, ouvre l’association NFC de Q-Audion et appuie sur Prêt."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das iPhone arbeitet als NFC-Leser. Öffnen Sie auf dem Android-Telefon die NFC-Kopplung von Q-Audion und tippen Sie auf Bereit."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O iPhone funciona como leitor NFC. No telefone Android, abra o pareamento NFC do Q-Audion e toque em Pronto."
+          }
+        }
+      }
+    },
+    "nfc.state.after_confirm_hint": {
+      "extractionState": "manual",
+      "comment": "NFC pairing screen: confirm only when both screens show the same code; a second hold of the phones finishes the pairing.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conferma solo se i due schermi mostrano lo stesso codice nello stesso momento. Dopo la conferma, avvicina di nuovo l’iPhone all’altro telefono."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm only if both screens show the same code at the same time. After you confirm, hold the iPhone to the other phone again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirma solo si las dos pantallas muestran el mismo código al mismo tiempo. Tras confirmar, acerca de nuevo el iPhone al otro teléfono."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ne confirme que si les deux écrans affichent le même code en même temps. Après la confirmation, rapproche à nouveau l’iPhone de l’autre téléphone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätigen Sie nur, wenn beide Bildschirme gleichzeitig denselben Code anzeigen. Halten Sie nach der Bestätigung das iPhone erneut an das andere Telefon."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirme só se as duas telas mostrarem o mesmo código ao mesmo tempo. Depois de confirmar, aproxime o iPhone do outro telefone de novo."
+          }
+        }
+      }
+    },
+    "Avvicina di nuovo": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avvicina di nuovo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold together again"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acercar de nuevo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapprocher à nouveau"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut annähern"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aproximar de novo"
+          }
+        }
+      }
+    },
     "Associazione NFC": {
       "extractionState": "manual",
       "localizations": {

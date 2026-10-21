@@ -1,100 +1,57 @@
 import Foundation
 import CryptoKit
-import Security
 #if canImport(CoreNFC) && os(iOS)
 import CoreNFC
 #endif
 
-/// iOS-initiator side of the Android Phase 14c NFC identity-bound key exchange.
+/// iPhone side of NFC pairing v2 (docs/security/NFC_PAIRING_V2.md). The iPhone is only ever the reader; the other
+/// phone is an Android phone in card mode (AID `F0 BC F1 07 3A 51 00`).
 ///
-/// ## Protocol overview
+/// ## Two taps
 ///
-/// Android acts as an HCE (Host Card Emulation) card with AID `F0 BC F1 07 3A 51 00`.
-/// iOS acts as the NFC reader (initiator) using `NFCTagReaderSession` with `.iso7816`.
+/// Tap 1 is one reader session: the exchange runs up to REVEAL, both phones derive the same 6-digit code from the
+/// whole transcript, the session closes and the sheet shows the code in its final message. Nothing is stored. The
+/// users compare the two screens; ``confirmSas()`` then opens tap 2, a new reader session started by that user action.
+/// Tap 2 polls the card until it has stored the key and proved it (`confirm_C`); only then does this phone store its
+/// copy (``onPskDerived``, which also finalizes: F1) and send FINALIZE. If the other person has not decided yet, or
+/// the field is lost, the screen offers to hold the phones together again until the 120 s of the user run out. A
+/// local reject sends nothing: the card times out by itself.
 ///
-/// The exchange sequence is:
-/// ```
-/// iOS (reader)                          Android (HCE card)
-///   ─── SELECT AID ────────────────────>
-///   <── 9000 ────────────────────────────
-///   ─── GET_IDENTITY_KEY (0xC4) ────────>
-///   <── [32B Ed25519 pub] 9000 ──────────
-///   ─── PUSH_PEER_IDENTITY (0xC5) ──────>  ← iOS sends its Ed25519 identity pub
-///   <── 9000 ────────────────────────────
-///   ─── KEY_EXCHANGE (0x01) ────────────>  ← [32B X25519_eph_pub | 32B entropy]
-///   <── [32B X25519_eph_pub] 9000 ───────  ← Android's ephemeral X25519 pub
-/// ```
-///
-/// Both sides then independently derive the PSK via (see
-/// ``deriveCollaborativePsk(myEphPriv:peerEphPub:entropyA:entropyB:)`` for the
-/// exact, current construction — this summary intentionally does not repeat
-/// its full derivation, which salts over the two EPHEMERAL pubkeys plus both
-/// sides' entropy, not the long-term identity keys):
-/// ```
-/// shared = X25519(my_eph_priv, peer_eph_pub)
-/// PSK    = HKDF-SHA256(ikm=shared‖entropy_a‖entropy_b,
-///                       salt=SHA256(sort(my_eph_pub, peer_eph_pub)),
-///                       info="Q-Audion NFC Collaborative PSK v1")
-/// ```
-/// The two IDENTITY keys exchanged in steps 2/3 above (`GET_IDENTITY_KEY`/
-/// `PUSH_PEER_IDENTITY`) are NOT mixed into this KDF — they exist so `S2`
-/// (`AssuranceState.nfcAuthenticated`) can later prove which peer the tapped
-/// PSK is bound to (see `AssuranceState.resolveNfcMixInputs`), and so
-/// `NfcSasConfirmGate`'s SAS step (below) has a real per-call proximity
-/// ceremony independent of the KDF's own inputs.
-///
-/// **W-NFCSAS:** after the PSK is derived, a 6-digit SAS
-/// (``NfcSasComputation``, over the two Ed25519 identity keys — byte-exact
-/// with Android's `nfc/SasComputation.kt`) is shown and the user must
-/// confirm it matches the other device
-/// (``State/sasConfirm(sas:peerDeviceName:)``) before anything is
-/// persisted — see ``confirmSas()``/``rejectSas()``.
-///
-/// **Superseded fallback (removed):** an anonymous, non-identity-bound
-/// single-round X25519 exchange used to exist as a fallback for this class
-/// (`NfcCollaborativeExchange`) — deleted (confirmed dead: zero production
-/// call sites once this identity-required path replaced it; the only peer
-/// that exists, Android's HCE service, never spoke that exchange's protocol
-/// either). `NfcApduExchange` is the ONLY NFC pairing path on iOS today.
-///
-/// **Platform note:** `NFCTagReaderSession` is iOS-only; this class is a no-op
-/// on macOS. The ``State`` type and ``start()``/``cancel()`` entry points are
-/// always available so the caller needn't `#if os(iOS)` everywhere.
+/// The state machine itself is ``NfcReaderCeremony`` (no CoreNFC); this class owns the sessions, the screen state and
+/// the identity policy. `NFCTagReaderSession` is iOS-only; elsewhere ``start()`` reports the unavailable line.
+@MainActor
 public final class NfcApduExchange: NSObject {
 
     // MARK: - Public types
 
     public enum State: Equatable {
         case idle
+        /// Tap 1: the reader session is open, waiting for the other phone.
         case waiting
+        /// Tap 1: the other phone is in the field and the exchange is running.
         case exchanging
-        /// W-NFCSAS — the raw PSK is derived and the ephemeral keys/entropy
-        /// exchanged, but nothing is persisted yet. `sas` is the 6-digit
-        /// Short-Authentication-String (`NfcSasComputation`, a byte-exact
-        /// port of Android's `nfc/SasComputation.kt`) derived from the two
-        /// peers' Ed25519 IDENTITY keys — NOT `ComputeSasUseCase` (that one
-        /// is for the in-call ceremony, derived from the session key into 6
-        /// PGP words; a different construction entirely). The user must
-        /// read this code against the other device before the ceremony can
-        /// proceed — both platforms now derive the identical 6 digits for
-        /// the same tap.
+        /// Both identity proofs verified; nothing is stored. `sas` is the code derived from the whole transcript.
         case sasConfirm(sas: String, peerDeviceName: String)
+        /// The user confirmed here; the phones must be held together again to finish.
+        case holdAgain(peerDeviceName: String)
+        /// Tap 2: the session is open and the exchange with the other phone is running.
+        case confirming(peerDeviceName: String)
+        /// Tap 2: the other person has not decided yet.
+        case waitingForPeer(peerDeviceName: String)
         case success(peerDeviceName: String)
+        /// The other person rejected (proven by their tag); nothing was stored.
+        case peerRejected(peerDeviceName: String)
         case error(String)
+    }
 
-        public static func == (lhs: State, rhs: State) -> Bool {
-            switch (lhs, rhs) {
-            case (.idle, .idle), (.waiting, .waiting), (.exchanging, .exchanging):
-                return true
-            case (.sasConfirm(let sasA, let peerA), .sasConfirm(let sasB, let peerB)):
-                return sasA == sasB && peerA == peerB
-            case (.success(let a), .success(let b)):
-                return a == b
-            case (.error(let a), .error(let b)):
-                return a == b
-            default:
-                return false
-            }
+    /// What the store step did, for the log.
+    public struct StoreOutcome: Equatable, Sendable {
+        public let replaced: Bool
+        public let deleted: Int
+
+        public init(replaced: Bool, deleted: Int) {
+            self.replaced = replaced
+            self.deleted = deleted
         }
     }
 
@@ -107,62 +64,52 @@ public final class NfcApduExchange: NSObject {
     /// Called whenever ``state`` changes.
     public var onStateChanged: ((State) -> Void)?
 
-    /// Called when the PSK exchange completes successfully — i.e. AFTER the
-    /// user has confirmed the SAS (`.sasConfirm` state, see `confirmSas()`).
-    /// Parameters: `(psk: 32B, peerIdentityPub: 32B Ed25519)`.
-    public var onPskDerived: ((Data, Data) async throws -> Void)?
+    /// Called once, when the other phone proved it stored the key and this user had confirmed: store the key bound
+    /// to the verified peer identity and finalize it (the earlier keys of that device are deleted: F1,
+    /// docs/security/CALL_KEY_PRIORITY.md section 4a). Parameters: `(psk: 32B, peerIdentityPub: 32B Ed25519)`. It
+    /// must throw if the key could not be stored.
+    public var onPskDerived: ((Data, Data) async throws -> StoreOutcome)?
 
-    /// W-NFCSAS — the post-derivation confirm gate. `nil` whenever no
-    /// ceremony is currently paused at `.sasConfirm` (before the first tap,
-    /// after a completed/failed/cancelled one).
-    private var sasGate: NfcSasConfirmGate?
+    /// Warning for the confirmation screen about the verified identity (a pinned key that differs, an account that
+    /// does not publish the proven key). Nil when there is none.
+    public private(set) var identityWarning: String?
 
-    /// User confirmed the SAS words match what the other device shows.
-    /// No-op if not currently at `.sasConfirm` (nothing to confirm).
-    public func confirmSas() {
-        sasGate?.confirm()
-        sasGate = nil
-    }
-
-    /// User rejected the SAS (words did not match, or they backed out).
-    /// The ceremony throws before `onPskDerived` is ever called — no
-    /// key material is persisted for a rejected tap. No-op if not
-    /// currently at `.sasConfirm`.
-    public func rejectSas() {
-        sasGate?.reject()
-        sasGate = nil
-    }
-
-    /// Local Ed25519 identity public key (32 bytes). Must be set before ``start()``.
-    /// Typically sourced from ``SovereignIdentityManager``.
+    /// Local Ed25519 identity public key (32 bytes). Must be set before ``start()``; the private key is read from
+    /// the identity manager and has to belong to it.
     public var localIdentityPublicKey: Data?
 
-    /// SECURITY M-6 — optional pinned peer identity for re-pairing.
-    ///
-    /// On the FIRST pairing this is nil (TOFU). The integration layer
-    /// SHOULD persist the peer's Ed25519 identity pub into
-    /// SovereignKeyVault keyed by the peer, and on any SUBSEQUENT
-    /// pairing with the same peer set this property to the stored
-    /// value. When set, `runPhase14cExchange` rejects the exchange
-    /// (constant-time compare) if the tag presents a DIFFERENT
-    /// identity key — defending against a key-substitution / MITM
-    /// swap on re-pair. When nil, behaviour is unchanged (TOFU).
-    ///
-    /// Integration status (SECURITY M-6): NOT wired from the UI today, on
-    /// purpose. `NfcExchangeView` is a blind pairing screen — it does not
-    /// know WHICH contact the user means to re-pair with (the peer's
-    /// identity is only learned at the GET_IDENTITY_KEY step), so there is
-    /// no stored key to pass before `start()`. The vault does persist the
-    /// captured identity per NFC entry (`SovereignKeyVault.nfcPeerIdentityKey
-    /// (name:)`). Once a contact-targeted re-pair entry point exists, set
-    /// this property from that stored value before `start()` and surface a
-    /// prominent "this device's key changed — possible attack" alert on
-    /// ``ExchangeError/peerIdentityMismatch`` instead of silently re-trusting.
+    /// The account id sent in the sealed identity block (`n = 0` when empty: no account id).
+    public var localUserId: String = ""
+
+    /// Optional pinned peer identity for a contact-targeted re-pairing: the exchange stops with
+    /// `peer_identity_changed` if the other phone proves a different key.
     public var expectedPeerIdentityPub: Data?
+
+    /// Optional lookup of the identity keys an account publishes (the same one proximity pairing uses). A proven key
+    /// that is not among them adds a warning to the confirmation screen.
+    public var serverIdentityKeys: ((String) async -> Set<Data>)?
+
+    // MARK: - Test seams
+
+    var identityProvider: (() -> NfcPairingV2LocalIdentity?)?
+    var environment: NfcReaderEnvironment = .live
+    /// Sleeps until the 120 s of the user are over (a test replaces it).
+    var timerSleepMs: (UInt64) async -> Void = { ms in try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+    /// False in the tests: no CoreNFC session is opened, the tests drive `performFirstTap` / `performConfirmTap`.
+    var opensSessions: Bool = true
+    var assessor: (NfcPairingV2Identity, NfcPairingV2Policy.ServerCheck) -> NfcPeerAssessment = { peer, check in
+        NfcPairingV2Policy.liveAssessment(peer: peer, serverCheck: check)
+    }
+
+    private static let serverCheckTimeoutMs: UInt64 = 3_000
 
     // MARK: - Init
 
     private let availability: NfcAvailability
+    private var ceremony: NfcReaderCeremony?
+    private var peerName: String = ""
+    private var confirmationTimer: Task<Void, Never>?
+    private var localStoreFailed: Bool = false
 
     public init(availability: NfcAvailability = .device) {
         self.availability = availability
@@ -171,448 +118,535 @@ public final class NfcApduExchange: NSObject {
 
     // MARK: - Lifecycle
 
-    /// Begin the NFC reader session. On macOS (no CoreNFC) transitions immediately to `.error`.
+    /// Begin tap 1. On macOS (no CoreNFC) transitions immediately to `.error`.
     public func start() {
-        guard let idPub = localIdentityPublicKey, idPub.count == 32 else {
-            state = .error(String(localized: "nfc.error.identity_key_invalid", defaultValue: "Chiave pubblica d'identità locale mancante o non valida", comment: "NFC pairing error: this phone's own identity key is missing or malformed."))
-            return
-        }
-        guard availability.isAvailable else {
-            state = .error(NfcAvailability.unavailableMessage)
-            return
-        }
+        guard prepareCeremony() else { return }
         #if canImport(CoreNFC) && os(iOS)
-        endSessionIfActive()
-        let d = TagDelegate()
-        d.owner = self
-        tagDelegate = d
-        guard let session = NFCTagReaderSession(
-            pollingOption: [.iso14443],
-            delegate: d,
-            queue: nil
-        ) else {
-            state = .error(String(localized: "nfc.error.session_failed", defaultValue: "Impossibile avviare la lettura NFC", comment: "NFC pairing error: the NFC reader session could not be created."))
-            return
-        }
-        session.alertMessage = String(localized: "nfc.session.hold_near", defaultValue: "Avvicina l'iPhone al telefono Android con Q-Audion.", comment: "System NFC sheet message: hold the iPhone near the other phone.")
-        nfcSession = session
-        session.begin()
-        state = .waiting
+        if opensSessions { openSession(.first) }
         #else
-        state = .error(NfcAvailability.unavailableMessage)
+        if opensSessions { state = .error(NfcAvailability.unavailableMessage) }
         #endif
     }
 
-    /// Cancel any running session — including one paused at `.sasConfirm`
-    /// awaiting the user's decision (rejects it, same as `rejectSas()`, so
-    /// the suspended `runPhase14cExchange` Task unwinds instead of leaking).
+    /// Checks the prerequisites and creates the ceremony of a new pairing. False (with the error on screen) when
+    /// the phone has no usable identity or cannot read NFC tags.
+    func prepareCeremony() -> Bool {
+        guard let idPub = localIdentityPublicKey, idPub.count == 32 else {
+            state = .error(String(localized: "nfc.error.identity_key_invalid", defaultValue: "Chiave pubblica d'identità locale mancante o non valida", comment: "NFC pairing error: this phone's own identity key is missing or malformed."))
+            return false
+        }
+        guard availability.isAvailable else {
+            state = .error(NfcAvailability.unavailableMessage)
+            return false
+        }
+        guard let local = loadLocalIdentity(expectedPublicKey: idPub) else {
+            state = .error(String(localized: "nfc.error.identity_key_missing", defaultValue: "Chiave d'identità locale non configurata", comment: "NFC pairing error: this phone has no identity key yet."))
+            return false
+        }
+        resetCeremony()
+        ceremony = NfcReaderCeremony(local: local, pinnedPeerKey: expectedPeerIdentityPub, environment: environment)
+        return true
+    }
+
+    /// The user compared the codes and they match. Opens tap 2. No-op unless the code is on screen.
+    public func confirmSas() {
+        guard case .sasConfirm = state, let ceremony, ceremony.hasStagedCeremony else { return }
+        guard ceremony.remainingConfirmationMs() > 0 else {
+            expireCeremony()
+            return
+        }
+        ceremony.userDidConfirm()
+        state = .holdAgain(peerDeviceName: peerName)
+        if opensSessions { beginConfirmSession() }
+    }
+
+    /// The user could not match the codes, or backed out. Nothing is sent: the card times out on its own.
+    public func rejectSas() {
+        guard ceremony?.hasStagedCeremony == true else { return }
+        switch state {
+        case .sasConfirm, .holdAgain, .waitingForPeer, .confirming:
+            break
+        default:
+            return
+        }
+        resetCeremony(rejected: true)
+        state = .error(String(localized: "nfc.error.sas_rejected", defaultValue: "Codice non confermato — scambio annullato", comment: "NFC pairing: the user said the 6-digit codes do not match, the exchange is cancelled."))
+    }
+
+    /// Opens tap 2 again (after the other person had not decided yet, or the field was lost).
+    public func holdAgain() {
+        guard case .holdAgain = state, ceremony?.hasStagedCeremony == true else { return }
+        if opensSessions { beginConfirmSession() }
+    }
+
+    /// Cancel any running session and discard a ceremony waiting for the user (nothing is sent).
     public func cancel() {
+        resetCeremony(rejected: ceremony?.hasStagedCeremony == true)
+        switch state {
+        case .waiting, .exchanging, .sasConfirm, .holdAgain, .confirming, .waitingForPeer:
+            state = .idle
+        default:
+            break
+        }
+    }
+
+    private func resetCeremony(rejected: Bool = false) {
+        confirmationTimer?.cancel()
+        confirmationTimer = nil
         #if canImport(CoreNFC) && os(iOS)
         endSessionIfActive()
         #endif
-        sasGate?.reject()
-        sasGate = nil
-        if case .waiting = state { state = .idle }
-        if case .exchanging = state { state = .idle }
-        if case .sasConfirm = state { state = .idle }
+        if rejected {
+            ceremony?.rejectLocally()
+        } else {
+            ceremony?.discard()
+        }
+        ceremony = nil
+        identityWarning = nil
+        localStoreFailed = false
+    }
+
+    private func loadLocalIdentity(expectedPublicKey: Data) -> NfcPairingV2LocalIdentity? {
+        if let identityProvider {
+            return identityProvider()
+        }
+        guard let stored = SovereignIdentityManager().loadIdentity() else { return nil }
+        var seed = Data(stored.signingPrivate)
+        defer { CryptoConstants.zeroize(&seed) }
+        guard let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: seed),
+              key.publicKey.rawRepresentation == Data(stored.signingPublic),
+              Data(stored.signingPublic) == expectedPublicKey,
+              let identity = try? NfcPairingV2Identity(publicKey: expectedPublicKey, userId: localUserId) else {
+            return nil
+        }
+        return NfcPairingV2LocalIdentity(identity: identity, signingPrivateKey: seed)
+    }
+
+    // MARK: - Tap logic (no CoreNFC)
+
+    /// What the session layer does with the system sheet after a tap.
+    enum TapEnd: Equatable {
+        /// Close the sheet; `message` is its final text (the code, or the success line).
+        case finished(message: String)
+        /// Close the sheet with this error text.
+        case failed(message: String)
+        /// Close the sheet with this text and offer to hold the phones together again.
+        case holdAgain(message: String)
+    }
+
+    /// Tap 1 over `transport`: the exchange up to REVEAL, the identity assessment, the code on screen.
+    func performFirstTap(over transport: NfcIso7816Transport) async -> TapEnd {
+        guard let ceremony else {
+            let message = Self.message(for: NfcPairingV2Failure(.order))
+            state = .error(message)
+            return .failed(message: message)
+        }
+        state = .exchanging
+        do {
+            let first = try await ceremony.runFirstTap(over: transport)
+            // Cancelled while the tap was running: the screen has moved on, nothing may come back to life.
+            guard self.ceremony === ceremony else {
+                ceremony.discard()
+                return .failed(message: Self.message(for: NfcPairingV2Failure(.userRejected)))
+            }
+            let serverCheck = await checkServer(for: first.peer)
+            guard self.ceremony === ceremony else {
+                ceremony.discard()
+                return .failed(message: Self.message(for: NfcPairingV2Failure(.userRejected)))
+            }
+            let assessment = assessor(first.peer, serverCheck)
+            peerName = assessment.contactName ?? Self.unknownPeerName
+            identityWarning = assessment.warning
+            NfcPairingLog.sasShown(role: .reader, peerKnown: assessment.peerKnown, pinned: assessment.pinned,
+                                   logTag: first.logTag)
+            state = .sasConfirm(sas: first.sas, peerDeviceName: peerName)
+            startConfirmationTimer()
+            return .finished(message: Self.codeMessage(first.sas))
+        } catch let failure as NfcPairingV2Failure {
+            let message = Self.message(for: failure)
+            if self.ceremony === ceremony { state = .error(message) }
+            return .failed(message: message)
+        } catch {
+            let message = Self.message(for: NfcPairingV2Failure(.cardError))
+            if self.ceremony === ceremony { state = .error(message) }
+            return .failed(message: message)
+        }
+    }
+
+    /// Tap 2 over `transport`: poll the card, store on a verified `confirm_C`, FINALIZE.
+    func performConfirmTap(over transport: NfcIso7816Transport) async -> TapEnd {
+        guard let ceremony, ceremony.hasStagedCeremony else {
+            let message = Self.message(for: NfcPairingV2Failure(.noCeremony))
+            state = .error(message)
+            return .failed(message: message)
+        }
+        state = .confirming(peerDeviceName: peerName)
+        let name = peerName
+        let result = await ceremony.runConfirmTap(
+            over: transport,
+            progress: { [weak self] decision in
+                if decision == .pending, let self, case .confirming = self.state {
+                    self.state = .waitingForPeer(peerDeviceName: name)
+                }
+            },
+            store: { [weak self] psk, peer in
+                // Nothing is stored for a ceremony the user cancelled or rejected in the meantime.
+                guard let self, self.ceremony === ceremony, let handler = self.onPskDerived else {
+                    throw NfcPairingV2Failure(.storeFailed)
+                }
+                do {
+                    let outcome = try await handler(psk, peer.publicKey)
+                    return NfcReaderStoreOutcome(replaced: outcome.replaced, deleted: outcome.deleted)
+                } catch {
+                    self.localStoreFailed = true
+                    throw error
+                }
+            })
+        var storedAlready = false
+        if case .stored = result { storedAlready = true }
+        guard self.ceremony === ceremony || storedAlready else {
+            // Cancelled or rejected while the tap was running: the screen already moved on.
+            ceremony.discard()
+            return .failed(message: Self.message(for: NfcPairingV2Failure(.userRejected)))
+        }
+        switch result {
+        case .stored:
+            confirmationTimer?.cancel()
+            confirmationTimer = nil
+            self.ceremony = nil
+            state = .success(peerDeviceName: name)
+            return .finished(message: String(localized: "nfc.session.paired", defaultValue: "Associato con \(name)", comment: "System NFC sheet message after a successful pairing; %@ is the other phone's name."))
+        case .peerRejected:
+            confirmationTimer?.cancel()
+            confirmationTimer = nil
+            self.ceremony = nil
+            state = .peerRejected(peerDeviceName: name)
+            return .failed(message: Self.message(for: NfcPairingV2Failure(.peerRejected)))
+        case .stillPending, .fieldLost:
+            if ceremony.remainingConfirmationMs() == 0 {
+                expireCeremony()
+                return .failed(message: Self.message(for: NfcPairingV2Failure(.timeout)))
+            }
+            state = .holdAgain(peerDeviceName: name)
+            return .holdAgain(message: String(localized: "nfc.session.hold_again", defaultValue: "Avvicina di nuovo i telefoni per terminare.", comment: "System NFC sheet message: the pairing is not finished, hold the phones together again."))
+        case .failed(let token):
+            confirmationTimer?.cancel()
+            confirmationTimer = nil
+            self.ceremony = nil
+            let message = Self.message(for: NfcPairingV2Failure(token), localStoreFailed: localStoreFailed)
+            state = .error(message)
+            return .failed(message: message)
+        }
+    }
+
+    private func checkServer(for peer: NfcPairingV2Identity) async -> NfcPairingV2Policy.ServerCheck {
+        guard let lookup = serverIdentityKeys, !peer.userId.isEmpty else { return .unavailable }
+        let userId = peer.userId
+        let presented = peer.publicKey
+        let timeoutMs = Self.serverCheckTimeoutMs
+        let published: Set<Data>? = await withTaskGroup(of: Set<Data>?.self) { group in
+            group.addTask { await lookup(userId) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutMs * 1_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        guard let published else { return .unavailable }
+        return NfcPairingV2Policy.serverVerdict(published: published, presented: presented)
+    }
+
+    // MARK: - The 120 s of the user
+
+    private func startConfirmationTimer() {
+        confirmationTimer?.cancel()
+        guard let ceremony else { return }
+        let remaining = ceremony.remainingConfirmationMs()
+        let sleepMs = timerSleepMs
+        confirmationTimer = Task { [weak self] in
+            await sleepMs(remaining)
+            if Task.isCancelled { return }
+            self?.confirmationTimerFired()
+        }
+    }
+
+    func confirmationTimerFired() {
+        guard let ceremony, ceremony.hasStagedCeremony else { return }
+        switch state {
+        case .sasConfirm, .holdAgain, .waitingForPeer, .confirming:
+            if ceremony.remainingConfirmationMs() == 0 {
+                expireCeremony()
+            }
+        default:
+            break
+        }
+    }
+
+    private func expireCeremony() {
+        confirmationTimer?.cancel()
+        confirmationTimer = nil
+        #if canImport(CoreNFC) && os(iOS)
+        endSessionIfActive()
+        #endif
+        ceremony?.expire()
+        ceremony = nil
+        state = .error(Self.message(for: NfcPairingV2Failure(.timeout)))
+    }
+
+    // MARK: - Texts
+
+    private static var unknownPeerName: String {
+        String(localized: "nfc.peer_unknown", defaultValue: "un telefono sconosciuto", comment: "Name shown for the other phone in NFC pairing when its identity matches no contact. Used mid-sentence after \"con\" / \"with\", so it carries its own article.")
+    }
+
+    /// `123 456`.
+    static func groupedCode(_ sas: String) -> String {
+        guard sas.count == 6 else { return sas }
+        return String(sas.prefix(3)) + " " + String(sas.suffix(3))
+    }
+
+    static func codeMessage(_ sas: String) -> String {
+        let grouped = groupedCode(sas)
+        return String(localized: "nfc.session.code", defaultValue: "Codice: \(grouped). Confrontalo con l\u{2019}altro telefono.", comment: "Final text of the system NFC sheet after the first tap; %@ is the 6-digit code grouped as 123 456.")
+    }
+
+    /// The text for a failed ceremony. Never contains a key, a code or an identity.
+    static func message(for failure: NfcPairingV2Failure, localStoreFailed: Bool = false) -> String {
+        switch failure.token {
+        case .version:
+            return String(localized: "nfc.error.update_other_app", defaultValue: "L\u{2019}altro telefono usa una versione di Q-Audion non compatibile. Aggiorna l\u{2019}app sull\u{2019}altro telefono.", comment: "NFC pairing error: the other phone runs an older version of the app.")
+        case .notArmed:
+            return String(localized: "nfc.error.not_ready", defaultValue: "Sull\u{2019}altro telefono apri la schermata di associazione NFC e premi Pronto, poi riprova.", comment: "NFC pairing error: the other phone is not showing its pairing screen in the ready state.")
+        case .identitySelf:
+            return String(localized: "nfc.error.self_pairing", defaultValue: "Non puoi associare il telefono con se stesso.", comment: "NFC pairing error: the other phone presented this phone's own identity.")
+        case .identityInvalid:
+            return String(localized: "nfc.error.identity_invalid", defaultValue: "L\u{2019}altro telefono ha presentato una chiave di identità non valida.", comment: "NFC pairing error: the identity key of the other phone is not acceptable.")
+        case .peerIdentityChanged:
+            return String(localized: "nfc.error.peer_identity_changed", defaultValue: "La chiave d'identità dell'altro telefono è cambiata dall'ultima associazione: operazione annullata (possibile attacco)", comment: "NFC pairing error: the other phone presented a different identity key than the one stored.")
+        case .rtt:
+            return String(localized: "nfc.error.too_slow", defaultValue: "L\u{2019}altro telefono ha risposto troppo lentamente. Tieni i telefoni fermi e riprova.", comment: "NFC pairing error: the answer of the other phone took too long.")
+        case .timeout:
+            return String(localized: "nfc.error.timeout", defaultValue: "Tempo scaduto. Ricomincia l\u{2019}associazione.", comment: "NFC pairing error: the time for the pairing ran out.")
+        case .userRejected, .peerRejected:
+            return String(localized: "nfc.error.peer_rejected", defaultValue: "L\u{2019}altra persona ha rifiutato l\u{2019}associazione.", comment: "NFC pairing: the other person did not confirm the code.")
+        case .noCeremony:
+            return String(localized: "nfc.error.no_ceremony", defaultValue: "L\u{2019}altro telefono non ha più questa associazione. Ricomincia.", comment: "NFC pairing error: the other phone no longer holds this pairing.")
+        case .storeFailed:
+            if localStoreFailed {
+                return String(localized: "nfc.error.store_failed_here", defaultValue: "Impossibile salvare la chiave su questo telefono. Ricomincia.", comment: "NFC pairing error: the key could not be saved on this phone.")
+            }
+            return String(localized: "nfc.error.store_failed_there", defaultValue: "L\u{2019}altro telefono non è riuscito a salvare la chiave. Ricomincia.", comment: "NFC pairing error: the other phone could not save the key.")
+        case .fieldLost:
+            return String(localized: "nfc.error.field_lost", defaultValue: "Connessione NFC interrotta. Avvicina di nuovo i telefoni e riprova.", comment: "NFC pairing error: the NFC connection to the other phone was lost.")
+        case .order, .length, .userId, .x25519Zero, .kem, .openFailed, .mac, .signature, .commitment, .cardError:
+            return String(localized: "nfc.error.security_check", defaultValue: "Verifica di sicurezza non riuscita. Ricomincia l\u{2019}associazione.", comment: "NFC pairing error: a check of the exchange failed, nothing was saved.")
+        }
     }
 
     // MARK: - CoreNFC internals (iOS-only)
 
     #if canImport(CoreNFC) && os(iOS)
+    fileprivate enum SessionKind {
+        case first
+        case confirm
+    }
+
     private var nfcSession: NFCTagReaderSession?
     private var tagDelegate: TagDelegate?
+    /// Bumped whenever a session ends, so a callback of a session that is already over is ignored.
+    private var generation: Int = 0
 
     private func endSessionIfActive() {
+        generation &+= 1
         nfcSession?.invalidate()
         nfcSession = nil
         tagDelegate = nil
     }
 
-    /// Drive the APDU sequence over an ISO-7816 tag (the Android HCE card).
-    /// Returns the peer device name string (from select response or placeholder).
-    fileprivate func runPhase14cExchange(
-        over iso: NFCISO7816Tag,
-        session: NFCTagReaderSession
-    ) async throws -> String {
-        state = .exchanging
-
-        guard let myIdPub = localIdentityPublicKey, myIdPub.count == 32 else {
-            throw ExchangeError.identityKeyMissing
-        }
-
-        // Step 1: SELECT AID F0BCF1073A5100
-        let aid = Data([0xF0, 0xBC, 0xF1, 0x07, 0x3A, 0x51, 0x00])
-        let selectApdu = NFCISO7816APDU(
-            instructionClass: 0x00, instructionCode: 0xA4,
-            p1Parameter: 0x04, p2Parameter: 0x00,
-            data: aid, expectedResponseLength: -1
-        )
-        let (_, sw1s, sw2s) = try await iso.sendCommand(apdu: selectApdu)
-        guard sw1s == 0x90, sw2s == 0x00 else {
-            throw ExchangeError.apduFailed("SELECT", sw1s, sw2s)
-        }
-
-        // Step 2: GET_IDENTITY_KEY (0xC4) — receive peer's Ed25519 identity pub
-        //
-        // W-NFCIOS — CLA is 0x80, the proprietary class. Android checks it on
-        // every one of the three commands (NfcApduService.kt:399,411,423 against
-        // NfcConstants.CLA_PROPRIETARY) and answers SW_INS_NOT_SUPPORTED (0x6D00)
-        // to anything else, so the 0x00 we sent before died here — the very first
-        // command after SELECT. Only SELECT itself is class 0x00, because that is
-        // the ISO-standard header Android matches byte-for-byte
-        // (NfcConstants.SELECT_AID_HEADER = 00 A4 04 00).
-        let getIdApdu = NFCISO7816APDU(
-            instructionClass: 0x80, instructionCode: 0xC4,
-            p1Parameter: 0x00, p2Parameter: 0x00,
-            data: Data(), expectedResponseLength: 32
-        )
-        let (idKeyResp, sw1g, sw2g) = try await iso.sendCommand(apdu: getIdApdu)
-        guard sw1g == 0x90, sw2g == 0x00, idKeyResp.count == 32 else {
-            throw ExchangeError.apduFailed("GET_IDENTITY_KEY", sw1g, sw2g)
-        }
-        let peerIdentityPub = idKeyResp
-
-        // SECURITY M-6 — pinned-key check on re-pairing. If the
-        // caller supplied a previously-stored identity for this peer
-        // and the tag now presents a different one, abort: this is a
-        // key-substitution attempt or a genuine key rotation the
-        // user must explicitly re-confirm out of band.
-        try NfcApduExchange.verifyPinnedPeerIdentity(
-            pinned: expectedPeerIdentityPub,
-            presented: peerIdentityPub
-        )
-
-        // Step 3: PUSH_PEER_IDENTITY (0xC5) — send our Ed25519 identity pub
-        let pushIdApdu = NFCISO7816APDU(
-            instructionClass: 0x80, instructionCode: 0xC5,
-            p1Parameter: 0x00, p2Parameter: 0x00,
-            data: Data(myIdPub), expectedResponseLength: -1
-        )
-        let (_, sw1p, sw2p) = try await iso.sendCommand(apdu: pushIdApdu)
-        guard sw1p == 0x90, sw2p == 0x00 else {
-            throw ExchangeError.apduFailed("PUSH_PEER_IDENTITY", sw1p, sw2p)
-        }
-
-        // Step 4: KEY_EXCHANGE (0x01) — send [ephemeral X25519 pub | 32B entropy],
-        //         receive the peer's [ephemeral X25519 pub | 32B entropy].
-        //
-        // W-NFCIOS — the response is 64 bytes, not 32. Android answers with the
-        // same payload shape it received (NfcApduService.kt:369 returns
-        // `ourPayload`, built by NfcProtocol.prepareCollaborativeExchange() =
-        // pubkey(32) ‖ entropy(32), NfcConstants.PAYLOAD_SIZE = 64). Guarding on
-        // 32 threw on a perfectly good reply.
-        let myEphPriv = Curve25519.KeyAgreement.PrivateKey()
-        let myEphPub = myEphPriv.publicKey.rawRepresentation
-        // SECURITY H-8 is closed by this change: the entropy each side
-        // contributes is now folded into the KDF instead of being transmitted
-        // and ignored. Both halves matter — a peer that could bias only its own
-        // ephemeral key still cannot steer the result while the other side's
-        // 32 fresh CSPRNG bytes are in the IKM.
-        let entropy = NfcApduExchange.secureRandomBytes(32)
-        let kePayload = myEphPub + entropy   // 64 bytes
-        let keyExchangeApdu = NFCISO7816APDU(
-            instructionClass: 0x80, instructionCode: 0x01,
-            p1Parameter: 0x00, p2Parameter: 0x00,
-            data: kePayload, expectedResponseLength: 64
-        )
-        let (peerPayload, sw1k, sw2k) = try await iso.sendCommand(apdu: keyExchangeApdu)
-        guard sw1k == 0x90, sw2k == 0x00, peerPayload.count == 64 else {
-            throw ExchangeError.apduFailed("KEY_EXCHANGE", sw1k, sw2k)
-        }
-        let peerEphPubBytes = peerPayload.prefix(32)
-        let peerEntropy = peerPayload.suffix(32)
-
-        let peerEphPub = try Curve25519.KeyAgreement.PublicKey(
-            rawRepresentation: Data(peerEphPubBytes))
-        // This device is the APDU initiator (iOS can only ever be the reader),
-        // so our entropy is `entropy_a` and the card's is `entropy_b`.
-        let psk = try NfcApduExchange.deriveCollaborativePsk(
-            myEphPriv: myEphPriv,
-            peerEphPub: peerEphPub,
-            entropyA: entropy,
-            entropyB: Data(peerEntropy)
-        )
-
-        // W-NFCSAS — pause here and make the user compare/confirm BEFORE the
-        // key is ever handed to the integration layer. `onPskDerived` (the
-        // ONLY call in this type that persists anything — `NfcExchangeView
-        // .persistPsk` writes to `SovereignKeyVault` from inside it) is
-        // reached ONLY through `handOverIfConfirmed` below, on a confirm; a
-        // reject (or a cancel()) throws first, so nothing is ever written for
-        // a rejected tap.
-        //
-        // Uses `NfcSasComputation` — a byte-exact port of Android's
-        // `nfc/SasComputation.kt` — over the two Ed25519 IDENTITY keys
-        // (`myIdPub`/`peerIdentityPub`, already exchanged above), NOT
-        // `ComputeSasUseCase` (that one derives from the session/call key
-        // into 6 PGP words, for the in-call ceremony — a different
-        // construction). Both platforms now derive the identical 6-digit
-        // code for the same tap (pinned by the shared KAT vectors:
-        // all-zero vs all-0xFF -> "759936"; 0..31 vs 32..63 -> "360896").
-        let sas = try NfcSasComputation.computeSas(
-            selfIkEdPub: Data(myIdPub),
-            peerIkEdPub: Data(peerIdentityPub)
-        )
-        let gate = NfcSasConfirmGate()
-        sasGate = gate
-        state = .sasConfirm(sas: sas, peerDeviceName: Self.peerDeviceName)
-        defer { if sasGate === gate { sasGate = nil } }
-
-        // Notify the integration layer, but only once the user has confirmed. A key stored by an earlier tap with
-        // the same phone is replaced by this one at that point and not before.
-        try await Self.handOverIfConfirmed(gate: gate, psk: psk, peerIdentityPub: peerIdentityPub, to: onPskDerived)
-
-        return Self.peerDeviceName
+    private func beginConfirmSession() {
+        openSession(.confirm)
     }
 
-    /// Name shown for the phone at the other end of the tap.
-    private static var peerDeviceName: String {
-        String(localized: "nfc.peer_name", defaultValue: "il telefono Android", comment: "Name shown for the Android phone the iPhone was tapped against during NFC pairing. Used mid-sentence after \"con\" / \"with\", so it carries its own article.")
-    }
-
-    fileprivate func handleSessionError(_ error: Error) {
-        let nfcError = error as? NFCReaderError
-        if nfcError?.code == .readerSessionInvalidationErrorUserCanceled {
-            if case .waiting = state { state = .idle }
-            if case .exchanging = state { state = .idle }
+    private func openSession(_ kind: SessionKind) {
+        endSessionIfActive()
+        let delegate = TagDelegate()
+        delegate.owner = self
+        delegate.generation = generation
+        delegate.kind = kind
+        tagDelegate = delegate
+        guard let session = NFCTagReaderSession(pollingOption: [.iso14443], delegate: delegate, queue: nil) else {
+            state = .error(String(localized: "nfc.error.session_failed", defaultValue: "Impossibile avviare la lettura NFC", comment: "NFC pairing error: the NFC reader session could not be created."))
             return
         }
-        state = .error(error.localizedDescription)
-        endSessionIfActive()
-    }
-    #endif
-
-    // MARK: - PSK derivation (platform-independent)
-
-    /// W-NFCIOS — the collaborative PSK, byte-identical to the Android HCE peer.
-    ///
-    /// ```
-    /// ikm  = ecdh(32) ‖ entropy_a(32) ‖ entropy_b(32)            [96]
-    /// salt = SHA-256(sorted(myEphPub, peerEphPub))               [32]
-    /// info = "Q-Audion NFC Collaborative PSK v1"
-    /// psk  = HKDF-SHA256(ikm, salt, info, 32)
-    /// ```
-    /// `entropy_a` is the APDU initiator's, `entropy_b` the responder's. iOS can
-    /// only be the reader, so the caller always passes its own as `entropyA`.
-    /// Mirrors `NfcProtocol.deriveCollaborativePsk` (NfcProtocol.kt:291-321),
-    /// with no ML-KEM leg because the Android HCE service never runs one: its
-    /// APDU dispatch handles SELECT / 0xC4 / 0xC5 / 0x01 and nothing else
-    /// (NfcApduService.kt:141-153), so `pqcActive` is false on that side and the
-    /// info label stays `HKDF_INFO_COLLAB`.
-    ///
-    /// This REPLACES the previous identity-bound derivation, which salted over
-    /// the two long-term identity keys and dropped both entropies. That shape
-    /// could never agree with the only peer that exists, so nothing is being
-    /// migrated — there are no working iOS-derived NFC keys in the field to
-    /// invalidate. The identity binding it was reaching for is still worth
-    /// having, but it belongs in the stored metadata rather than in the KDF,
-    /// where changing it would mean moving both platforms in lockstep. Today the
-    /// peer's Ed25519 key is fetched over 0xC4 and survives only as the first 16
-    /// hex characters of the vault account name (`NfcExchangeView.persistPsk`);
-    /// recording it in full, so a call can prove it is talking to the peer that
-    /// was tapped, is a follow-up and is NOT done here.
-    ///
-    /// Note for whoever re-pins the cross-platform vector: `nfc_psk_v1` in
-    /// Tests/Resources/cross_platform_vectors.json still describes the old
-    /// ecdh-only shape and says "Android must confirm byte-identical output".
-    /// Android never did — there is no NFC KAT in that repo at all. Aligning iOS
-    /// to Android rather than the reverse is deliberate: real NFC keys exist on
-    /// Android phones today and none exist here.
-    public static func deriveCollaborativePsk(
-        myEphPriv: Curve25519.KeyAgreement.PrivateKey,
-        peerEphPub: Curve25519.KeyAgreement.PublicKey,
-        entropyA: Data,
-        entropyB: Data
-    ) throws -> Data {
-        let shared = try myEphPriv.sharedSecretFromKeyAgreement(with: peerEphPub)
-        let salt = sortedConcatSHA256(myEphPriv.publicKey.rawRepresentation,
-                                      peerEphPub.rawRepresentation)
-        // CryptoKit's SharedSecret.hkdfDerivedSymmetricKey can only use the raw
-        // ECDH output as IKM, and Android concatenates the two entropies onto
-        // it, so the extract step is done explicitly here.
-        var ikm = Data()
-        shared.withUnsafeBytes { ikm.append(contentsOf: $0) }
-        ikm.append(entropyA)
-        ikm.append(entropyB)
-        let prk = HKDF<SHA256>.extract(inputKeyMaterial: SymmetricKey(data: ikm),
-                                       salt: salt)
-        let key = HKDF<SHA256>.expand(pseudoRandomKey: prk,
-                                      info: HkdfLabels.nfcCollaborativePsk,
-                                      outputByteCount: 32)
-        return key.withUnsafeBytes { Data($0) }
-    }
-
-    private static func sortedConcatSHA256(_ a: Data, _ b: Data) -> Data {
-        let pair = a.lexicographicallyPrecedes(b) ? a + b : b + a
-        return Data(SHA256.hash(data: pair))
-    }
-
-    /// SECURITY H-8 — CSPRNG-backed random bytes. Uses
-    /// `SecRandomCopyBytes`; falls back to CryptoKit's `SymmetricKey`
-    /// generator (also CSPRNG) only if the Security call fails, so
-    /// the result is never the non-crypto `UInt8.random` path.
-    static func secureRandomBytes(_ count: Int) -> Data {
-        var buf = Data(count: count)
-        let status: Int32 = buf.withUnsafeMutableBytes { ptr -> Int32 in
-            guard let base = ptr.baseAddress else { return errSecParam }
-            return SecRandomCopyBytes(kSecRandomDefault, count, base)
+        switch kind {
+        case .first:
+            session.alertMessage = String(localized: "nfc.session.hold_near", defaultValue: "Avvicina l'iPhone al telefono Android con Q-Audion.", comment: "System NFC sheet message: hold the iPhone near the other phone.")
+        case .confirm:
+            session.alertMessage = String(localized: "nfc.session.hold_again_start", defaultValue: "Avvicina di nuovo l\u{2019}iPhone all\u{2019}altro telefono per terminare.", comment: "System NFC sheet message of the second tap: hold the iPhone to the other phone again to finish.")
         }
-        if status == errSecSuccess { return buf }
-        let k = SymmetricKey(size: SymmetricKeySize(bitCount: count * 8))
-        return k.withUnsafeBytes { Data($0) }
+        nfcSession = session
+        session.begin()
+        if kind == .first { state = .waiting }
     }
 
-    // MARK: - Errors
-
-    public enum ExchangeError: Error, LocalizedError {
-        case identityKeyMissing
-        case apduFailed(String, UInt8, UInt8)
-        case invalidResponse(String)
-        /// SECURITY M-6 — re-pair presented a different peer identity
-        /// key than the pinned one.
-        case peerIdentityMismatch
-        /// W-NFCSAS — the user rejected the SAS confirm step (or cancelled
-        /// while it was showing). Thrown BEFORE `onPskDerived` is ever
-        /// called, so no key material is persisted.
-        case sasRejected
-
-        public var errorDescription: String? {
-            switch self {
-            case .identityKeyMissing:
-                return String(localized: "nfc.error.identity_key_missing", defaultValue: "Chiave d'identità locale non configurata", comment: "NFC pairing error: this phone has no identity key yet.")
-            case .apduFailed(let cmd, let sw1, let sw2):
-                let status: String = String(format: "%02X%02X", sw1, sw2)
-                return String(localized: "nfc.error.apdu_failed", defaultValue: "\(cmd) non riuscito: SW=\(status)", comment: "NFC pairing error: a command sent to the other phone failed; first %@ is the command name, second %@ the status word.")
-            case .invalidResponse(let msg):
-                return String(localized: "nfc.error.invalid_response", defaultValue: "Risposta non valida dall'altro telefono: \(msg)", comment: "NFC pairing error: the other phone answered with unexpected data; %@ is a short technical detail.")
-            case .peerIdentityMismatch:
-                return String(localized: "nfc.error.peer_identity_changed", defaultValue: "La chiave d'identità dell'altro telefono è cambiata dall'ultima associazione: operazione annullata (possibile attacco)", comment: "NFC pairing error: the other phone presented a different identity key than the one stored.")
-            case .sasRejected:
-                return String(localized: "nfc.error.sas_rejected", defaultValue: "Codice non confermato — scambio annullato", comment: "NFC pairing: the user said the 6-digit codes do not match, the exchange is cancelled.")
-            }
-        }
-    }
-
-    /// W-NFCSAS — the post-derivation confirm gate `runPhase14cExchange`
-    /// awaits, extracted as a plain, CoreNFC-free async barrier so it is
-    /// unit-testable without real NFC hardware (CoreNFC tag sessions cannot
-    /// run in CI/simulator — see `NfcCollaborativePskKatTests`'s own note on
-    /// this same constraint). `awaitConfirmation()` suspends until EITHER
-    /// `confirm()` (resumes `true`) or `reject()` (resumes `false`) is
-    /// called — there is no third path and no timeout, matching every other
-    /// NFC state transition in this file (user-driven, not time-boxed).
-    final class NfcSasConfirmGate {
-        private var continuation: CheckedContinuation<Bool, Never>?
-
-        func awaitConfirmation() async -> Bool {
-            await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-                self.continuation = cont
-            }
-        }
-
-        func confirm() {
-            continuation?.resume(returning: true)
-            continuation = nil
-        }
-
-        func reject() {
-            continuation?.resume(returning: false)
-            continuation = nil
-        }
-    }
-
-    /// W-NFCSAS — the last step of a tap, extracted with the gate so a test can run it without CoreNFC: wait for
-    /// the user's decision on the SAS and hand the key to `handler` only when the user confirmed. A reject, or a
-    /// `cancel()` while the code is showing, throws ``ExchangeError/sasRejected`` first, so `handler` (the one
-    /// place a key is stored) is never called and a key stored by an earlier tap stays as it was.
-    static func handOverIfConfirmed(
-        gate: NfcSasConfirmGate,
-        psk: Data,
-        peerIdentityPub: Data,
-        to handler: ((Data, Data) async throws -> Void)?
-    ) async throws {
-        guard await gate.awaitConfirmation() else {
-            throw ExchangeError.sasRejected
-        }
-        try await handler?(psk, peerIdentityPub)
-    }
-
-    /// SECURITY M-6 — the pin decision of `runPhase14cExchange`, extracted as
-    /// a plain CoreNFC-free function so it is unit-testable without NFC
-    /// hardware. `pinned == nil` is TOFU (first pairing): always accepted.
-    /// When `pinned` is set, `presented` must equal it byte-for-byte
-    /// (constant-time, length-checked) or this throws
-    /// ``ExchangeError/peerIdentityMismatch``.
-    static func verifyPinnedPeerIdentity(pinned: Data?, presented: Data) throws {
-        guard let pinned = pinned else { return }
-        guard constantTimeEquals(pinned, presented) else {
-            throw ExchangeError.peerIdentityMismatch
-        }
-    }
-
-    /// SECURITY M-6 — length-checked constant-time byte compare so
-    /// the pin check does not leak via timing.
-    static func constantTimeEquals(_ a: Data, _ b: Data) -> Bool {
-        guard a.count == b.count else { return false }
-        let av = Array(a)
-        let bv = Array(b)
-        var diff: UInt8 = 0
-        var i: Int = 0
-        while i < av.count {
-            diff |= av[i] ^ bv[i]
-            i += 1
-        }
-        return diff == 0
-    }
-}
-
-private extension Data {
-    func lexicographicallyPrecedes(_ other: Data) -> Bool {
-        for (l, r) in zip(self, other) {
-            if l < r { return true }
-            if l > r { return false }
-        }
-        return count < other.count
-    }
-}
-
-// MARK: - NFCTagReaderSessionDelegate (iOS-only)
-
-#if canImport(CoreNFC) && os(iOS)
-private final class TagDelegate: NSObject, NFCTagReaderSessionDelegate {
-
-    weak var owner: NfcApduExchange?
-
-    func tagReaderSessionDidBecomeActive(_ session: NFCTagReaderSession) {}
-
-    func tagReaderSession(_ session: NFCTagReaderSession, didInvalidateWithError error: Error) {
-        owner?.handleSessionError(error)
-    }
-
-    func tagReaderSession(_ session: NFCTagReaderSession, didDetect tags: [NFCTag]) {
+    fileprivate func handleDetected(tags: [NFCTag], session: NFCTagReaderSession, kind: SessionKind, generation gen: Int) async {
+        guard gen == generation else { return }
         guard let tag = tags.first, case .iso7816(let iso) = tag else {
             session.invalidate(errorMessage: String(localized: "nfc.error.incompatible_tag", defaultValue: "Tag non compatibile: serve un telefono Android con Q-Audion", comment: "System NFC sheet message: the tapped object is not a phone running Q-Audion."))
             return
         }
-        Task { [weak owner] in
-            let ownerRef = owner
-            do {
-                try await session.connect(to: tag)
-                let peerName = try await ownerRef?.runPhase14cExchange(
-                    over: iso, session: session) ?? "(unknown)"
-                await MainActor.run { [ownerRef] in
-                    ownerRef?.state = .success(peerDeviceName: peerName)
-                }
-                session.alertMessage = String(localized: "nfc.session.paired", defaultValue: "Associato con \(peerName)", comment: "System NFC sheet message after a successful pairing; %@ is the other phone's name.")
-                session.invalidate()
-            } catch {
-                let errMsg = error.localizedDescription
-                session.invalidate(errorMessage: errMsg)
-                await MainActor.run { [ownerRef] in
-                    ownerRef?.state = .error(errMsg)
-                }
+        do {
+            try await session.connect(to: tag)
+        } catch {
+            fail(session: session, kind: kind, generation: gen, failure: NfcPairingV2Failure(.fieldLost))
+            return
+        }
+        guard gen == generation else { return }
+        let transport = CoreNfcTransport(tag: iso)
+        let end: TapEnd
+        switch kind {
+        case .first: end = await performFirstTap(over: transport)
+        case .confirm: end = await performConfirmTap(over: transport)
+        }
+        guard gen == generation else { return }
+        generation &+= 1
+        nfcSession = nil
+        tagDelegate = nil
+        switch end {
+        case .finished(let message):
+            session.alertMessage = message
+            session.invalidate()
+        case .failed(let message), .holdAgain(let message):
+            session.invalidate(errorMessage: message)
+        }
+    }
+
+    private func fail(session: NFCTagReaderSession, kind: SessionKind, generation gen: Int, failure: NfcPairingV2Failure) {
+        guard gen == generation else { return }
+        generation &+= 1
+        nfcSession = nil
+        tagDelegate = nil
+        let message = Self.message(for: failure)
+        switch kind {
+        case .first:
+            state = .error(message)
+        case .confirm:
+            state = ceremony?.hasStagedCeremony == true ? .holdAgain(peerDeviceName: peerName) : .error(message)
+        }
+        session.invalidate(errorMessage: message)
+    }
+
+    fileprivate func handleSessionInvalidated(_ error: Error, kind: SessionKind, generation gen: Int) {
+        guard gen == generation else { return }
+        generation &+= 1
+        nfcSession = nil
+        tagDelegate = nil
+        let userCancelled = (error as? NFCReaderError)?.code == .readerSessionInvalidationErrorUserCanceled
+        switch kind {
+        case .first:
+            if userCancelled {
+                if case .waiting = state { state = .idle }
+                if case .exchanging = state { state = .idle }
+            } else {
+                // "Session invalidated" and "tag connection lost" are a lost field, never a rejection.
+                NfcPairingLog.fail(role: .reader, NfcPairingV2Failure(.fieldLost))
+                state = .error(Self.message(for: NfcPairingV2Failure(.fieldLost)))
             }
+        case .confirm:
+            // The staged ceremony stays: the user can hold the phones together again until the 120 s run out.
+            if ceremony?.hasStagedCeremony == true, ceremony?.remainingConfirmationMs() ?? 0 > 0 {
+                if !userCancelled { NfcPairingLog.fail(role: .reader, NfcPairingV2Failure(.fieldLost), step: .confirm) }
+                state = .holdAgain(peerDeviceName: peerName)
+            }
+        }
+    }
+
+    fileprivate final class TagDelegate: NSObject, NFCTagReaderSessionDelegate {
+        weak var owner: NfcApduExchange?
+        var generation: Int = 0
+        var kind: SessionKind = .first
+
+        func tagReaderSessionDidBecomeActive(_ session: NFCTagReaderSession) {}
+
+        func tagReaderSession(_ session: NFCTagReaderSession, didInvalidateWithError error: Error) {
+            let gen = generation
+            let kind = kind
+            Task { @MainActor [weak owner] in
+                owner?.handleSessionInvalidated(error, kind: kind, generation: gen)
+            }
+        }
+
+        func tagReaderSession(_ session: NFCTagReaderSession, didDetect tags: [NFCTag]) {
+            let gen = generation
+            let kind = kind
+            Task { @MainActor [weak owner] in
+                await owner?.handleDetected(tags: tags, session: session, kind: kind, generation: gen)
+            }
+        }
+    }
+    #else
+    private func beginConfirmSession() {}
+    #endif
+}
+
+#if canImport(CoreNFC) && os(iOS)
+/// The CoreNFC tag as a transport: one APDU at a time, a time limit per APDU, every CoreNFC error as a lost field.
+private final class CoreNfcTransport: NfcIso7816Transport {
+    private static let perApduTimeoutMs: UInt64 = 4_000
+
+    private let tag: NFCISO7816Tag
+
+    init(tag: NFCISO7816Tag) {
+        self.tag = tag
+    }
+
+    func transceive(_ command: NfcApduCommand) async throws -> NfcApduResponse {
+        let apdu = NFCISO7816APDU(instructionClass: command.cla, instructionCode: command.ins,
+                                  p1Parameter: command.p1, p2Parameter: command.p2,
+                                  data: command.data, expectedResponseLength: command.expectedLength ?? -1)
+        let tag = self.tag
+        return try await Self.withTimeout(milliseconds: Self.perApduTimeoutMs) {
+            do {
+                let (data, sw1, sw2) = try await tag.sendCommand(apdu: apdu)
+                return NfcApduResponse(data: data, statusWord: (UInt16(sw1) << 8) | UInt16(sw2))
+            } catch {
+                // "Tag connection lost", "session invalidated" and the like.
+                throw NfcTransportError.fieldLost
+            }
+        }
+    }
+
+    /// `sendCommand` cannot be cancelled, so the timeout is a race, not a task group (a group would wait for it).
+    private static func withTimeout<T: Sendable>(milliseconds: UInt64,
+                                                 _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            let once = OnceResume(continuation)
+            Task {
+                do { once.resume(.success(try await operation())) } catch { once.resume(.failure(error)) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: milliseconds * 1_000_000)
+                once.resume(.failure(NfcTransportError.timeout))
+            }
+        }
+    }
+
+    private final class OnceResume<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T, Error>?
+
+        init(_ continuation: CheckedContinuation<T, Error>) {
+            self.continuation = continuation
+        }
+
+        func resume(_ result: Result<T, Error>) {
+            lock.lock()
+            let c = continuation
+            continuation = nil
+            lock.unlock()
+            c?.resume(with: result)
         }
     }
 }

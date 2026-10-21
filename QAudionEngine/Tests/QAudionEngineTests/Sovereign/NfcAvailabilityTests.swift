@@ -4,6 +4,7 @@ import XCTest
 /// A device that cannot read NFC tags (an iPad, for instance) must get a
 /// neutral line instead of the NFC actions, and starting an exchange there
 /// must report that line without touching CoreNFC.
+@MainActor
 final class NfcAvailabilityTests: XCTestCase {
 
     func test_injectedAnswerIsReported() {

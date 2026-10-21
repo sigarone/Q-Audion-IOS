@@ -187,7 +187,10 @@ struct KeyManagementScreen: View {
     private var nfcRow: some View {
         if nfcAvailability.isAvailable {
             NavigationLink {
-                NfcExchangeView()
+                NfcExchangeView(localUserId: appState.currentUserId ?? "",
+                                serverIdentityKeys: { (userId: String) async -> Set<Data> in
+                                    await contacts.publishedIdentityKeys(userId)
+                                })
             } label: {
                 SettingsRow(icon: "wave.3.right",
                             iconColor: extras.pqcAccent,

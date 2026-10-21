@@ -55,12 +55,6 @@ public enum CryptoConstants {
     /// HKDF info for envelope key derivation.
     public static let hkdfEnvelopeKeyInfo = Data("qaudion-envelope-key-v1".utf8)
 
-    // MARK: - NFC Collaborative PSK
-    /// HKDF info for NFC collaborative X25519-only PSK derivation (must match Android NfcProtocol.kt).
-    public static let hkdfNfcCollaborativePskInfo: Data = HkdfLabels.nfcCollaborativePsk
-    /// HKDF info for NFC hybrid PQC PSK derivation (X25519 + ML-KEM-1024).
-    public static let hkdfNfcHybridPqcPskInfo = Data("Q-Audion NFC Hybrid PQC PSK v1".utf8)
-
     // MARK: - Certificate Pinning
     /// SHA-256 hashes (base64) of pinned server certificate SPKI data.
     /// Matches Android CryptoConstants.kt PINNED_CERT_HASHES.

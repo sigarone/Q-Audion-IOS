@@ -11,10 +11,6 @@ final class HkdfLabelsTests: XCTestCase {
         XCTAssertEqual(String(data: HkdfLabels.hybridPqcSessionKey, encoding: .utf8), "q-audion-session-key")
     }
 
-    func test_nfcCollaborativePsk_isCanonicalString() {
-        XCTAssertEqual(String(data: HkdfLabels.nfcCollaborativePsk, encoding: .utf8), "Q-Audion NFC Collaborative PSK v1")
-    }
-
     func test_deviceLinkPsk_isCanonicalString() {
         XCTAssertEqual(String(data: HkdfLabels.deviceLinkPsk, encoding: .utf8), "qaudion-device-link-v1")
     }
@@ -54,10 +50,5 @@ final class HkdfLabelsTests: XCTestCase {
     func test_messageKey_byteCountMatchesUtf8Length() {
         // "q-audion-msg-key" = 16 ASCII bytes
         XCTAssertEqual(HkdfLabels.messageKey.count, 16)
-    }
-
-    func test_nfcCollaborativePsk_byteCountIs33() {
-        // "Q-Audion NFC Collaborative PSK v1" = 33 ASCII bytes
-        XCTAssertEqual(HkdfLabels.nfcCollaborativePsk.count, 33)
     }
 }

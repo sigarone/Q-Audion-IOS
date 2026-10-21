@@ -219,6 +219,11 @@ struct QAudionApp: App {
                 attrs: DatabaseOpenRecoveryPolicy.telemetryAttributes(for: outcome))
         }
 
+        // NFC pairing v2 (docs/security/NFC_PAIRING_V2.md section 11): the engine package cannot see `RTLog`, so its
+        // log lines come here. Tag "pair" is the pairing scope the log shipper already lets through; the lines carry
+        // result tokens, status words, timings and the 8-hex log tag, never keys, codes, tags or identities.
+        NfcPairingLog.install(sink: { tag, line in RTLog.info(tag, line) })
+
         // W-BGK: BGAppRefreshTask must be registered before the app finishes
         // launching (Apple requirement). We forward it via NotificationCenter
         // so AppState.handleWsKeepaliveTask() can access the live auth state

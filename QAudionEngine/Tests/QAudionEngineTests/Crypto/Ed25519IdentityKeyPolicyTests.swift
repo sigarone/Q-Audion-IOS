@@ -226,20 +226,18 @@ final class Ed25519IdentityKeyPolicyTests: XCTestCase {
             signature: forgedSignature, payload: Data("payload".utf8), signingPublicKey: neutral))
     }
 
-    // MARK: - NFC SAS keeps its outcomes
+    // MARK: - NFC pairing v2 identity check keeps the outcomes
 
-    func testNfcSasStillRejectsEveryTableEntryAsSmallOrder() {
+    func testNfcPairingIdentityCheckRejectsEveryTableEntryAsInvalid() {
         for text in smallOrder {
-            XCTAssertThrowsError(try NfcSasComputation.computeSas(
-                selfIkEdPub: honestKey, peerIkEdPub: fromHex(text)), text) { error in
-                XCTAssertEqual(error as? NfcSasComputation.SasError, .smallOrderPoint, text)
+            XCTAssertThrowsError(try NfcPairingV2Crypto.checkPeerIdentityKey(fromHex(text), ownKey: honestKey), text) { error in
+                XCTAssertEqual((error as? NfcPairingV2Failure)?.token, .identityInvalid, text)
             }
         }
     }
 
-    func testNfcSasStillAcceptsTwoHonestKeys() throws {
+    func testNfcPairingIdentityCheckAcceptsAnHonestKey() throws {
         let other = F.signer(seed: 9).pubRaw
-        let sas = try NfcSasComputation.computeSas(selfIkEdPub: honestKey, peerIkEdPub: other)
-        XCTAssertEqual(sas.count, NfcSasComputation.sasDigitCount)
+        XCTAssertNoThrow(try NfcPairingV2Crypto.checkPeerIdentityKey(other, ownKey: honestKey))
     }
 }

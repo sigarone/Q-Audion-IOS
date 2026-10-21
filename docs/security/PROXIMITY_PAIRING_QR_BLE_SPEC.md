@@ -448,26 +448,11 @@ BluetoothLeScanner + BluetoothGatt for the scanner); request MTU 517 on
 connect. ML-KEM via BouncyCastle — use raw 1568-byte encodings on the wire,
 never SPKI. The KAT in §15 is platform-neutral.
 
-## 14. NFC v2 — ML-KEM-1024 for the NFC tap (proposal, not implemented)
+## 14. NFC v2 (superseded)
 
-The NFC exchange (`NfcApduExchange` / Android `NfcApduService`) is still
-X25519-only. Its code comments are accurate: Android's HCE service answers
-only SELECT / 0xC4 / 0xC5 / 0x01, so an iOS-only change would break the
-only NFC peer that exists. The upgrade has to ship on both sides together:
-
-1. SELECT response data gains a version byte (`0x02` = supports v2).
-2. New INS `0xC6 GET_KEM_PUBKEY` (P1 = chunk index, Le = 240) returns the
-   card's ephemeral ek in 240-byte chunks (7 APDUs), avoiding reliance on
-   extended-length APDU support.
-3. New INS `0xC7 PUT_KEM_CIPHERTEXT` (P1 = chunk index, P2 = 0x80 on the last
-   chunk) carries the reader's ciphertext in ≤ 240-byte chunks.
-4. `psk_v2 = HKDF(salt = SHA-256(sorted(ephPubs)),
-   ikm = ss_kem ‖ ecdh ‖ entropy_a ‖ entropy_b,
-   info = "Q-Audion NFC Collaborative PSK v2 ML-KEM-1024")`, and the SAS
-   input gains the negotiated version byte, so a stripped capability changes
-   both the key and the code instead of silently downgrading.
-5. A contact once paired with v2 records it; a later v1-only tap with that
-   contact is refused.
+The NFC tap exchange is specified, with its own identity proofs, transcript-bound SAS and mutual confirmation, in
+`docs/security/NFC_PAIRING_V2.md` (hybrid ML-KEM-1024 + X25519, short APDUs, no compatibility mode with the earlier
+exchange). The proposal that stood here is replaced by that document.
 
 ## 15. Test vectors
 

@@ -18,7 +18,6 @@ import CryptoKit
 /// ## Covered invariants
 /// 1. `phone_hash_v1`         — SHA-256(E.164), no salt/pepper
 /// 2. `peppered_phone_hash_v2`— SHA-256(pepper_utf8 ‖ E.164_utf8)
-/// 3. `nfc_psk_v1`            — HKDF-SHA256 over X25519 shared secret, sorted-concat salt
 /// 4. `device_link_qr`        — Binary blob layout + base64url URL round-trip
 final class KatVectorsTests: XCTestCase {
 
@@ -132,62 +131,6 @@ final class KatVectorsTests: XCTestCase {
                     "peppered_phone_hash_v2: SHA-256('\(pepper)'+'\(e164)') mismatch")
             }
         }
-    }
-
-    // MARK: - Invariant 3: NFC PSK Derivation
-
-    /// HKDF-SHA256 over X25519 shared secret with sorted-concat salt.
-    /// Also verifies symmetry: derivePsk(a→b) == derivePsk(b→a).
-    func test_nfcPskV1_katVector() throws {
-        let section = try XCTUnwrap(
-            json["nfc_psk_v1"] as? [String: Any],
-            "nfc_psk_v1 section missing from cross_platform_vectors.json"
-        )
-
-        let aPrivHex = try XCTUnwrap(section["a_priv_hex"] as? String)
-        let bPrivHex = try XCTUnwrap(section["b_priv_hex"] as? String)
-        let aPubHex  = section["a_pub_hex"] as? String ?? ""
-        let bPubHex  = section["b_pub_hex"] as? String ?? ""
-
-        let aPrivBytes = try XCTUnwrap(fromHex(aPrivHex), "a_priv_hex is not valid hex")
-        let bPrivBytes = try XCTUnwrap(fromHex(bPrivHex), "b_priv_hex is not valid hex")
-
-        let aPriv = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: aPrivBytes)
-        let bPriv = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: bPrivBytes)
-
-        // Verify published public keys match what CryptoKit derives
-        if !aPubHex.isEmpty {
-            let expectedAPub = try XCTUnwrap(fromHex(aPubHex), "a_pub_hex is not valid hex")
-            XCTAssertEqual(aPriv.publicKey.rawRepresentation, expectedAPub,
-                "a_pub from CryptoKit must match a_pub_hex in JSON (X25519 public key)")
-        }
-        if !bPubHex.isEmpty {
-            let expectedBPub = try XCTUnwrap(fromHex(bPubHex), "b_pub_hex is not valid hex")
-            XCTAssertEqual(bPriv.publicKey.rawRepresentation, expectedBPub,
-                "b_pub from CryptoKit must match b_pub_hex in JSON (X25519 public key)")
-        }
-
-        // Derive PSK from both sides and verify symmetry
-        let pskA = try NfcPskDerivation.derivePsk(myPriv: aPriv, peerPub: bPriv.publicKey)
-        let pskB = try NfcPskDerivation.derivePsk(myPriv: bPriv, peerPub: aPriv.publicKey)
-        XCTAssertEqual(pskA, pskB, "NFC PSK must be symmetric: derivePsk(a→b) == derivePsk(b→a)")
-        XCTAssertEqual(pskA.count, 32, "NFC PSK must be 32 bytes")
-
-        let computedHex = pskA.map { String(format: "%02x", $0) }.joined()
-        let expectedHex = (section["expected_psk_hex"] as? String) ?? ""
-        if expectedHex.isEmpty {
-            print("[KAT] nfc_psk_v1 → \(computedHex) (unverified — pin this value)")
-        } else {
-            XCTAssertEqual(computedHex, expectedHex,
-                "nfc_psk_v1: HKDF output mismatch — iOS↔Android divergence for fixed seed keys")
-        }
-
-        // Verify HKDF info label byte-for-byte
-        XCTAssertEqual(
-            NfcPskDerivation.hkdfInfo,
-            Data("Q-Audion NFC Collaborative PSK v1".utf8),
-            "hkdfInfo must be exact UTF-8 of the spec string"
-        )
     }
 
     // MARK: - Invariant 4: DeviceLinkBinaryQR blob layout

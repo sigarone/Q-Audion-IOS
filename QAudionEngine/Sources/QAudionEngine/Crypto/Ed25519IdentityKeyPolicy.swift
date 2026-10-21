@@ -7,8 +7,7 @@ import Foundation
 /// so such a "signature" proves possession of nothing. Whether CryptoKit rejects these keys is not
 /// documented, so the check is explicit and independent of the library:
 ///   - the length must be exactly 32 bytes;
-///   - the 8 canonical small-order points are refused (the table below, shared with
-///     `NfcSasComputation`);
+///   - the 8 canonical small-order points are refused (the table below);
 ///   - NON-canonical encodings are refused: y (the low 255 bits, little-endian) must be < p = 2^255-19,
 ///     and a set sign bit on an x = 0 point (`01 00..00 80`, `ec ff..ff ff`) is not decodable under
 ///     RFC 8032 section 5.1.3.
@@ -54,8 +53,9 @@ public enum Ed25519IdentityKeyPolicy {
     private static let smallOrderBytes: [[UInt8]] = smallOrderHex.map { Ed25519IdentityKeyPolicy.decodeHexLiteral($0) }
     private static let signedZeroXBytes: [[UInt8]] = signedZeroXHex.map { Ed25519IdentityKeyPolicy.decodeHexLiteral($0) }
 
-    /// True when `key` is exactly one of the 8 canonical small-order encodings. This is the table check
-    /// `NfcSasComputation` has always done; it does not look at non-canonical encodings.
+    /// True when `key` is exactly one of the 8 canonical small-order encodings. This is the table check only; it
+    /// does not look at non-canonical encodings, and it does not catch a mixed-order point (`Ed25519PrimeOrderCheck`
+    /// does, for the keys of NFC pairing v2).
     public static func isCanonicalSmallOrderPoint(_ key: Data) -> Bool {
         guard key.count == encodedLength else { return false }
         return smallOrderBytes.contains([UInt8](key))
