@@ -89,7 +89,9 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
 - 4.4 Both PCs: bundle max-bundle, rtcp-mux require, continual gathering. **DTLS pin**: the
   remote `a=fingerprint` in qjanus' SDP MUST equal `dtls_fingerprint`, else both PCs are closed
   (`group.dtls_pin_mismatch`). SDP rules: only `mid`, `rid`, `repaired-rid` and transport-wide-cc
-  extmaps survive (allow-list; Janus 1.4.2 has no Cryptex), on the REMOTE descriptions as well as
+  extmaps survive (allow-list; Janus 1.4.2 has no Cryptex; transport-wide-cc is kept on the video sections
+  only, the audio sections carry no bandwidth-estimation extension and no session-level extmap), on the
+  REMOTE descriptions as well as
   the local ones (section 12.4), Opus fmtp `minptime=60;useinbandfec=1;
   usedtx=0;cbr=1;stereo=0;maxaveragebitrate=32000` and `ptime:60` (the 1:1 audio profile: 60 ms /
   32 kbps CBR, FEC floor 10 %, no RED, no DTX). Video: VP8 ONLY (section 12.8: every other video
@@ -164,7 +166,7 @@ Therefore:
   and the `qa_kms` pre-bootstrap; reject v4 / v3 / v2 / v1 message-crypto formats and any
   PSK-candidate fallback for these envelopes.
 - **12.4 Remote SDP (M1).** The header-extension allow-list (mid, rid, repaired-rid,
-  transport-wide-cc) is applied to REMOTE descriptions too (answer / offer from qjanus) before
+  transport-wide-cc on the video sections only) is applied to REMOTE descriptions too (answer / offer from qjanus) before
   `setRemoteDescription` (`GroupSdpRules.mungeRemote`); the DTLS pin is checked on the raw SDP first.
 - **12.5 Pseudonym binding (M2).** `media_key` carries `"p":"<sender's own pseudonym>"` (required,
   32 lowercase hex); the receiver refuses the key (no install, no ack) unless `p` equals the

@@ -3,11 +3,10 @@ import Foundation
 import WebRTC
 
 /// I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) — M150-DEPENDENT.
-/// This file does NOT compile against today's linked WebRTC.xcframework
-/// (df1011beabae, M144) — every selector below is the P8
-/// (`rtc_base/qaudion_tuning.{h,cc}`) runtime-tuning API, which only exists
-/// once this app links the M150 build. See `Package.swift`'s WebRTC
-/// binaryTarget for the swap point (I1).
+/// Every selector below is the P8 (`rtc_base/qaudion_tuning.{h,cc}`)
+/// runtime-tuning API, which exists only in the M150 build this app links
+/// (`Package.swift`'s WebRTC binaryTarget, I1); the earlier M144 build
+/// (df1011beabae) does not have it and this file does not compile against it.
 ///
 /// This is the ONE file that calls a P8 selector (task instruction: "keep
 /// ALL native P8 calls in ONE adapter file per platform so a later rename is

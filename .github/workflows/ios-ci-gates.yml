@@ -8,6 +8,9 @@
 #     its tests include mutations of the real sources. scripts/ci/test-assert-no-earbud.sh is the
 #     self-test of the BINARY gate (the real gate runs on the built app in ios-app-tests.yml and on
 #     the shipped IPA in ios-testflight.yml).
+#   * the audio wire policy on the RTP sender (a fixed 32 kbps / packet time pin, applied when the sender is
+#     created and after every negotiation, no adaptive packet time anywhere) is exercised on the simulator by
+#     the engine tests; scripts/ci/check_audio_wire_shape.py proves on the sources that it is still wired.
 #   * dSYMs are uploaded encrypted (the repository is public): scripts/ci/install-age.sh installs the
 #     pinned age release after checking its SHA-256 (the test downloads it for real and also feeds it
 #     a tampered tarball), scripts/ci/encrypt-dsyms.sh and the recipient committed in
@@ -62,6 +65,11 @@ jobs:
         run: |
           python3 -I scripts/ci/check_earbud_gating.py
           python3 -I scripts/ci/test_check_earbud_gating.py
+
+      - name: Audio sender pin, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_audio_wire_shape.py
+          python3 -I scripts/ci/test_check_audio_wire_shape.py
 
       - name: Earbud stack, binary gate self-test
         run: sh scripts/ci/test-assert-no-earbud.sh

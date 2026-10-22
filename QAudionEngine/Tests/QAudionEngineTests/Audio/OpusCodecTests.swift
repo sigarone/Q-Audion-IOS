@@ -2,8 +2,16 @@ import XCTest
 @testable import QAudionEngine
 
 final class OpusCodecTests: XCTestCase {
+
+    /// The 20 ms codec of the documented single exception (`AudioProfile.standard`).
+    /// Every test below that feeds the codec `AudioConstants.bytesPerFrame` (one 20 ms frame) builds it with this;
+    /// a codec built WITHOUT a profile runs the fleet profile's 60 ms (see the tests at the end of this file).
+    private func codec20() -> OpusCodec {
+        OpusCodec(config: OpusCodec.Config(profile: .standard))
+    }
+
     func testEncodeReturnsData() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let pcm = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         let encoded = codec.encode(pcm)
         XCTAssertNotNil(encoded)
@@ -13,12 +21,12 @@ final class OpusCodecTests: XCTestCase {
     }
 
     func testEncodeWrongSizeReturnsNil() {
-        let codec = OpusCodec()
+        let codec = codec20()
         XCTAssertNil(codec.encode(Data(repeating: 0, count: 100)))
     }
 
     func testDecodeReturnsData() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let pcm = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         // Safe: pcm is fixed-size (bytesPerFrame), so encode() always succeeds.
         // swiftlint:disable:next force_unwrapping
@@ -31,13 +39,13 @@ final class OpusCodecTests: XCTestCase {
     }
 
     func testDecodePLC() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let plc = codec.decodePLC()
         XCTAssertEqual(plc.count, AudioConstants.bytesPerFrame)
     }
 
     func testStats() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let pcm = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         _ = codec.encode(pcm)
         _ = codec.encode(pcm)
@@ -51,9 +59,11 @@ final class OpusCodecTests: XCTestCase {
     }
 
     func testReconfigure() {
-        let codec = OpusCodec()
+        let codec = codec20()
         codec.reconfigure(.highQuality())
-        let pcm = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
+        // The presets carry no profile of their own, so they are the fleet profile's 60 ms frames.
+        XCTAssertEqual(codec.encodeFrameDurationMs, 60)
+        let pcm = Data(repeating: 0, count: AudioProfile.defaultProfile.bytesPerFrame)
         XCTAssertNotNil(codec.encode(pcm))
     }
 
@@ -94,7 +104,7 @@ final class OpusCodecTests: XCTestCase {
     /// frame of a steady tone also has energy. The signal has to CHANGE between
     /// frames so "the previous one" is distinguishable from "this one".
     func testDecodeRendersTheCurrentFrameAndNotThePreviousOne() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let silence = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         let loud = tone()
         let inputRms = rms(loud)
@@ -124,7 +134,7 @@ final class OpusCodecTests: XCTestCase {
     /// And the mirror: a silent frame must not come back loud. Catches the
     /// symmetric failure where the decoder renders a stale loud frame.
     func testASilentFrameDecodesQuiet() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let loud = tone()
         let silence = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         // Safe: loud/silence are fixed-size tone()/Data buffers, so encode() always succeeds.
@@ -150,7 +160,7 @@ final class OpusCodecTests: XCTestCase {
     /// a steady signal cannot distinguish "recovered the lost frame" from
     /// "recovered nothing and decoder history leaked through anyway".
     func testDecodeFECRecoversAKnownSingleFrameLoss() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let silence = Data(repeating: 0, count: AudioConstants.bytesPerFrame)
         let loud = tone()
         let inputRms = rms(loud)
@@ -223,7 +233,7 @@ final class OpusCodecTests: XCTestCase {
     /// count as a FAILED recovery, never a crash or a bogus non-silent
     /// result.
     func testDecodeFECOnEmptyFrameReturnsSilenceAndCountsAsFailed() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let result = codec.decodeFEC(Data(), lostMs: 20)
         XCTAssertEqual(result.count, AudioConstants.bytesPerFrame)
         XCTAssertTrue(result.allSatisfy { $0 == 0 })
@@ -235,8 +245,50 @@ final class OpusCodecTests: XCTestCase {
     /// contract — a 60 ms request must come back as 2880 samples (5760 B),
     /// not the 20 ms default.
     func testDecodeFECRespectsTheRequestedDuration() {
-        let codec = OpusCodec()
+        let codec = codec20()
         let result = codec.decodeFEC(Data(), lostMs: 60)
         XCTAssertEqual(result.count, 5760)
+    }
+
+    // MARK: - Audio wire policy: a codec without a profile cannot run 20 ms
+
+    func testAConfigWithoutAProfileIsTheFleetProfile() {
+        let fleet = AudioProfile.defaultProfile
+        let cfg = OpusCodec.Config()
+        XCTAssertEqual(cfg.frameDurationMs, 60)
+        XCTAssertEqual(cfg.blockBytes, 256)
+        XCTAssertEqual(cfg.bitrate, 32000)
+        XCTAssertEqual(cfg.frameDurationMs, fleet.frameDurationMs)
+        XCTAssertEqual(cfg.blockBytes, fleet.blockBytes)
+        XCTAssertEqual(cfg.samplesPerFrame, 2880)
+        XCTAssertEqual(cfg.bytesPerFrame, 5760)
+        XCTAssertLessThanOrEqual(cfg.bitrate, cfg.maxBitrateBps, "the default bitrate fits the default block")
+    }
+
+    func testEveryPresetIsTheFleetFrameDuration() {
+        for cfg in [OpusCodec.Config.secure(), .highQuality(), .lowLatency()] {
+            XCTAssertEqual(cfg.frameDurationMs, 60)
+            XCTAssertEqual(cfg.blockBytes, 256)
+        }
+    }
+
+    func testTheOnlyTwentyMillisecondProfileIsTheStandardOne() {
+        XCTAssertEqual(OpusCodec.Config(profile: .standard).frameDurationMs, 20)
+        XCTAssertEqual(OpusCodec.Config(profile: .long60x256).frameDurationMs, 60)
+        XCTAssertEqual(AudioProfile.defaultProfile, AudioProfile.long60x256)
+    }
+
+    func testACodecBuiltWithoutAProfileEncodes60msFramesOnly() {
+        let codec = OpusCodec()
+        XCTAssertEqual(codec.encodeFrameDurationMs, 60)
+        XCTAssertNil(codec.encode(Data(repeating: 0, count: AudioConstants.bytesPerFrame)), "a 20 ms frame is refused")
+        XCTAssertNotNil(codec.encode(Data(repeating: 0, count: AudioProfile.defaultProfile.bytesPerFrame)))
+    }
+
+    func testTheInitialBitrateIsClampedToTheBlock() throws {
+        let cbr32 = AudioConstants.opusCbrBytes(bitrateBps: 32000, frameDurationMs: 60)
+        let codec = OpusCodec(config: OpusCodec.Config(bitrate: 64000))
+        let packet = try XCTUnwrap(codec.encode(Data(repeating: 0, count: AudioProfile.defaultProfile.bytesPerFrame)))
+        XCTAssertLessThanOrEqual(packet.count, cbr32, "64 kbps would be a 480-byte frame in a 256-byte block")
     }
 }

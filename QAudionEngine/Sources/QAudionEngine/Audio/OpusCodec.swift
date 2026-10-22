@@ -12,17 +12,18 @@ public final class OpusCodec {
         public var enableAgc: Bool
         /// W-LONGAUDIO (2026-08-10) — the ENCODE frame duration for this call.
         ///
-        /// Defaults to `AudioConstants.frameDurationMs` (20), so every existing
-        /// construction site — including the four in this file's own `secure()`
-        /// / `highQuality()` / `lowLatency()` presets — keeps producing exactly
-        /// today's wire without being touched. It moves to 60 only when a call
-        /// has NEGOTIATED the long profile and the send kill switch is on.
+        /// Audio wire policy: defaults to the fleet profile's 60 ms
+        /// (`AudioProfile.defaultProfile`), so an encoder built without a profile
+        /// — the three presets in this file included — can no longer run 20 ms.
+        /// The only 20 ms encoder is the one built from `AudioProfile.standard`,
+        /// the documented single exception (see its doc).
         ///
         /// This is the ENCODE side only. Decode never reads it: what a peer
         /// sends is not ours to assume (see `decode` and `decodePLC`).
         public var frameDurationMs: Int
         /// W-LONGAUDIO (2026-08-10) — the constant plaintext block this
-        /// encoder's output has to fit inside. 120 by default.
+        /// encoder's output has to fit inside. 256 by default (the fleet
+        /// profile's block, which holds a 60 ms frame at 32 kbps).
         ///
         /// The codec owns the whole operating point (bitrate x frame duration x
         /// block) precisely so it can refuse to exceed it. §2.4's rule is that
@@ -30,10 +31,10 @@ public final class OpusCodec {
         /// and the only place that can be enforced for EVERY bitrate source —
         /// the settings slider, the auto-tuner, a mid-call change — is here.
         public var blockBytes: Int
-        public init(bitrate: Int = AudioConstants.opusBitrate, complexity: Int = 5,
+        public init(bitrate: Int = AudioProfile.defaultProfile.maxBitrateBps, complexity: Int = 5,
                     enableHpf: Bool = true, enableAgc: Bool = false,
-                    frameDurationMs: Int = AudioConstants.frameDurationMs,
-                    blockBytes: Int = AudioConstants.blockBytesStandard) {
+                    frameDurationMs: Int = AudioProfile.defaultProfile.frameDurationMs,
+                    blockBytes: Int = AudioProfile.defaultProfile.blockBytes) {
             self.bitrate = bitrate; self.complexity = complexity
             self.enableHpf = enableHpf; self.enableAgc = enableAgc
             self.frameDurationMs = frameDurationMs
@@ -104,7 +105,11 @@ public final class OpusCodec {
     public var encodeFrameDurationMs: Int { config.frameDurationMs }
 
     public init(config: Config = .secure()) {
-        self.config = config
+        // The last gate in front of the encoder, same as `reconfigure`: a bitrate whose CBR frame does not fit
+        // the config's own block never reaches libopus, whatever built the config.
+        var applied = config
+        applied.bitrate = min(config.bitrate, config.maxBitrateBps)
+        self.config = applied
 
         var error: Int32 = 0
         encoder = opus_encoder_create(Int32(AudioConstants.sampleRate),
@@ -112,8 +117,8 @@ public final class OpusCodec {
         if error == OPUS_OK, let enc = encoder {
             // CBR mode (constant bitrate for anti-traffic-analysis).
             opus_helper_set_vbr(enc, Int32(0))
-            opus_helper_set_bitrate(enc, Int32(config.bitrate))
-            opus_helper_set_complexity(enc, Int32(config.complexity))
+            opus_helper_set_bitrate(enc, Int32(applied.bitrate))
+            opus_helper_set_complexity(enc, Int32(applied.complexity))
             // In-band FEC: encoder embeds redundancy in subsequent frames so
             // the decoder can reconstruct a lost frame from the next one.
             // Required for parity with Android (FEC on by default there).

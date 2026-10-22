@@ -506,19 +506,14 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///
     ///     I2 comment fix (webrtc-plan.md v2 §3.3, 2026-09-29) — this used to
     ///     call this "an SRTP-GCM call" outright, which overstated what the
-    ///     4-arg `RTCCryptoOptions` init at M144 actually guaranteed:
-    ///     *enabling* GCM is not *preferring* it, and M144's init has no
-    ///     preference-order argument at all — SHA1_80 could win the
+    ///     4-arg `RTCCryptoOptions` init of the earlier M144 build actually
+    ///     guaranteed: *enabling* GCM is not *preferring* it, and that init has
+    ///     no preference-order argument at all — SHA1_80 could win the
     ///     negotiation (same gap Android's own CryptoOptions comment named,
-    ///     `PeerConnectionHolder.kt:3662-3672`). The init call below now
-    ///     passes M150's 6-arg designated initializer
-    ///     (`RTCCryptoOptions.h:60-73`), `srtpPreferGcmCryptoSuites: true`
-    ///     included — that line is source-complete already (I2), it simply
-    ///     does not COMPILE until this app links the M150 WebRTC.xcframework
-    ///     (M144's `RTCCryptoOptions` has no matching overload — see that
-    ///     call's own doc for the full citation). Once it does, "an SRTP-GCM
-    ///     call" is accurate again; until then this app still links M144, so
-    ///     this whole `if nativeSrtpEnabledLocally` block does not build.
+    ///     `PeerConnectionHolder.kt:3662-3672`). The init call below passes
+    ///     the M150 6-arg designated initializer (`RTCCryptoOptions.h:60-73`),
+    ///     `srtpPreferGcmCryptoSuites: true` included, and this app links the
+    ///     M150 WebRTC.xcframework, so "an SRTP-GCM call" is accurate.
     ///   - `tcpCandidatePolicy = .disabled` — TCP candidates add head-of-line
     ///     blocking on top of an already-encrypted, already-lossy-tolerant
     ///     RTP stream; UDP (host/srflx/relay) is sufficient and this app's
@@ -609,13 +604,10 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
             // I2 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) — M150's
             // RTCCryptoOptions designated initializer takes SIX arguments
             // (`RTCCryptoOptions.h:60-73` at both the M150 target pin,
-            // ba469aa2093ba950066258ca0a59a6fbd1295582, and confirmed absent
-            // at today's M144 pin, df1011beabae, which has only the 4-arg
-            // form below as `init` is `NS_UNAVAILABLE` on both — there is no
-            // fallback overload to keep this compiling against today's
-            // binary). WITHOUT this change the app does not compile once the
-            // M150 xcframework lands (plan's own words: "senza questa
-            // modifica non compila").
+            // ba469aa2093ba950066258ca0a59a6fbd1295582, which this app links;
+            // the earlier M144 pin, df1011beabae, had only a 4-arg form, and
+            // `init` is `NS_UNAVAILABLE` on both — there is no fallback
+            // overload).
             //
             // Two arguments added vs. the pre-M150 call:
             //   - `srtpPreferGcmCryptoSuites: true` — GCM was already

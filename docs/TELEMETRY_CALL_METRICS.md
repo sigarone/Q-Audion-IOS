@@ -146,6 +146,18 @@ The pair is the one the transport reports as selected, else a nominated succeede
 
 The exact texts are pinned by `DtlsWaitLineTests.swift` and run through the shipper by `scripts/test_ship_ios_dtlswait_vocab.py`.
 
+## Audio wire lines (`audiowire`, sender pin)
+
+The same names and fields are written on iOS, Android and Desktop, so one query compares the audio on the wire across the three. Tag `call`, native SRTP calls only. Code: `QAudionEngine/Sources/QAudionEngine/Diagnostics/AudioWireLines.swift` (pure), wired in `CallService.sampleWireThroughput` (the heartbeat) and `QAudionWebRtcCallController.pollMediaRttOnce` (the counters, from the same stats report as hb=1). A value that was not measured is omitted.
+
+`audiowire win_ms=<ms> tx_pkts=<n> tx_bytes=<n> tx_hdr_bytes=<n> tx_retx_pkts=<n> rx_pkts=<n> rx_bytes=<n>` every heartbeat (5 s): the deltas of the audio RTP counters over the window. The window is bounded by the capture stamps (uptime) of two stats reports, and `win_ms` is the time between those two reports; a heartbeat that finds no newer report than the last one writes no line. `tx_bytes` is payload, `tx_hdr_bytes` the RTP header and padding bytes (the stats API's `headerBytesSent`), `tx_pkts` counts every RTP packet sent, padding-only ones included, so `tx_pkts` above the media frame count (16.7 a second at 60 ms) and `tx_bytes / tx_pkts` below the frame size show packets that carry no audio. The counters sum all audio rows of a direction. No line for the first heartbeat of a call (no baseline yet).
+
+`audiowire codec ptime=<ms> minptime=<ms> maxptime=<ms> cbr=<0|1> fec=<0|1> dtx=<0|1> maxavg=<bps> stereo=<0|1> alevel=<0|1> tcc=<0|1>` once per negotiation (and again if it changes): the SEND-side codec as it is configured. `minptime`, `cbr`, `fec`, `dtx`, `maxavg`, `stereo` come from the fmtp of the codec row the OUTBOUND rtp row points to (never the inbound row's), `ptime` and `maxptime` from the remote description (what the peer asks of our sender), `alevel` = 1 iff a speech-level extension (`ssrc-audio-level` or `csrc-audio-level`, plain or in the RFC 6904 wrapped form) is present in the audio section after the audio SDP policy, `tcc` = 1 iff a `transport-wide-cc` extension (either URI) is (both read from the descriptions the peer connection holds, an extension counts when both carry it); the same definition on iOS, Android and Desktop.
+
+`audiosrtp cap n=<encodings> min=<bps> max=<bps> apt=<0|1> prio=<n> ok=<0|1> src=<n>`: the audio sender's parameters READ BACK after the 32 kbps / fixed packet time / DSCP pin; `ok=1` when they equal what was set (bitrate min = max, fixed packet time, high priority). The pin goes to the sender that carries the microphone track; when the read-back is not `ok=1` it is applied once more and a second line follows. `src`: 1 sender created, 2 after a local description, 3 after a remote description, 4 at activation. Group calls write `grp audio cap n=<n> min=<bps> max=<bps> apt=<0|1> ok=<0|1>` (tag `group`; a sender without any encoding gives `n=0 min=0 max=0 apt=0 ok=0`).
+
+The exact texts are pinned by `AudioWireLinesTests.swift` and run through the shipper by `scripts/test_ship_ios_audiowire_vocab.py`.
+
 ## Where the numbers come from
 
 Everything is read from values the app already had: the 1 Hz stats poll that feeds the in-call readout (`sampleWireThroughput`), the heartbeat that emits hb=1 and hb=2, the `AVAudioSession` route-change notification the app already observes, and the two WebRTC audio-processing hooks that already ran on every native call (they now also measure the RMS of each 10 ms frame, a single pass without allocation, never blocking the audio thread). No new timer, no new network request, no new permission.

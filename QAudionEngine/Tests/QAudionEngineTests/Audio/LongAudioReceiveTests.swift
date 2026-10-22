@@ -34,7 +34,7 @@ final class LongAudioReceiveTests: XCTestCase {
     /// fallback returns a zero-filled buffer so nothing anywhere reports it.
     func test_aSixtyMsFrameDecodesToItsFullLength() throws {
         let enc = OpusCodec(config: OpusCodec.Config(profile: .long60x256))
-        let dec = OpusCodec()  // a DEFAULT receiver: 20 ms encode, no negotiation
+        let dec = OpusCodec()  // a DEFAULT receiver: no negotiation (the receive side never reads the encode config)
         guard let packet = enc.encode(pcm(ms: 60, amplitude: 6000)) else {
             return XCTFail("60 ms encode failed")
         }
@@ -47,7 +47,7 @@ final class LongAudioReceiveTests: XCTestCase {
     /// ...and the same build still decodes a 20 ms frame in the same session.
     /// Both must work on one decoder, because both will arrive on one call.
     func test_theSameDecoderHandlesBothDurations() throws {
-        let enc20 = OpusCodec()
+        let enc20 = OpusCodec(config: OpusCodec.Config(profile: .standard))
         let enc60 = OpusCodec(config: OpusCodec.Config(profile: .long60x256))
         let dec = OpusCodec()
         guard let p20 = enc20.encode(pcm(ms: 20, amplitude: 6000)),
@@ -70,7 +70,7 @@ final class LongAudioReceiveTests: XCTestCase {
 
     /// After decoding a 20 ms stream, concealment is 20 ms.
     func test_afterA20msStream_concealmentIs20ms() throws {
-        let enc = OpusCodec()
+        let enc = OpusCodec(config: OpusCodec.Config(profile: .standard))
         let dec = OpusCodec()
         for _ in 0..<4 {
             guard let p = enc.encode(pcm(ms: 20, amplitude: 4000)) else { return XCTFail("encode") }
@@ -100,7 +100,7 @@ final class LongAudioReceiveTests: XCTestCase {
     /// The interleave regression detector: a stream that switches duration
     /// mid-capture must decode both and conceal at whatever it last saw.
     func test_concealmentFollowsTheStreamAcrossADurationChange() throws {
-        let enc20 = OpusCodec()
+        let enc20 = OpusCodec(config: OpusCodec.Config(profile: .standard))
         let enc60 = OpusCodec(config: OpusCodec.Config(profile: .long60x256))
         let dec = OpusCodec()
 

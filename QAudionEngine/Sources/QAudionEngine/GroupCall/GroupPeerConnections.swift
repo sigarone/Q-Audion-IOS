@@ -339,6 +339,10 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
     /// Our own camera track (nil while the camera is off), for the self tile.
     public var onLocalVideoTrack: ((RTCVideoTrack?) -> Void)?
 
+    /// The numeric `grp audio cap ...` line of the audio sender's read-back (a diagnostic line for the
+    /// session's `diagLog`). Set before `start()`.
+    public var onAudioSenderLine: ((String) -> Void)?
+
     public init(factory: RTCPeerConnectionFactory, iceServers: [RTCIceServer],
                 cryptors: GroupFrameCryptorHub, selfPseudonym: String) {
         self.hub = cryptors
@@ -439,6 +443,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         let offer = try await createOffer(constraints)
         let munged = GroupSdpRules.mungeLocal(offer.sdp, role: .publisherOffer)
         try await setLocal(RTCSessionDescription(type: .offer, sdp: munged))
+        reassertAudioSenderProfile()
         return munged
     }
 
@@ -446,6 +451,7 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
         // Spec §12.8: an answer whose video is not VP8 is refused, not decoded.
         guard GroupSdpRules.activeVideoSectionsWithoutVp8(in: sdp).isEmpty else { throw GroupPeerError.sdpFailed("video_codec") }
         try await setRemote(RTCSessionDescription(type: .answer, sdp: GroupSdpRules.mungeRemote(sdp)))
+        reassertAudioSenderProfile()
         // An answer sets every encoding's `active` from its simulcast line, and the offer
         // never marks a layer inactive (`GroupSdpRules.activateSimulcastLayers`): the layers
         // the thermal / congestion policy wants off are switched off again here.
@@ -642,17 +648,42 @@ public final class GroupPublisherPeer: GroupPeerBase, GroupPublisherLink, @unche
 
     // MARK: Internals
 
-    /// The 1:1 native-audio sender profile: 32 kbps min = max, DSCP high.
+    /// The 1:1 native-audio sender profile: 32 kbps min = max, a fixed packet time
+    /// (`adaptiveAudioPacketTime` stated off, not left to the library default), DSCP high.
+    /// Applied when the sender is created and again after every offer / answer, and the
+    /// parameters are read back into one numeric `grp audio cap` line.
     private func applyAudioSenderProfile(_ sender: RTCRtpSender) {
         let parameters = sender.parameters
-        guard !parameters.encodings.isEmpty else { return }
-        let bps = NSNumber(value: AudioSdpPolicy.maxAverageBitrateBps)
+        guard !parameters.encodings.isEmpty else {
+            onAudioSenderLine?(GroupDiagnostics.audioSenderLine(
+                encodings: 0, minBps: -1, maxBps: -1, adaptivePacketTime: -1, ok: false))
+            return
+        }
+        let pinnedBps: Int = AudioSdpPolicy.maxAverageBitrateBps
+        let bps = NSNumber(value: pinnedBps)
         for encoding in parameters.encodings {
             encoding.minBitrateBps = bps
             encoding.maxBitrateBps = bps
+            encoding.adaptiveAudioPacketTime = false
         }
         parameters.encodings[0].networkPriority = .high
         sender.parameters = parameters
+        let readBack = sender.parameters.encodings
+        let first = readBack.first
+        let readMin: Int = first?.minBitrateBps?.intValue ?? -1
+        let readMax: Int = first?.maxBitrateBps?.intValue ?? -1
+        var readAdaptive: Int = -1
+        if let first { readAdaptive = first.adaptiveAudioPacketTime ? 1 : 0 }
+        let readHighPriority: Bool = first?.networkPriority == .high
+        let accepted: Bool = readMin == pinnedBps && readMax == pinnedBps && readAdaptive == 0 && readHighPriority
+        onAudioSenderLine?(GroupDiagnostics.audioSenderLine(
+            encodings: readBack.count, minBps: readMin, maxBps: readMax, adaptivePacketTime: readAdaptive, ok: accepted))
+    }
+
+    /// Re-pins the audio sender after a negotiation (see ``applyAudioSenderProfile``).
+    private func reassertAudioSenderProfile() {
+        guard let sender = senderLock.withLock({ audioSender }) else { return }
+        applyAudioSenderProfile(sender)
     }
 
     #if os(iOS)

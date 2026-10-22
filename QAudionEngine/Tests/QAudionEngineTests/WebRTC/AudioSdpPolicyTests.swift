@@ -189,4 +189,203 @@ final class AudioSdpPolicyTests: XCTestCase {
         let fmtp = audioFmtp111(out)
         XCTAssertTrue(fmtp.contains("cbr=1"))
     }
+
+    // MARK: - Audio header extensions (no speech indicator in the clear, no bandwidth probing on the audio stream)
+
+    private static let levelUri = "urn:ietf:params:rtp-hdrext:ssrc-audio-level"
+    private static let absSendTimeUri = "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"
+    private static let tccUri = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
+    private static let tcc02Uri = "http://www.webrtc.org/experiments/rtp-hdrext/transport-wide-cc-02"
+    private static let midUri = "urn:ietf:params:rtp-hdrext:sdes:mid"
+    private static let absCaptureTimeUri = "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time"
+    private static let fingerprintLine = "a=fingerprint:sha-256 " + Array(repeating: "AB", count: 32).joined(separator: ":")
+
+    /// What libwebrtc writes for an audio + video call: one id per URI across the whole SDP, the audio section with
+    /// the level, abs-send-time, transport-cc and mid, the video section with its own bandwidth extensions.
+    private func libwebrtcSdp(audioExtras: [String] = [], sessionExtras: [String] = [], videoExtras: [String] = []) -> String {
+        var lines: [String] = [
+            "v=0",
+            "o=- 4611731400430051336 2 IN IP4 127.0.0.1",
+            "s=-",
+            "t=0 0",
+            "a=group:BUNDLE 0 1",
+            Self.fingerprintLine,
+        ]
+        lines += sessionExtras
+        lines += [
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:0",
+            "a=extmap:1 " + Self.levelUri,
+            "a=extmap:2 " + Self.absSendTimeUri,
+            "a=extmap:3 " + Self.tccUri,
+            "a=extmap:4 " + Self.midUri,
+            "a=sendrecv",
+            "a=rtpmap:111 opus/48000/2",
+            "a=rtcp-fb:111 transport-cc",
+            "a=rtcp-fb:111 nack",
+            "a=fmtp:111 minptime=10;useinbandfec=1",
+        ]
+        lines += audioExtras
+        lines += [
+            "m=video 9 UDP/TLS/RTP/SAVPF 96",
+            "c=IN IP4 0.0.0.0",
+            "a=mid:1",
+            "a=extmap:2 " + Self.absSendTimeUri,
+            "a=extmap:3 " + Self.tccUri,
+            "a=extmap:4 " + Self.midUri,
+            "a=rtpmap:96 H265/90000",
+            "a=rtcp-fb:96 transport-cc",
+            "a=rtcp-fb:* transport-cc",
+            "a=fmtp:96 level-id=93",
+        ]
+        lines += videoExtras
+        return lines.joined(separator: "\r\n") + "\r\n"
+    }
+
+    private func videoSection(_ sdp: String) -> [String] {
+        let lines = sdp.components(separatedBy: "\r\n")
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("m=video") }) else { return [] }
+        return Array(lines[start...])
+    }
+
+    func test_theAudioSectionLosesTheSpeechIndicatorAndEveryBandwidthExtension() {
+        let audio = audioSection(AudioSdpPolicy.apply(libwebrtcSdp()))
+        for gone in [Self.levelUri, Self.absSendTimeUri, Self.tccUri] {
+            XCTAssertFalse(audio.contains { $0.contains(gone) }, "\(gone) must not be negotiated on audio: \(audio)")
+        }
+        XCTAssertTrue(audio.contains("a=extmap:4 " + Self.midUri), "mid is not touched")
+        XCTAssertTrue(audio.contains("a=mid:0"))
+        XCTAssertTrue(audio.contains("a=sendrecv"))
+    }
+
+    func test_bothTransportWideCcSpellingsAndToffsetAndCsrcLevelGoToo() {
+        let extra = [
+            "a=extmap:5 " + Self.tcc02Uri,
+            "a=extmap:6 urn:ietf:params:rtp-hdrext:toffset",
+            "a=extmap:7 urn:ietf:params:rtp-hdrext:csrc-audio-level",
+            "a=extmap:8/sendrecv " + Self.tccUri,
+        ]
+        let audio = audioSection(AudioSdpPolicy.apply(libwebrtcSdp(audioExtras: extra)))
+        XCTAssertEqual(audio.filter { $0.hasPrefix("a=extmap:") }, ["a=extmap:4 " + Self.midUri], "only mid is left: \(audio)")
+    }
+
+    func test_theTransportCcFeedbackOfTheOpusPayloadTypeGoesButNackStays() {
+        let audio = audioSection(AudioSdpPolicy.apply(libwebrtcSdp()))
+        XCTAssertFalse(audio.contains("a=rtcp-fb:111 transport-cc"))
+        XCTAssertTrue(audio.contains("a=rtcp-fb:111 nack"), "only the bandwidth feedback is dropped")
+    }
+
+    func test_aWildcardTransportCcFeedbackInTheAudioSectionGoesToo() {
+        let audio = audioSection(AudioSdpPolicy.apply(libwebrtcSdp(audioExtras: ["a=rtcp-fb:* transport-cc"])))
+        XCTAssertFalse(audio.contains("a=rtcp-fb:* transport-cc"))
+    }
+
+    func test_theVideoSectionKeepsItsOwnBandwidthExtensionsAndFeedback() {
+        let before = videoSection(libwebrtcSdp())
+        let after = videoSection(AudioSdpPolicy.apply(libwebrtcSdp()))
+        XCTAssertEqual(before, after, "a video upgrade still gets its bandwidth feedback")
+        XCTAssertTrue(after.contains("a=extmap:3 " + Self.tccUri))
+        XCTAssertTrue(after.contains("a=rtcp-fb:96 transport-cc"))
+    }
+
+    func test_anExtensionTheHeaderEncryptionCoversIsKept() {
+        // RFC 6904: the extension is carried encrypted, so the level is not in the clear.
+        let encryptedLine = "a=extmap:1 urn:ietf:params:rtp-hdrext:encrypt " + Self.levelUri
+        let encrypted = libwebrtcSdp().replacingOccurrences(of: "a=extmap:1 " + Self.levelUri, with: encryptedLine)
+        let audio = audioSection(AudioSdpPolicy.apply(encrypted))
+        XCTAssertTrue(audio.contains(encryptedLine))
+        XCTAssertFalse(audio.contains { $0.contains(Self.tccUri) }, "the bandwidth extension goes whatever the encryption")
+    }
+
+    func test_cryptexAtMediaOrSessionLevelDoesNotKeepThePlainLevel() {
+        // A cryptex line in one description says nothing about what the stream carries: the plain speech level and
+        // every bandwidth / capture-time extension go, whatever `a=cryptex` says, at media or session level.
+        let extra = ["a=extmap:7 urn:ietf:params:rtp-hdrext:csrc-audio-level", "a=extmap:8 " + Self.absCaptureTimeUri]
+        for sdp in [libwebrtcSdp(audioExtras: ["a=cryptex"] + extra), libwebrtcSdp(audioExtras: extra, sessionExtras: ["a=cryptex"])] {
+            let audio = audioSection(AudioSdpPolicy.apply(sdp))
+            XCTAssertEqual(audio.filter { $0.hasPrefix("a=extmap:") }, ["a=extmap:4 " + Self.midUri],
+                           "only mid is left whatever cryptex says: \(audio)")
+        }
+    }
+
+    func test_onlyTheWrappedFormOfTheSpeechLevelMayStayEvenWithCryptex() {
+        let wrappedLine = "a=extmap:1 urn:ietf:params:rtp-hdrext:encrypt " + Self.levelUri
+        let sdp = libwebrtcSdp(audioExtras: ["a=cryptex"]).replacingOccurrences(of: "a=extmap:1 " + Self.levelUri, with: wrappedLine)
+        let audio = audioSection(AudioSdpPolicy.apply(sdp))
+        XCTAssertTrue(audio.contains(wrappedLine))
+        XCTAssertFalse(audio.contains { $0.contains(Self.tccUri) })
+    }
+
+    func test_absCaptureTimeGoesFromTheAudioSectionAndStaysOnTheVideoSection() {
+        let wrapped = "a=extmap:9 urn:ietf:params:rtp-hdrext:encrypt " + Self.absCaptureTimeUri
+        let sdp = libwebrtcSdp(audioExtras: ["a=extmap:8 " + Self.absCaptureTimeUri, wrapped],
+                               videoExtras: ["a=extmap:8 " + Self.absCaptureTimeUri])
+        let out = AudioSdpPolicy.apply(sdp)
+        XCTAssertFalse(audioSection(out).contains { $0.contains(Self.absCaptureTimeUri) },
+                       "it makes some audio packets larger, plain or wrapped")
+        XCTAssertTrue(videoSection(out).contains("a=extmap:8 " + Self.absCaptureTimeUri), "video is untouched")
+        XCTAssertEqual(videoSection(sdp).filter { $0.hasPrefix("a=extmap:") }, videoSection(out).filter { $0.hasPrefix("a=extmap:") })
+    }
+
+    func test_sessionLevelExtmapLinesAreDroppedOutright() {
+        // What a non-libwebrtc remote may send: RFC 8285 would apply these to every section, the audio one included.
+        let session = [
+            "a=extmap:10 " + Self.tccUri,
+            "a=extmap:11 " + Self.levelUri,
+            "a=extmap:12 urn:ietf:params:rtp-hdrext:encrypt " + Self.levelUri,
+            "a=extmap:13 " + Self.midUri,
+            "a=extmap-allow-mixed",
+        ]
+        let sdp = libwebrtcSdp(sessionExtras: session)
+        let out = AudioSdpPolicy.apply(sdp)
+        let lines = out.components(separatedBy: "\r\n")
+        let head = Array(lines[..<(lines.firstIndex(where: { $0.hasPrefix("m=") }) ?? lines.endIndex)])
+        XCTAssertEqual(head.filter { $0.hasPrefix("a=extmap:") }, [], "no session-level extmap survives: \(head)")
+        XCTAssertTrue(head.contains("a=extmap-allow-mixed"), "only the extmap lines go")
+        XCTAssertTrue(head.contains(Self.fingerprintLine))
+        XCTAssertFalse(audioSection(out).contains { $0.contains(Self.tccUri) || $0.contains(Self.levelUri) })
+        XCTAssertEqual(videoSection(out), videoSection(libwebrtcSdp()), "the video section is not touched")
+    }
+
+    func test_anSdpWithoutAnOpusAudioSectionKeepsItsSessionLevelExtmaps() {
+        // No audio stream to protect: the policy does not run at all, as before.
+        let videoOnly = ["v=0", "a=extmap:10 " + Self.tccUri, "m=video 9 UDP/TLS/RTP/SAVPF 96", "a=rtpmap:96 VP8/90000"]
+            .joined(separator: "\r\n") + "\r\n"
+        XCTAssertEqual(AudioSdpPolicy.apply(videoOnly), videoOnly)
+    }
+
+    func test_aDirectionSuffixedExtmapIsRecognised() {
+        let suffixed = libwebrtcSdp().replacingOccurrences(of: "a=extmap:1 " + Self.levelUri,
+                                                           with: "a=extmap:1/sendrecv " + Self.levelUri)
+        XCTAssertFalse(audioSection(AudioSdpPolicy.apply(suffixed)).contains { $0.contains(Self.levelUri) })
+    }
+
+    func test_anAudioSectionWithoutOpusKeepsItsExtensions() {
+        let pcmu = [
+            "v=0",
+            "m=audio 9 UDP/TLS/RTP/SAVPF 0",
+            "a=extmap:1 " + Self.levelUri,
+            "a=extmap:3 " + Self.tccUri,
+            "a=rtpmap:0 PCMU/8000",
+            "a=rtcp-fb:0 transport-cc",
+        ].joined(separator: "\r\n") + "\r\n"
+        XCTAssertEqual(AudioSdpPolicy.apply(pcmu), pcmu)
+    }
+
+    func test_theExtensionRulesAreIdempotentAndLeaveTheFingerprintAlone() {
+        let once = AudioSdpPolicy.apply(libwebrtcSdp(audioExtras: ["a=extmap:8 " + Self.absCaptureTimeUri],
+                                                     sessionExtras: ["a=extmap:10 " + Self.tccUri]))
+        XCTAssertEqual(once, AudioSdpPolicy.apply(once))
+        XCTAssertTrue(once.components(separatedBy: "\r\n").contains(Self.fingerprintLine),
+                      "the signed DTLS fingerprint line is untouched")
+    }
+
+    func test_extmapTargetReadsPlainAndEncryptedForms() {
+        XCTAssertEqual(AudioSdpPolicy.extmapTarget(of: "a=extmap:1 " + Self.levelUri)?.uri, Self.levelUri)
+        XCTAssertEqual(AudioSdpPolicy.extmapTarget(of: "a=extmap:1/sendrecv " + Self.levelUri + " attr")?.uri, Self.levelUri)
+        XCTAssertEqual(AudioSdpPolicy.extmapTarget(of: "a=extmap:1 urn:ietf:params:rtp-hdrext:encrypt " + Self.levelUri)?.encrypted, true)
+        XCTAssertNil(AudioSdpPolicy.extmapTarget(of: "a=extmap-allow-mixed"))
+        XCTAssertNil(AudioSdpPolicy.extmapTarget(of: "a=mid:0"))
+    }
 }
