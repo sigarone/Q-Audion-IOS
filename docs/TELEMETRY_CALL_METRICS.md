@@ -95,6 +95,17 @@ Fields that cannot be read are omitted. Examples:
     audioroute why=1 old=1 out=3 in=3 profile=1 sr=16000 out_ch=1 in_ch=1 vol=50
     audioroute why=99 out=1 in=1 profile=0 sr=48000 out_ch=1 in_ch=1 vol=100
 
+### Narrowband Bluetooth notice lines
+
+The call screens (1:1 audio, 1:1 video, group) show a small banner when the call audio input is a Bluetooth hands-free route (`in=3 profile=1`) at a known sample rate of 8 kHz or less (`sr=8000`): "Bluetooth a banda stretta: voce di qualità ridotta" with a "Usa il telefono" button that moves the call to the built-in microphone and the phone's own output (the receiver on a 1:1 call, the loudspeaker on a group call). A 16 kHz route, or a rate that cannot be read, never shows it. The route is read on every route change and, while the call input is Bluetooth hands-free, once a second; the banner shows one second after the route turned narrowband (without a break), hides at once when it stops being narrowband, shows again after one second if it is narrowband again, and can be closed for the rest of the call. Tapping "Usa il telefono" does not close it: the route change hides it. A new call, a 1:1 call promoted to a group included, starts clean. The Android app follows the same rules and writes the same two lines. Same tag and family word as the route line, numbers only:
+
+| line | when |
+|---|---|
+| `audioroute nb_banner shown=1 sr=<Hz>` | the banner went up (`sr` = the session sample rate that made it); at most 5 per call |
+| `audioroute nb_switch tap=1` | the user tapped "Usa il telefono" (every tap) |
+
+The route change that follows a switch is an ordinary `audioroute why=... in=1 profile=0` line, so the effect of the tap is visible in the next line.
+
 ## `call.audio.diag` telemetry record
 
 ### Why it was missing on a native call, and what changed

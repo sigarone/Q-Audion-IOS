@@ -595,6 +595,8 @@ final class AppState: ObservableObject {
             updateProximityMonitoring()
             updateMeshCallState()
             callResourceLogger.update(callActive: callState == .active || callState == .encrypted)
+            // Narrowband Bluetooth notice: watch the route for as long as a call is up.
+            updateNarrowbandBluetoothMonitor()
             // W-ACCEPTLATCH — an early `call_answer` held while the caller was
             // still `.connecting` is re-applied once the call has moved on (async:
             // the replay may itself change `callState`).
@@ -1670,6 +1672,8 @@ final class AppState: ObservableObject {
             updateIdleTimer()
             // The Bluetooth mesh pause counts a connected group call only.
             updateMeshCallState()
+            // Narrowband Bluetooth notice: same signal, same reason.
+            updateNarrowbandBluetoothMonitor()
             // 2026-10-02 — the group screen's state machine in the phone log
             // (`grp state=<n> old=<n> count=<n>`, numbers only): the iPhone's group
             // traces recorded nothing of what the screen was doing.
@@ -3734,6 +3738,11 @@ final class AppState: ObservableObject {
         // the same reason: `lazy` means it does not exist until touched, and
         // it has to be listening before the first call publishes a state.
         _ = callConnectAvatarObserver
+        // Narrowband Bluetooth notice: the banner's "use the phone" button, which needs the speaker state and the group
+        // call of the app (closure only, never an AppState parameter: CLAUDE.md section 16).
+        NarrowbandBluetoothBannerModel.shared.usePhone = { [weak self] in
+            self?.narrowbandUsePhone()
+        }
         // W-EARTOUCH — re-evaluate proximity monitoring on every audio route
         // change (Bluetooth/wired headset connect or disconnect mid-call),
         // not just the manual speaker toggle already covered in setSpeaker().
@@ -22821,6 +22830,83 @@ extension AppState {
             return false
         }()
         MeshRuntime.shared.setCallActive(oneToOneConnected || groupConnected)
+    }
+
+    /// Narrowband Bluetooth notice (2026-10-22) -- tells `NarrowbandBluetoothBannerModel` which call is up, which is when
+    /// it watches the audio route: a 1:1 call that is connected (active / encrypted) or a group call that is connecting
+    /// or active. The key says when the banner starts over: a group call is its own call (its call id), so a 1:1 call
+    /// promoted to a group starts clean, like any new call. Idempotent; called from the two state `didSet`s, like
+    /// `updateIdleTimer`.
+    @MainActor
+    private func updateNarrowbandBluetoothMonitor() {
+        let groupCallId: String? = {
+            switch groupCallControllerState {
+            case .connecting(let callId): return callId
+            case .active(let callId, _): return callId
+            case .idle, .failed: return nil
+            }
+        }()
+        let oneToOneLive: Bool = callState == .active || callState == .encrypted
+        let key: String? = NarrowbandBluetoothCallScope.key(oneToOneLive: oneToOneLive, groupCallId: groupCallId)
+        NarrowbandBluetoothBannerModel.shared.setCall(key: key)
+    }
+
+    /// Narrowband Bluetooth notice: "use the phone" -- the call audio goes to the phone's built-in microphone and to the
+    /// phone's own output for this kind of call, the same as the Android app. In both cases the output preference is put
+    /// in place BEFORE the input moves, so the route the call lands on is decided by the session itself and nothing has
+    /// to be asserted again afterwards:
+    ///  * 1:1 call (audio or video): the receiver. If the speaker button was on it is turned off first (the same
+    ///    `setSpeaker(false)` as the button), so the button says what the route is and the loudspeaker never comes on
+    ///    by itself; the user turns it on again with one tap.
+    ///  * group call: the loudspeaker. The group screen is hands-free and has no speaker button, so the loudspeaker
+    ///    preference is set first, whatever the output is at that moment, and then the input moves to the built-in
+    ///    microphone.
+    /// The headset stays connected: the system route picker brings the call back to it.
+    func narrowbandUsePhone() {
+        let groupLive: Bool = {
+            switch groupCallControllerState {
+            case .connecting, .active: return true
+            case .idle, .failed: return false
+            }
+        }()
+        if groupLive {
+            setGroupLoudspeakerPreference()
+        } else if callSpeakerOn {
+            setSpeaker(false)
+        }
+        BuiltInRouteSwitch.useBuiltInMicAndReceiver()
+    }
+
+    /// The loudspeaker as a PREFERENCE of the session for a group call: `.defaultToSpeaker` in the category options with
+    /// the output override left at `.none`, the same soft model `setSpeaker(true)` uses on an iPhone. Unlike
+    /// `routeGroupCallAudioToSpeaker`, which acts only while the receiver is the current output (so it cannot run before
+    /// the input has left the headset), this does not look at the current output: it can run first, and the output that
+    /// follows the new input is then the loudspeaker. On a call whose audio runs in WebRTC's manual audio mode the same
+    /// preference goes through the gate (configuration lock, WebRTC's own session configuration kept in step).
+    private func setGroupLoudspeakerPreference() {
+        if NativeAudioSessionGate.isArmed {
+            NativeAudioSessionGate.applySpeakerRoute(speakerOn: true, hardOverride: false)
+            return
+        }
+        let session = AVAudioSession.sharedInstance()
+        do {
+            #if !targetEnvironment(simulator)
+            let opts: AVAudioSession.CategoryOptions = [
+                .allowBluetoothHFP,
+                .interruptSpokenAudioAndMixWithOthers,
+                .defaultToSpeaker
+            ]
+            #else
+            let opts: AVAudioSession.CategoryOptions = [
+                .interruptSpokenAudioAndMixWithOthers,
+                .defaultToSpeaker
+            ]
+            #endif
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
+            try session.overrideOutputAudioPort(.none)
+        } catch {
+            RTLog.warn("call", "group-call speaker route failed: " + error.localizedDescription)
+        }
     }
 
     /// W-GRPSPKR (2026-07-20, live 5-way call 694147de): group calls have NO

@@ -83,6 +83,9 @@ struct VideoCallView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
+                // Narrowband Bluetooth notice: a row of the column, between the top bars and the picture area.
+                NarrowbandBluetoothBanner()
+
                 Spacer()
 
                 HStack(alignment: .bottom) {
@@ -194,6 +197,11 @@ struct VideoCallView: View {
         }
         .onChange(of: appState.callContactId) { _ in
             resolveDisplayName()
+        }
+        // The speaker button follows the app's real choice when something other than this button changes it (the
+        // Bluetooth banner's "use the phone" turns the loudspeaker off).
+        .onChange(of: appState.callSpeakerOn) { value in
+            isSpeaker = value
         }
         // 2026-07-30: `peerDisplayName` is a @State snapshot taken by
         // `resolveDisplayName()` — same stale-cache shape as the

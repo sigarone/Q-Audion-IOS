@@ -632,6 +632,10 @@ TELEMETRY_VOCAB = frozenset([
     "frames", "bytes", "ms", "sec", "peer", "self", "remote", "local",
     "candidate", "offer", "answer", "rx", "tx", "sent", "recv", "received",
     "and", "to", "of", "at", "is", "via", "for", "with",
+    # the two line markers of the narrowband Bluetooth notice ("audioroute nb_banner shown=1 sr=8000",
+    # "audioroute nb_switch tap=1"): one whole token each, structural like "ws_relay", so a line with a single key=value
+    # still has as much structure as free words (see _passes_structured_gate (B)).
+    "nb_banner", "nb_switch",
 ])
 
 # A token is "safe-structured" if it is one of: a key=value or key:value pair,
@@ -816,7 +820,17 @@ APP_VOCAB = frozenset("""
     side same brake resize
 
     audiowire win pkts hdr retx codec maxavg stereo alevel tcc cap prio
+    shown
 """.split())
+# IN-CALL NARROWBAND BLUETOOTH NOTICE (2026-10-22) -- "shown" (the line right above) and the two whole tokens "nb_banner" /
+# "nb_switch" (TELEMETRY_VOCAB) are for the new "call"-tagged RTLog lines of the notice that offers the phone when the call
+# audio runs on an 8 kHz hands-free link:
+#   audioroute nb_banner shown=1 sr=<Hz>     (the banner went up)
+#   audioroute nb_switch tap=1               (the user tapped "use the phone")
+# "audioroute", "tap" and "sr" were already vocabulary. The two markers are TELEMETRY_VOCAB (structural) rather than
+# APP_VOCAB (free words) because a line with ONE key=value has one structural token, and the gate needs the free words
+# (the bare "audioroute" counts as one) not to outnumber the structure. Global, like the other audioroute lines: every line
+# is numeric and only printed during a call. Pinned by test_ship_ios_callmetrics_vocab.py.
 # W-NAMEGATE (2026-10-10) -- with MAX_UNKNOWN_BARE_WORDS = 0 every free word of a
 # line must be vocabulary, and so must the alphabetic value of a key=value. The
 # five blocks of words that close this set (senderid ... ipv4, apply ... vidpause,
