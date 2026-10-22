@@ -814,6 +814,8 @@ APP_VOCAB = frozenset("""
     vpnservice
 
     side same brake resize
+
+    audiowire win pkts hdr retx codec maxavg stereo alevel tcc cap prio
 """.split())
 # W-NAMEGATE (2026-10-10) -- with MAX_UNKNOWN_BARE_WORDS = 0 every free word of a
 # line must be vocabulary, and so must the alphabetic value of a key=value. The
@@ -842,6 +844,16 @@ APP_VOCAB = frozenset("""
 # never a value typed by a person. Words seen once or twice, and the ones that are
 # also given names, are left out on purpose: fail closed, a new line shape is
 # summarised until its words are added here and pinned in a test_ship_ios_*_vocab.py.
+# Audio wire shape -- the 12 words on the line right above ("audiowire win pkts hdr retx codec maxavg stereo alevel
+# tcc cap prio") are for the numeric "call"-tagged lines that compare the audio on the wire across platforms
+# (QAudionEngine/Diagnostics/AudioWireLines.swift; the same names and fields on iOS, Android and Desktop):
+#   audiowire win_ms=<ms> tx_pkts=<n> tx_bytes=<n> tx_hdr_bytes=<n> tx_retx_pkts=<n> rx_pkts=<n> rx_bytes=<n>
+#   audiowire codec ptime=<ms> minptime=<ms> maxptime=<ms> cbr=<0|1> fec=<0|1> dtx=<0|1> maxavg=<bps> stereo=<0|1>
+#       alevel=<0|1> tcc=<0|1>
+#   audiosrtp cap n=<n> min=<bps> max=<bps> apt=<0|1> prio=<n> ok=<0|1> src=<n>     (sender parameters read back)
+#   grp audio cap n=<n> min=<bps> max=<bps> apt=<0|1> ok=<0|1>                      (group publisher, tag "group")
+# "audiowire" is 9 letters but not vocabulary (an unknown word); the others are the field names. Every value is a
+# number, every line is only printed during a native-SRTP call. Pinned by test_ship_ios_audiowire_vocab.py.
 # CALL-METRICS (2026-10-04) -- the 5 words on the line right above ("audioroute suspect duck silent hear") are for the new
 # "call"-tagged RTLog lines of CallService's call-monitoring package (docs/TELEMETRY_CALL_METRICS.md):
 #   audioroute why=<reason> old=<code> out=<code> in=<code> profile=<0-3> sr=<Hz> out_ch=<n> in_ch=<n> vol=<0-100>

@@ -9,11 +9,16 @@ import Foundation
 ///  * header extensions: Janus 1.4.2 has no Cryptex (RFC 9335), so RTP header
 ///    extensions travel in the clear on the client <-> qjanus hop. Only
 ///    `mid`, `rid`, `repaired-rid` and transport-wide-cc may be negotiated
-///    (spec §10). An allow-list is used, not a block-list, so an extension a
+///    (spec §10); transport-wide-cc on the video sections only (see the audio
+///    profile below). An allow-list is used, not a block-list, so an extension a
 ///    future WebRTC build starts offering can never leak by default.
 ///  * audio profile: identical to the 1:1 profile (60 ms / 32 kbps CBR, in-band
 ///    FEC, no DTX) — `AudioSdpPolicy` is reused verbatim, plus the explicit
-///    `usedtx=0;stereo=0` of spec §4.4.
+///    `usedtx=0;stereo=0` of spec §4.4. That policy also takes the bandwidth-
+///    estimation extensions (and `transport-cc` feedback) and `abs-capture-time`
+///    off the Opus audio sections and drops every session-level extmap, so
+///    `transport-wide-cc` stays negotiated on the video sections only and the
+///    audio stream keeps its media packet rate.
 ///  * VP8 only (spec §12.8): every other video codec, and their RTX, is removed.
 ///
 /// Both directions are filtered (spec §12.4): the local description we create AND

@@ -3,9 +3,10 @@ import Foundation
 /// IOS-C4b / W-SRTPPTIME (2026-08-26) — Opus policy for the native SRTP audio
 /// path (``CallCapabilities/audioSrtpV1``), applied by rewriting the Opus
 /// `a=fmtp` line of every SDP this client produces AND every SDP it
-/// receives. Byte-for-byte port of Android's `AudioSdpPolicy.kt` (values
-/// copied verbatim, not approximated — see that file for the full
-/// rationale):
+/// receives. The fmtp / packet-time rules are a byte-for-byte port of
+/// Android's `AudioSdpPolicy.kt` (values copied verbatim, not approximated —
+/// see that file for the full rationale); the audio header-extension rule at
+/// the end of the list is the same audio wire policy, applied here:
 ///
 ///  - `cbr=1`                   — constant bitrate: uniform packet sizes.
 ///  - `useinbandfec=1`          — in-band FEC: each packet carries a
@@ -29,6 +30,44 @@ import Foundation
 ///                                instead of libwebrtc's 20 ms default
 ///                                (3x the packet rate / per-packet overhead
 ///                                of the DataChannel path otherwise).
+///  - audio header extensions   — an Opus `m=audio` section negotiates none
+///                                of the RTP header extensions below, so the
+///                                audio stream is a constant-size,
+///                                constant-rate packet train and the clear
+///                                RTP header carries no per-packet speech
+///                                indicator:
+///                                * `ssrc-audio-level` / `csrc-audio-level`
+///                                  (RFC 6464 / 6465) in their plain form,
+///                                  whatever `a=cryptex` says: a cryptex
+///                                  line in one description proves nothing
+///                                  about the other side's stream. Only the
+///                                  RFC 6904 wrapped form (`a=extmap:<id>
+///                                  urn:ietf:params:rtp-hdrext:encrypt <uri>`)
+///                                  may stay.
+///                                * the send-side bandwidth-estimation
+///                                  extensions (`transport-wide-cc` in both
+///                                  spellings, `abs-send-time`, `toffset`) and
+///                                  the `a=rtcp-fb ... transport-cc` of the
+///                                  Opus payload type. libwebrtc sends
+///                                  padding-only packets (padding and
+///                                  bandwidth probes) on a stream only when
+///                                  that stream negotiated one of them, so the
+///                                  audio stream stays at its media packet
+///                                  rate. The video `m=` section keeps its own
+///                                  `transport-cc`: a video upgrade still gets
+///                                  its bandwidth feedback.
+///                                * `abs-capture-time`: it rides on some audio
+///                                  packets only, which makes them larger and
+///                                  breaks the constant packet size.
+///                                Session-level `a=extmap:` lines (before the
+///                                first `m=` line) are dropped outright: RFC
+///                                8285 would apply them to every section,
+///                                libwebrtc never writes them.
+///                                Removal is unilateral (an extension absent
+///                                from one side's SDP is simply not
+///                                negotiated) and, like the fmtp rewrite,
+///                                runs on both directions. The video section
+///                                is not touched.
 ///
 /// Applying the rewrite in BOTH directions makes the policy unilateral: the
 /// munged outbound SDP constrains the PEER's encoder (an SDP receiver
@@ -70,6 +109,33 @@ enum AudioSdpPolicy {
     /// three are needed (bare `ptime` is advisory; the fmtp `minptime` is
     /// the strongest against libwebrtc's own encoder).
     static let ptimeMs: Int = 60
+
+    /// Per-packet speech indicators that travel in the clear RTP header
+    /// (RFC 6464 `ssrc-audio-level`, RFC 6465 `csrc-audio-level`).
+    static let speechIndicatorExtmapUris: Set<String> = [
+        "urn:ietf:params:rtp-hdrext:ssrc-audio-level",
+        "urn:ietf:params:rtp-hdrext:csrc-audio-level",
+    ]
+
+    /// The header extensions that make an RTP stream eligible for padding and
+    /// bandwidth probing (libwebrtc: a module supports padding only when one of
+    /// these is registered). Removed from every Opus audio section.
+    static let bandwidthExtmapUris: Set<String> = [
+        "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+        "http://www.webrtc.org/experiments/rtp-hdrext/transport-wide-cc-02",
+        "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time",
+        "urn:ietf:params:rtp-hdrext:toffset",
+    ]
+
+    /// `abs-capture-time`: carried by some audio packets only, so it changes the packet size. Removed from every Opus
+    /// audio section, even in the RFC 6904 wrapped form (the size of a header-encrypted extension is still visible).
+    static let captureTimeExtmapUris: Set<String> = [
+        "http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
+    ]
+
+    /// RFC 6904: `a=extmap:<id> urn:ietf:params:rtp-hdrext:encrypt <uri>` is the
+    /// header-encrypted form of the extension `<uri>`.
+    private static let encryptedExtmapUri = "urn:ietf:params:rtp-hdrext:encrypt"
 
     private static let rtpmapOpusPattern = "^a=rtpmap:([0-9]+)\\s+opus/48000/2\\s*$"
     private static let ptimeLinePattern = "^a=(ptime|maxptime):\\s*[0-9]+\\s*$"
@@ -136,7 +202,16 @@ enum AudioSdpPolicy {
                 inOpusAudio = false
             }
 
+            // Audio wire shape — a session-level extmap (before the first m= line)
+            // would apply to every section, the audio one included: dropped outright.
+            if section < 0, line.hasPrefix("a=extmap:") { continue }
             if inAudio {
+                // Audio wire shape — no speech indicator in the clear header, no
+                // bandwidth-probing or capture-time extension on the audio stream
+                // (see the type doc). Policed sections only, like the ptime pair.
+                if inOpusAudio, shouldDropAudioHeaderLine(line, opusPts: opusPts) {
+                    continue
+                }
                 // W-SRTPPTIME — drop any pre-existing ptime/maxptime in a
                 // policed section; the policy's pair is re-added at the end
                 // of the section, so present->replaced and absent->added
@@ -159,6 +234,37 @@ enum AudioSdpPolicy {
         closeSection()
         let joined = out.joined(separator: "\r\n")
         return hadTrailingNewline ? joined + "\r\n" : joined
+    }
+
+    /// The target of an `a=extmap` line: its URI, and whether it is the
+    /// header-encrypted (RFC 6904) form. `nil` for any other line.
+    static func extmapTarget(of line: String) -> (uri: String, encrypted: Bool)? {
+        guard line.hasPrefix("a=extmap:") else { return nil }
+        let parts = line.dropFirst("a=extmap:".count).split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count >= 2 else { return nil }
+        if parts[1] == encryptedExtmapUri {
+            guard parts.count >= 3 else { return nil }
+            return (String(parts[2]), true)
+        }
+        return (String(parts[1]), false)
+    }
+
+    /// True for the lines an Opus audio section must not carry: an extmap of a
+    /// speech indicator in its plain form, an extmap of a bandwidth estimation or
+    /// capture-time extension (wrapped or not), and the `transport-cc` feedback of
+    /// the Opus payload type (or of every type, `*`).
+    private static func shouldDropAudioHeaderLine(_ line: String, opusPts: Set<String>) -> Bool {
+        if let target = extmapTarget(of: line) {
+            if bandwidthExtmapUris.contains(target.uri) || captureTimeExtmapUris.contains(target.uri) { return true }
+            if speechIndicatorExtmapUris.contains(target.uri) { return !target.encrypted }
+            return false
+        }
+        if line.hasPrefix("a=rtcp-fb:") {
+            let parts = line.dropFirst("a=rtcp-fb:".count).split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 2, parts[1] == "transport-cc" else { return false }
+            return parts[0] == "*" || opusPts.contains(String(parts[0]))
+        }
+        return false
     }
 
     private static func sdpHasFmtp(_ lines: [String], payloadType pt: String) -> Bool {

@@ -131,6 +131,8 @@ final class WebRtcGroupMediaLink: GroupMediaLink, @unchecked Sendable {
         self.session = session
         session.onEvent = onEvent
         session.publisherFilter = publisherFilter
+        // The audio sender's read-back line goes to the same diagnostic stream as the other group lines.
+        publisher.onAudioSenderLine = { [weak session] line in session?.noteDiagLine(line) }
     }
 
     func forward(_ remote: GroupSubscriberPeer.RemoteTrack) {

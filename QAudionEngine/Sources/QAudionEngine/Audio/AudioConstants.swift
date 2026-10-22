@@ -4,6 +4,11 @@ public enum AudioConstants {
     public static let sampleRate = 48000
     public static let channels = 1
     public static let bitsPerSample = 16
+    /// The CAPTURE / ANALYSIS cadence: the 20 ms slice the voice enrollment, the voice analysers, the self test and the
+    /// audio-session buffer are built on. It is NOT an encoder default: an encoder's frame duration comes from its
+    /// profile, and a codec built without one takes the fleet profile's 60 ms
+    /// (`AudioProfile.defaultProfile`, `OpusCodec.Config`). 20 ms frames go on the wire only on the
+    /// `AudioProfile.standard` profile, the documented single exception (see its doc).
     public static let frameDurationMs = 20
     public static let samplesPerFrame = (sampleRate * frameDurationMs) / 1000
     public static let bytesPerFrame = samplesPerFrame * (bitsPerSample / 8) * channels

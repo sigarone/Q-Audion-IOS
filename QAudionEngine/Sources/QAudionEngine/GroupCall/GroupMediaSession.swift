@@ -930,6 +930,12 @@ public final class GroupMediaSession: @unchecked Sendable {
         emit(.telemetry(GroupTelemetry.diagLine(line, slot: slot, values: values)))
     }
 
+    /// A ready-made `GroupDiagnostics` line from the media layer (the audio sender read-back), for the
+    /// controller's `diagLog`. Nothing after `close()`.
+    func noteDiagLine(_ line: String) {
+        emitDiag(line)
+    }
+
     /// A camera-publish line (`GroupDiagnostics.videoLine`), also kept as the "video" slot.
     private func emitVideoDiag(camera: Bool, phase: GroupDiagnostics.VideoPhase, ok: Bool, code: Int = 0, ms: Int = 0) {
         emitDiag(GroupDiagnostics.videoLine(camera: camera, phase: phase, ok: ok, code: code, ms: ms),

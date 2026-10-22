@@ -784,6 +784,34 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         public var codecChannels: Int?
         public var codecSdpFmtpLine: String?
 
+        // Audio wire shape -- the counters and the send-side codec behind the shared `audiowire` lines
+        // (`AudioWireLines`). All from the SAME report as every field above: the window deltas are taken
+        // between two snapshots, so the six counters are one consistent sample. Each counter is the SUM over
+        // the audio rows of its direction (one row in practice; a sender or receiver whose SSRC changed can
+        // leave a second one in the report for a while, and the counters are cumulative per row).
+        /// `ProcessInfo.systemUptime` in milliseconds at the moment the stats callback ran, `-1` until the first
+        /// report. The `audiowire` window is bounded by the capture stamps of two reports, not by the clock of
+        /// the heartbeat that happens to read them: a heartbeat that reads the same report twice sees the same
+        /// stamp and writes no window.
+        public var capturedAtUptimeMs: Int64 = -1
+        /// `outbound-rtp` (kind=audio) `packetsSent` -- cumulative, every RTP packet including padding-only ones.
+        public var outboundPacketsSent: Int64 = -1
+        /// `outbound-rtp` (kind=audio) `bytesSent` -- cumulative payload bytes (headers and padding excluded).
+        public var outboundBytesSent: Int64 = -1
+        /// `outbound-rtp` (kind=audio) `headerBytesSent` -- cumulative RTP header AND padding bytes.
+        public var outboundHeaderBytesSent: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `packetsReceived` -- cumulative.
+        public var inboundPacketsReceived: Int64 = -1
+        /// `inbound-rtp` (kind=audio) `bytesReceived` -- cumulative payload bytes.
+        public var inboundBytesReceived: Int64 = -1
+        /// `sdpFmtpLine` of the codec row the OUTBOUND `outbound-rtp` row points to (`codecId`): the codec the
+        /// sender is actually configured with. NOT the inbound one (`codecSdpFmtpLine` above follows the
+        /// inbound row), which is the peer's choice for what it sends us.
+        public var outboundCodecSdpFmtpLine: String?
+        /// What the SDP negotiated for the audio section (packet times, header extensions); `nil` until the
+        /// descriptions exist.
+        public var audioWireSdpFacts: AudioWireLines.SdpFacts?
+
         // N7 (network-resilience-max, this task) — the additional raw stats
         // the heartbeat's new INTERVAL-delta fields (`CallService`'s
         // `jitter_ms`/`target_ms`/`plc`/`fec_recv`/`fec_drop`/`nack` log
@@ -889,6 +917,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         pc.statistics { [weak self] report in
             guard let self else { return }
+            // Audio wire shape -- the capture stamp of this report (monotonic uptime), taken first thing in the
+            // callback: the bound of the `audiowire` window.
+            let capturedAtUptimeMs = Int64(ProcessInfo.processInfo.systemUptime * 1000)
             // Android's pair choice, verbatim: a succeeded pair that is
             // nominated or selected; failing that, the first succeeded pair.
             // The RTT is carried out of the loop rather than the stats object
@@ -934,7 +965,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // W-NATIVESRTPDIAG (this task) — see NativeAudioSrtpStatsSnapshot's
             // own field docs for what each of these is.
             var snapshot = NativeAudioSrtpStatsSnapshot()
+            snapshot.capturedAtUptimeMs = capturedAtUptimeMs
             var audioCodecId: String?
+            var outboundCodecId: String?
+            // Audio wire shape -- cumulative counters summed over the audio rows of each direction (-1 = no row
+            // carried the field).
+            var wireTxPackets: Int64 = -1, wireTxBytes: Int64 = -1, wireTxHeaderBytes: Int64 = -1
+            var wireTxRetransmitted: Int64 = -1, wireRxPackets: Int64 = -1, wireRxBytes: Int64 = -1
+            func addCounter(_ total: inout Int64, _ raw: Any?) {
+                guard let value = (raw as? NSNumber)?.int64Value, value >= 0 else { return }
+                total = total < 0 ? value : total + value
+            }
             var preferredLocalCandidateId: String?
             var preferredRemoteCandidateId: String?
             var fallbackLocalCandidateId: String?
@@ -986,12 +1027,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     snapshot.inboundNackCount = (s.values["nackCount"] as? NSNumber)?.int64Value ?? -1
                     snapshot.inboundSilentConcealedSamples = (s.values["silentConcealedSamples"] as? NSNumber)?.int64Value ?? -1
                     snapshot.inboundConcealmentEvents = audioConcealmentEvents
+                    addCounter(&wireRxPackets, s.values["packetsReceived"])
+                    addCounter(&wireRxBytes, s.values["bytesReceived"])
                 }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
                     audioTxPackets = (s.values["packetsSent"] as? NSNumber)?.int64Value ?? -1
-                    snapshot.outboundRetransmittedPacketsSent =
-                        (s.values["retransmittedPacketsSent"] as? NSNumber)?.int64Value ?? -1
+                    addCounter(&wireTxPackets, s.values["packetsSent"])
+                    addCounter(&wireTxBytes, s.values["bytesSent"])
+                    addCounter(&wireTxHeaderBytes, s.values["headerBytesSent"])
+                    addCounter(&wireTxRetransmitted, s.values["retransmittedPacketsSent"])
+                    outboundCodecId = s.values["codecId"] as? String
                 }
                 // N7 — the PEER's RTCP receiver-report view of OUR outbound
                 // audio: fractionLost/roundTripTime. Instantaneous per report,
@@ -1081,6 +1127,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 snapshot.codecChannels = (codecStats.values["channels"] as? NSNumber)?.intValue
                 snapshot.codecSdpFmtpLine = codecStats.values["sdpFmtpLine"] as? String
             }
+            // Audio wire shape -- the SEND-side codec: the codec row the OUTBOUND row points to.
+            if let outboundCodecId, let outboundCodec = report.statistics[outboundCodecId] {
+                snapshot.outboundCodecSdpFmtpLine = outboundCodec.values["sdpFmtpLine"] as? String
+                snapshot.audioWireSdpFacts = AudioWireLines.sdpFacts(
+                    local: pc.localDescription?.sdp, remote: pc.remoteDescription?.sdp)
+            }
             let localCandidateId = havePreferred ? preferredLocalCandidateId : fallbackLocalCandidateId
             let remoteCandidateId = havePreferred ? preferredRemoteCandidateId : fallbackRemoteCandidateId
             if let localCandidateId, let localStats = report.statistics[localCandidateId] {
@@ -1105,6 +1157,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 snapshot.remoteCandidateType = remoteStats.values["candidateType"] as? String
                 snapshot.remoteCandidateProtocol = remoteStats.values["protocol"] as? String
             }
+            snapshot.outboundPacketsSent = wireTxPackets
+            snapshot.outboundBytesSent = wireTxBytes
+            snapshot.outboundHeaderBytesSent = wireTxHeaderBytes
+            snapshot.outboundRetransmittedPacketsSent = wireTxRetransmitted
+            snapshot.inboundPacketsReceived = wireRxPackets
+            snapshot.inboundBytesReceived = wireRxBytes
             self.nativeAudioSrtpStats = snapshot
 
             // W-DTLSWAIT -- one `dtls wait` line (at most one per ~1 s, 20 per call leg, none after the DTLS state
@@ -1982,6 +2040,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
         // cryptor-state line right above, for the new mute-apply diagnostic.
         pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
+        // Audio wire shape: sender-parameter read-back lines.
+        pc.onNativeAudioDiagLine = { [weak self] line in self?.log?(line) }
         pc.createAudioDataChannel()
         if !audioOnly {
             // Add the local camera track before creating the offer so the
@@ -2155,6 +2215,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
         // cryptor-state line right above, for the new mute-apply diagnostic.
         pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
+        // Audio wire shape: sender-parameter read-back lines.
+        pc.onNativeAudioDiagLine = { [weak self] line in self?.log?(line) }
         if !audioOnly {
             // Add the local camera track before creating the answer so the
             // SDP m=video section is populated. Mirrors Android
@@ -2278,6 +2340,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // W-CALLERUNMUTELOST (2026-09-27) — same wiring pattern as the
         // cryptor-state line right above, for the new mute-apply diagnostic.
         pc.onNativeSenderMuteApplied = { [weak self] line in self?.log?(line) }
+        // Audio wire shape: sender-parameter read-back lines.
+        pc.onNativeAudioDiagLine = { [weak self] line in self?.log?(line) }
         // Video track BEFORE createAnswer so the answer's m=video is sendrecv
         // with a real encoder-bound codec (avoids codec=null / purple video).
         if let videoSource = pc.addLocalVideoTrack() {

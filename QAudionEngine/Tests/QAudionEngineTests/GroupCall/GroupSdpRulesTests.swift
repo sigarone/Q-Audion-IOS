@@ -132,6 +132,44 @@ final class GroupSdpRulesTests: XCTestCase {
         XCTAssertTrue(out.contains("opus/48000/2"))
     }
 
+    /// The audio sections of a group call carry no bandwidth-estimation extension (the audio stream keeps its media
+    /// packet rate); the video section keeps `transport-wide-cc` for the simulcast layers.
+    func testTheAudioSectionLosesTransportCcAndTheVideoSectionKeepsIt() {
+        let withVideoCc = sdp().replacingOccurrences(
+            of: "a=extmap:4 http://www.webrtc.org/experiments/rtp-hdrext/abs-capture-time",
+            with: "a=extmap:2 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n"
+                + "a=rtcp-fb:96 transport-cc")
+        for out in [GroupSdpRules.mungeLocal(withVideoCc, role: .publisherOffer), GroupSdpRules.mungeRemote(withVideoCc)] {
+            let parts = out.components(separatedBy: "m=video")
+            XCTAssertEqual(parts.count, 2)
+            XCTAssertFalse(parts[0].contains("transport-wide-cc"), "audio keeps no transport-wide-cc: \(parts[0])")
+            XCTAssertFalse(parts[0].contains("transport-cc"), "audio keeps no transport-cc feedback: \(parts[0])")
+            XCTAssertTrue(parts[0].contains("a=extmap:3 urn:ietf:params:rtp-hdrext:sdes:mid"), "mid stays")
+            XCTAssertTrue(parts[1].contains("transport-wide-cc-extensions-01"), "video keeps its own")
+            XCTAssertTrue(parts[1].contains("a=rtcp-fb:96 transport-cc"))
+            XCTAssertTrue(GroupSdpRules.disallowedExtensions(in: out).isEmpty)
+        }
+    }
+
+    /// A remote description may carry session-level extmap lines (libwebrtc never writes them); they would apply to the
+    /// audio section too, so none survives, and the allow-listed transport-wide-cc stays on the video section only.
+    func testSessionLevelExtmapLinesAreDroppedFromTheRemoteDescription() {
+        let withSessionExtmaps = sdp().replacingOccurrences(
+            of: "a=extmap-allow-mixed",
+            with: "a=extmap-allow-mixed\r\n"
+                + "a=extmap:9 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n"
+                + "a=extmap:10 urn:ietf:params:rtp-hdrext:ssrc-audio-level")
+        let out = GroupSdpRules.mungeRemote(withSessionExtmaps)
+        let lines = GroupSdpRules.lines(of: out)
+        let head = lines.prefix { !$0.hasPrefix("m=") }
+        XCTAssertFalse(head.contains { $0.hasPrefix("a=extmap:") }, "no session-level extmap survives: \(head)")
+        XCTAssertTrue(head.contains("a=extmap-allow-mixed"))
+        let audio = out.components(separatedBy: "m=video")[0]
+        XCTAssertFalse(audio.contains("transport-wide-cc"), audio)
+        XCTAssertFalse(audio.contains("ssrc-audio-level"), audio)
+        XCTAssertTrue(GroupSdpRules.disallowedExtensions(in: out).isEmpty)
+    }
+
     func testAudioProfileWithoutAudioIsUnchangedInSubstance() {
         let videoOnly = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\na=mid:0\r\n"
         XCTAssertEqual(GroupSdpRules.applyAudioProfile(videoOnly), videoOnly)

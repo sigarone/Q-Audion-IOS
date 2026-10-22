@@ -88,10 +88,10 @@ public final class QAudionPeerConnection: NSObject {
         /// agent just selected a new candidate pair. Sourced from the
         /// `RTCPeerConnectionDelegate` OPTIONAL method
         /// `didChangeLocalCandidate:remoteCandidate:lastReceivedMs:
-        /// changeReason:` — confirmed present on the pinned webrtc-sdk/webrtc
-        /// `m144_release` tag this app's vendored `WebRTC.xcframework` is
-        /// built from (fetched and grepped the real header before wiring
-        /// this; see `QAudionWebRtcCallController
+        /// changeReason:` — confirmed present on the webrtc-sdk/webrtc tag this
+        /// app's vendored `WebRTC.xcframework` is built from (the real header was
+        /// fetched and grepped against `m144_release` when this was wired; it
+        /// compiles unchanged against the current M150 build). See `QAudionWebRtcCallController
         /// .resolveAndApplyRouteTier`'s own prior "VERIFICATION GAP" note,
         /// now closed with real evidence instead of a guess).
         ///
@@ -536,6 +536,39 @@ public final class QAudionPeerConnection: NSObject {
     /// site).
     public var onNativeSenderMuteApplied: ((String) -> Void)?
 
+    /// One numeric diagnostic line of the native audio sender (`audiosrtp cap ...`: what its parameters read back as
+    /// after the pin). Same reason as ``onNativeSenderMuteApplied``: the engine has no call id and cannot reach
+    /// `RTLog`. A line produced before the controller wired this closure (the sender is pinned when it is created,
+    /// inside `init`) is held and delivered the moment it is set.
+    public var onNativeAudioDiagLine: ((String) -> Void)? {
+        didSet { flushPendingNativeAudioDiagLines() }
+    }
+    private let pendingNativeAudioDiagLock = NSLock()
+    private var pendingNativeAudioDiagLines: [String] = []
+
+    private func emitNativeAudioDiagLine(_ line: String) {
+        pendingNativeAudioDiagLock.lock()
+        let sink = onNativeAudioDiagLine
+        if sink == nil {
+            // Bounded: a call has a handful of negotiations; never grow without a consumer.
+            if pendingNativeAudioDiagLines.count < 16 { pendingNativeAudioDiagLines.append(line) }
+            pendingNativeAudioDiagLock.unlock()
+            return
+        }
+        pendingNativeAudioDiagLock.unlock()
+        sink?(line)
+    }
+
+    private func flushPendingNativeAudioDiagLines() {
+        pendingNativeAudioDiagLock.lock()
+        let lines = pendingNativeAudioDiagLines
+        pendingNativeAudioDiagLines = []
+        let sink = onNativeAudioDiagLine
+        pendingNativeAudioDiagLock.unlock()
+        guard let sink else { return }
+        for line in lines { sink(line) }
+    }
+
     public init(factory: RTCPeerConnectionFactory,
                 audioProcessingModule: RTCDefaultAudioProcessingModule? = nil,
                 iceServers: [RTCIceServer],
@@ -622,9 +655,9 @@ public final class QAudionPeerConnection: NSObject {
             // NATIVE Opus encoder/decoder before any audio can flow on the
             // transceiver pre-attached below, then arm an observer that keeps
             // it current for the rest of the call. All four native calls go
-            // through `QaudionRuntimeTuning` (the one P8 adapter file); none
-            // of this compiles against today's linked M144 binary (P8 does
-            // not exist there) — see that file's own doc.
+            // through `QaudionRuntimeTuning` (the one P8 adapter file); P8
+            // exists only in the M150 build this app links — see that file's
+            // own doc.
             //
             //   - FEC floor: the plan's aligned constant (10%, §3.1) — same
             //     floor `PlpPolicy.minPct` now uses on the custom path.
@@ -750,6 +783,12 @@ public final class QAudionPeerConnection: NSObject {
             nativeAudioSender = pc.senders.first { $0.track?.trackId == audioTrackId }
             audioTransceiver = pc.transceivers.first { $0.mediaType == .audio }
             print("[WebRTC] W-PREATTACHMIC: pre-attached muted mic track (kill switch on) senderResolved=\(nativeAudioSender != nil)")
+            // Audio wire shape: the sender is pinned (32 kbps min = max, fixed packet time, DSCP) as it is
+            // created, not only once the key exchange has finished, so no packet of the call is produced
+            // under the library defaults. Re-asserted after every negotiation and at activation.
+            if let preAttachedSender = nativeAudioSender {
+                applyNativeAudioSenderBitrateCap(on: preAttachedSender, source: 1)
+            }
             // W-NATIVESRTPDIAG (this task) — raise the WebRTC stderr debug
             // severity for this call's whole lifetime (restored in `close()`
             // below). Gated on the SAME condition as the transceiver
@@ -1219,14 +1258,33 @@ public final class QAudionPeerConnection: NSObject {
     /// flag set, which every call site that calls this method's PeerConnection
     /// always is (native audio srtp is only ever activated on a PeerConnection
     /// built via `defaultConfiguration(nativeSrtpEnabledLocally: true)`).
+    ///
+    /// Audio wire shape — the pin also states `adaptiveAudioPacketTime = false`
+    /// (`RTCRtpEncodingParameters`, verified in the pinned header: the W3C
+    /// `adaptivePtime` extension) explicitly, so the packet time stays at the
+    /// negotiated 60 ms whatever the library default is. The pin is applied
+    /// when the sender is created (`src=1`), after every local / remote
+    /// description (`src=2` / `src=3`) and at activation (`src=4`), and every
+    /// application reads the parameters back and logs one numeric line
+    /// (`audiosrtp cap ... ok=<0|1>`): `RTCRtpSender.parameters` has no result,
+    /// so the read-back is the only way to see that the update was accepted.
+    ///
+    /// - Parameter source: where the pin comes from, for the log line.
+    /// - Returns: `true` when the read-back equals the pin (bitrate min = max, fixed packet time, high priority).
     @discardableResult
-    public func applyNativeAudioSenderBitrateCap(on sender: RTCRtpSender) -> Bool {
+    public func applyNativeAudioSenderBitrateCap(on sender: RTCRtpSender, source: Int = 4) -> Bool {
         let params = sender.parameters
-        guard !params.encodings.isEmpty else { return false }
-        let bps = NSNumber(value: AudioSdpPolicy.maxAverageBitrateBps)
+        guard !params.encodings.isEmpty else {
+            emitNativeAudioDiagLine(AudioWireLines.senderCapLine(
+                encodings: 0, minBps: -1, maxBps: -1, adaptivePacketTime: -1, priority: -1, ok: false, source: source))
+            return false
+        }
+        let pinnedBps: Int = AudioSdpPolicy.maxAverageBitrateBps
+        let bps = NSNumber(value: pinnedBps)
         for encoding in params.encodings {
             encoding.minBitrateBps = bps
             encoding.maxBitrateBps = bps
+            encoding.adaptiveAudioPacketTime = false
         }
         // N5 — DSCP-marking priority hint for the native audio stream;
         // `bitratePriority` (WebRTC's OWN internal bandwidth-allocation
@@ -1241,8 +1299,43 @@ public final class QAudionPeerConnection: NSObject {
         // clamp safe even if that ever changes.
         params.encodings[0].networkPriority = .high
         sender.parameters = params
-        print("[WebRTC] W-NATIVEAUDIOQUALITY: native audio sender bitrate pinned min=max=\(AudioSdpPolicy.maxAverageBitrateBps) networkPriority=high")
-        return true
+        // Read-back: the parameters as the sender holds them now.
+        let readBack = sender.parameters.encodings
+        let first = readBack.first
+        let readMin: Int = first?.minBitrateBps?.intValue ?? -1
+        let readMax: Int = first?.maxBitrateBps?.intValue ?? -1
+        var readAdaptive: Int = -1
+        if let first { readAdaptive = first.adaptiveAudioPacketTime ? 1 : 0 }
+        var readPriority: Int = -1
+        var readHighPriority = false
+        if let first {
+            readPriority = first.networkPriority.rawValue
+            readHighPriority = first.networkPriority == .high
+        }
+        let accepted: Bool = readMin == pinnedBps && readMax == pinnedBps
+            && readAdaptive == 0 && readHighPriority
+        emitNativeAudioDiagLine(AudioWireLines.senderCapLine(
+            encodings: readBack.count, minBps: readMin, maxBps: readMax, adaptivePacketTime: readAdaptive,
+            priority: readPriority, ok: accepted, source: source))
+        print("[WebRTC] W-NATIVEAUDIOQUALITY: native audio sender pinned min=max=\(pinnedBps) fixed ptime networkPriority=high accepted=\(accepted)")
+        return accepted
+    }
+
+    /// Audio wire shape — re-pins the native audio sender after a negotiation. A
+    /// description can recycle or replace the transceiver (the activation path
+    /// documents the same), and a replaced sender starts from the library
+    /// defaults. The target is the sender that carries the mic track (the one
+    /// the activation attaches the cryptor to), never "the first audio
+    /// transceiver with a mid": a second audio transceiver added for a remote
+    /// m-line would be picked instead. When the read-back says the pin was not
+    /// accepted it is applied once more and the second read-back is logged too.
+    /// Does nothing on a call that never pre-attached a mic track (native SRTP off).
+    private func reassertNativeAudioSenderCap(source: Int) {
+        guard let pc = peerConnection, localAudioSrtpTrack != nil else { return }
+        guard let sender = nativeAudioSender ?? pc.senders.first(where: { $0.track?.trackId == audioTrackId }) else { return }
+        if !applyNativeAudioSenderBitrateCap(on: sender, source: source) {
+            applyNativeAudioSenderBitrateCap(on: sender, source: source)
+        }
     }
 
     // MARK: - Native video FrameCryptor (insertable streams)
@@ -1329,7 +1422,7 @@ public final class QAudionPeerConnection: NSObject {
         var diagN = 0, diagSel = 0, diagDir = -1, diagBr = 0
         // W-AUDIOSRTPSENDERCARRYOVER (2026-08-28, port of the equivalent
         // Android/qaudion-android-new fix) — `audioTransceiver` is cached
-        // ONCE at `init()`, before any SDP round-trip. libwebrtc M144's JSEP
+        // ONCE at `init()`, before any SDP round-trip. libwebrtc's JSEP
         // can silently replace the pre-created transceiver object during
         // `setRemoteDescription`/`setLocalDescription` — this repo's own
         // VIDEO path already documents and handles that exact behavior (see
@@ -2069,6 +2162,7 @@ public final class QAudionPeerConnection: NSObject {
                 if let setErr = setErr {
                     completion(.failure(setErr))
                 } else {
+                    self?.reassertNativeAudioSenderCap(source: 2)
                     completion(.success(munged.sdp))
                 }
             })
@@ -2148,6 +2242,7 @@ public final class QAudionPeerConnection: NSObject {
                 if let setErr = setErr {
                     completion(.failure(setErr))
                 } else {
+                    self?.reassertNativeAudioSenderCap(source: 2)
                     completion(.success(pinnedSdp.sdp))
                 }
             })
@@ -2213,7 +2308,10 @@ public final class QAudionPeerConnection: NSObject {
         }
         logH265FmtpLines(munged, tag: type == .offer ? "REMOTE_OFFER" : "REMOTE_ANSWER")
         let desc = RTCSessionDescription(type: type, sdp: munged)
-        pc.setRemoteDescription(desc, completionHandler: completion)
+        pc.setRemoteDescription(desc, completionHandler: { [weak self] error in
+            if error == nil { self?.reassertNativeAudioSenderCap(source: 3) }
+            completion(error)
+        })
     }
 
     // MARK: - ICE

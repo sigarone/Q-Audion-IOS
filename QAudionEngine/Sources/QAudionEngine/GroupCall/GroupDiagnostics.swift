@@ -128,6 +128,22 @@ public enum GroupDiagnostics {
         "grp video camera=\(camera ? 1 : 0) phase=\(phase.rawValue) ok=\(ok ? 1 : 0) code=\(clamp(code)) ms=\(clamp(ms))"
     }
 
+    /// `grp audio cap n=<encodings> min=<bps> max=<bps> apt=<0|1> ok=<0|1>`: what the published audio sender's
+    /// parameters read back as after the 32 kbps / fixed-packet-time / DSCP pin. `ok` = 1 when the read-back equals what
+    /// was set (bitrate min = max, fixed packet time, high priority). A value that could not be read is 0 (and then
+    /// `ok` is 0): the line keeps its shape, which is what the phone-log shipper's gate accepts. A sender without any
+    /// encoding gives `n=0 min=0 max=0 apt=0 ok=0`.
+    public static func audioSenderLine(encodings: Int, minBps: Int, maxBps: Int, adaptivePacketTime: Int, ok: Bool) -> String {
+        let adaptive: Int = adaptivePacketTime == 1 ? 1 : 0
+        var out: String = "grp audio cap"
+        out += " n=\(clamp(encodings))"
+        out += " min=\(clamp(minBps))"
+        out += " max=\(clamp(maxBps))"
+        out += " apt=\(adaptive)"
+        out += ok ? " ok=1" : " ok=0"
+        return out
+    }
+
     // MARK: - Heartbeat (every `GroupMediaSession.Config.heartbeatSeconds`)
 
     /// `GroupPcState` as a number: 0 new, 1 connecting, 2 connected, 3 disconnected,

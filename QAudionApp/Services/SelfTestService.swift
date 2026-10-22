@@ -98,9 +98,9 @@ public final class SelfTestService {
     private func runOpusRoundtrip(runId: String) async {
         let codec = OpusCodec(config: .secure())
         // Generate a deterministic test signal: 1 kHz sine at -12 dBFS.
-        // 48 kHz / 20 ms → 960 samples per frame, mono, Int16.
-        let frameSamples = AudioConstants.samplesPerFrame
-        let bytesPerFrame = AudioConstants.bytesPerFrame
+        // One frame of the codec's own duration (60 ms → 2880 samples at 48 kHz on the fleet default), mono, Int16.
+        let frameSamples: Int = AudioConstants.sampleRate / 1000 * codec.encodeFrameDurationMs
+        let bytesPerFrame: Int = frameSamples * (AudioConstants.bitsPerSample / 8) * AudioConstants.channels
         var pcm = Data(count: bytesPerFrame)
         pcm.withUnsafeMutableBytes { (rawBuf: UnsafeMutableRawBufferPointer) in
             guard let p = rawBuf.baseAddress?.assumingMemoryBound(to: Int16.self) else { return }

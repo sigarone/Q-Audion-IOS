@@ -383,6 +383,10 @@ final class CallService: @unchecked Sendable {
     /// `srtpHbSampleCounter % 5 == 0`), not every sample.
     private var lastNativeAudioIntervalCounters: NativeAudioHeartbeatDeltas.IntervalCounters?
 
+    /// Audio wire shape -- the per-call state behind the shared `audiowire` lines (window deltas of the audio RTP
+    /// counters every heartbeat, the send-side codec once per negotiation). See `AudioWireLines`.
+    private var audioWireReporter = AudioWireLines.Reporter()
+
     /// Live wire throughput in kbps, last computed by [sampleWireThroughput].
     /// `nil` ⇒ "—". Written on the main actor by the sampler only.
     public private(set) var wireTxKbps: Double?
@@ -544,6 +548,7 @@ final class CallService: @unchecked Sendable {
             // and ships intact at every value range (incl. all -1).
             var resilienceLine: String?
             var concealLine: String?
+            var wireLines: [String] = []
             // W-NATIVESRTPDIAG (this task) — extend the SAME heartbeat line
             // (no second timer) with the wider stats snapshot, ONLY on a
             // call that actually negotiated native SRTP: every field below
@@ -668,10 +673,27 @@ final class CallService: @unchecked Sendable {
                 concealLine = CallMetricsLines.hb4(concealedDelta: deltas.concealedSamplesDelta,
                                                    silentDelta: deltas.silentConcealedSamplesDelta,
                                                    eventsDelta: deltas.concealmentEventsDelta)
+                // Audio wire shape -- `audiowire` window line (deltas of the six audio RTP counters between two
+                // stats reports, bounded by their capture stamps: a heartbeat that reads the report the last one
+                // already used writes no window) and, once per negotiation, `audiowire codec`. Pure builder, see
+                // AudioWireLines.
+                let wireCounters = AudioWireLines.Counters(
+                    txPackets: stats.outboundPacketsSent,
+                    txBytes: stats.outboundBytesSent,
+                    txHeaderBytes: stats.outboundHeaderBytesSent,
+                    txRetransmittedPackets: stats.outboundRetransmittedPacketsSent,
+                    rxPackets: stats.inboundPacketsReceived,
+                    rxBytes: stats.inboundBytesReceived)
+                let wireCodec = AudioWireLines.codec(sendFmtp: stats.outboundCodecSdpFmtpLine,
+                                                     sdp: stats.audioWireSdpFacts)
+                wireLines = audioWireReporter.lines(counters: wireCounters,
+                                                    capturedAtMs: stats.capturedAtUptimeMs,
+                                                    codec: wireCodec)
             }
             RTLog.info("call", line)
             if let resilienceLine { RTLog.info("call", resilienceLine) }
             if let concealLine { RTLog.info("call", concealLine) }
+            for wireLine in wireLines { RTLog.info("call", wireLine) }
             // CALL-METRICS — hb=3 (echo / VP-IO state), the route sample and the mid-call call.audio.diag.
             emitCallMetricsAtHeartbeat(heartbeat: closedInterval.heartbeat)
         }
@@ -4139,6 +4161,7 @@ final class CallService: @unchecked Sendable {
         // N7 (network-resilience-max) — never let a second call's first
         // heartbeat diff against the PREVIOUS call's last cumulative sample.
         lastNativeAudioIntervalCounters = nil
+        audioWireReporter.reset()
         wireTxKbps = nil
         wireRxKbps = nil
         mediaRttMs = nil

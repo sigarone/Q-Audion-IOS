@@ -21,6 +21,8 @@
 # test_ship_ios_dtlswait_vocab.py legge anche
 # QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift,
 # per questo e' tra i percorsi che fanno partire il workflow. Lo stesso vale
+# per test_ship_ios_audiowire_vocab.py, che legge le righe dell'audio sul filo da
+# QAudionEngine/Tests/QAudionEngineTests/Diagnostics/AudioWireLinesTests.swift. Lo stesso vale
 # per test_ship_ios_block_vocab.py, che confronta le righe "block drop=1 kind="
 # del test con quelle scritte da QAudionApp/AppState.swift e
 # QAudionApp/Services/NotificationCenterService.swift. E test_ship_ios_pair_vocab.py
@@ -42,6 +44,7 @@ on:
       - 'scripts/ship-server-logs.py'
       - 'scripts/test_ship_*'
       - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift'
+      - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/AudioWireLinesTests.swift'
       - 'QAudionApp/AppState.swift'
       - 'QAudionApp/Services/NotificationCenterService.swift'
       - 'QAudionEngine/Sources/QAudionEngine/Sovereign/Proximity/ProximityPairingTypes.swift'
