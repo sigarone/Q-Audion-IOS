@@ -110,6 +110,50 @@ final class MeshRuntime: ObservableObject {
     /// True once the identity is known (a transport can be built).
     var hasIdentity: Bool { slot.nodeId != nil }
 
+    // MARK: - Call and route facts for the Bluetooth pause (spec 2.1)
+
+    /// The app's own call, 1:1 or group, is connected (not ringing, not dialling). Set by `AppState`.
+    private(set) var ownCallConnected = false
+    /// A connected call exists on the device: the app's own, a call of another app, a cellular call
+    /// (`MeshCallDefinition`). While one is active and its audio uses a Bluetooth device the transport suspends
+    /// scanning, advertising and new outgoing links, and keeps the links it has (docs/mesh/MESH_LINK_SPEC.md
+    /// section 2.1).
+    private(set) var callActive = false
+    /// The audio route has a Bluetooth input or output port.
+    private(set) var btRoute = false
+
+    /// The app's own call became connected or ended. Called by `AppState` on the main thread; primitives only
+    /// (CLAUDE.md section 16). Reads the other facts here, on the main thread, and hands the transport all of them
+    /// together.
+    func setCallActive(_ connected: Bool) {
+        guard ownCallConnected != connected else { return }
+        ownCallConnected = connected
+        refreshCallFacts()
+    }
+
+    /// Reads the call state and the audio route on the main thread (never on the transport's queue, where reading the
+    /// route could wait on the audio system) and sends both to the transport in one piece. Run when the own call
+    /// changes, when a call of the device changes, when the route changes, and when the transport asks (the process
+    /// was suspended or Bluetooth came back, and the notifications may have been missed).
+    func refreshCallFacts() {
+        let facts = readCallFacts()
+        slot.existingTransport?.setCallFacts(callActive: facts.callActive, btRoute: facts.btRoute)
+    }
+
+    private func readCallFacts() -> (callActive: Bool, btRoute: Bool) {
+        callActive = MeshCallDefinition.callActive(ownCallConnected: ownCallConnected, systemCalls: readSystemCalls())
+        btRoute = readBluetoothRoute()
+        return (callActive, btRoute)
+    }
+
+    /// Where the device facts come from: the device in the app, replaced in tests. Both run on the main thread.
+    private let readSystemCalls: @MainActor () -> [MeshCallDefinition.SystemCall]
+    private let readBluetoothRoute: @MainActor () -> Bool
+    /// Observes the calls of the device while the antenna is on; nil in a runtime built for tests, which observes
+    /// nothing.
+    private var systemCalls: MeshSystemCalls?
+    private var routeObserver: NSObjectProtocol?
+
     /// The transport of the process, built only once the identity is known.
     private let slot: MeshTransportSlot<BleMeshTransport>
     /// Rebuilt from every `knownPeers` update (each `MeshPeerInfo` already
@@ -135,14 +179,48 @@ final class MeshRuntime: ObservableObject {
     private init() {
         consent = MeshConsent.shared
         slot = Self.makeSlot()
+        let calls = MeshSystemCalls()
+        systemCalls = calls
+        readSystemCalls = { calls.snapshot() }
+        readBluetoothRoute = { MeshAudioRoute.currentRouteUsesBluetooth() }
+        calls.onChange = { [weak self] in self?.refreshCallFacts() }
         observeFlagRefresh()
     }
 
     /// A runtime of its own for unit tests, with a consent of its own, so they
     /// never touch `shared` or the user's stored answer. No observer is armed.
-    init(forTesting consent: MeshConsent) {
+    /// The device facts (calls of the device, Bluetooth audio route) are what the test passes.
+    init(
+        forTesting consent: MeshConsent,
+        systemCalls: @escaping @MainActor () -> [MeshCallDefinition.SystemCall] = { [] },
+        bluetoothRoute: @escaping @MainActor () -> Bool = { false }
+    ) {
         self.consent = consent
         slot = Self.makeSlot()
+        readSystemCalls = systemCalls
+        readBluetoothRoute = bluetoothRoute
+    }
+
+    /// Arms the observers of the two device facts, the calls (CallKit) and the audio route, for as long as the antenna
+    /// is on. Each change reads both facts again, here on the main thread. Does nothing in a runtime built for tests.
+    private func startObservingCallFacts() {
+        guard let calls = systemCalls else { return }
+        calls.start()
+        guard routeObserver == nil else { return }
+        routeObserver = MeshAudioRoute.observeChanges { [weak self] in
+            Task { @MainActor in
+                self?.refreshCallFacts()
+            }
+        }
+    }
+
+    /// The antenna is off: nothing about the calls or the route of the device is observed or read.
+    private func stopObservingCallFacts() {
+        systemCalls?.stop()
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+            self.routeObserver = nil
+        }
     }
 
     /// The radio may start, in some mode, when the feature is available (compiled on and
@@ -288,6 +366,7 @@ final class MeshRuntime: ObservableObject {
         guard let mode else {
             let wasRunning = requestedMode != nil
             slot.existingTransport?.stop()
+            stopObservingCallFacts()
             requestedMode = nil
             activeTargets.removeAll()
             if wasRunning { MeshOutboxDrain.shared.stop() }
@@ -313,6 +392,17 @@ final class MeshRuntime: ObservableObject {
         }
         transport.delegate = self
         requestedMode = allowed
+        // Before start(): all of it goes through the transport's queue in order, so a radio that comes up during a call
+        // on a Bluetooth route starts paused. The facts are read here, on the main thread, and the transport asks for
+        // them again (`refreshCallFacts`) when the app wakes up or Bluetooth comes back.
+        startObservingCallFacts()
+        let facts = readCallFacts()
+        transport.setCallFactsRequest { [weak self] in
+            Task { @MainActor in
+                self?.refreshCallFacts()
+            }
+        }
+        transport.setCallFacts(callActive: facts.callActive, btRoute: facts.btRoute)
         transport.start(schedule: MeshRadioSchedule.backgroundIdle, mode: allowed)
         MeshOutboxDrain.shared.start()
     }

@@ -254,6 +254,7 @@ jobs:
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
             -only-testing:QAudionAppTests/KmsSweepStatusTests \
             -only-testing:QAudionAppTests/LegalLinksTests \
+            -only-testing:QAudionAppTests/MeshAudioRouteTests \
             -only-testing:QAudionAppTests/MeshConsentPresentationTests \
             -only-testing:QAudionAppTests/MeshConsentTests \
             -only-testing:QAudionAppTests/MeshReachTests \

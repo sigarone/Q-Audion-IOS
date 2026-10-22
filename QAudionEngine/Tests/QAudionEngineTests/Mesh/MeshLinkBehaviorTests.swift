@@ -537,10 +537,27 @@ final class MeshLinkBehaviorTests: XCTestCase {
         XCTAssertEqual(MeshLog.line(.identity, [("ok", "1"), ("nh", "21fe31"), ("src", "key")]), "identity ok=1 nh=21fe31 src=key")
     }
 
+    func testBluetoothCallPauseAndBackoffLinesUseTheSpecifiedFields() {
+        // Section 13: radio.pause (reason), radio.resume (reason, pausedMs), connect.backoff (link, failures, waitMs).
+        XCTAssertEqual(MeshLog.line(.radioPause, [("reason", MeshBtCallPause.pauseReason)]),
+                       "radio.pause reason=bt_call_route")
+        XCTAssertEqual(MeshLog.line(.radioResume, [("reason", MeshBtCallPause.ResumeReason.callEnded.rawValue), ("pausedMs", "44210")]),
+                       "radio.resume reason=call_ended pausedMs=44210")
+        XCTAssertEqual(MeshLog.line(.radioResume, [("reason", MeshBtCallPause.ResumeReason.routeChanged.rawValue), ("pausedMs", "900")]),
+                       "radio.resume reason=route_changed pausedMs=900")
+        XCTAssertEqual(MeshLog.line(.connectBackoff, [("link", "c31"), ("failures", "1"), ("waitMs", "14213")]),
+                       "connect.backoff link=c31 failures=1 waitMs=14213")
+        // INFO events, like the rest of the radio and link events.
+        XCTAssertEqual(MeshLog.Event.radioPause.level, .info)
+        XCTAssertEqual(MeshLog.Event.radioResume.level, .info)
+        XCTAssertEqual(MeshLog.Event.connectBackoff.level, .info)
+    }
+
     func testEventNamesAndLevelsFollowTheSpecification() {
         XCTAssertEqual(MeshLog.Event.allCases.map(\.rawValue), [
             "identity", "radio", "link.up", "link.ready", "link.down", "link.refused", "ann.tx", "ann.rx",
             "tx", "tx.frame.fail", "rx", "rx.drop", "guard.block", "relay", "app.tx", "app.rx", "outbox",
+            "radio.pause", "radio.resume", "connect.backoff",
         ])
         let warn = Set(MeshLog.Event.allCases.filter { $0.level == .warn }.map(\.rawValue))
         XCTAssertEqual(warn, ["tx.frame.fail", "rx.drop", "guard.block"])

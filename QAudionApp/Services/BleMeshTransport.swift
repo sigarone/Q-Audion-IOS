@@ -44,6 +44,21 @@ import QAudionEngine
 /// service UUID filter, which background scanning requires) stays on in
 /// `.direct` and `.fullMesh`, and is re-armed after every link loss.
 ///
+/// ## Pause during a call on a Bluetooth audio route (spec 2.1)
+/// While a call is active (any connected call on the device, `MeshCallDefinition`) and its audio uses a Bluetooth
+/// device (`MeshAudioRoute`), scanning and advertising stop and no new outgoing link is opened; the links that exist
+/// stay up and keep carrying ANNOUNCE and packets. The decision is `MeshBtCallPause`; this class is given the two
+/// facts together (`setCallFacts`, from `MeshRuntime`, which reads the call state and the route on the main thread:
+/// this class never reads the audio route, a read that can wait on the audio system does not belong on `bleQueue`)
+/// and applies what the decision returns. It evaluates again whenever the facts arrive, when the app changes between
+/// foreground and background and when Bluetooth powers on, asking `MeshRuntime` for fresh facts at those two moments
+/// (`setCallFactsRequest`). The pause is not a radio state of its own: the antenna is still on, so
+/// `currentRadioState()` keeps reporting the roles the mode runs.
+///
+/// ## Retry backoff (spec 3.5)
+/// An outgoing attempt that fails before the first ANNOUNCE on its link puts the peripheral identifier into
+/// `MeshConnectBackoff`; `didDiscover` skips an identifier whose backoff has not expired.
+///
 /// ## Concurrency
 /// Deliberately NOT `@MainActor`. Both managers use the dedicated serial queue
 /// `bleQueue`, every delegate method runs on it, and all state is confined to
@@ -100,6 +115,24 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private var relayGate = MeshRelayGate()
     private var announcedNeighborsByNode: [String: Set<String>] = [:]
 
+    /// A connected call exists on the device (any app, cellular included); given by `MeshRuntime` together with
+    /// `btRoute`, kept across stop() / start() (the owner gives fresh facts before every start).
+    private var callActive = false
+    /// The audio route has a Bluetooth input or output; given by `MeshRuntime`, which reads it on the main thread.
+    /// Never read here: `bleQueue` must not wait on the audio system.
+    private var btRoute = false
+    /// Spec 2.1: when discovery is suspended. Reset whenever the antenna is turned off.
+    private var callPause = MeshBtCallPause()
+    /// Asks the owner to read the call and route facts again and send them through `setCallFacts`.
+    private var callFactsRequest: (@Sendable () -> Void)?
+    /// The re-evaluation that a rate-limited resume waits for.
+    private var pauseRecheck: DispatchWorkItem?
+    /// Spec 3.5: advertisers that did not answer, by peripheral identifier. Emptied whenever the antenna is turned off.
+    private var connectBackoff = MeshConnectBackoff()
+
+    /// Scanning, advertising and new outgoing links are suspended (spec 2.1).
+    private var discoveryPaused: Bool { callPause.isPaused }
+
     // MARK: - Link and job types
 
     /// One Bluetooth link, in either role.
@@ -128,6 +161,9 @@ final class BleMeshTransport: NSObject, MeshTransport {
         var activeJob: SendJob?
         var setupTimer: DispatchWorkItem?
         var downReason: String?
+        /// A valid ANNOUNCE was received on this link; until then a link that goes down counts as a failed attempt
+        /// (spec 3.5).
+        var announceReceived = false
         /// Write requests whose frame already timed out: their late response must not confirm the next frame.
         var staleConfirmations = 0
 
@@ -208,6 +244,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
         Int64(Date().timeIntervalSince1970 * 1000)
     }
 
+    /// Monotonic milliseconds, for the pause and the backoff: a wall-clock change must not shorten or stretch them.
+    private func uptimeMs() -> Int64 {
+        Int64(DispatchTime.now().uptimeNanoseconds / 1_000_000)
+    }
+
     // MARK: - MeshTransport
 
     func start(schedule: MeshRadioSchedule.Profile, mode: MeshAntennaMode) {
@@ -230,6 +271,9 @@ final class BleMeshTransport: NSObject, MeshTransport {
             let options: [String: Any] = [CBPeripheralManagerOptionRestoreIdentifierKey: Self.peripheralRestoreIdentifier]
             peripheralManager = CBPeripheralManager(delegate: self, queue: bleQueue, options: options)
         }
+        // Spec 2.1: a radio that starts during a call on a Bluetooth route starts paused, so decide before anything
+        // is armed, from the facts the owner gave before start().
+        evaluateCallPause()
         // The *DidUpdateState callbacks pick up scanning / advertising once
         // poweredOn; calling scanForPeripherals earlier is silently dropped.
         maybeStartScanning()
@@ -243,6 +287,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     /// Synchronous: when this returns the managers are released, so a new transport can be built with the same
     /// restore identifiers (a mode switch, an identity change) without two managers sharing them.
+    ///
+    /// Called from the main thread (`MeshRuntime`), so nothing that runs on `bleQueue` may wait for the main thread or
+    /// for the audio system, or this would deadlock: the delegate callbacks and `callFactsRequest` hop to the main
+    /// thread asynchronously, and the audio route and the call list are read on the main thread only.
     func stop() {
         if DispatchQueue.getSpecific(key: queueKey) == true {
             stopLocked()
@@ -267,6 +315,12 @@ final class BleMeshTransport: NSObject, MeshTransport {
         restoredSubscribers.removeAll()
         announcedNeighborsByNode.removeAll()
         relayGate = MeshRelayGate()
+        // Antenna off: the pause (which never brings anything back on its own) and the backoff table (spec 3.5) go.
+        // `callActive` and `btRoute` stay: they are facts the owner gives, and it gives fresh ones before a later start.
+        pauseRecheck?.cancel()
+        pauseRecheck = nil
+        callPause.reset()
+        connectBackoff.removeAll()
         // Release the managers (and with them the restore identifiers); start() builds fresh ones.
         central?.delegate = nil
         peripheralManager?.delegate = nil
@@ -318,6 +372,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
         inBackground = value
         guard active else { return }
         log(.radio, [("state", "on"), ("mode", modeToken()), ("reason", value ? "background" : "foreground")])
+        // Spec 2.1: a call or a route change may have gone unnoticed while the process was suspended. Ask the owner for
+        // fresh facts (they arrive through `setCallFacts`) and decide with the ones known now, before the scan is re-armed
+        // (a scan is not re-armed while discovery is paused).
+        requestCallFacts()
+        evaluateCallPause()
         // Background scans coalesce duplicates; re-arm so a peer that is already
         // around is reported again under the new rules.
         restartScan()
@@ -329,6 +388,83 @@ final class BleMeshTransport: NSObject, MeshTransport {
         case .direct: return "direct"
         case .visibleOnly: return "visible"
         }
+    }
+
+    // MARK: - Pause during a call on a Bluetooth audio route (spec 2.1)
+
+    /// The two facts of the pause, read together by the owner on the main thread: a connected call exists on the device
+    /// (`MeshCallDefinition`) and the audio route has a Bluetooth input or output. Safe before `start()` and after
+    /// `stop()`: the values are kept and decide the next start. Not part of `MeshTransport`: only `MeshRuntime`, which
+    /// owns this concrete type, calls it.
+    func setCallFacts(callActive: Bool, btRoute: Bool) {
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            self.callActive = callActive
+            self.btRoute = btRoute
+            self.evaluateCallPause()
+        }
+    }
+
+    /// What `MeshRuntime` gives so this class can ask for fresh facts: it reads them on the main thread and answers
+    /// through `setCallFacts`. Set before `start()`; the closure only hops to the main thread.
+    func setCallFactsRequest(_ request: @escaping @Sendable () -> Void) {
+        bleQueue.async { [weak self] in
+            self?.callFactsRequest = request
+        }
+    }
+
+    /// Asks the owner for fresh facts (answered asynchronously, on `bleQueue`, through `setCallFacts`).
+    private func requestCallFacts() {
+        callFactsRequest?()
+    }
+
+    /// Feeds the two facts to `MeshBtCallPause` and applies its decision. Does nothing while the antenna is off:
+    /// a pause can end only while the antenna is on, so it can never switch on an antenna that is off for consent,
+    /// the kill switch or the user's choice.
+    private func evaluateCallPause() {
+        guard active else { return }
+        pauseRecheck?.cancel()
+        pauseRecheck = nil
+        let decision = callPause.evaluate(callActive: callActive, btRoute: btRoute, nowMs: uptimeMs())
+        switch decision.action {
+        case .keep:
+            break
+        case .pause:
+            applyPause()
+        case .resume(let reason, let pausedMs):
+            applyResume(reason: reason, pausedMs: pausedMs)
+        }
+        if let delayMs = decision.recheckInMs {
+            // The route flipped back and forth: the resume waits for the rest of the 5 s interval.
+            let work = DispatchWorkItem { [weak self] in
+                self?.pauseRecheck = nil
+                self?.evaluateCallPause()
+            }
+            pauseRecheck = work
+            bleQueue.asyncAfter(deadline: .now() + .milliseconds(Int(delayMs)), execute: work)
+        }
+    }
+
+    /// Stops scanning and advertising and gives up the attempts that have not connected yet. Established links, their
+    /// ANNOUNCE loop and their traffic are left alone.
+    private func applyPause() {
+        log(.radioPause, [("reason", MeshBtCallPause.pauseReason)])
+        central?.stopScan()
+        peripheralManager?.stopAdvertising()
+        // A connection that is still being opened is a new outgoing link: cancel it (not a failure, so no backoff).
+        // One that is already connected and setting up is let finish.
+        for link in Array(outgoing.values) where link.state == .connecting && link.peripheral?.state != .connected {
+            disconnect(link, reason: "stop")
+        }
+        notifyDelegateRadioState(currentRadioState())
+    }
+
+    /// Starts discovery again, in the roles the mode runs.
+    private func applyResume(reason: MeshBtCallPause.ResumeReason, pausedMs: Int64) {
+        log(.radioResume, [("reason", reason.rawValue), ("pausedMs", String(pausedMs))])
+        maybeStartScanning()
+        maybeStartAdvertisingAndServer()
+        notifyDelegateRadioState(currentRadioState())
     }
 
     // MARK: - Link bookkeeping
@@ -382,13 +518,13 @@ final class BleMeshTransport: NSObject, MeshTransport {
     // MARK: - Central role (scan + connect out)
 
     private func maybeStartScanning() {
-        guard active, mode.connectsOut, let central, central.state == .poweredOn else { return }
+        guard active, !discoveryPaused, mode.connectsOut, let central, central.state == .poweredOn else { return }
         let options: [String: Any] = [CBCentralManagerScanOptionAllowDuplicatesKey: true]
         central.scanForPeripherals(withServices: [Self.serviceUUID], options: options)
     }
 
     private func restartScan() {
-        guard active, mode.connectsOut, let central, central.state == .poweredOn else { return }
+        guard active, !discoveryPaused, mode.connectsOut, let central, central.state == .poweredOn else { return }
         central.stopScan()
         maybeStartScanning()
     }
@@ -416,6 +552,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
     }
 
     private func startAdvertisingNow() {
+        // Spec 2.1: no advertising while discovery is paused; the GATT service itself stays installed.
+        guard !discoveryPaused else { return }
         // Connectable, the service UUID only: no name, no manufacturer data.
         let data: [String: Any] = [CBAdvertisementDataServiceUUIDsKey: [Self.serviceUUID]]
         peripheralManager?.startAdvertising(data)
@@ -845,6 +983,9 @@ final class BleMeshTransport: NSObject, MeshTransport {
         // Only a fully valid ANNOUNCE counts as the link behaving.
         malformedGuard.registerWellFormed(link.identifier.uuidString)
         link.lastActivityMs = nowMs()
+        // Spec 3.5: the device at the other end answered, so its backoff history is over.
+        link.announceReceived = true
+        connectBackoff.clear(link.identifier.uuidString)
         var bound = false
         if announce.nodeIdHex != localNodeId.hex {
             // The ONLY place a link is bound to a node. The sender id of any other packet is its originator,
@@ -929,7 +1070,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
     // MARK: - Link teardown
 
     /// Removes the link from every table, fails what it was sending, and logs `link.down`.
-    private func tearDown(_ link: Link, reason: String, cancelConnection: Bool) {
+    /// - Parameter countsAsFailure: whether an outgoing link that never received an ANNOUNCE goes into the retry
+    ///   backoff (spec 3.5). False where the link is lost for a reason that says nothing about the advertiser
+    ///   (Bluetooth switched off).
+    private func tearDown(_ link: Link, reason: String, cancelConnection: Bool, countsAsFailure: Bool = true) {
         link.setupTimer?.cancel()
         link.setupTimer = nil
         if link.isOutgoing, link.state != .ready, reason != "stop" {
@@ -956,6 +1100,13 @@ final class BleMeshTransport: NSObject, MeshTransport {
         if let nodeHex = link.nodeHex, !allLinks().contains(where: { $0.nodeHex == nodeHex }) {
             announcedNeighborsByNode.removeValue(forKey: nodeHex)
         }
+        // Spec 3.5: an outgoing attempt that ended (connect or setup timeout, a drop, a refusal) before the first
+        // ANNOUNCE arrived on it failed, and the advertiser is left alone for a while.
+        if countsAsFailure,
+           MeshConnectBackoff.isFailedAttempt(outgoing: link.isOutgoing, announceReceived: link.announceReceived, reason: finalReason) {
+            let failure = connectBackoff.recordFailure(link.identifier.uuidString, nowMs: uptimeMs())
+            log(.connectBackoff, [("link", link.handle), ("failures", String(failure.failures)), ("waitMs", String(failure.waitMs))])
+        }
     }
 
     /// Closes a link where the platform allows it: a link we opened is cancelled; a central that opened to us
@@ -968,7 +1119,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     }
 
     private func restartScanSoon() {
-        guard active, mode.connectsOut else { return }
+        guard active, !discoveryPaused, mode.connectsOut else { return }
         bleQueue.asyncAfter(deadline: .now() + .milliseconds(500)) { [weak self] in
             self?.restartScan()
         }
@@ -1002,8 +1153,14 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     private func currentRadioState() -> MeshRadioState {
         guard active else { return .idle }
-        let scanning = central?.isScanning ?? false
-        let advertising = peripheralManager?.isAdvertising ?? false
+        var scanning = central?.isScanning ?? false
+        var advertising = peripheralManager?.isAdvertising ?? false
+        if discoveryPaused {
+            // Spec 2.1: only discovery is suspended, the antenna and its mode are unchanged. Report the roles the mode
+            // runs (where the managers are powered on), so nothing shows an antenna that is off for the length of a call.
+            scanning = mode.connectsOut && central?.state == .poweredOn
+            advertising = peripheralManager?.state == .poweredOn
+        }
         switch (scanning, advertising) {
         case (true, true): return .scanningAndAdvertising
         case (true, false): return .scanningOnly
@@ -1062,6 +1219,10 @@ extension BleMeshTransport: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
+            // Spec 2.1: Bluetooth was off or the process asleep, so a call or a route change may have gone unnoticed. Ask
+            // for fresh facts and decide with the ones known now before anything is armed.
+            requestCallFacts()
+            evaluateCallPause()
             maybeStartScanning()
             setUpRestoredLinks()
             notifyDelegateRadioState(currentRadioState())
@@ -1069,7 +1230,7 @@ extension BleMeshTransport: CBCentralManagerDelegate {
         case .poweredOff, .unauthorized, .unsupported, .resetting:
             // CoreBluetooth invalidates every connection of a manager that is not powered on.
             for link in Array(outgoing.values) {
-                tearDown(link, reason: "remote", cancelConnection: false)
+                tearDown(link, reason: "remote", cancelConnection: false, countsAsFailure: false)
             }
             outgoing.removeAll()
             recomputeAndNotifyPeers()
@@ -1089,7 +1250,11 @@ extension BleMeshTransport: CBCentralManagerDelegate {
         guard let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] else { return }
         for peripheral in restored {
             let identifier = peripheral.identifier
-            guard active, mode.connectsOut, outgoing[identifier] == nil, outgoing.count < Self.maxOutgoingLinks else {
+            // Spec 2.1: a connection the system kept pending is a new outgoing link too; during a pause only the ones
+            // that are already connected are adopted.
+            let pendingWhilePaused = discoveryPaused && peripheral.state != .connected
+            guard active, mode.connectsOut, !pendingWhilePaused, outgoing[identifier] == nil,
+                  outgoing.count < Self.maxOutgoingLinks else {
                 central.cancelPeripheralConnection(peripheral)
                 continue
             }
@@ -1123,9 +1288,14 @@ extension BleMeshTransport: CBCentralManagerDelegate {
             existing.rssi = RSSI.intValue
             return
         }
+        // Spec 2.1: a result that was already queued when the scan stopped must not open a new link.
+        guard !discoveryPaused else { return }
         guard !isBlocked(identifier) else { return }
         guard outgoing.count < Self.maxOutgoingLinks else { return }
         if let failedAt = failedSetupAtMs[identifier], nowMs() - failedAt < Self.redialSpacingMs { return }
+        // Spec 3.5: an advertiser that did not answer is left alone until its backoff expires (silently: the
+        // `connect.backoff` line was written when the backoff was set, not for every advertisement heard since).
+        guard !connectBackoff.isBackedOff(identifier.uuidString, nowMs: uptimeMs()) else { return }
         // Two phones may open a link to each other at the same time; both links are kept and senders prefer the
         // outgoing one (spec 3.3).
         let link = Link(handle: linkHandle(outgoing: true), identifier: identifier, isOutgoing: true, nowMs: nowMs(), state: .connecting)

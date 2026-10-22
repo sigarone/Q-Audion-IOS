@@ -45,6 +45,9 @@ public enum MeshLog {
         case appTx = "app.tx"
         case appRx = "app.rx"
         case outbox
+        case radioPause = "radio.pause"
+        case radioResume = "radio.resume"
+        case connectBackoff = "connect.backoff"
 
         /// The events the specification marks WARN.
         public var level: Level {
