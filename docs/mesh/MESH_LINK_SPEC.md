@@ -93,6 +93,43 @@ has not consented to relaying SHOULD run in DIRECT, not VISIBLE_ONLY, so that
 it can still reach nearby contacts. VISIBLE_ONLY is a user choice (lowest power,
 never initiates), not a default.
 
+### 2.1 Pause during a call on a Bluetooth audio route
+
+A call, for this section, is any connected voice or video call on the device,
+of this app or of any other app, including a cellular call, from the moment it
+connects until it ends. A call that is only ringing is not a call.
+
+While a call is active and the device's call audio uses a Bluetooth device for
+input or output (HFP/SCO, LE Audio, hearing aid, or any other Bluetooth audio
+port), the device MUST:
+
+- stop scanning and MUST NOT open new outgoing links; attempts that have not
+  reached "connected" are cancelled, while links already connected MAY finish
+  service discovery and subscription;
+- stop advertising;
+- keep existing links up, keep sending ANNOUNCE on them at the normal interval,
+  and keep sending and relaying packets over them (the outbox retries only over
+  existing links).
+
+The pause ends when the call ends or the call audio no longer uses a Bluetooth
+device. Discovery MUST then resume within 2 s, unless the antenna is off for
+another reason (consent, kill switch, user choice), with two exceptions: a
+route that flips back and forth MUST NOT restart discovery more than once per
+5 s, so a resume may wait up to 5 s after the previous restart; and a platform
+that limits how often scanning may start (Android: 5 starts per 30 s per app)
+MUST defer the restart until that limit allows it, and MUST retry once the
+limit has passed if a start is refused. Starting the antenna is not a restart.
+
+Rationale: discovery and connection attempts share the 2.4 GHz radio with the
+voice link to the car kit or headset; a hands-free link is the most fragile
+Bluetooth traffic on the phone. The pause does not change the radio mode
+(section 2); it only suspends discovery.
+
+Privacy: the pause is observable. A nearby BLE scanner can see the
+advertisement stop for the length of a Bluetooth call, and the `radio.pause` /
+`radio.resume` log events (section 13) record when and for how long such calls
+happened. Both are accepted properties of this rule.
+
 ## 3. Discovery and connections
 
 ### 3.1 Advertising
@@ -127,6 +164,23 @@ peer appearing under several addresses or platform identifiers.
   subscribed to notifications for more than 30 s; otherwise it is refused.
 - Where the platform cannot refuse or close a specific incoming link, the
   device MUST ignore that link's frames and MUST NOT write to it.
+
+### 3.5 Retry backoff for outgoing connections
+
+After an outgoing attempt to an advertiser fails (connect timeout, discovery or
+subscribe timeout, or the link dropped before the first ANNOUNCE was received
+on it), the device MUST NOT attempt the same advertiser again before its
+backoff expires. The backoff is keyed by the platform identifier of the
+advertiser (Android: device address; iOS: peripheral identifier); a different
+identifier is a different advertiser.
+
+- The first failure sets a backoff of 15 s; each further consecutive failure
+  doubles it, up to 300 s. Each value is randomised by plus or minus 20 %.
+- A link on which an ANNOUNCE is received clears the backoff for that
+  identifier.
+- At most 64 identifiers are remembered; the oldest entry is dropped first.
+- The backoff table is in memory only and is cleared when the antenna is
+  turned off.
 
 ## 4. GATT service
 
@@ -501,6 +555,9 @@ display names. The only identifiers allowed are:
 | `app.tx` | `ph`, `kind` (`msg`, `rcpt`), `state` (`sent`, `queued`, `failed`), `attempt` |
 | `app.rx` | `ph`, `kind`, `result` (`stored`, `dup`, `unknown_sender`, `refresh_hit`, `undecryptable`, `bad_envelope`, `readdressed`, `service`, `blocked`, `applied`) |
 | `outbox` | `pending`, `retried`, `gaveUp` |
+| `radio.pause` | `reason` (`bt_call_route`) |
+| `radio.resume` | `reason` (`call_ended`, `route_changed`), `pausedMs` |
+| `connect.backoff` | `link`, `failures`, `waitMs` |
 
 `tx` is emitted once per packet transmission attempt, after every frame has a
 result. `app.tx` is emitted when an application-level state changes.
@@ -559,3 +616,7 @@ output; ratchet vectors live with the ratchet.
 | ANNOUNCE max neighbours | 10 |
 | outbox retry / give-up | 20 s / 1 h |
 | unknown-sender refresh | once per 60 s |
+| connect retry backoff first / max | 15 s / 300 s (plus or minus 20 %) |
+| backoff identifiers remembered | 64 |
+| discovery resume after Bluetooth call route ends | within 2 s |
+| discovery restart rate limit on route flapping | once per 5 s |

@@ -53,6 +53,7 @@ targets:
           - FileV2ImageCleanerTests.swift
           - KmsSweepStatusTests.swift
           - LegalLinksTests.swift
+          - MeshAudioRouteTests.swift
           - MeshConsentPresentationTests.swift
           - MeshConsentTests.swift
           - MeshReachTests.swift

@@ -86,6 +86,10 @@ FRAME_REASONS += re.findall(r"^\s*case\s+(rejected|timeout)\s*$",
                             framing_src.split("public enum MeshFrameFailure")[1].split("}")[0], re.M)
 MALFORMED = re.findall(r'case\s+\w+\s*=\s*"([a-z_]+)"',
                        framing_src.split("public enum MalformedReason")[1].split("}")[0])
+pause_src = read(MESH_DIR, "MeshBtCallPause.swift")
+PAUSE_REASONS = re.findall(r'pauseReason\s*=\s*"([a-z_]+)"', pause_src)
+RESUME_REASONS = re.findall(r'case\s+\w+\s*=\s*"([a-z_]+)"',
+                            pause_src.split("public enum ResumeReason")[1].split("}")[0])
 relay_src = read(MESH_DIR, "MeshRelayGate.swift")
 SKIPS = re.findall(r"^\s*case\s+(mode|ttl|dup|rate)\s*$", relay_src.split("public enum SkipReason")[1].split("}")[0], re.M)
 
@@ -105,7 +109,10 @@ DOWN_REASONS = sorted(set(re.findall(r'(?:tearDown|disconnect)\([^)]*reason: "([
 APP_RESULTS = sorted(set(re.findall(r'logMeshRx\([^)]*result: "([a-z_]+)"\)', appstate_src)))
 APP_STATES = sorted(set(re.findall(r'logApp\([^)]*state: "([a-z]+)"', drain_src)))
 
-check(len(EVENTS) == 17, "expected 17 events in MeshLog.Event, found %r" % (EVENTS,))
+check(len(EVENTS) == 20, "expected 20 events in MeshLog.Event, found %r" % (EVENTS,))
+check({"radio.pause", "radio.resume", "connect.backoff"} <= set(EVENTS), "the pause / backoff events are missing: %r" % (EVENTS,))
+check(PAUSE_REASONS == ["bt_call_route"], "radio.pause reasons: %r" % (PAUSE_REASONS,))
+check(sorted(RESUME_REASONS) == ["call_ended", "route_changed"], "radio.resume reasons: %r" % (RESUME_REASONS,))
 check(len(FRAME_REASONS) == 6, "MeshFrameFailure tokens: %r" % (FRAME_REASONS,))
 check(len(MALFORMED) == 4, "MalformedReason tokens: %r" % (MALFORMED,))
 check(sorted(SKIPS) == ["dup", "mode", "rate", "ttl"], "relay skip reasons: %r" % (SKIPS,))
@@ -138,7 +145,16 @@ LINES = [
     "relay ph=%s ttl=4 p=800 fwd=2 okLinks=2" % PH,
     "relay ph=%s ttl=3 p=1000 fwd=1 okLinks=0" % PH,
     "outbox pending=3 retried=1 gaveUp=0",
+    # Section 2.1 / 3.5 (Bluetooth call pause, connect backoff)
+    "connect.backoff link=c31 failures=1 waitMs=14213",
+    "connect.backoff link=c2 failures=12 waitMs=359999",
+    "connect.backoff link=p7 failures=1 waitMs=0",
 ]
+for reason in PAUSE_REASONS:
+    LINES.append("radio.pause reason=%s" % reason)
+for reason in RESUME_REASONS:
+    LINES.append("radio.resume reason=%s pausedMs=44210" % reason)
+    LINES.append("radio.resume reason=%s pausedMs=0" % reason)
 for reason in RADIO_REASONS:
     LINES.append("radio state=error mode=full reason=%s" % reason)
     LINES.append("radio state=on mode=direct reason=%s" % reason)
@@ -201,6 +217,18 @@ FORGED = [
     "link.up link=c1 role=c n=2 ",
     "link.up link=c1 role=x n=2",
     "relay ph=%s ttl=4 p=800 fwd=2 okLinks=2 reason=other" % PH,
+    "radio.pause reason=Marco_Rossi",                                          # a reason that is not a closed token
+    "radio.pause reason=bt_call_route extra",
+    "radio.pause",
+    "radio.resume reason=call_ended pausedMs=%s" % NODE_ID,                    # a node id where a number belongs
+    "radio.resume reason=bt_call_route pausedMs=12",                           # the pause reason on a resume
+    "radio.resume reason=call_ended pausedMs=12 name=Marco",
+    "radio.resume reason=call_ended",
+    "connect.backoff link=AA:BB:CC:DD:EE:FF failures=1 waitMs=14213",          # an address as the handle
+    "connect.backoff link=3F2504E0-4F89-11D3-9A0C-0305E82C3301 failures=1 waitMs=14213",
+    "connect.backoff link=c31 failures=1 waitMs=14213 id=%s" % NODE_ID,
+    "connect.backoff link=c31 failures=one waitMs=14213",
+    "connect.backoff link=c31 failures=1",
 ]
 for line in FORGED:
     got = shipped(line)

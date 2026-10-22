@@ -593,6 +593,7 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != callState else { return }
             updateProximityMonitoring()
+            updateMeshCallState()
             callResourceLogger.update(callActive: callState == .active || callState == .encrypted)
             // W-ACCEPTLATCH — an early `call_answer` held while the caller was
             // still `.connecting` is re-applied once the call has moved on (async:
@@ -1667,6 +1668,8 @@ final class AppState: ObservableObject {
             // signal, see the busy-check), so the auto-lock hold has to be
             // re-evaluated from here too.
             updateIdleTimer()
+            // The Bluetooth mesh pause counts a connected group call only.
+            updateMeshCallState()
             // 2026-10-02 — the group screen's state machine in the phone log
             // (`grp state=<n> old=<n> count=<n>`, numbers only): the iPhone's group
             // traces recorded nothing of what the screen was doing.
@@ -22802,6 +22805,22 @@ extension AppState {
             UIApplication.shared.isIdleTimerDisabled = wanted
             RTLog.info("call", "W-CALLAWAKE isIdleTimerDisabled=\(wanted) (isInCall=\(isInCall), groupLive=\(groupLive))")
         }
+    }
+
+    /// The Bluetooth mesh pauses discovery while a CONNECTED call is on a Bluetooth audio route
+    /// (docs/mesh/MESH_LINK_SPEC.md section 2.1). This is the app's own half of "a call": a 1:1 call that is
+    /// active/encrypted or a group call that is active. A ringing or still-connecting call is not one (unlike the
+    /// auto-lock hold above, which is why `updateIdleTimer`'s flag is not reused). Calls of other apps and cellular
+    /// calls are read by the runtime itself. Called from the `callState` and `groupCallControllerState` didSets; a
+    /// plain flag crosses over (CLAUDE.md section 16).
+    @MainActor
+    private func updateMeshCallState() {
+        let oneToOneConnected = callState == .active || callState == .encrypted
+        let groupConnected: Bool = {
+            if case .active = groupCallControllerState { return true }
+            return false
+        }()
+        MeshRuntime.shared.setCallActive(oneToOneConnected || groupConnected)
     }
 
     /// W-GRPSPKR (2026-07-20, live 5-way call 694147de): group calls have NO

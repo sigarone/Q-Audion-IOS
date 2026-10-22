@@ -29,8 +29,8 @@
 # legge i motivi di scarto di un QR dal sorgente
 # QAudionEngine/.../Proximity/ProximityPairingTypes.swift. test_ship_ios_mesh_vocab.py
 # legge gli eventi e i motivi del log mesh dai sorgenti Swift del motore e dell'app
-# (Mesh/MeshLog.swift, MeshLinkFraming.swift, MeshRelayGate.swift, BleMeshTransport.swift,
-# MeshRuntime.swift, MeshOutboxDrain.swift, AppState.swift);
+# (Mesh/MeshLog.swift, MeshLinkFraming.swift, MeshRelayGate.swift, MeshBtCallPause.swift,
+# BleMeshTransport.swift, MeshRuntime.swift, MeshOutboxDrain.swift, AppState.swift);
 #
 # Nessun segreto, nessuna rete; sola lettura del repository.
 
@@ -51,6 +51,7 @@ on:
       - 'QAudionEngine/Sources/QAudionEngine/Mesh/MeshLog.swift'
       - 'QAudionEngine/Sources/QAudionEngine/Mesh/MeshLinkFraming.swift'
       - 'QAudionEngine/Sources/QAudionEngine/Mesh/MeshRelayGate.swift'
+      - 'QAudionEngine/Sources/QAudionEngine/Mesh/MeshBtCallPause.swift'
       - 'QAudionApp/Services/BleMeshTransport.swift'
       - 'QAudionApp/Services/MeshRuntime.swift'
       - 'QAudionApp/Services/MeshOutboxDrain.swift'

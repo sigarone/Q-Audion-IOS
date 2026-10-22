@@ -1161,6 +1161,8 @@ def _is_pair_format_body(tag, norm_body):
 # identifiers on a line are a 6-hex node hash (nh), an 8-hex payload hash (ph) and a per-process link handle (c1, p2):
 #   identity ok=1 nh=<6 hex> src=key | identity ok=0 src=locked|missing
 #   radio state=<off|starting|on|error> mode=<full|direct|visible> reason=<token>
+#   radio.pause reason=bt_call_route                  radio.resume reason=<call_ended|route_changed> pausedMs=<n>
+#   connect.backoff link=<handle> failures=<n> waitMs=<n>
 #   link.up link=<handle> role=<c|p> n=<n>            link.ready link=.. mtu=0 l=<n> sub=<0|1>
 #   link.down link=.. reason=<token> heldMs=<n>        link.refused reason=<cap|blocked> role=<c|p>
 #   ann.tx link=.. nbrs=<n> bytes=<n> ok=<0|1>         ann.rx link=.. nh=<6 hex> nbrs=<n> bound=<0|1>
@@ -1194,6 +1196,9 @@ _RE_MESH_FULL = re.compile(
     r"identity ok=1 nh=[0-9a-f]{6} src=key"
     r"|identity ok=0 src=(?:locked|missing)"
     r"|radio state=(?:off|starting|on|error) mode=(?:full|direct|visible) reason=" + _MESH_RADIO_REASONS +
+    r"|radio\.pause reason=bt_call_route"
+    r"|radio\.resume reason=(?:call_ended|route_changed) pausedMs=\d{1,9}"
+    r"|connect\.backoff " + _MESH_LINK + r" failures=\d{1,4} waitMs=\d{1,6}"
     r"|link\.up " + _MESH_LINK + r" role=[cp] n=\d{1,3}"
     r"|link\.ready " + _MESH_LINK + r" mtu=0 l=\d{1,5} sub=[01]"
     r"|link\.down " + _MESH_LINK + r" reason=(?:remote|timeout|evicted|blocked|stop) heldMs=\d{1,9}"

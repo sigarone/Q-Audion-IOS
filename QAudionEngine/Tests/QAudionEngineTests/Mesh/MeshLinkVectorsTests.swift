@@ -104,6 +104,13 @@ final class MeshLinkVectorsTests: XCTestCase {
         XCTAssertEqual(MeshOutboxPolicy.retryMs, 20_000)
         XCTAssertEqual(MeshOutboxPolicy.giveUpMs, 3_600_000)
         XCTAssertEqual(MeshRefreshGate.intervalMs, 60_000)
+        // Section 3.5 and section 2.1 rows of the constants table.
+        XCTAssertEqual(MeshConnectBackoff.firstMs, 15_000)
+        XCTAssertEqual(MeshConnectBackoff.maxMs, 300_000)
+        XCTAssertEqual(MeshConnectBackoff.jitterRangePermille, 200)
+        XCTAssertEqual(MeshConnectBackoff.capacity, 64)
+        XCTAssertEqual(MeshBtCallPause.resumeWithinMs, 2_000)
+        XCTAssertEqual(MeshBtCallPause.restartMinIntervalMs, 5_000)
     }
 
     // MARK: - nodeIds
