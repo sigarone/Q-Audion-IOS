@@ -63,6 +63,26 @@ public enum QaudionRuntimeTuning {
         RTCPeerConnectionFactory.setQaudionOpusMinPacketLossPercent(percent)
     }
 
+    /// `+[RTCPeerConnectionFactory setQaudionOpusEncoderMaxPlaybackRate:]` - an upper bound, in Hz, on the audio
+    /// band the native Opus encoder codes (`EncoderBandHint`): 8000 narrowband, 16000 wideband, `-1` for no limit.
+    /// It only lowers what the SDP negotiated and leaves bitrate, packet size and CBR alone.
+    ///
+    /// Reached through the Objective-C runtime instead of a direct call, because the WebRTC binary this app pins
+    /// may predate the selector: a build without it answers `false` and nothing happens. Once the pinned binary
+    /// carries it, this can become `RTCPeerConnectionFactory.setQaudionOpusEncoderMaxPlaybackRate(hz)`.
+    /// The selector takes an `NSInteger`, which is `Int` on every 64-bit target this app builds for.
+    @discardableResult
+    public static func setEncoderMaxPlaybackRate(_ hz: Int) -> Bool {
+        let selector: Selector = NSSelectorFromString("setQaudionOpusEncoderMaxPlaybackRate:")
+        let factoryClass: AnyClass = RTCPeerConnectionFactory.self
+        guard let method = class_getClassMethod(factoryClass, selector) else { return false }
+        typealias Setter = @convention(c) (AnyObject, Selector, Int) -> Void
+        let implementation: IMP = method_getImplementation(method)
+        let setter: Setter = unsafeBitCast(implementation, to: Setter.self)
+        setter(factoryClass as AnyObject, selector, hz)
+        return true
+    }
+
     /// `+[RTCPeerConnectionFactory setQaudionRequireDtlsPqc]` — tighten-only
     /// for the life of the process; there is deliberately no corresponding
     /// "un-require" native call. Owner instruction (2026-09-29): "deve

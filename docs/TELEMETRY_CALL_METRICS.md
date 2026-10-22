@@ -95,6 +95,12 @@ Fields that cannot be read are omitted. Examples:
     audioroute why=1 old=1 out=3 in=3 profile=1 sr=16000 out_ch=1 in_ch=1 vol=50
     audioroute why=99 out=1 in=1 profile=0 sr=48000 out_ch=1 in_ch=1 vol=100
 
+### Band hint line (only with the flag `calls.bt_hfp_band_hint` on, default off)
+
+    audioroute band=1 old=0 sr=8000
+
+Written when the ceiling on the band the native Opus encoder codes changes (a 1:1 call whose microphone is the Bluetooth hands-free link, and again when the call ends or the route moves away). `band` is the ceiling now and `old` the one before: 0 none, 1 narrowband (8000 Hz playback rate), 2 wideband (16000 Hz). `sr` is the session sample rate the decision rested on (absent at call end). Nothing is written, and nothing changes, on a WebRTC build without the native setter. Whether the bitstream followed is on the native side: a `Q-AUDION opus-enc tx_mode=.. tx_bw=..` line appears once per change while a ceiling is active (mode 0 SILK, 1 hybrid, 2 CELT; band 0 narrowband .. 4 fullband).
+
 ## `call.audio.diag` telemetry record
 
 ### Why it was missing on a native call, and what changed

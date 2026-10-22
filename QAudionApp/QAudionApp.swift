@@ -355,6 +355,12 @@ struct QAudionApp: App {
                 // line is captured by the W417 telemetry. Fire-and-forget:
                 // never blocks launch, fails safe to the compiled defaults.
                 FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
+                // The engine cannot import FeatureFlags: it reads the band-hint flag through this closure
+                // (main thread only, off anywhere else). Primitive-only, no AppState (CLAUDE.md section 16).
+                EncoderBandHintController.shared.flagProvider = {
+                    guard Thread.isMainThread else { return false }
+                    return MainActor.assumeIsolated { FeatureFlags.bool(EncoderBandHint.flagKey, false) }
+                }
                 let lock = lockService
                 appState.isAppLocked = { lock.isLocked }
                 appState.initialize()

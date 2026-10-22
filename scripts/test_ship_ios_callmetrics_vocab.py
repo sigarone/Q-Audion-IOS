@@ -68,6 +68,11 @@ LINES = [
     "audioroute why=99 out=1 in=1 profile=0 sr=48000 out_ch=1 in_ch=1 vol=100",
     "audioroute why=1 old=1 out=3 in=3 profile=3 sr=24000 out_ch=1 in_ch=1 vol=30",
     "audioroute why=3 old=2 out=2 in=1 profile=0",
+    # the hands-free band hint (EncoderBandHint.logLine): a cap taken, widened, and given back
+    "audioroute band=1 old=0 sr=8000",
+    "audioroute band=2 old=1 sr=16000",
+    "audioroute band=0 old=2 sr=16000",
+    "audioroute band=0 old=1",
 ]
 
 failures = []

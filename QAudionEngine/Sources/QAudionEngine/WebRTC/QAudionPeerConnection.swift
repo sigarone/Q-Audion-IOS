@@ -222,6 +222,10 @@ public final class QAudionPeerConnection: NSObject {
     /// lifetime discipline as `didRaiseDebugLogLevelForSession` above.
     private var runtimeTuningThermalObserver: NSObjectProtocol?
     private var runtimeTuningPowerObserver: NSObjectProtocol?
+    /// Token of this call's hold on `EncoderBandHintController` (the optional ceiling on the band the native
+    /// encoder codes, off unless its server flag is on). `nil` unless this call armed native audio SRTP.
+    /// Handed back in `close()`.
+    private var bandHintOwner: UInt64?
     /// Two independent hysteresis drivers — encoder and decoder tables have
     /// different ladders (`AdaptiveOpusComplexityPolicy` vs
     /// `AdaptiveOpusDecoderComplexityPolicy`) — so one driver cannot serve
@@ -708,6 +712,11 @@ public final class QAudionPeerConnection: NSObject {
             runtimeTuningPowerObserver = NotificationCenter.default.addObserver(
                 forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: nil
             ) { _ in reapply() }
+
+            // Optional ceiling on the band the encoder codes while the microphone is a Bluetooth hands-free
+            // link (`EncoderBandHint`). Follows the audio route for the life of this call; does nothing unless
+            // the server flag is on and the pinned WebRTC build has the native setter.
+            bandHintOwner = EncoderBandHintController.shared.startObserving()
 
             // W-ADMMANUAL (2026-09-26) — replaces W-ADMNOMANUAL's "nothing to
             // arm". Manual audio mode BEFORE the mic track is added and before
@@ -2294,6 +2303,10 @@ public final class QAudionPeerConnection: NSObject {
         if let observer = runtimeTuningPowerObserver {
             NotificationCenter.default.removeObserver(observer)
             runtimeTuningPowerObserver = nil
+        }
+        if let owner = bandHintOwner {
+            EncoderBandHintController.shared.stopObserving(owner: owner)
+            bandHintOwner = nil
         }
         runtimeTuningLock.lock()
         encoderComplexityDriver = nil
