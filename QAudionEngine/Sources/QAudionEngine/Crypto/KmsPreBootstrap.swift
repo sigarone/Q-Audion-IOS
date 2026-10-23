@@ -224,7 +224,8 @@ public enum KmsPreBootstrap {
         // an empty buffer.
         nonce.withUnsafeMutableBytes { ptr in
             // swiftlint:disable:next force_unwrapping
-            _ = SecRandomCopyBytes(kSecRandomDefault, nonceBytes, ptr.baseAddress!)
+            let status = SecRandomCopyBytes(kSecRandomDefault, nonceBytes, ptr.baseAddress!)
+            precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
         }
         let ephPriv = Curve25519.KeyAgreement.PrivateKey()
         let ephPub = Data(ephPriv.publicKey.rawRepresentation)

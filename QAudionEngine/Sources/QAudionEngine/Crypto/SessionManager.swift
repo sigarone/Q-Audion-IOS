@@ -48,7 +48,8 @@ public final class SessionManager: @unchecked Sendable {
         sessionId.withUnsafeMutableBytes { buffer in
             #if canImport(Security)
             // swiftlint:disable:next force_unwrapping
-            _ = SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+            let status = SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+            precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
             #else
             let fd = open("/dev/urandom", O_RDONLY)
             // swiftlint:disable:next force_unwrapping
