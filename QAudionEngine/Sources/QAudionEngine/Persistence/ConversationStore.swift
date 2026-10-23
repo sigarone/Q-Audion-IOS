@@ -205,6 +205,32 @@ public final class ConversationStore {
         }
     }
 
+    /// Sets the unread count of a conversation (never below zero): for a read mark that covers only part of it.
+    public func setUnreadCount(_ count: Int, forConversation id: UUID) {
+        let target = max(0, count)
+        do {
+            try db.writer.write { db in
+                if var conv = try Conversation.fetchOne(db, key: id), conv.unreadCount != target {
+                    conv = Conversation(
+                        id: conv.id,
+                        peerUserId: conv.peerUserId,
+                        peerDisplayName: conv.peerDisplayName,
+                        lastMessagePreview: conv.lastMessagePreview,
+                        lastActivity: conv.lastActivity,
+                        unreadCount: target,
+                        pinned: conv.pinned,
+                        kind: conv.kind,
+                        muted: conv.muted,
+                        ephemeralTimerSeconds: conv.ephemeralTimerSeconds
+                    )
+                    try conv.save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] setUnreadCount failed: \(error)")
+        }
+    }
+
     // MARK: - Messages
 
     public func loadMessages(conversationId: UUID) -> [Message] {

@@ -1,14 +1,15 @@
 import Foundation
 
-// Two small, dependency-free pieces extracted from `AppState` so that the call
+// Small, dependency-free pieces extracted from `AppState` so that the call
 // start path has real, running unit coverage (AppState itself is a large
 // dependency-injected @MainActor class with no lightweight test init):
 //
 //  - `CallStartGate`: the in-flight latch for `startCall`.
+//  - `CarCallStartNotice`: when the car screen tells the driver that a call did not start.
 //  - `CallEngineLifecycle`: who owns the call engine, and how it comes back
 //    after a logout.
 //
-// Both are generic over / independent of the engine type on purpose, so the
+// The gate and the lifecycle are generic over / independent of the engine type on purpose, so the
 // app-hosted test bundle (which does not link QAudionEngine, see
 // `QAudionApp/project-apptests.yml`) can drive them with a stand-in.
 
@@ -40,6 +41,15 @@ struct CallStartGate {
     /// Releases the gate. Safe to call when it is not held.
     mutating func end() {
         inFlight = false
+    }
+}
+
+/// When a call started from the car screen that left no call up is told to the driver.
+enum CarCallStartNotice {
+    /// A start that `startCall` ignored (another start was in flight, or a call was up) is not a failure and says
+    /// nothing; any other start that left no call up does.
+    static func isDue(busyAtEntry: Bool, inCallAfter: Bool) -> Bool {
+        !busyAtEntry && !inCallAfter
     }
 }
 

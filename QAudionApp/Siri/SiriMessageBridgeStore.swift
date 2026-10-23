@@ -55,13 +55,18 @@ public final class SiriMessageBridgeStore {
         public let text: String
         public let sentAt: Date
         public let isOutgoing: Bool
+        /// True for an incoming message the user has not read yet. nil when the writer did not say, which a search
+        /// for unread messages treats as "not unread".
+        public let isUnread: Bool?
 
-        public init(peerUserId: String, peerDisplayName: String, text: String, sentAt: Date, isOutgoing: Bool) {
+        public init(peerUserId: String, peerDisplayName: String, text: String, sentAt: Date, isOutgoing: Bool,
+                    isUnread: Bool? = nil) {
             self.peerUserId = peerUserId
             self.peerDisplayName = peerDisplayName
             self.text = text
             self.sentAt = sentAt
             self.isOutgoing = isOutgoing
+            self.isUnread = isUnread
         }
     }
 
@@ -78,19 +83,47 @@ public final class SiriMessageBridgeStore {
         public let spokenName: String
         public let text: String
         public let queuedAt: Date
+        /// `INSendMessageIntent.conversationIdentifier`: the peer user id a CarPlay conversation row carries. When it
+        /// is set it names the target exactly and the main app uses it instead of matching a name.
+        public let conversationIdentifier: String?
+        /// `INPerson.customIdentifier` of the recipient: the Q-Audion user id of a person this app donated itself.
+        public let customIdentifier: String?
 
         public init(id: String = UUID().uuidString, handle: String?, spokenName: String,
-                    text: String, queuedAt: Date = Date()) {
+                    text: String, queuedAt: Date = Date(),
+                    conversationIdentifier: String? = nil, customIdentifier: String? = nil) {
             self.id = id
             self.handle = handle
             self.spokenName = spokenName
             self.text = text
+            self.queuedAt = queuedAt
+            self.conversationIdentifier = conversationIdentifier
+            self.customIdentifier = customIdentifier
+        }
+    }
+
+    /// A request, queued by the extension, to mark the messages of the conversation with `peerUserId` as read, up to
+    /// `upToSentAt` (the system sends `INSetMessageAttributeIntent` after it has read messages aloud). Only the main
+    /// app applies it.
+    public struct ReadMark: Codable, Equatable {
+        public let id: String
+        public let peerUserId: String
+        /// The newest message Siri was given, as the whole seconds of its `sentAt`. The mark covers the messages up to
+        /// it and nothing that came after.
+        public let upToSentAt: Int
+        public let queuedAt: Date
+
+        public init(id: String = UUID().uuidString, peerUserId: String, upToSentAt: Int, queuedAt: Date = Date()) {
+            self.id = id
+            self.peerUserId = peerUserId
+            self.upToSentAt = upToSentAt
             self.queuedAt = queuedAt
         }
     }
 
     private static let cacheFileName = "siri_recent_messages.v1"
     private static let outboxFileName = "siri_outbox.v1"
+    private static let readMarksFileName = "siri_read_marks.v1"
     private static let keyFileName = "siri_bridge.key"
     private static let maxCachedMessages = 300
 
@@ -130,6 +163,7 @@ public final class SiriMessageBridgeStore {
         var current: [OutboxMessage] = read(fileName: Self.outboxFileName) ?? []
         current.append(message)
         write(current, fileName: Self.outboxFileName)
+        SiriBridgeSignal.post()
     }
 
     /// Reads and clears the outbox. Only the main app's drain loop calls
@@ -138,6 +172,22 @@ public final class SiriMessageBridgeStore {
     public func drainOutbox() -> [OutboxMessage] {
         let current: [OutboxMessage] = read(fileName: Self.outboxFileName) ?? []
         if !current.isEmpty { clearFile(named: Self.outboxFileName) }
+        return current
+    }
+
+    // MARK: - Read marks (extension appends, main app drains)
+
+    public func enqueueReadMark(_ mark: ReadMark) {
+        var current: [ReadMark] = read(fileName: Self.readMarksFileName) ?? []
+        current.append(mark)
+        write(current, fileName: Self.readMarksFileName)
+        SiriBridgeSignal.post()
+    }
+
+    /// Reads and clears the read marks. Only the main app calls this, same single-reader rule as the outbox.
+    public func drainReadMarks() -> [ReadMark] {
+        let current: [ReadMark] = read(fileName: Self.readMarksFileName) ?? []
+        if !current.isEmpty { clearFile(named: Self.readMarksFileName) }
         return current
     }
 
@@ -204,6 +254,52 @@ public final class SiriMessageBridgeStore {
         return key
     }
 }
+
+/// The extension posts this after it queues a message or a read mark, so a running app picks the queue up at once
+/// instead of at its next foreground. A Darwin notification has no payload: the queue is the data.
+public enum SiriBridgeSignal {
+    public static let name = "com.bcrypto.qaudion.siri.bridge.changed"
+
+    public static func post() {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(name as CFString), nil, nil, true)
+    }
+}
+
+/// Calls `handler` on the main queue each time `SiriBridgeSignal` arrives, from this process or from the extension.
+/// Observing stops when the object is released.
+public final class SiriBridgeSignalObserver {
+    private let handler: () -> Void
+
+    public init(handler: @escaping () -> Void) {
+        self.handler = handler
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            { _, observer, _, _, _ in
+                guard let observer else { return }
+                let target = Unmanaged<SiriBridgeSignalObserver>.fromOpaque(observer).takeUnretainedValue()
+                DispatchQueue.main.async { target.handler() }
+            },
+            SiriBridgeSignal.name as CFString, nil, .deliverImmediately)
+    }
+
+    deinit {
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(), Unmanaged.passUnretained(self).toOpaque(),
+            CFNotificationName(SiriBridgeSignal.name as CFString), nil)
+    }
+}
+
+/// What the Intents extension needs from the bridge. The extension talks to this, never to the class, so a test can
+/// stand in for the App Group container.
+public protocol SiriBridgeStoring: AnyObject {
+    func enqueueOutboxMessage(_ message: SiriMessageBridgeStore.OutboxMessage)
+    func enqueueReadMark(_ mark: SiriMessageBridgeStore.ReadMark)
+    func recentMessages(peerUserId: String?, limit: Int) -> [SiriMessageBridgeStore.CachedMessage]
+}
+
+extension SiriMessageBridgeStore: SiriBridgeStoring {}
 
 /// Opt-in consent flag for `SiriMessageBridgeStore.recentMessages` (S2).
 /// Default OFF — sharing a second, extension-reachable copy of recent

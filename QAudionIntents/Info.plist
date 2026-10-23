@@ -31,6 +31,10 @@
 	     SiriMessageBridgeStore, never the live E2EE ratchet — see that
 	     file's header and docs/superpowers/plans/
 	     2026-09-06-carplay-state-of-the-art.md.
+	     INSetMessageAttributeIntent: marks a conversation as read after Siri
+	     has read it aloud; the mark is queued in the same bridge and applied
+	     by the main app. The three messaging intents are listed together
+	     because a messaging app is expected to handle all of them.
 	     IntentsRestrictedWhileLocked: INSearchForMessagesIntent only —
 	     reading message plaintext (even from the opt-in cache) requires an
 	     unlocked device, matching Apple's own stated default for this
@@ -47,6 +51,7 @@
 				<string>INStartCallIntent</string>
 				<string>INSendMessageIntent</string>
 				<string>INSearchForMessagesIntent</string>
+				<string>INSetMessageAttributeIntent</string>
 			</array>
 			<key>IntentsRestrictedWhileLocked</key>
 			<array>

@@ -79,6 +79,21 @@ final class CallStartSupportTests: XCTestCase {
         XCTAssertTrue(gate.tryBegin())
     }
 
+    // MARK: - CarCallStartNotice
+
+    func test_carNotice_aStartThatLeftNoCallUpIsToldToTheDriver() {
+        XCTAssertTrue(CarCallStartNotice.isDue(busyAtEntry: false, inCallAfter: false))
+    }
+
+    func test_carNotice_aStartThatLeftACallUpSaysNothing() {
+        XCTAssertFalse(CarCallStartNotice.isDue(busyAtEntry: false, inCallAfter: true))
+    }
+
+    func test_carNotice_aSecondTapWhileTheFirstStartIsInFlightIsNotAFailure() {
+        XCTAssertFalse(CarCallStartNotice.isDue(busyAtEntry: true, inCallAfter: false))
+        XCTAssertFalse(CarCallStartNotice.isDue(busyAtEntry: true, inCallAfter: true))
+    }
+
     // MARK: - CallEngineLifecycle
 
     func test_lifecycle_startsEmpty() {

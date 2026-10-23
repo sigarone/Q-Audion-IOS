@@ -20,6 +20,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         MainActor.assumeIsolated {
             MeshBoot.bootIdentityAndRadio()
+            // CarPlay can start the app with only its own scene (the phone has no window): the root view's `onAppear`
+            // never runs then, so the way into the app is wired here, before any scene exists. Nothing happens
+            // unless a CarPlay scene exists, which needs the QAUDION_CARPLAY build and the CarPlay entitlement.
+            CarPlayBridge.shared.bootApp = { QAudionApp.startForCarPlayLaunch() }
+            CarPlayBridge.shared.continueStartCall = { activity in AppState.shared.handleSiriStartCall(activity) }
         }
         return true
     }
@@ -61,7 +66,7 @@ struct QAudionApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState.shared
     /// W441: App lock service. isLocked drives the gate overlay in body.
-    @StateObject private var lockService = AppLockService()
+    @StateObject private var lockService = AppLockService.shared
     @Environment(\.scenePhase) private var scenePhase
 
     /// W441: reactive screenshot-protection flag, so the ZStack modifier
@@ -306,6 +311,10 @@ struct QAudionApp: App {
                 appState.phoneTransferNotice.setLocked(locked)
                 if !locked { appState.refreshPhoneTransferNotice() }
             }
+            // The car screen lists nothing while the app lock is up.
+            .onChange(of: lockService.isLocked) { _ in
+                CarPlayBridge.shared.lockDidChange()
+            }
             // W-EMAILVERIFYLINK — Universal Link entry point (parity with
             // Android's App Link intent-filter). associated-domains in
             // QAudion.entitlements is what makes the OS route the tapped
@@ -341,50 +350,13 @@ struct QAudionApp: App {
                 }
             }
             .onAppear {
-                // W416: ring-buffer stdout tee from launch for live telemetry.
-                RuntimeLogSink.shared.attachStdoutTee()
-                // W472 — flush any crash report from the previous launch.
-                // MUST be after attachStdoutTee() so the prints are
-                // captured by the W417 telemetry and shipped to the server.
-                CrashReporter.flushPendingReport()
-                // W-FLAGS — start the remote feature-flag poll. Primitive-only
-                // signature (CLAUDE.md §16): a compile-time flags URL String,
-                // NO AppState. Plain URLSession (public, un-authed, NOT the
-                // pinned voip host) — see FeatureFlags.swift header. Placed
-                // after attachStdoutTee() so the "[FeatureFlags] fetched: ..."
-                // line is captured by the W417 telemetry. Fire-and-forget:
-                // never blocks launch, fails safe to the compiled defaults.
-                FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
-                // The engine cannot import FeatureFlags: it reads the band-hint flag through this closure
-                // (main thread only, off anywhere else). Primitive-only, no AppState (CLAUDE.md section 16).
-                EncoderBandHintController.shared.flagProvider = {
-                    guard Thread.isMainThread else { return false }
-                    return MainActor.assumeIsolated { FeatureFlags.bool(EncoderBandHint.flagKey, false) }
-                }
-                // The engine cannot reach RTLog either: its lines go out with the tag "call", like the other `audioroute` lines.
-                EncoderBandHintController.shared.lineSink = { line in RTLog.info("call", line) }
+                // W416 ... W-FLAGS ... band hint: the window-less start-up steps, in the order they have always had.
+                QAudionApp.startServicesBeforeInitialize()
                 let lock = lockService
                 appState.isAppLocked = { lock.isLocked }
-                appState.initialize()
-                // W-MK — register the MetricKit subscriber. MUST be after
-                // attachStdoutTee() so the per-payload prints are captured
-                // by the W417 telemetry, same rationale as the crash flush
-                // above. W-MKCRASHTELEMETRY (this task) moved this AFTER
-                // appState.initialize() (was between the crash flush and
-                // FeatureFlags.start above): initialize() is what calls
-                // TelemetryService.shared.start(...), and MetricKitDiagnostics
-                // now also calls TelemetryService.shared.emit(kind: "app.crash",
-                // ...) for a crash/hang diagnostic. `emit()` silently drops an
-                // event until TelemetryService.started flips true, so
-                // registering the MetricKit subscriber (whose didReceive could
-                // in principle fire immediately) before that flip would risk
-                // losing exactly the event this task adds. Registering a few
-                // synchronous statements later, still in the same runloop
-                // turn, costs nothing — MetricKit queues payloads until a
-                // subscriber exists.
-                MetricKitDiagnostics.start()
-                // W441: sweep expired messages immediately + every 60s.
-                EphemeralMessageJanitor.shared.start()
+                appState.initializeForPhoneWindow()
+                // W-MK ... W441: MetricKit subscriber and the expired-message sweep, after initialize().
+                QAudionApp.startServicesAfterInitialize()
                 // W441: listen for OS screenshot events and warn in the log.
                 registerScreenshotObserver()
                 // W-SCREENRECDETECT (2026-09-02): listen for an active
@@ -406,6 +378,72 @@ struct QAudionApp: App {
                 }
             }
         }
+    }
+
+    // MARK: - Start-up steps that need no window
+
+    /// The steps of the start-up that come before `AppState.initialize()` and need no window. Run by the root view's
+    /// `onAppear` and by the CarPlay scene's start (a launch with only the car), in the same order.
+    @MainActor
+    static func startServicesBeforeInitialize() {
+        // W416: ring-buffer stdout tee from launch for live telemetry.
+        RuntimeLogSink.shared.attachStdoutTee()
+        // W472 — flush any crash report from the previous launch.
+        // MUST be after attachStdoutTee() so the prints are
+        // captured by the W417 telemetry and shipped to the server.
+        CrashReporter.flushPendingReport()
+        // W-FLAGS — start the remote feature-flag poll. Primitive-only
+        // signature (CLAUDE.md §16): a compile-time flags URL String,
+        // NO AppState. Plain URLSession (public, un-authed, NOT the
+        // pinned voip host) — see FeatureFlags.swift header. Placed
+        // after attachStdoutTee() so the "[FeatureFlags] fetched: ..."
+        // line is captured by the W417 telemetry. Fire-and-forget:
+        // never blocks launch, fails safe to the compiled defaults.
+        FeatureFlags.shared.start(flagsUrl: "https://dash.bcrypto.com/flags.json")
+        // The engine cannot import FeatureFlags: it reads the band-hint flag through this closure
+        // (main thread only, off anywhere else). Primitive-only, no AppState (CLAUDE.md section 16).
+        EncoderBandHintController.shared.flagProvider = {
+            guard Thread.isMainThread else { return false }
+            return MainActor.assumeIsolated { FeatureFlags.bool(EncoderBandHint.flagKey, false) }
+        }
+        // The engine cannot reach RTLog either: its lines go out with the tag "call", like the other `audioroute` lines.
+        EncoderBandHintController.shared.lineSink = { line in RTLog.info("call", line) }
+    }
+
+    /// The steps that come after `AppState.initialize()`.
+    @MainActor
+    static func startServicesAfterInitialize() {
+        // W-MK — register the MetricKit subscriber. MUST be after
+        // attachStdoutTee() so the per-payload prints are captured
+        // by the W417 telemetry, same rationale as the crash flush
+        // above. W-MKCRASHTELEMETRY (this task) moved this AFTER
+        // appState.initialize() (was between the crash flush and
+        // FeatureFlags.start above): initialize() is what calls
+        // TelemetryService.shared.start(...), and MetricKitDiagnostics
+        // now also calls TelemetryService.shared.emit(kind: "app.crash",
+        // ...) for a crash/hang diagnostic. `emit()` silently drops an
+        // event until TelemetryService.started flips true, so
+        // registering the MetricKit subscriber (whose didReceive could
+        // in principle fire immediately) before that flip would risk
+        // losing exactly the event this task adds. Registering a few
+        // synchronous statements later, still in the same runloop
+        // turn, costs nothing — MetricKit queues payloads until a
+        // subscriber exists.
+        MetricKitDiagnostics.start()
+        // W441: sweep expired messages immediately + every 60s.
+        EphemeralMessageJanitor.shared.start()
+    }
+
+    /// The whole window-less start-up, for a launch where the CarPlay scene is the only scene. There is no window to
+    /// ask the user on, so an enabled app lock is set (and the car screen shows nothing) until the phone window
+    /// appears and the user passes the prompt.
+    @MainActor
+    static func startForCarPlayLaunch() {
+        startServicesBeforeInitialize()
+        AppState.shared.isAppLocked = { AppLockService.shared.isLocked }
+        AppLockService.shared.lockWithoutPrompt()
+        AppState.shared.initializeForCarPlayLaunch()
+        startServicesAfterInitialize()
     }
 
     // MARK: - Scene phase

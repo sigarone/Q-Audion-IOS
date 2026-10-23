@@ -1,0 +1,57 @@
+# XcodeGen spec for the build WITH the CarPlay scene (QAUDION_CARPLAY).
+#
+# QAudionApp/project.yml is the default spec: the CarPlay scene is NOT compiled and the
+# app's Info.plist has no CarPlay scene configuration. This file includes project.yml
+# unchanged and adds, on top, only:
+#   - the QAUDION_CARPLAY compilation condition on the QAudionApp target (OTHER_SWIFT_FLAGS
+#     rather than SWIFT_ACTIVE_COMPILATION_CONDITIONS, so it cannot clobber a condition
+#     injected into project.yml by the workflow, e.g. QAUDION_DEV_TOOLS; same choice as
+#     project-vpn.yml and project-earbud.yml);
+#   - CarPlay.framework, linked weakly (-weak_framework CarPlay in OTHER_LDFLAGS), so a system
+#     without the framework still starts the app. A build made from project.yml does not link it;
+#   - a build phase that adds the CarPlay scene configuration to the built Info.plist
+#     (scripts/ci/carplay-add-scene.sh): the scene role
+#     CPTemplateApplicationSceneSessionRoleApplication with CarPlaySceneDelegate, and
+#     UIApplicationSupportsMultipleScenes on, which CarPlay needs. The source Info.plist is
+#     not touched, so a build made from project.yml never has the entry.
+#
+# What this spec does NOT do: it does not add the entitlement
+# com.apple.developer.carplay-communication. That entitlement is granted by Apple on request
+# and is not in any entitlements file of this repository, so a build from this spec runs the
+# CarPlay scene only where the entitlement is not checked (the Simulator) and compiles
+# everywhere. It is never used by ios-testflight.yml, and
+# scripts/ci/check_carplay_gating.py fails the pull request that makes it so.
+#
+# Generate with:  cd QAudionApp && xcodegen generate --spec project-carplay.yml
+#
+# HOW TO ENABLE CARPLAY ON A DEVICE (after Apple grants the entitlement)
+#   1. Enable the CarPlay capability on the App ID and regenerate the provisioning profiles.
+#   2. Add com.apple.developer.carplay-communication to the entitlements the build is
+#      signed with.
+#   3. Generate the project from this spec; in ios-testflight.yml that is a new dispatch
+#      input, kept off for a tag push, with the same kind of "not in the artifact" gate that
+#      the VPN and earbud variants have, inverted for that input.
+#   Never turn the condition on in a release build before calls, contacts and conversations
+#   have been tried in a real car.
+#
+# ios-app-tests.yml compiles this variant on every pull request (job carplay-variant-build)
+# so the code does not rot while the default build leaves it out.
+
+include:
+  - project.yml
+
+targets:
+  QAudionApp:
+    settings:
+      base:
+        OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_CARPLAY
+        # A value in this file replaces the one it includes, so project.yml's -lc++ is repeated here.
+        OTHER_LDFLAGS: $(inherited) -lc++ -weak_framework CarPlay
+        # The phase below edits the built Info.plist, which a sandboxed script phase may not do.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    postBuildScripts:
+      - name: CarPlay scene configuration
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          sh "${SRCROOT}/../scripts/ci/carplay-add-scene.sh" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}" "${PRODUCT_MODULE_NAME}"
