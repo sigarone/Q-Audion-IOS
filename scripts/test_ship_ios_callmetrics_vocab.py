@@ -68,6 +68,10 @@ LINES = [
     "audioroute why=99 out=1 in=1 profile=0 sr=48000 out_ch=1 in_ch=1 vol=100",
     "audioroute why=1 old=1 out=3 in=3 profile=3 sr=24000 out_ch=1 in_ch=1 vol=30",
     "audioroute why=3 old=2 out=2 in=1 profile=0",
+    # The narrowband Bluetooth notice (QAudionEngine/Call/NarrowbandBluetoothBanner.swift, NarrowbandBluetoothLines): the banner
+    # went up, and the tap on "use the phone".
+    "audioroute nb_banner shown=1 sr=8000",
+    "audioroute nb_switch tap=1",
 ]
 
 failures = []

@@ -20,6 +20,9 @@ final class CallMetricsRedactionTests: XCTestCase {
         "audiosrtp hb=4 plc_silent_ms=5000 plc_hear_ms=5000 plc_event=1234",
         "audioroute why=1 old=1 out=3 in=3 profile=1 sr=16000 out_ch=1 in_ch=1 vol=50",
         "audioroute why=99 out=1 in=1 profile=0 sr=48000 out_ch=2 in_ch=1 vol=100",
+        // The narrowband Bluetooth notice (NarrowbandBluetoothLines).
+        "audioroute nb_banner shown=1 sr=8000",
+        "audioroute nb_switch tap=1",
     ]
 
     func test_everyCallMetricsLineSurvivesTheStructuredRedactor() {

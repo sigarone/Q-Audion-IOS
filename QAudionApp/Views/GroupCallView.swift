@@ -135,6 +135,10 @@ struct GroupCallView: View {
                         .padding(.bottom, 10)
                 }
 
+                // Narrowband Bluetooth notice: the audio runs over an 8 kHz hands-free link. Hides by itself when the
+                // route changes; can be closed for the rest of the call.
+                NarrowbandBluetoothBanner(horizontalInset: 20)
+
                 // W-GRPSCREENSHARE: spotlight tile for whichever remote
                 // participant is currently sharing their screen — rendered
                 // full-width, ABOVE the regular participant grid, so a

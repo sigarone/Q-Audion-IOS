@@ -130,6 +130,11 @@ struct LiveInCallScreen: View {
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
         // Reduce the call to the "call in progress" bar on top of the app (audio call, once connected).
         .overlay(alignment: .topTrailing) { reduceButtonOverlay }
+        // Narrowband Bluetooth notice: a row above the call content (a safe-area inset, so it pushes the content down
+        // and never covers a control); it draws nothing, and reserves nothing, while it is hidden.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            NarrowbandBluetoothBanner()
+        }
         .onAppear {
             // SECURITY F-3: the in-call screen renders the SAS words +
             // peer identity. Mirror ChatDetailScreen's secure-window
@@ -158,6 +163,11 @@ struct LiveInCallScreen: View {
             // Re-resolve when the call peer changes (e.g. switching
             // between successive calls on the same showcase entry).
             resolvePeerDisplayName()
+        }
+        // The speaker button follows the app's real choice when something other than this button changes it (the
+        // Bluetooth banner's "use the phone" turns the loudspeaker off).
+        .onChange(of: appState.callSpeakerOn) { value in
+            speakerOn = value
         }
         // 2026-07-29 fix — pick up NameResolutionService's async enrichment
         // (device-contact match, or the `ensureResolved` profile fetch

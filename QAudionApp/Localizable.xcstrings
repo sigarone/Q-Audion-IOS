@@ -34111,6 +34111,174 @@
         }
       }
     },
+    "call.bt_narrowband.message": {
+      "extractionState": "manual",
+      "comment": "In-call banner — the Bluetooth hands-free link runs at 8 kHz or less, so the voice quality is reduced",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth a banda stretta: voce di qualità ridotta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Narrowband Bluetooth: reduced voice quality"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schmalband-Bluetooth: verringerte Sprachqualität"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth de banda estrecha: calidad de voz reducida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth à bande étroite : qualité vocale réduite"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth de banda estreita: qualidade de voz reduzida"
+          }
+        }
+      }
+    },
+    "call.bt_narrowband.use_phone": {
+      "extractionState": "manual",
+      "comment": "In-call banner — button that moves the call audio from the Bluetooth headset to the phone's own microphone and receiver",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa il telefono"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use phone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefon verwenden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usar el teléfono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiliser le téléphone"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usar o telefone"
+          }
+        }
+      }
+    },
+    "call.bt_narrowband.use_phone_hint": {
+      "extractionState": "manual",
+      "comment": "Accessibility hint — the Use phone button of the narrowband Bluetooth banner",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sposta l'audio della chiamata sul microfono e sul ricevitore del telefono"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moves the call audio to the phone's microphone and receiver"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verlegt den Anrufton auf Mikrofon und Hörmuschel des Telefons"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pasa el audio de la llamada al micrófono y al auricular del teléfono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bascule l'audio de l'appel sur le micro et l'écouteur du téléphone"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passa o áudio da chamada para o microfone e o receptor do telefone"
+          }
+        }
+      }
+    },
+    "call.bt_narrowband.dismiss_a11y": {
+      "extractionState": "manual",
+      "comment": "Accessibility label — close button of the narrowband Bluetooth banner; hides it for the rest of the call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nascondi avviso Bluetooth"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss Bluetooth notice"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Hinweis ausblenden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ocultar aviso de Bluetooth"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masquer l'avis Bluetooth"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ocultar aviso de Bluetooth"
+          }
+        }
+      }
+    },
     "call.video_pause_request.toast": {
       "extractionState": "manual",
       "comment": "Snackbar — one-shot toast shown when the peer asks us to turn off our own camera by tapping \"No, audio only\" on their own video-request banner",
