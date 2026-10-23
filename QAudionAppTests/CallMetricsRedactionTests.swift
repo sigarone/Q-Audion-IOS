@@ -23,6 +23,9 @@ final class CallMetricsRedactionTests: XCTestCase {
         // The narrowband Bluetooth notice (NarrowbandBluetoothLines).
         "audioroute nb_banner shown=1 sr=8000",
         "audioroute nb_switch tap=1",
+        "audioroute band=1 old=0 sr=8000",
+        "audioroute band=0 old=2 sr=16000",
+        "audioroute nosetter=1",
     ]
 
     func test_everyCallMetricsLineSurvivesTheStructuredRedactor() {
