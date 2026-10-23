@@ -637,7 +637,10 @@ struct ChatListScreen: View {
         // has been written. Single activityItem = the on-disk URL so
         // receivers see a real .txt with proper UTI.
         .sheet(item: $exportTarget) { target in
-            ActivityShareSheet(activityItems: [target.url])
+            ActivityShareSheet(activityItems: [target.url], onComplete: {
+                // The transcript is a plaintext copy in the temporary directory: remove it once shared or dismissed.
+                try? FileManager.default.removeItem(at: target.url)
+            })
         }
         .sheet(isPresented: $showingNewGroup) {
             // W40.A: full group-creation flow. ContactPicker +

@@ -10,6 +10,8 @@ import Foundation
 ///   - `Library/Caches/files_v2/`   — files received and thumbnails made in the file transfer v2 format
 ///     (documents, images, voice notes, videos): the rows keep their descriptors, so the bubbles offer
 ///     the download again.
+///   - `Library/Caches/file_attachments/` — files received in the earlier file transfer format.
+///   - the temporary directory: the `attach-*` and `grpattach-*` files written for attachments.
 ///
 /// The qfile markers in the chat history stay intact, so the user can
 /// still tap a bubble to re-fetch + decrypt from the server. We only
@@ -23,10 +25,32 @@ enum AttachmentCacheCleaner {
     @discardableResult
     static func clearAllCaches() -> UInt64 {
         var freed: UInt64 = 0
-        for sub in ["voicenotes", "images", "files_v2"] {
+        for sub in ["voicenotes", "images", "files_v2", "file_attachments"] {
             freed &+= clearSubdir(sub)
         }
+        freed &+= clearTemporaryAttachments()
         return freed
+    }
+
+    /// Removes the attachment copies kept in the temporary directory (`attach-*` for 1:1 chats,
+    /// `grpattach-*` for groups). Returns the bytes freed. Best-effort, like the rest of this type.
+    private static func clearTemporaryAttachments() -> UInt64 {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+        guard let names = try? fm.contentsOfDirectory(atPath: tmp.path) else { return 0 }
+        var bytes: UInt64 = 0
+        for name in names where name.hasPrefix("attach-") || name.hasPrefix("grpattach-") {
+            let url = tmp.appendingPathComponent(name)
+            if let s = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                bytes &+= UInt64(s)
+            }
+            do {
+                try fm.removeItem(at: url)
+            } catch {
+                print("[AttachmentCacheCleaner] failed to remove \(name): \(error)")
+            }
+        }
+        return bytes
     }
 
     /// W113: report current cache sizes without deleting. Lets the

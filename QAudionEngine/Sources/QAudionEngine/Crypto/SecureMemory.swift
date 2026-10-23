@@ -49,8 +49,9 @@ public final class SecureBytes: @unchecked Sendable {
         byteCount = count
         pointer = UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: 1)
         #if canImport(Security)
-        _ = SecRandomCopyBytes(kSecRandomDefault, count,
-                               pointer.assumingMemoryBound(to: UInt8.self))
+        let status = SecRandomCopyBytes(kSecRandomDefault, count,
+                                        pointer.assumingMemoryBound(to: UInt8.self))
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
         #else
         let fd = open("/dev/urandom", O_RDONLY)
         if fd >= 0 { _ = read(fd, pointer, count); close(fd) }

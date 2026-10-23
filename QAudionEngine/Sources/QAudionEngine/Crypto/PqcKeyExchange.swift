@@ -68,6 +68,11 @@ public struct PqcKeyExchange {
         }
         defer { OQS_KEM_free(kem) }
 
+        // liboqs reads exactly `length_public_key` bytes from the pointer it is given.
+        guard remotePublicKey.count == Int(kem.pointee.length_public_key) else {
+            throw PqcKeyExchangeError.wrongPublicKeyLength
+        }
+
         let ctSize = Int(kem.pointee.length_ciphertext)
         let ssSize = Int(kem.pointee.length_shared_secret)
 
@@ -108,6 +113,14 @@ public struct PqcKeyExchange {
             throw PqcKeyExchangeError.kemUnavailable
         }
         defer { OQS_KEM_free(kem) }
+
+        // liboqs reads exactly `length_ciphertext` / `length_secret_key` bytes from the pointers it is given.
+        guard ciphertext.count == Int(kem.pointee.length_ciphertext) else {
+            throw PqcKeyExchangeError.wrongCiphertextLength
+        }
+        guard privateKey.count == Int(kem.pointee.length_secret_key) else {
+            throw PqcKeyExchangeError.wrongPrivateKeyLength
+        }
 
         let ssSize = Int(kem.pointee.length_shared_secret)
         var sharedSecret = Data(count: ssSize)
@@ -203,4 +216,10 @@ public enum PqcKeyExchangeError: Error {
     /// SECURITY H-10: a remote public key was neither exactly 1568 bytes
     /// (raw ML-KEM-1024) nor a well-formed 1590-byte BouncyCastle SPKI.
     case invalidPublicKey
+    /// The public key passed to `encapsulate` does not have the ML-KEM-1024 public key length.
+    case wrongPublicKeyLength
+    /// The ciphertext passed to `decapsulate` does not have the ML-KEM-1024 ciphertext length.
+    case wrongCiphertextLength
+    /// The private key passed to `decapsulate` does not have the ML-KEM-1024 secret key length.
+    case wrongPrivateKeyLength
 }

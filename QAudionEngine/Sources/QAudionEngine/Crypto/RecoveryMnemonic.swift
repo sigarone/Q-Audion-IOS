@@ -302,10 +302,11 @@ public enum RecoveryMnemonic {
         var randomBuffer = [UInt8](repeating: 0, count: 12 * 2)
         // force-unwrap safe: randomBuffer is a fixed 24-byte array, always
         // non-empty — baseAddress is only nil for an empty buffer.
-        _ = randomBuffer.withUnsafeMutableBufferPointer { buf in
+        let status = randomBuffer.withUnsafeMutableBufferPointer { buf in
             // swiftlint:disable:next force_unwrapping
             SecRandomCopyBytes(kSecRandomDefault, buf.count, buf.baseAddress!)
         }
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
         for i in 0..<12 {
             let high = UInt16(randomBuffer[i * 2])
             let low = UInt16(randomBuffer[i * 2 + 1])

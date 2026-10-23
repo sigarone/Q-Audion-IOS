@@ -107,7 +107,8 @@ public struct ZeroKnowledgeAuth {
         data.withUnsafeMutableBytes { buf in
             #if canImport(Security)
             // swiftlint:disable:next force_unwrapping
-            _ = SecRandomCopyBytes(kSecRandomDefault, count, buf.baseAddress!)
+            let status = SecRandomCopyBytes(kSecRandomDefault, count, buf.baseAddress!)
+            precondition(status == errSecSuccess, "SecRandomCopyBytes failed: \(status)")
             #else
             let fd = open("/dev/urandom", O_RDONLY)
             // swiftlint:disable:next force_unwrapping
