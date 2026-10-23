@@ -216,6 +216,7 @@ final class ChatMessageSendService {
         peerUserId: String,
         plaintext: String
     ) async -> DurableOutcome {
+        let isLocationBody: Bool = LocationCodec.hasLocationPrefix(plaintext)
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
             return .failed(reason: .notAuthenticated)
         }
@@ -240,6 +241,12 @@ final class ChatMessageSendService {
             // bytes. Synchronous, non-throwing, ignored by the send below, which never waits for it; with the effect off it
             // returns at its first line. Nothing it receives can reach the cipher, a nonce or the tag check.
             EnigmaBus.shared.sealed(rowId: messageId.uuidString, conversationKey: conversationId.uuidString, wire: wireBlob)
+            // The start of a live share (WIRE_SPEC 14.6.1 rule 2): from here its bytes may leave, so a stop that comes while the send is in
+            // flight is held for the echo; and a start that the user already stopped (withdrawn while this send was being prepared) is not
+            // sent at all. `false` only ever happens for the start of a share.
+            if isLocationBody, !LocationShareCenter.shared.startBeingSent(clientMsgId: messageId.uuidString) {
+                return .queued
+            }
             let serverMsgId = try await live.messageApi.sendMessage(
                 recipientId: peerUserId,
                 content: wireBlob,
@@ -249,6 +256,7 @@ final class ChatMessageSendService {
         } catch {
             guard OutboxRetryPolicy.shouldQueue(isTransportFailure: true) else {
                 print("[ChatSend] WS send failed: \(error.localizedDescription)")
+                if isLocationBody { LocationShareCenter.shared.startNotSent(clientMsgId: messageId.uuidString) }
                 return .failed(reason: .networkError)
             }
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -264,6 +272,9 @@ final class ChatMessageSendService {
                 nextAttemptAtMs: nowMs + OutboxRetryPolicy.backoffMs(afterFailedAttempts: attempts)
             )
             RTLog.warn("chat", "send queued=1 attempts=\(attempts)")
+            // The hand-over failed before any byte was written: the start of a live share did not leave (taken back AFTER the entry
+            // above is written, so that a share that ended meanwhile withdraws the entry with the start).
+            if isLocationBody { LocationShareCenter.shared.startNotSent(clientMsgId: messageId.uuidString) }
             return .queued
         }
     }

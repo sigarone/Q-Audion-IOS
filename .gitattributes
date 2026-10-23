@@ -14,6 +14,10 @@ QAudionEngine/Tests/QAudionEngineTests/Resources/kat/file-v2-server-transcript.j
 # (test/kat/reply_v1/reply-kat.json) and the tests pin its SHA-256: git must never rewrite its line endings.
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/reply-kat.json -text
 
+# The location message (WIRE_SPEC section 14) known-answer vectors are a byte-for-byte copy of the server repository's file
+# (test/kat/location_v1/location-kat.json) and the tests pin its SHA-256: git must never rewrite its line endings.
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/location-kat.json -text
+
 # The remote-voice analysis vectors are a byte-for-byte copy of the file that ships with the specification and the
 # Android tests (the expected output of the reference implementation): git must never rewrite its line endings.
 QAudionEngine/Tests/QAudionEngineTests/Analysis/Resources/voicedsp-vectors.json -text

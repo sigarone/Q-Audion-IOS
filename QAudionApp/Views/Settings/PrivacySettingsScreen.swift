@@ -339,6 +339,10 @@ struct PrivacySettingsScreen: View {
                     // changed here. Appears unless the remote kill switch `mesh_ble.enabled` has been set to false.
                     MeshSettingsSection()
 
+                    // Location sharing: the live shares this device is running, with "Interrompi tutte". Appears only while the remote
+                    // switch `location_share.enabled` is on.
+                    LocationSharesSettingsSection()
+
                     // 2026-08-10: the "MESSAGGI A SCADENZA" picker and the
                     // "ANONIMIZZAZIONE RETE" Tor toggle were removed here —
                     // both wrote a preference no production path ever read.

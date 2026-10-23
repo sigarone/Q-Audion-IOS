@@ -34,8 +34,17 @@ enum ReplyQuotePresenter {
         case .image: return FileV2ChatBody.kindLabelText(.image)
         case .video: return FileV2ChatBody.kindLabelText(.video)
         case .file: return String(localized: "reply.kind.file", defaultValue: "📎 Allegato", comment: "Quote block of a reply to a document that has no name.")
+        case .location: return locationLabel("location")
         case .text: return String(localized: "reply.generic_message", defaultValue: "Messaggio", comment: "Quote block of a reply when the text of the quoted message is not shown.")
         }
+    }
+
+    /// The fixed label of a quoted location (WIRE_SPEC 13.6 and 14.3.7): a pin, or a live share. A position is never part of it.
+    static func locationLabel(_ label: String) -> String {
+        if label == "location_live" {
+            return String(localized: "reply.kind.location_live", defaultValue: "📍 Posizione in tempo reale", comment: "Quote block of a reply to a live location share.")
+        }
+        return String(localized: "reply.kind.location", defaultValue: "📍 Posizione", comment: "Quote block of a reply to a shared location (a pin).")
     }
 
     /// The block of `reply` among `messages` (the rows of the same conversation). `to` is matched against the server message id of
@@ -86,6 +95,10 @@ enum ReplyQuotePresenter {
             let kind: MessageReplyKind = legacyKind == "image" ? .image : .file
             return MessageReplyRow(id: id, sameConversation: true, kind: kind, text: "", author: author, viewOnce: true, gone: false)
         }
+        // A pin of a group (WIRE_SPEC 14.3.7): quoted by its fixed label, never by its text.
+        if stored.locationBody != nil {
+            return MessageReplyRow(id: id, sameConversation: true, kind: .location, text: "", author: author, viewOnce: false, gone: false)
+        }
         let rejectedFileMessage: Bool = FileV2ChatBody.isRejectedPlaceholderText(stored.text)
         return MessageReplyRow(id: id, sameConversation: true, kind: .text, text: stored.text, author: author,
                                viewOnce: viewOnce || rejectedFileMessage, gone: false)
@@ -100,7 +113,10 @@ enum ReplyQuotePresenter {
             shownText = String(localized: "reply.unavailable", defaultValue: "Messaggio non più disponibile", comment: "Quote block of a reply whose quoted message has expired or been deleted.")
             isLabel = true
         case .local, .quote:
-            if block.excerpt.isEmpty {
+            if let label = block.label {
+                shownText = locationLabel(label)
+                isLabel = true
+            } else if block.excerpt.isEmpty {
                 shownText = kindLabel(kind)
                 isLabel = true
             } else {
@@ -116,6 +132,9 @@ enum ReplyQuotePresenter {
     /// "In risposta a <author>: <excerpt>"; "In risposta a un messaggio" when there is no author or no excerpt; "In risposta a un
     /// messaggio vocale" for a voice note (WIRE_SPEC 13.7).
     static func accessibilityText(author: String?, excerpt: String, kind: MessageReplyKind, unavailable: Bool) -> String {
+        if kind == .location && !unavailable {
+            return String(localized: "reply.a11y.to_location", defaultValue: "In risposta a una posizione", comment: "VoiceOver text of the quote block of a reply to a shared location.")
+        }
         if kind == .voice && !unavailable {
             return String(localized: "reply.a11y.to_voice", defaultValue: "In risposta a un messaggio vocale", comment: "VoiceOver text of the quote block of a reply to a voice note.")
         }

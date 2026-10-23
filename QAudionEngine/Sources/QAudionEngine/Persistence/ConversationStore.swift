@@ -741,6 +741,22 @@ public final class ConversationStore {
         }
     }
 
+    /// The expiry of one row. A live location share is exempt from the timer of its conversation while it runs, so its row is written
+    /// without an expiry; when the share ends (any reason) the app sets `expiresAt = end + timer` here, and the row then follows the
+    /// timer like any message (WIRE_SPEC 14.6.6, docs/LOCATION_SHARING.md 1.3). Every other field is carried over.
+    public func setExpiresAt(messageId: UUID, expiresAt: Date?) {
+        do {
+            try db.writer.write { db in
+                if let msg = try Message.fetchOne(db, key: messageId) {
+                    try msg.replacing(plaintext: msg.plaintext, expiresAt: expiresAt, isViewOnce: msg.isViewOnce,
+                                      viewOnceOpened: msg.viewOnceOpened).save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] setExpiresAt saved=0 error: \(error)")
+        }
+    }
+
     public func setServerMessageId(localId: UUID, conversationId: UUID, serverMessageId: String) {
         do {
             try db.writer.write { db in
@@ -911,9 +927,16 @@ public final class ConversationStore {
             print("[ConversationStore] applyEditByClientMsgId refused=1 reason=reply_message")
             return false
         }
+        // Nor into a location message (WIRE_SPEC 14.3.6): the coordinates of a pin, and a live start, never change after they were sent.
+        guard !LocationCodec.hasLocationPrefix(newPlaintext) else {
+            print("[ConversationStore] applyEditByClientMsgId refused=1 reason=location_message")
+            return false
+        }
         do {
             return try db.writer.write { db in
                 if var msg = try Message.filter(Column("clientMsgId") == clientMsgId).fetchOne(db) {
+                    // ... and the row of a pin or a live share is never rewritten by an edit.
+                    if LocationCodec.hasLocationPrefix(msg.plaintext) { return false }
                     msg = Message(
                         id: msg.id, conversationId: msg.conversationId, direction: msg.direction,
                         plaintext: newPlaintext,

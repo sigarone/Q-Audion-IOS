@@ -223,6 +223,11 @@ public enum FileV2ChatBody: Equatable, Sendable {
     static func applyInboundBoundary(_ message: Message, preview: String) -> (message: Message, preview: String)? {
         switch classify(text: message.plaintext) {
         case .text:
+            // A location message (WIRE_SPEC 14) is never stored as the text it is: a pin keeps its body and shows a fixed label, a live
+            // start keeps its local form (no key), a rejected body is one placeholder.
+            if LocationCodec.hasLocationPrefix(message.plaintext) {
+                return LocationInboundBoundary.apply(message)
+            }
             // A reply (WIRE_SPEC 13) keeps the body as received; wherever the message is previewed it shows `b`, never the object.
             if case .reply(let reply) = MessageReplyCodec.recognize(message.plaintext) {
                 return (message, reply.body)

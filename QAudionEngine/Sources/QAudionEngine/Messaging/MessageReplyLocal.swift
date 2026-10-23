@@ -37,9 +37,12 @@ public struct MessageReplyRow: Equatable, Sendable {
     public let viewOnce: Bool
     /// Expired or deleted: a tombstone.
     public let gone: Bool
+    /// A location row that is a live start (a live share), not a pin: the quote block says which. Only read for the kind `location`.
+    public let live: Bool
 
     public init(id: String, sameConversation: Bool, kind: MessageReplyKind, text: String, author: String, viewOnce: Bool,
-                gone: Bool) {
+                gone: Bool, live: Bool = false) {
+        self.live = live
         self.id = id
         self.sameConversation = sameConversation
         self.kind = kind
@@ -66,8 +69,12 @@ public struct MessageReplyBlock: Equatable, Sendable {
     public let link: String?
     public let author: String?
     public let excerpt: String
+    /// The fixed label of a quoted location (WIRE_SPEC 13.6): `location` for a pin or an unknown row quoted as a location,
+    /// `location_live` for a live share found among the local rows; `nil` for everything else. A position is never shown.
+    public let label: String?
 
-    public init(source: Source, link: String?, author: String?, excerpt: String) {
+    public init(source: Source, link: String?, author: String?, excerpt: String, label: String? = nil) {
+        self.label = label
         self.source = source
         self.link = link
         self.author = author
@@ -88,11 +95,14 @@ extension MessageReplyCodec {
             if row.gone {
                 return MessageReplyBlock(source: .unavailable, link: nil, author: nil, excerpt: "")
             }
-            let hidden: Bool = row.viewOnce || row.kind == .voice
+            // A location row shows its fixed label, never a position and never an excerpt (WIRE_SPEC 14.3.7).
+            let hidden: Bool = row.viewOnce || row.kind == .voice || row.kind == .location
+            let label: String? = row.kind == .location ? (row.live ? "location_live" : "location") : nil
             let shown: String = hidden ? "" : excerpt(row.text)
-            return MessageReplyBlock(source: .local, link: row.id, author: row.author, excerpt: shown)
+            return MessageReplyBlock(source: .local, link: row.id, author: row.author, excerpt: shown, label: label)
         }
-        return MessageReplyBlock(source: .quote, link: nil, author: nil, excerpt: reply.displayedQuote)
+        return MessageReplyBlock(source: .quote, link: nil, author: nil, excerpt: reply.displayedQuote,
+                                 label: reply.kind == .location ? "location" : nil)
     }
 
     // MARK: Rows of the app
@@ -106,6 +116,8 @@ extension MessageReplyCodec {
         let ephemeral: Bool
         /// A row the reply action may be offered on (before the server id is looked at).
         let quotable: Bool
+        /// A location row that is a live share and not a pin.
+        var live: Bool = false
     }
 
     private static func facts(of message: Message) -> Facts {
@@ -146,6 +158,14 @@ extension MessageReplyCodec {
         if let duration = message.mediaDurationMs, duration > 0 {
             return Facts(kind: .voice, text: "", contentHidden: true, ephemeral: hasLifetime, quotable: false)
         }
+        // A pin or a live start (WIRE_SPEC 14.3.7): quoted by its fixed label, never by its text, and `q` is empty. A row that holds the
+        // body (a pin, or the local form of a live start, which keeps the prefix) is a location whatever its content; one that arrived
+        // over the BLE mesh has no server message id and is not quoted.
+        if LocationCodec.hasLocationPrefix(message.plaintext) {
+            let usableLocation: Bool = message.deletedAt == nil && message.isPlaceholder != true && message.viaMesh != true
+            return Facts(kind: .location, text: "", contentHidden: true, ephemeral: hasLifetime, quotable: usableLocation,
+                         live: LocationCodec.isLiveBody(Data(message.plaintext.utf8)))
+        }
         // Text: an ordinary text, a reply (its `b`) or a rejected reply shown as text (its whole body).
         let text: String = shownText(ofBody: message.plaintext)
         let usable: Bool = message.deletedAt == nil && message.isPlaceholder != true && message.viaMesh != true
@@ -171,6 +191,6 @@ extension MessageReplyCodec {
         guard let serverId = message.serverMessageId, !serverId.isEmpty else { return nil }
         let found: Facts = facts(of: message)
         return MessageReplyRow(id: serverId, sameConversation: true, kind: found.kind, text: found.text, author: author,
-                               viewOnce: found.contentHidden, gone: message.deletedAt != nil)
+                               viewOnce: found.contentHidden, gone: message.deletedAt != nil, live: found.live)
     }
 }

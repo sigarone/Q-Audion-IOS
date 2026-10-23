@@ -378,6 +378,90 @@
           }
         }
       }
+    },
+    "NSLocationWhenInUseUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Location: a position the user chooses to send in a chat, or a live share (When In Use only)",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion uses your location only when you choose to send it in a chat: as a single position, or as a live share for the time you pick. The position is end-to-end encrypted and only the contact you send it to can read it. While a live share runs, Q-Audion keeps using your location in the background and iOS shows its location indicator; you can stop at any time."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa la tua posizione solo quando scegli di inviarla in una chat: come posizione singola o in tempo reale per la durata che scegli. La posizione è cifrata end-to-end e solo il contatto a cui la invii può leggerla. Mentre una condivisione in tempo reale è attiva, Q-Audion continua a usare la posizione in background e iOS mostra il suo indicatore di localizzazione; puoi interromperla in qualsiasi momento."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion usa tu ubicación solo cuando eliges enviarla en un chat: como una posición única o en tiempo real durante el tiempo que elijas. La ubicación está cifrada de extremo a extremo y solo el contacto al que la envías puede leerla. Mientras una ubicación en tiempo real está activa, Q-Audion sigue usando tu ubicación en segundo plano e iOS muestra su indicador de ubicación; puedes detenerla en cualquier momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion utilise votre position uniquement lorsque vous choisissez de l'envoyer dans une discussion : en une seule fois ou en direct pour la durée que vous choisissez. La position est chiffrée de bout en bout et seul le contact à qui vous l'envoyez peut la lire. Pendant un partage en direct, Q-Audion continue d'utiliser votre position en arrière-plan et iOS affiche son indicateur de localisation ; vous pouvez l'arrêter à tout moment."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion verwendet deinen Standort nur, wenn du ihn in einem Chat senden möchtest: als einzelne Position oder live für die Dauer, die du wählst. Der Standort ist Ende-zu-Ende-verschlüsselt und nur der Kontakt, an den du ihn sendest, kann ihn lesen. Solange eine Live-Freigabe läuft, nutzt Q-Audion deinen Standort weiter im Hintergrund und iOS zeigt seine Standortanzeige; du kannst sie jederzeit beenden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion usa sua localização somente quando você escolhe enviá-la em uma conversa: como uma posição única ou em tempo real pelo tempo que você escolher. A localização é criptografada de ponta a ponta e somente o contato para quem você a envia pode lê-la. Enquanto um compartilhamento em tempo real está ativo, o Q-Audion continua usando sua localização em segundo plano e o iOS mostra o indicador de localização; você pode interromper a qualquer momento."
+          }
+        }
+      }
+    },
+    "LocationFullAccuracyPurpose": {
+      "extractionState": "manual",
+      "comment": "Purpose key of NSLocationTemporaryUsageDescriptionDictionary: the one-off request of the exact position",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion asks for your exact position once, to send it precisely in the chat you chose."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion chiede la tua posizione esatta una sola volta, per inviarla con precisione nella chat che hai scelto."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion pide tu ubicación exacta una sola vez, para enviarla con precisión en el chat que elegiste."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion demande votre position exacte une seule fois, pour l'envoyer avec précision dans la discussion que vous avez choisie."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion fragt einmalig nach deinem genauen Standort, um ihn präzise in dem Chat zu senden, den du gewählt hast."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion pede sua localização exata uma única vez, para enviá-la com precisão na conversa que você escolheu."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

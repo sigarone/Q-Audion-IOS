@@ -112,6 +112,11 @@ public final class GroupMessageStore: ObservableObject {
         /// `k`, `q`, `b`), kept beside `text` (which holds `b`, what the row shows and previews) so that the references are not lost and
         /// the quote block can be drawn. nil for every other row and for every row stored before this field (additive optional field).
         public var replyObject: String?
+        /// Location sharing (WIRE_SPEC 14.2: a pin only, a live share is 1:1 only): the body of a pin exactly as sent or received
+        /// (`{"qa_loc":1,"m":"pin",...}`), kept beside `text` (the fixed label the row previews with, never a coordinate) so that the card
+        /// can be drawn and a failed send can go again. nil for every other row and every row stored before this field. Stored sealed
+        /// like every group body (`LocalStoreCipher`).
+        public var locationBody: String?
 
         public init(id: String, serverMessageId: String?, senderId: String,
                     mine: Bool, text: String, ts: Date,
@@ -121,7 +126,7 @@ public final class GroupMessageStore: ObservableObject {
                     deliveredBy: [String]? = nil, readBy: [String]? = nil,
                     expiresAt: Date? = nil, isViewOnce: Bool? = nil,
                     viewOnceOpened: Bool? = nil, exportBlocked: Bool? = nil,
-                    sendFailed: Bool? = nil, fileV2: Bool? = nil, replyObject: String? = nil) {
+                    sendFailed: Bool? = nil, fileV2: Bool? = nil, replyObject: String? = nil, locationBody: String? = nil) {
             self.id = id
             self.serverMessageId = serverMessageId
             self.senderId = senderId
@@ -143,6 +148,7 @@ public final class GroupMessageStore: ObservableObject {
             self.sendFailed = sendFailed
             self.fileV2 = fileV2
             self.replyObject = replyObject
+            self.locationBody = locationBody
         }
     }
 

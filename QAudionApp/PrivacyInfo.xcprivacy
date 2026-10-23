@@ -85,6 +85,36 @@
             </array>
         </dict>
 
+        <!-- Precise location - a position the user chooses to send in a chat (a pin, or a live share for a chosen time), sealed end to
+             end and relayed as ciphertext (messages and the 37-byte live frames): the server cannot read it and keeps no frame.
+             Never collected in the background without a running share, never used for tracking, advertising or analytics. Optional. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePreciseLocation</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Coarse location - the same, when the user only allowed approximate location: the position is sent as granted. Optional. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeCoarseLocation</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
         <!-- Contacts - address-book phone numbers are uploaded ONLY as peppered
              SHA-256 hashes, and only after an explicit import tap or
              pull-to-refresh (PhonebookSyncCoordinator, ContactsRefreshService);

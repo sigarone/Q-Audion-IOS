@@ -59,6 +59,8 @@ struct GroupChatScreen: View {
     /// File transfer v2: the upload progress of the rows of this device being sent (shown in place of the tick).
     @ObservedObject private var fileV2Uploads: GroupUploadProgress = .shared
     @State private var showingDocPicker = false
+    /// Location sharing (WIRE_SPEC 14): the share sheet of the group (a pin only), reachable only while the remote switch is on.
+    @State private var showingLocationSheet = false
 
     let groupId: UUID
     @State private var state: GroupChatUiState
@@ -502,6 +504,19 @@ struct GroupChatScreen: View {
             }
             .accessibilityLabel("Aggiungi allegato")
 
+            // Location sharing: a pin in the group (no live share). Its own entry, not behind `Capability.files`; hidden while the
+            // remote switch `location_share.enabled` is off.
+            if LocationShareCenter.isFeatureEnabled {
+                Button(action: { showingLocationSheet = true }) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(LocationCardStrings.attachAccessibility)
+            }
+
             TextField("",
                       text: composerBinding,
                       prompt: Text("Messaggio cifrato…")
@@ -537,6 +552,16 @@ struct GroupChatScreen: View {
         .overlay(alignment: .top) {
             Rectangle().fill(scheme.outline.opacity(0.3)).frame(height: 0.5)
         }
+        .sheet(isPresented: $showingLocationSheet) { groupLocationSheet }
+    }
+
+    private var groupLocationSheet: some View {
+        LocationShareSheet(
+            peerName: state.name,
+            allowsLive: false,
+            onSendPin: { reading in sendGroupLocationPin(reading) },
+            onStartLive: { _, _ in LocationCardStrings.notAvailable })
+        .presentationDetents([.medium, .large])
     }
 
     private var canSend: Bool {
@@ -675,6 +700,7 @@ struct GroupChatScreen: View {
                 fileV2: m.fileV2 == true,
                 descriptorJson: m.fileV2 == true ? m.descriptorJson : nil)
             row.replyQuote = replyQuoteDisplay(for: m, among: stored)
+            row.locationBody = m.locationBody
             return row
         }
         // Viewing the group == reading it: clear the unread badge shown in
@@ -784,6 +810,32 @@ struct GroupChatScreen: View {
         }
     }
 
+    /// A pin the user chose to send in the group (WIRE_SPEC 14.2): an ordinary group message whose body is the pin. The row shows the
+    /// fixed label in lists and keeps the body for its card. Returns `nil` on success, otherwise the sentence that says why not.
+    private func sendGroupLocationPin(_ reading: LocationReading) -> String? {
+        guard LocationShareCenter.isFeatureEnabled else { return LocationCardStrings.notAvailable }
+        switch LocationCodec.buildPin(fix: reading.engineFix()) {
+        case .failure(let refusal):
+            return refusal == .age ? LocationCardStrings.fixTooOld : LocationCardStrings.sendFailed
+        case .success(let body):
+            let memberRows = makeInfoState().members
+            let memberIds = memberRows.map { $0.userId }
+            let selfId = memberRows.first(where: { $0.isSelf })?.userId
+                ?? (AppState.currentUserIdSnapshot ?? "u-self")
+            let clientMsgId = UUID().uuidString
+            GroupMessageStore.shared.append(
+                groupHex: groupHex,
+                GroupMessageStore.Stored(
+                    id: clientMsgId, serverMessageId: nil, senderId: selfId, mine: true,
+                    text: LocationLabels.text(.pin), ts: Date(), locationBody: body))
+            LocationTelemetry.pinSent()
+            Task {
+                await sendGroupOverWire(plaintext: body, memberIds: memberIds, selfId: selfId, clientMsgId: clientMsgId)
+            }
+            return nil
+        }
+    }
+
     /// W-GRPOUTBOX — manual retry for a row `GroupChatScreen.deliveryStatus`
     /// marked `.failed` (see `GroupMessageStore.Stored.sendFailed`'s kdoc).
     /// Re-runs the exact same send path with the SAME `clientMsgId`, so a
@@ -813,7 +865,8 @@ struct GroupChatScreen: View {
         GroupMessageStore.shared.clearSendFailed(groupHex: groupHex, clientMsgId: clientMsgId)
         Task {
             await sendGroupOverWire(
-                plaintext: row.text,
+                // A pin goes again as the body it was built with; the row's text is only its label.
+                plaintext: row.locationBody ?? row.text,
                 memberIds: memberIds,
                 selfId: selfId,
                 clientMsgId: clientMsgId)
@@ -1173,7 +1226,10 @@ struct GroupMessageBubble: View {
 
     @ViewBuilder
     private var messageBody: some View {
-        if message.fileV2 {
+        if let locationBody = message.locationBody {
+            // A pin (WIRE_SPEC 14): drawn as a card, never as the text it is made of.
+            GroupLocationBubbleContent(locationBody: locationBody, mine: message.mine, timeText: message.timestamp)
+        } else if message.fileV2 {
             fileV2Bubble
         } else {
             legacyMessageBody

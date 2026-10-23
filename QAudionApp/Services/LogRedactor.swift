@@ -132,6 +132,8 @@ enum LogRedactor {
 
     static func redact(_ line: String) -> String {
         var working: String = LogRedactor.scrubKeyMaterial(line)
+        // WIRE_SPEC 14.10: a position, a geo: URI, a map link, a share id or key that reaches a log through another code path.
+        working = LocationLogScrub.scrub(working, placeholder: redactPlaceholder)
         working = LogRedactor.maskIpAddresses(working)
         for rx in redactRegexes {
             let full = NSRange(working.startIndex..<working.endIndex, in: working)
@@ -317,6 +319,8 @@ enum LogRedactor {
     static func redactStructuredStashed(_ line: String) -> (text: String, stash: [String]) {
         // --- 0. W-KEYSCRUB: key bytes first, before anything can be stashed or restored ---
         var work: String = LogRedactor.scrubKeyMaterial(line)
+        // WIRE_SPEC 14.10: the coordinate rule, before anything can be stashed or restored.
+        work = LocationLogScrub.scrub(work, placeholder: redactPlaceholder)
         // --- 0b. I2: mask IP addresses/ports before anything else touches the line ---
         work = LogRedactor.maskIpAddresses(work)
         var stash: [String] = []

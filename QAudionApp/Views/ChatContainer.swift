@@ -374,22 +374,27 @@ final class ChatContainer: ObservableObject {
     /// The row, the preview and the send of an outbound text, whatever its body: the typed text, or the object of a reply. `body` is
     /// the plaintext of the message (the row keeps it, the outbox re-seals it, the wire carries it); `preview` is what the conversation
     /// list shows (the typed text, never the object). This is the former tail of `sendMessage()`, unchanged except for these two names.
-    private func dispatchOutboundText(body: String, preview: String, clearsComposer: Bool) {
+    @discardableResult
+    private func dispatchOutboundText(body: String, preview: String, clearsComposer: Bool, messageId: UUID? = nil) -> UUID {
         let text = body
         // W114: soft haptic tap so the user feels the send fire.
         HapticFeedback.messageSent()
-        let outboundId = UUID()
+        let outboundId = messageId ?? UUID()
+        // A location message (WIRE_SPEC 14): never view-once; a live start is exempt from the timer of the conversation while the share
+        // runs (the row follows the timer from the moment the share ends) and never goes over the BLE mesh (it needs the server).
+        let isLocationBody: Bool = LocationCodec.hasLocationPrefix(body)
+        let isLiveStartBody: Bool = isLocationBody && LocationCodec.isLiveBody(Data(body.utf8))
         // W441: derive expiresAt from the conversation's ephemeral timer.
         // nil = no expiry (disabled or timer is 0).
         let sentNow = Date()
         let ephSecs = viewModel.conversation.ephemeralTimerSeconds
-        let ephExpiry: Date? = ephSecs.flatMap { s in
+        let ephExpiry: Date? = isLiveStartBody ? nil : ephSecs.flatMap { s in
             s > 0 ? sentNow.addingTimeInterval(Double(s)) : nil
         }
         // View-once is a per-conversation timer value of -1 (Android parity).
         // When the conversation timer is -1, every outgoing message is view-once.
         let convTimerSec = viewModel.conversation.ephemeralTimerSeconds ?? 0
-        let isViewOnce = convTimerSec == -1
+        let isViewOnce = convTimerSec == -1 && !isLocationBody
         let msg = Message(
             id: outboundId,
             conversationId: conversationId,
@@ -429,13 +434,14 @@ final class ChatContainer: ObservableObject {
         // route THIS message over the mesh transport instead of the normal
         // WS pipeline below. Mirrors the Android sibling's
         // `SendMessageUseCase` mesh pre-flight branch.
-        if let sender = sendService,
+        if !isLiveStartBody,
+           let sender = sendService,
            let target = resolveMeshRoute() {
             sendViaMesh(
                 sender: sender, target: target,
                 messageId: msg.id, wireText: wireText
             )
-            return
+            return outboundId
         }
 
         // W71: real WS send pipeline. The MessageCrypto wire format
@@ -512,6 +518,42 @@ final class ChatContainer: ObservableObject {
                     self.refreshFromStore()
                 }
             }
+        }
+        return outboundId
+    }
+
+    // MARK: - Location sharing (WIRE_SPEC 14)
+
+    /// A pin the user chose to send, as an ordinary chat message (its own client message id, receipts, outbox and retries). Returns `nil`
+    /// on success, otherwise the sentence that says why not.
+    func sendLocationPin(_ reading: LocationReading) -> String? {
+        guard LocationShareCenter.isFeatureEnabled else { return LocationCardStrings.notAvailable }
+        switch LocationShareCenter.shared.buildPin(reading: reading) {
+        case .success(let body):
+            dispatchOutboundText(body: body, preview: LocationLabels.text(.pin), clearsComposer: false)
+            LocationTelemetry.pinSent()
+            return nil
+        case .failure(let refusal):
+            return refusal == .age ? LocationCardStrings.fixTooOld : LocationCardStrings.sendFailed
+        }
+    }
+
+    /// A live share the user just confirmed in a 1:1 chat. The start is an ordinary chat message sent through the durable path; the
+    /// share (key, counter, ticks) belongs to `LocationShareCenter`. Returns `nil` on success, otherwise the sentence that says why not.
+    func startLiveLocation(_ reading: LocationReading, duration: Int64) -> String? {
+        guard viewModel.conversation.kind == .oneToOne else { return LocationCardStrings.notAvailable }
+        let result = LocationShareCenter.shared.startLive(
+            reading: reading, duration: duration, peerUserId: peerUserId, conversationId: conversationId,
+            dispatch: { body, preview, messageId in
+                self.dispatchOutboundText(body: body, preview: preview, clearsComposer: false, messageId: messageId)
+            })
+        switch result {
+        case .success:
+            return nil
+        case .failure(let failure):
+            if case .refused(let refusal) = failure, refusal == .age { return LocationCardStrings.fixTooOld }
+            if case .disabled = failure { return LocationCardStrings.notAvailable }
+            return LocationCardStrings.startNotice
         }
     }
 
@@ -768,6 +810,8 @@ final class ChatContainer: ObservableObject {
         // row so the chat stays in the list. See `deleteConversation` for
         // the full-conversation counterpart.
         store.deleteMessages(conversationId: conversationId)
+        // The shares of this conversation end and their keys, positions and cards go (WIRE_SPEC 14.6.6).
+        LocationShareCenter.shared.conversationCleared(peerUserId: peerUserId)
         // W137: hard-clear nukes the composer draft too — any unsent
         // text the user typed prior to wiping the chat is intentional
         // collateral; we don't want a stray draft surviving a "delete
@@ -872,6 +916,8 @@ final class ChatContainer: ObservableObject {
         }
         // 1. Apply locally first so the bubble flips immediately.
         store.applyDeleteByClientMsgId(cmid)
+        // A live share of one's own ends with its start row (WIRE_SPEC 14.6.1 rule 7).
+        LocationShareCenter.shared.ownRowDeletedForEveryone(clientMsgId: cmid)
         refreshFromStore()
         // 2. Ship envelope.
         let envelope = ChatControlEnvelope.delete(
@@ -898,6 +944,8 @@ final class ChatContainer: ObservableObject {
         }
         // Apply tombstone locally — no peer envelope.
         store.applyDeleteByClientMsgId(cmid)
+        // A location row: the share it started ends and its card goes; the two ids stay for the duplicate test (WIRE_SPEC 14.6.2).
+        LocationShareCenter.shared.rowDeletedForMe(clientMsgId: cmid, peerUserId: peerUserId)
         refreshFromStore()
     }
 
@@ -917,6 +965,11 @@ final class ChatContainer: ObservableObject {
         }
         // A file message is not text (it cannot be edited), and an edit cannot turn text into one (WIRE_SPEC 12.7.1, 13.5).
         guard FileV2ChatBody.classify(text: message.plaintext) == .text else {
+            transientNotice = Self.editRefusedNotice()
+            return false
+        }
+        // A pin and a live share never change after they were sent (WIRE_SPEC 14.3.6): no edit of a location row.
+        guard !LocationCodec.hasLocationPrefix(message.plaintext) else {
             transientNotice = Self.editRefusedNotice()
             return false
         }
@@ -1148,6 +1201,8 @@ final class ChatContainer: ObservableObject {
     /// è una test fixture in `simulateFailure(messageId:reason:)` finché
     /// la real send pipeline non è wired.
     func markFailed(messageId: UUID, reason: SendFailureReason) {
+        // The start of a live share that could not be sent: the share ends and the row, which holds the key, goes.
+        LocationShareCenter.shared.startFailed(clientMsgId: messageId.uuidString)
         store.updateMessageStatus(
             id: messageId, conversationId: conversationId,
             newStatus: .failed
@@ -1210,6 +1265,16 @@ final class ChatContainer: ObservableObject {
             }
             return
         }
+        // A pin (WIRE_SPEC 14): the row holds the canonical body. It is sent again as it is, and the old row is removed. A live start is
+        // never sent again as a new message (its share ended when the send failed): its row is only removed.
+        if LocationCodec.hasLocationPrefix(msg.plaintext) {
+            store.removeMessage(id: id, conversationId: conversationId)
+            refreshFromStore()
+            if LocationRowForm.pin(of: msg.plaintext) != nil {
+                dispatchOutboundText(body: msg.plaintext, preview: LocationLabels.text(.pin), clearsComposer: false)
+            }
+            return
+        }
         // A reply (WIRE_SPEC 13): the row holds the canonical object. It is sent again as it is (the quote is not rebuilt, the composer
         // is left alone), and the old row is removed so there are not two copies.
         if case .reply(let failedReply) = MessageReplyCodec.recognize(msg.plaintext) {
@@ -1260,6 +1325,11 @@ final class ChatContainer: ObservableObject {
         // Find or bootstrap the target conversation's container and send.
         // We send directly via the send service to keep the implementation
         // self-contained — no need to spin up a full ChatContainer.
+        // A pin and a live share cannot be forwarded (WIRE_SPEC 14.3.6): nothing of them leaves the conversation but by the user's own share.
+        guard !LocationCodec.hasLocationPrefix(message.plaintext) else {
+            transientNotice = LocationCardStrings.forwardRefused
+            return
+        }
         // A reply is forwarded as its `b`, a new ordinary text: the quote is not forwarded (WIRE_SPEC 13.7).
         let text = MessageReplyCodec.shownText(ofBody: message.plaintext)
         // A forwarded file is a NEW file (WIRE_SPEC 12.2: a key is never reused), which this version does not do: never forward the

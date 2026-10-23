@@ -155,6 +155,25 @@ enum FileV2PlaceholderText {
                 return String(localized: "file_v2.kind.video", defaultValue: "🎬 Video", comment: "One-line label of a video message in the conversation list and in notifications.")
             }
         }
+        // A rejected location body (WIRE_SPEC 14.3.3) becomes one of these two rows, never its content.
+        LocationBodyPlaceholder.text = { placeholder in
+            switch placeholder {
+            case .unsupportedVersion:
+                return String(localized: "location.placeholder.unsupported", defaultValue: "📍 Posizione non supportata: aggiorna l'app per aprirla", comment: "Placeholder row for a location message of a newer version this app cannot read.")
+            case .unavailable:
+                return String(localized: "location.placeholder.unavailable", defaultValue: "📍 Posizione non disponibile", comment: "Placeholder row for a location message that was rejected: its content is never shown.")
+            }
+        }
+        // The fixed labels that stand for a location message wherever its content must not appear (WIRE_SPEC 14.3.6): the list
+        // preview, a notification, a share-sheet cache, an export, a quote. Never a coordinate.
+        LocationLabels.text = { label in
+            switch label {
+            case .pin:
+                return String(localized: "reply.kind.location", defaultValue: "📍 Posizione", comment: "Quote block of a reply to a shared location (a pin).")
+            case .live:
+                return String(localized: "reply.kind.location_live", defaultValue: "📍 Posizione in tempo reale", comment: "Quote block of a reply to a live location share.")
+            }
+        }
         FileV2ChatBody.placeholderText = { placeholder in
             switch placeholder {
             case .unsupportedVersion:

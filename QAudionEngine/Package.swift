@@ -278,7 +278,8 @@ let package = Package(
             // ML-KEM-1024 deterministic-seed KAT calls
             // OQS_KEM_ml_kem_1024_keypair_derand directly (no generic-handle
             // equivalent exists in liboqs; it's algorithm-specific).
-            dependencies: ["QAudionEngine", "CLiboqs"],
+            // GRDB: LocationShareStoreTests builds the schema of the live-share tables on an in-memory database queue.
+            dependencies: ["QAudionEngine", "CLiboqs", .product(name: "GRDB", package: "GRDB.swift")],
             path: "Tests/QAudionEngineTests",
             resources: [
                 // 2026-08-02: was "../Resources/cross_platform_vectors.json".
@@ -379,6 +380,11 @@ let package = Package(
                 // MessageReplyKatTests pins its SHA-256 and .gitattributes marks it -text so a CRLF checkout cannot change it.
                 // Re-copy it, never edit it.
                 .copy("Resources/kat/reply-kat.json"),
+                // Location messages (WIRE_SPEC section 14): the known-answer vectors, a BYTE-FOR-BYTE copy of bcrypto-server
+                // test/kat/location_v1/location-kat.json (SHA-256 72ac8c3f6987c252f2722b9b50c836e9218a3588748bbd9220e67b560b43d600,
+                // generated there by tools/katgen/location, standard library only). LocationKatTests pins that SHA-256 and
+                // .gitattributes marks the file -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
+                .copy("Resources/kat/location-kat.json"),
                 // NFC pairing v2 (docs/security/NFC_PAIRING_V2.md): the known-answer vectors, a BYTE-FOR-BYTE copy of
                 // scripts/kat/nfc-pairing-kat.json (written by scripts/kat/gen_nfc_pairing_kat.py, an independent
                 // implementation; the Android app runs the same file). NfcPairingV2KatTests pins its SHA-256 and

@@ -81,6 +81,19 @@
 	<string>Q-Audion can use your contacts so you can import them into your encrypted address book, and to automatically show the name and photo of a phone contact when they call you or you call them. To find contacts already on Q-Audion, phone numbers are hashed on your device before matching; names and photos never leave your phone.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Q-Audion saves chat images you choose to keep into your Photos library.</string>
+	<!-- Location sharing in chat (WIRE_SPEC 14, docs/LOCATION_SHARING.md 1.8): When In Use only. The app never asks for Always
+	     (no NSLocationAlwaysAndWhenInUseUsageDescription) and reads the position only when the user taps to send it or to start a
+	     live share. A live share keeps the location session running in the background (UIBackgroundModes `location`, with the
+	     system indicator). The text is localised in InfoPlist.xcstrings. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Q-Audion uses your location only when you choose to send it in a chat: as a single position, or as a live share for the time you pick. The position is end-to-end encrypted and only the contact you send it to can read it. While a live share runs, Q-Audion keeps using your location in the background and iOS shows its location indicator; you can stop at any time.</string>
+	<!-- The one-off request of the exact position when only approximate location is granted
+	     (CLLocationManager.requestTemporaryFullAccuracyAuthorization, purpose key LocationFullAccuracyPurpose). -->
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>LocationFullAccuracyPurpose</key>
+		<string>Q-Audion asks for your exact position once, to send it precisely in the chat you chose.</string>
+	</dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Q-Audion uses Face ID to unlock the app when the app lock feature is enabled.</string>
 	<!-- NSBluetoothPeripheralUsageDescription (deprecated since iOS 13) is
@@ -140,6 +153,9 @@
 		<string>fetch</string>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+		<!-- A live location share keeps sending while the screen is off (When In Use, with the system location indicator). The
+		     background session is enabled only while a share runs (LocationService.beginLiveSampling). -->
+		<string>location</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>

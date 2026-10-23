@@ -236,6 +236,14 @@ final class ChatOutboxDrain {
                 failed += 1
                 continue
             }
+            // The start of a live share (WIRE_SPEC 14.6.1 rule 2): from here its bytes may leave, so a stop that comes while the send is in
+            // flight is held for the echo; and a start that the user stopped while this pass was preparing it is gone (withdrawn, row and
+            // entry removed) and is not sent. For any other row this does nothing and answers `true`.
+            let isLocationRow: Bool = LocationCodec.hasLocationPrefix(row.plaintext)
+            if isLocationRow, !LocationShareCenter.shared.startBeingSent(clientMsgId: clientMsgId) {
+                outbox.remove(id: clientMsgId)
+                continue
+            }
             do {
                 try await sendWire(peerUserId, blob, clientMsgId)
                 // Same optimistic semantics as the live path
@@ -249,6 +257,8 @@ final class ChatOutboxDrain {
                 postRefresh(peerUserId: peerUserId, extra: nil)
                 sent += 1
             } catch {
+                // The hand-over failed before any byte was written: the start of a live share did not leave.
+                if isLocationRow { LocationShareCenter.shared.startNotSent(clientMsgId: clientMsgId) }
                 let attempts = current.attempts + 1
                 let nextAttemptAtMs = Self.nowMs() + OutboxRetryPolicy.backoffMs(afterFailedAttempts: attempts)
                 outbox.recordAttempt(id: clientMsgId, attempts: attempts, nextAttemptAtMs: nextAttemptAtMs)
@@ -283,6 +293,10 @@ final class ChatOutboxDrain {
     // MARK: - Helpers
 
     private func fail(row: Message, peerUserId: String, reasonCode: String, attempts: Int) {
+        // The start of a live share that could not be sent: the share ends and the row, which holds the key, goes.
+        if let failedClientMsgId = row.clientMsgId {
+            LocationShareCenter.shared.startFailed(clientMsgId: failedClientMsgId)
+        }
         store.updateMessageStatus(id: row.id, conversationId: row.conversationId, newStatus: .failed)
         RTLog.warn("chat", "outbox giveup=1 attempts=\(attempts) age=\(Int(Date().timeIntervalSince(row.sentAt)))")
         postRefresh(peerUserId: peerUserId, extra: [
