@@ -72,6 +72,13 @@ LINES = [
     # went up, and the tap on "use the phone".
     "audioroute nb_banner shown=1 sr=8000",
     "audioroute nb_switch tap=1",
+    # the hands-free band hint (EncoderBandHint.logLine): a cap taken, widened, and given back
+    "audioroute band=1 old=0 sr=8000",
+    "audioroute band=2 old=1 sr=16000",
+    "audioroute band=0 old=2 sr=16000",
+    "audioroute band=0 old=1",
+    # the same hint when the WebRTC build has no native setter (EncoderBandHint.unsupportedLine), once per process
+    "audioroute nosetter=1",
 ]
 
 failures = []

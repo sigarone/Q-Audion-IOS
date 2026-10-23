@@ -106,6 +106,12 @@ The call screens (1:1 audio, 1:1 video, group) show a small banner when the call
 
 The route change that follows a switch is an ordinary `audioroute why=... in=1 profile=0` line, so the effect of the tap is visible in the next line.
 
+### Band hint line (only with the flag `calls.bt_hfp_band_hint` on, default off)
+
+    audioroute band=1 old=0 sr=8000
+
+Tag `call`, the family word `audioroute` at the start of the body, like the route line. Written when the ceiling on the band the native Opus encoder codes changes (a 1:1 call whose microphone is the Bluetooth hands-free link, and again when the call ends or the route moves away). `band` is the ceiling now and `old` the one before: 0 none, 1 narrowband (8000 Hz playback rate), 2 wideband (16000 Hz). `sr` is the session sample rate the decision rested on (absent at call end). On a WebRTC build without the native setter nothing changes and one fixed line, `audioroute nosetter=1`, is written, once per process, the first time a ceiling was wanted. Whether the bitstream followed is on the native side: a `Q-AUDION opus-enc tx_mode=.. tx_bw=..` line appears once per change while a ceiling is active (mode 0 SILK, 1 hybrid, 2 CELT; band 0 narrowband .. 4 fullband).
+
 ## `call.audio.diag` telemetry record
 
 ### Why it was missing on a native call, and what changed
