@@ -34,6 +34,7 @@ auth tag fails.
 | Per-contact message PSK derivation | callId UTF-8 | `q-audion-msg-psk-v1` |
 | Message AEAD key | random 32 B | `q-audion-msg-key` |
 | File key derivation (v2) | `file_id` (16 B) | `qaudion-file-v2-enc` / `qaudion-file-v2-nonce` / `qaudion-file-v2-commit` (§12) |
+| Live location frame key (§14.6.3) | share id `sid` (16 B) | `qa-loc v1 frame key` (the frame aad begins with the label `qa-loc v1 frame`; a later frame version takes labels of its own) |
 | Forward-secrecy frame derivation | (per-session) | `q-audion-fs-frame` |
 | ZK auth proof key | salt | `q-audion-zk-auth` |
 | Password blinding | salt | `q-audion-pw-blind` |
@@ -1658,6 +1659,11 @@ A new version of a reply (the `qa_reply` member of §13) is a binary-incompatibl
 per-device announcement exists, a sender MUST emit version 1 only; a receiver that meets another version follows
 §13.3 (`unsupported_version`, displayed as ordinary text).
 
+A new version of a location message (the `qa_loc` member of §14) or of the live frame (`FRAME_VERSION`, §14.6.3) is a
+binary-incompatible change too. Until the same per-device announcement exists, a sender MUST emit version 1 only; a
+receiver that meets another body version follows §14.3.2 (`unsupported_version`, one placeholder, never displayed as
+text); a frame with another first byte is dropped.
+
 ---
 
 ## 7. Earbud key-import GATT family (0xc0–0xca)
@@ -3017,7 +3023,7 @@ voice note as a reply is not defined.
 |---|---|
 | `qa_reply` | required; the integer 1 (§12.7.3 plain decimal form) |
 | `to` | required string; the server message id of the quoted message, exactly 36 characters matching `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$` (lowercase hex, hyphens at 8, 13, 18 and 23, no version check), written exactly as the server returned it. 1:1: the `message_id` of `msg_sent` (sender) and of `msg_receive` / `msg_pending_sync` (recipient). Group: the `server_message_id` of the group message. The server mints both with `uuid.NewString()` |
-| `k` | required string; the kind of the quoted message: `text`, `file`, `image`, `video` or `voice` (`avatar` and `thumb` are not chat messages and are never quoted) |
+| `k` | required string; the kind of the quoted message: `text`, `file`, `image`, `video`, `voice` or `location` (`avatar` and `thumb` are not chat messages and are never quoted; `location` is a pin or a live start, §14) |
 | `q` | required string, possibly empty; the excerpt of the quoted message (§13.4) |
 | `b` | required string; the reply text, written by the user |
 
@@ -3063,7 +3069,7 @@ Validation of version 1:
    denotes a lone surrogate; unknown members ignored at every level whatever their type, counted for the limit, obeying
    the rules, their numbers never converted.
 2. The five members of §13.2 are present with their types: `qa_reply` the integer 1, `to` a string matching the pattern,
-   `k` a string among the five kinds (compared as bytes: `Text` is not `text`), `q` a string, `b` a string. `null` is a
+   `k` a string among the six kinds (compared as bytes: `Text` is not `text`), `q` a string, `b` a string. `null` is a
    value of the wrong type for every member. The members may appear in any order after the prefix.
 
 A failure of either step is `bad_reply`. The content of `q` and `b` is NEVER a reason to reject: a `q` longer than
@@ -3123,6 +3129,7 @@ The source of `q` (builder):
 | a body displayed through the fallback of §13.3 | `text` | `EXCERPT` of that body |
 | a file, image or video (descriptor `kind` `file`, `image`, `video`) | the same | `EXCERPT` of its `nm` as received (§12.7.4); empty when `nm` is absent |
 | a voice note (descriptor `kind` `voice`) | `voice` | empty |
+| a location, a pin or a live start (§14) | `location` | empty, always: a position is never copied into a quote |
 | any message with an ephemeral lifetime: a timer or view-once (§13.7) | its kind | empty |
 
 ### 13.5 Builder (MUST)
@@ -3142,19 +3149,21 @@ A builder takes `to`, `k`, the source of `q` (or the fact that it is empty) and 
 The builder refuses to send, and the user interface keeps the draft and tells the user why, when:
 
 - `b` is empty;
-- `b` begins with `{"qa_file":`, `{"qa_file_src":`, `{"qa_file_cancel":` or `{"qa_reply":`. This is the entry-point rule
-  of §12.7.1, which now also covers `{"qa_reply":`: user text that begins with any of these four prefixes is refused as
-  an ordinary message and as the `b` of a reply, so that no user text can become a file message or a reply;
+- `b` begins with `{"qa_file":`, `{"qa_file_src":`, `{"qa_file_cancel":`, `{"qa_reply":` or `{"qa_loc":`. This is the
+  entry-point rule of §12.7.1, which now also covers `{"qa_reply":` and, by §14.3.6, `{"qa_loc":`: user text that
+  begins with any of these five prefixes is refused as an ordinary message and as the `b` of a reply, so that no user
+  text can become a file message, a reply or a location message;
 - the canonical text (after the U+FFFD replacement, with its escapes) would reach 8192 bytes. The builder never
   shortens `b` and never drops or shortens `q` to make it fit; the composer SHOULD show the remaining room as the limit
   approaches;
-- `to` does not match the pattern, or `k` is not one of the five kinds.
+- `to` does not match the pattern, or `k` is not one of the six kinds.
 
 Which messages can be quoted. Only a message that has a server message id in this conversation: a message of one's own
 whose `msg_sent` (1:1) or `group_msg_receive` echo (group) has arrived, or a received message. The reply action is disabled for a message of
 one's own that has no id yet (still in the outbox), a message that travelled only over the BLE mesh (§9.5: it has no
-server id), the placeholder of a rejected file message (§12.7.1: its content is never quoted), call and system rows,
-avatars and thumbnails.
+server id), the placeholder of a rejected file message (§12.7.1: its content is never quoted) or of a rejected location
+message (§14.3.3), call and system rows, avatars and thumbnails. A location row (a pin or a live start) can be quoted
+like any message with a server id.
 
 ### 13.6 Reception and display (MUST)
 
@@ -3165,12 +3174,14 @@ avatars and thumbnails.
    - Found, and the row still exists: the block is a link that opens the quoted message; the author and the excerpt
      come from the LOCAL row, with the rules of §13.4 (its kind, `EXCERPT` of its text, of its `b` if it is a reply, or of
      its `nm`; no excerpt for a voice note, a view-once message or the placeholder of a rejected file message, whose
-     content is never quoted, §12.7.1), and `q` is ignored. A sender therefore
+     content is never quoted, §12.7.1; a location row has no excerpt either: the block shows the fixed label of the row
+     kind, for a pin and for a live start, localised, never a position), and `q` is ignored. A sender therefore
      cannot make the quote of a message the receiver holds say something else.
    - Found, but the row is gone (expired, deleted, a tombstone): the block is not a link and shows no author and no text,
      only that the message is no longer available. `q` is NOT shown, so nothing of an expired message comes back through
      a reply.
-   - Not found: the block is not a link and shows no author, and its text is `EXCERPT(q)`, or nothing when `k` is `voice`.
+   - Not found: the block is not a link and shows no author, and its text is `EXCERPT(q)`, or nothing when `k` is `voice`
+     or `location` (for `location` the block shows the fixed label of a pin instead, and `q` is not shown).
      The receiver MUST NOT ask the server or another device for the quoted message: the request would tell the server
      which message is quoted.
    The block is derived when it is displayed; the reply row keeps the body as received and never stores a copy of the
@@ -3210,8 +3221,9 @@ avatars and thumbnails.
 `test/kat/reply_v1/reply-kat.json` (LF line endings, `-text` in `.gitattributes`, SHA-256 pinned by
 `tools/katgen/reply` and by each client). Sections:
 
-- `constants`: the numbers of §13.2, the prefix, the id pattern, the kinds, the member order, the four recognised prefixes
-  of §13.5 and the REMOVED and SPACED sets of §13.4 as inclusive ranges.
+- `constants`: the numbers of §13.2, the prefix, the id pattern, the kinds, the member order, the five recognised prefixes
+  of §13.5 and §14.3.6, the resolution labels (`location`, `location_live`) and the REMOVED and SPACED sets of §13.4 as
+  inclusive ranges.
 - `recognition` and `rules`: a chat BODY goes through the receiver of §13.3 end to end. `expect` is `text` (not a reply:
   handled as before), `reply` (valid; `normalized` gives `to`, `k`, `q`, `b` as decoded and `q_display`, the text the
   block shows when `to` is not found: `EXCERPT(q)`, empty for a voice note) or `fallback` (recognised and rejected,
@@ -3225,9 +3237,10 @@ avatars and thumbnails.
   member absent from the input is absent for the builder) and either `expected`, the exact text the builder MUST write
   (also accepted by the receiver), or `refuse`, the reason it MUST refuse: `b.empty`, `b.prefix`, `size`, `to` or `k`.
 - `resolution_cases`: `rows`, the local rows that matter (`id`, `conversation` `same` or `other`, `kind`, `text` (its text,
-  its `b`, or its `nm`), `author`, `view_once`, `gone`), a valid reply in `serialized`, and the block a receiver shows:
-  `source` (`local`, `q` or `unavailable`), `link` (the id the block opens, or `null`), `author` (or `null`) and
-  `excerpt`.
+  its `b`, or its `nm`), `author`, `view_once`, `live` (a location row that is a live start), `gone`), a valid reply in
+  `serialized`, and the block a receiver shows: `source` (`local`, `q` or `unavailable`), `link` (the id the block opens,
+  or `null`), `author` (or `null`), `excerpt` and, for a location, `label` (`location` for a pin or an unknown row,
+  `location_live` for a live start; the fixed label the application localises).
 - `fallback_codes`: `bad_reply`, `unsupported_version`.
 
 Together they pin recognition and versions, every member and type, the JSON profile (size at exactly 8191, 8192 and
@@ -3236,7 +3249,678 @@ scalars and with control, bidirectional and invisible characters, the builder's 
 the resolution of `to`. The behaviours that depend on the state of a platform (ephemeral timers, Enigma, notifications,
 accessibility, forwarding) are requirements of the platform behaviour tests.
 
-Latest: 2026-10-08 (new §13 message replies: the reference to the quoted message travels inside the end-to-end
+## 14. Location messages (instant position and live share) — cross-platform contract
+
+Added 2026-10-23. The known-answer vectors are `test/kat/location_v1/location-kat.json` in the server repository
+(generated by `tools/katgen/location`, standard library only), copied byte for byte into each client repository, where
+each test pins the SHA-256 of the file. `MUST`, `MUST NOT`, `SHOULD` and `MAY` have their RFC 2119 meaning.
+
+A user can send a position in a chat: an instant position (a pin) or a live share that follows the user for a chosen
+time, from 60 seconds up to 24 hours. Coordinates, accuracy, duration and the key of a share travel only inside
+end-to-end encrypted bodies. This is a HARD SWITCH (§6): one format on every platform, no earlier format is kept.
+
+| Unit | Content | Channel | Stored by the server | Push |
+|---|---|---|---|---|
+| Pin (instant position) | `{"qa_loc":1,"m":"pin",...}` | chat body (1:1); group payload 0xE4 `msg_type = 0`; BLE mesh `b` | as any message of its channel | none added |
+| Live start | `{"qa_loc":1,"m":"live",...}` with a fresh 32-byte share key | chat body, 1:1 only | as any message of its channel | none added |
+| Live frame | 37-byte AES-256-GCM frame sealed with the share key | WebSocket frame `eph_relay` (§14.8) | never | never |
+| Stop | `{"qa_ctl":1,"t":"loc_stop",...}` | CONTROL lane (first ciphertext byte 0xE6) | as any CONTROL message | none (the CONTROL lane never wakes a device) |
+
+- The pin and the live start are user content, recognised by a byte prefix exactly like `{"qa_reply":` and
+  `{"qa_file":`. They add no message type and no server behaviour.
+- Live frames do not use `msg_send`, the CHAT lane or the CONTROL lane, and consume none of the pairwise message
+  ratchet. Each share has its own key; frames are counter-nonce AEAD; the server relays them blind, the way it relays
+  `msg_typing`: no storage, no pending queue, no push. A missed frame is superseded by the next one.
+- This section adds no push of any kind. A pin, a live start and a stop are delivered by the path and with the wake
+  behaviour that every other message of their lane already has on the receiving platform; a frame is delivered only to
+  a connected socket and is lost for a device that is not connected.
+- The cadence of the frames is fixed (§14.6.1), so that the relay learns nothing about movement. How often a device
+  asks the operating system for a position is a local matter and is not part of this contract.
+- Every live share ends on the receiver at a sealed end time even if nothing more arrives (§14.6.2).
+
+### 14.1 Constants
+
+| Constant | Value | Notes |
+|---|---|---|
+| `VERSION` | 1 | |
+| `PREFIX` | `{"qa_loc":` | compact form up to and including the colon |
+| `LOC_MAX_BYTES` | 8192, exclusive | the limit of §12.7 and §13; real bodies are under 200 bytes |
+| `LOC_MAX_DEPTH` | 4 | JSON profile §12.7.2 rule 4 |
+| `LAT_E7_MIN`, `LAT_E7_MAX` | -900 000 000, 900 000 000 | degrees × 10^7, WGS 84 |
+| `LON_E7_MIN`, `LON_E7_MAX` | -1 800 000 000, 1 800 000 000 | both ends accepted |
+| `ACC_MIN`, `ACC_MAX` | 1, 65 535 | horizontal accuracy radius, metres |
+| `AGE_MAX` | 3 600 | seconds, receiver bound |
+| `BUILD_MAX_FIX_AGE` | 120 | seconds, builder bound for a pin and a live start |
+| `DU_MIN`, `DU_MAX` | 60, 86 400 | live duration in seconds; 24 hours is the hard maximum |
+| `DU_PRESETS` | 900, 3 600, 28 800, 86 400 | the durations a user interface offers (15 minutes, 1 hour, 8 hours, 24 hours); receivers accept every value of `DU_MIN`..`DU_MAX` |
+| `SKEW` | 600 | seconds of sender clock skew tolerated when computing the end of a live share |
+| `TX_INTERVAL` | 30 | seconds between two frames of a share |
+| `TX_INTERVAL_LOW_POWER` | 60 | seconds between two frames while the platform is in a low-power mode |
+| `TX_MIN_GAP` | 10 | seconds, the smallest interval between two position frames; a final frame is exempt |
+| `IV_MIN`, `IV_MAX` | 10, 600 | seconds, interval announced in a frame, accepted by a receiver |
+| `FRAME_VERSION` | 0x01 | first byte of a live frame |
+| `FRAME_LEN` | 37 | bytes: 1 version + 4 counter + 16 ciphertext + 16 tag |
+| `FRAME_PT_LEN` | 16 | bytes of frame plaintext |
+| `FRAME_AGE_MAX` | 65 535 | seconds, the largest `age` of a frame (a 16-bit field); an older fix is clamped to it |
+| `STALE_FLOOR`, `STALE_FACTOR` | 120, 3 | see §14.6.5 |
+| `MAX_CANDIDATES` | 2 | live shares tried per inbound frame, §14.6.4 |
+| `TOMBSTONE_KEEP` | 87 000 | seconds (`DU_MAX` + `SKEW`), counted from the arrival of the control: a receiver remembers a stop or delete whose start it has not seen for exactly this long and forgets it at that instant, §14.7 |
+| `TOMBSTONE_MAX` | 16 | targets a receiver remembers per 1:1 conversation: when one more arrives the oldest is forgotten, §14.7 |
+| `STOP_TARGET_MAX` | 128 | bytes of the `target` of a stop |
+| `EPH_MAX_B64` | 256 | bytes, server cap on `eph_relay.encrypted_payload` |
+| `EPH_PAIR_RATE`, `EPH_PAIR_BURST` | 0.2 per second, 4 | server limiter per (sender, recipient), §14.8 |
+| Labels | `qa-loc v1 frame key`, `qa-loc v1 frame` | ASCII, §14.6.3; a frame version other than `FRAME_VERSION` takes labels of its own |
+
+### 14.2 Where a location message travels
+
+A pin is carried exactly where chat text travels: in a 1:1 chat as the body of an ordinary chat message sealed by the
+existing message channel; in a group inside the group payload 0xE4 with `msg_type = 0` (the receiver MUST also accept
+`msg_type = 1`, as in §13.1); over the BLE mesh as the `b` of a `MeshChatMessage` (§9). It has its own client message
+id, server message id, receipts, outbox and retries like any message (§13.7 applies unchanged).
+
+A live start is carried only as the body of a 1:1 chat message in version 1. A sender MUST NOT send a live start in a
+group or over the BLE mesh. A receiver that meets a valid live start in a group payload or in a mesh message rejects it
+with `unsupported_context` (§14.3.4).
+
+Live frames travel only in the WebSocket frame `eph_relay` (§14.8). Stops travel only as the `qa_ctl` variant
+`loc_stop` on the CONTROL lane (§14.7).
+
+### 14.3 The location body
+
+#### 14.3.1 Format
+
+A pin (example, illustrative only; the vectors are normative):
+
+```
+{"qa_loc":1,"m":"pin","lat":454642110,"lon":91899820,"acc":12,"age":3,"ap":0}
+```
+
+A live start:
+
+```
+{"qa_loc":1,"m":"live","sid":"AAECAwQFBgcICQoLDA0ODw==","k":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=","st":1792756800,"du":3600,"lat":454642110,"lon":91899820,"acc":12,"age":3,"ap":0}
+```
+
+| Member | Mode | Rule |
+|---|---|---|
+| `qa_loc` | both | required; the integer 1 (§12.7.3 plain decimal form) |
+| `m` | both | required string, `pin` or `live`, compared as bytes |
+| `sid` | live | required; canonical base64 (§12.7.3) of exactly 16 bytes; the share id, random per share |
+| `k` | live | required; canonical base64 of exactly 32 bytes; the share key, from a CSPRNG, fresh per share, never reused |
+| `st` | live | required; integer 0..2^53 - 1; the sender's wall clock in unix seconds when the share started |
+| `du` | live | required; integer `DU_MIN`..`DU_MAX`; the duration in seconds |
+| `lat` | both | required; integer `LAT_E7_MIN`..`LAT_E7_MAX`; latitude in degrees × 10^7 |
+| `lon` | both | required; integer `LON_E7_MIN`..`LON_E7_MAX`; longitude in degrees × 10^7 |
+| `acc` | both | required; integer `ACC_MIN`..`ACC_MAX`; horizontal accuracy radius in metres |
+| `age` | both | required; integer 0..`AGE_MAX`; seconds between the fix and the building of the body |
+| `ap` | both | required; integer 0 or 1; 1 when the platform granted approximate location only |
+
+Rules that are deliberate:
+
+- Positions are integers, never JSON fractions, so that no two libraries can disagree on formatting or parsing. A unit
+  of 10^-7 degree is about 1.1 cm, far below any real accuracy, and fits a signed 32-bit integer.
+- Times are relative where possible (`age`, `du`). The only absolute time is `st`, used only to bound the end of a live
+  share when its start message is delivered late (§14.6.2). A pin has no sender timestamp; the receiver shows the
+  receipt time minus `age`.
+- A pin MUST NOT carry `sid`, `k`, `st` or `du`. A pin that has any of them is `bad_location`, so that a key can never
+  ride on a message that the receiver treats as a plain pin.
+- There is no place name, no address, no label and no sender name in the format. Unknown members, among them a name or an
+  address, are ignored and never displayed. Reverse geocoding is a network service of a third party and is out of scope.
+
+#### 14.3.2 Recognition and validation (MUST)
+
+Recognition runs on the body exactly as decrypted, under the first paragraph of §12.7.1: bytes, no decoder that strips
+a byte order mark or substitutes U+FFFD, byte comparisons (Swift `utf8.starts(with:)`).
+
+A body is a location message if and only if its bytes begin with `{"qa_loc":`. The prefix differs from those of
+§12.7.1 and §13.3, so a body is at most one of a file message, a reply and a location message. No leading whitespace is
+skipped and none is allowed inside the prefix: `{ "qa_loc":1`, `{"qa_loc" :1`, `{"QA_LOC":1`, an escaped name and a
+leading byte order mark are not recognised, and neither is `{"qa_locx":`. A body that is not recognised is handled
+exactly as before this section.
+
+The version is read before anything else, exactly as in §12.7.1: the plain integer 1 goes on to validation; another
+plain integer is `unsupported_version` and nothing else is examined (invalid UTF-8 and a length of 8192 bytes or more
+included); anything else (empty, `1.0`, `"1"`, `01`, `1e0`, `+1`, a magnitude above 2^53 - 1) is `bad_location`.
+
+Validation of version 1:
+
+1. The JSON profile of §12.7.2, rules 1 to 6, with `LOC_MAX_BYTES` as the limit of rule 1. Unknown members are ignored
+   at every level whatever their type, counted for the limit and obeying the profile.
+2. `m` is a string equal to `pin` or `live`.
+3. Every member of §14.3.1 that belongs to the mode is present with its type and range. `null` is a value of the wrong
+   type for every member. Integers follow §12.7.3; base64 follows §12.7.3 and decodes to exactly the stated length.
+4. A pin has none of `sid`, `k`, `st`, `du`.
+5. Members may appear in any order after the prefix.
+
+Any failure is `bad_location`. The context rule of §14.3.4 is applied after validation.
+
+#### 14.3.3 Failure handling (MUST)
+
+A recognised body that is rejected is NEVER displayed as text, because it may contain a position and a key. This is the
+rule of a rejected file descriptor (§12.7.1), not the fallback of a rejected reply (§13.3).
+
+- It becomes ONE placeholder row in the conversation. For `unsupported_version` with a version greater than 1 the
+  placeholder tells the user to update the app; for `bad_location` and `unsupported_context` it says that the location
+  could not be shown.
+- Its content is never displayed, quoted, forwarded, notified, read aloud, indexed for search, copied, exported, or
+  written in the clear to backups or logs.
+- An `unsupported_version` body SHOULD be kept sealed with the same at-rest protection as other messages so that an app
+  update can process it. A `bad_location` or `unsupported_context` body is discarded after the placeholder is written.
+- The error code goes to telemetry as a code only.
+
+#### 14.3.4 Context rules (MUST)
+
+- `m = live` in a group payload or in a mesh message: `unsupported_context`.
+- A live start whose sender is the receiving account itself (a copy of an own message on another own device, if the
+  platform delivers such copies) is displayed as an own live card in its current state. The device MUST NOT start
+  sending frames for it: only the device that built the start sends frames.
+- A device that will not process the frames of a live start it has decrypted MUST discard `k` at once and MUST NOT
+  persist the body with `k` in any form (a message row, a cache, a queue, a log, a backup): it keeps the local form
+  of §14.6.2 step 6, without `k`, or a placeholder. Such devices are: the own copy above, a Desktop that does not
+  implement live shares (version 1), a start rejected with `unsupported_context`, and any process that can decrypt a
+  message without being the application that shows live shares (a notification extension, a background fetch).
+
+#### 14.3.5 Reserved service members
+
+The structural filter of the service messages runs before recognition and is not changed. A body that contains a
+reserved service member name (`qa_ctl` and the others) is discarded by that filter. `qa_loc` is not a service member:
+it is user content on the CHAT lane, and MUST NOT be added to the service-key lists of the clients' filters.
+
+#### 14.3.6 Entry-point rule (MUST)
+
+The entry-point rule of §12.7.1 and §13.5 gains a fifth prefix. User text that begins with `{"qa_file":`,
+`{"qa_file_src":`, `{"qa_file_cancel":`, `{"qa_reply":` or `{"qa_loc":` is refused as an ordinary message, as the `b` of
+a reply, as a forwarded text and as the new body of an edit, through every entry point (typing, paste, share sheet,
+intents, dictation, forward, edit). Only the builders of §14.5 produce such a body.
+
+The rule has an inbound side. A receiver drops, silently and without changing anything, an edit whose target is a row
+that holds a pin or a live start, and an edit whose new body is recognised as a location message (§14.3.2, whether it
+would be valid or not): the coordinates of a pin, and a live start, never change after they were sent. A location
+message that reaches the application as the new body of an edit is never displayed, stored or notified.
+
+This changes the constant `RECOGNISED_PREFIXES` of `reply-kat.json` (§13.8), which is regenerated and MUST be re-pinned
+in every repository in the same release train.
+
+#### 14.3.7 Replies to a location
+
+§13 is amended: `k` gains a sixth kind, `location`, for a quoted pin or live start; the builder writes `q = ""` for it,
+always; a found location row shows the fixed label of its kind, never a position. See §13.2, §13.4, §13.5 and §13.6.
+
+### 14.4 Conversion from platform values (MUST)
+
+Pinned by `conversion_cases`.
+
+- `lat = RHAZ(latitude_degrees × 10^7)` and `lon = RHAZ(longitude_degrees × 10^7)`, where the product is one IEEE 754
+  double multiplication and `RHAZ` rounds the exact double to the nearest integer, ties away from zero. Swift:
+  `(x * 1e7).rounded(.toNearestOrAwayFromZero)`. Go: `math.Round`. Kotlin and Java: `BigDecimal(x * 1e7)
+  .setScale(0, RoundingMode.HALF_UP)` (`Math.round` rounds ties toward positive infinity and `floor(x + 0.5)` is wrong
+  for the double just below one half). JavaScript: `Math.sign(v) * Math.round(Math.abs(v))`. A negative zero converts
+  to 0: there is no negative zero on the wire.
+- A degrees value that is NaN or infinite is no valid fix. A finite value whose integer falls outside the range of its
+  axis (including a product that overflows) is out of range.
+- `acc = ceil(horizontal_accuracy_metres)`, then 0 becomes 1 and a value above `ACC_MAX` becomes `ACC_MAX`. A negative,
+  NaN or infinite accuracy means "no valid fix".
+- `age = floor(now - fix_time)` in seconds, on a monotonic clock where the platform offers one (Android
+  `Location.getElapsedRealtimeAgeMillis`); a negative value becomes 0.
+- `ap = 1` when the platform reports reduced or coarse accuracy authorization (iOS `accuracyAuthorization ==
+  .reducedAccuracy`, Android only the coarse permission granted).
+- `st = floor(wall_clock_unix_seconds)` when the user confirms the live share.
+
+### 14.5 Builder (MUST)
+
+A builder takes structured input and writes the canonical form:
+
+- compact JSON, members in this fixed order: `qa_loc`, `m`, `sid`, `k`, `st`, `du`, `lat`, `lon`, `acc`, `age`, `ap`; a
+  pin omits `sid`, `k`, `st`, `du`; every other member is always written; `null` and unknown members are never
+  written. A pin begins `{"qa_loc":1,"m":"pin","lat":`, a live start begins `{"qa_loc":1,"m":"live","sid":"`;
+- integers in plain decimal form; `sid` and `k` in canonical base64 with padding;
+- there are no free-text members, so no escaping rules apply.
+
+The builder refuses, and the user interface tells the user why, when: the fix is missing or invalid (`fix`); `age` would
+exceed `BUILD_MAX_FIX_AGE` (`age`); a converted `lat` or `lon` is out of range, or `st` is not a valid unix time
+(`range`); `du` is outside `DU_MIN`..`DU_MAX` (`du`); a live start is requested in a group or over the mesh
+(`context`). The reasons are those of the `builder_cases`.
+
+The output of a builder MUST be accepted by §14.3.2.
+
+### 14.6 Live share
+
+#### 14.6.1 Sender obligations (MUST)
+
+1. A live share starts only from a user action in a visible conversation screen, after the platform granted location
+   access, with a fix that satisfies §14.5. The builder draws `sid` and `k` from a CSPRNG for every share. The user
+   interface offers `DU_PRESETS`.
+2. The start body is sent through the normal durable path (outbox included). A retry re-sends that same message
+   under the same client message id: a share has exactly one start message, and its body (its `sid` and `k`) is never
+   sent again as a new message under a new client message id (§14.6.2 step 1). The sender MUST NOT send frames before the
+   server has acknowledged the start message (`msg_sent` echo): frames for a share the receiver does not know are
+   wasted. It MUST NOT send `loc_stop` before that echo either: a stop sent first can reach the receiver before the
+   start, which travels on another lane. A user who stops before the echo ends the share locally at once and the key
+   is deleted; if the start has not left the device it is withdrawn from the outbox and nothing is sent, and
+   otherwise the `loc_stop` is held until the echo arrives and no final frame is built. The clock of the share
+   (`st + du`) runs from the user's confirmation regardless.
+3. Cadence. While the share is live, the sender builds exactly one frame per tick (none while the socket is down,
+   rule 5). The tick is `TX_INTERVAL` (30 seconds), or `TX_INTERVAL_LOW_POWER` (60 seconds) while the platform reports a low-power mode (iOS Low Power Mode,
+   Android battery saver). The cadence does not depend on movement, on the position, or on whether a new fix arrived:
+   a share that stands still and a share that drives send the same frames at the same rhythm, so that the relay learns
+   nothing about movement. A sender MUST NOT send position frames faster than one per `TX_MIN_GAP` (10 seconds); the
+   final frame of rule 8 is exempt. `iv` in a position frame is the interval of the tick in force (30 or 60).
+4. Each frame carries the newest fix and its `age`; when no fix has been obtained for a long time, frames keep carrying
+   the last fix with a growing `age`. How often the operating system is asked for a position is not constrained by
+   this contract.
+5. Socket down and failed writes. A frame is built only while the WebSocket is connected and authenticated. While the
+   socket is down no frame is built: the tick is skipped, nothing is queued or sent over REST, and the next tick after
+   reconnection builds the next counter with the newest fix. A frame that has been sealed has consumed its counter
+   whether or not the write succeeded (the write failed, the socket died under it, the server dropped it): the
+   counter is never taken back and the frame is never re-sealed, neither with the same plaintext nor with a newer
+   fix, and a frame that was not written is never counted as "not sent" so that the next frame reuses its counter.
+   Writing the identical bytes of a sealed frame again is allowed (the receiver drops a duplicate as `frame_old` if the
+   first one arrived); building a new frame under the same counter is not (rule 9).
+6. At most one live share per conversation and sending device. Starting a new share in a conversation ends the previous
+   one first (final frame and `loc_stop`).
+7. The share ends on the first of: the user's stop; `st + du` reached; delete for everyone of the start message;
+   conversation cleared or deleted; the peer blocked; the peer's identity key changed, or a device added to or removed
+   from the peer's account where the platform can see it; location permission revoked or location services turned off;
+   the remote switch `location_share.enabled` false; logout, account deletion or local wipe; the process found, at its
+   next start, a share that was live when it died (rule 10: it is never resumed).
+8. On every end it can act on, the sender sends one `loc_stop` (durable, §14.7) and one final frame (best effort), then
+   deletes `k`, the last fix and every sampling state. The `loc_stop` goes out at once. The final frame SHOULD be built
+   on the next regular tick, so that the cadence of the frames is not disturbed; a sender that cannot wait (the process
+   is going away, or the socket is about to be closed) builds it at once, while the socket is up, and a final frame is
+   exempt from the minimum interval of rule 3. Like every frame it is built only while the socket is up (rule 5): if
+   the socket is down when the share ends, or goes down before the tick that was to carry the final frame, no final
+   frame is built, the `loc_stop` is the end and `k` is deleted at once. Only the process that built the earlier
+   frames of the share builds its final frame (rules 9 and 10).
+9. Counter uniqueness. A counter value MUST NEVER be sealed twice under one `k`, whatever happened to the frame sealed
+   under it (a failed write, a dropped socket, a restart: rules 5 and 10). Each share has exactly one sealer inside
+   the process that runs it: one owner of `k` and of the counter of the next frame, and sealing a frame reads the
+   counter and advances it in one serialized step (a reconnection that re-arms the tick timer without cancelling the
+   old one, a second window or scene that holds its own copy of the share, or a retry that builds a frame beside a
+   tick would each seal one counter twice). `k` and the counter of the next frame live only in the memory of that
+   process; the copy of the start body in the outbox (rule 2) is never used to seal a frame. The sender meets the rule
+   in one of two ways. Either `k` is never written to any store, or, if `k` is persisted for any reason in the private
+   storage of the app, the counter is recorded durably first: the next counter, or a reserved block of counters, is
+   written to the store before any frame under it is sealed. That record guards the running process only: in version
+   1 no later process seals a frame under that `k` (rule 10), and the record is never read to resume a share. In both
+   cases `k` is never placed in anything the platform can hand to another process or bring back after one, and a copy
+   of that kind, wherever it came from, is never allowed to seal: the extras of an Intent or a PendingIntent of a
+   service that the system restarts (a redelivered Intent starts the service again at counter 1), saved instance
+   state, iOS state restoration, WorkManager input data, a backup, a device migration or the copy of a second device.
+   A service or a process that the system starts again is a restart under rule 10.
+10. Restart. A process that starts and finds a share that was live when the previous process died builds NO frame for
+    it, neither a position frame nor a final frame. It sends `loc_stop` (held until the echo of the start if that never
+    arrived, rule 2; an unsent start is withdrawn), deletes `k`, the recorded counter and every state of the share, and
+    tells the user. The share is never resumed.
+
+#### 14.6.2 Receiver: start and end time (MUST)
+
+On a valid live start from peer `P` in the 1:1 conversation with `P`, received at local wall time `R` (the time the
+start was first seen):
+
+1. A start is a duplicate when its client message id OR its `sid` is already in the live-share store of this
+   conversation, in any state (ENDED records, and shares that were created ended, included). A duplicate is ignored:
+   the state and the end time of the first sighting stand, and nothing is created, replaced or reset; creating a share
+   never overwrites an existing record. The store keeps the client message id and the `sid` of every start it has seen
+   (neither is secret: §14.6.6 deletes `k` and the positions, not these two), for as long as the record exists and in
+   any case for at least `TOMBSTONE_KEEP` seconds after the share ended. This holds when the conversation is cleared,
+   when the row is deleted for me and when the user logs out: those wipe `k`, the positions and the card and keep the
+   two ids with the end time of the share. The one exception is the deletion of the whole local store (account
+   deletion, a wipe of all app data, or a logout that erases the database): the two ids go with it. The test reads the
+   live-share store, not only the message table, so that a start redelivered after a crash that committed the record
+   but not the message row is still a duplicate. A start that repeats a known `sid` under a new client message id is a
+   duplicate too: otherwise a fresh record with `lastCtr = 0` would accept a replay of every earlier frame of the share
+   (and a sender never produces such a start, §14.6.1 rule 2).
+2. A start whose client message id is in the tombstones of this conversation (a `loc_stop` or a delete for everyone
+   that arrived before the start, §14.7) creates no live share: `k` is never stored and no position is shown. After a
+   `loc_stop` the share is created ENDED (`stopped`) and its card shows that a live share took place, with no position.
+   After a delete for everyone the start is handled by the delete-for-everyone path that the platform already has,
+   exactly as when the delete arrives after the start (the row is removed or replaced by the deleted placeholder, as
+   that path does): no live-share card is ever shown for it, and its record is ENDED (`deleted`), kept only for step 1.
+   Other shares are not touched.
+3. Compute `endAt`:
+
+   ```
+   endAt = min(R + du, st + du + SKEW)
+   ```
+
+   `R` is the receiver's clock, `st` the sender's clock. The first term stops a sender clock that runs ahead from
+   stretching the share; the second stops a start delivered hours late (offline queue) from showing a share that is
+   already over. A sender clock that runs behind by more than `SKEW` ends the share early on the receiver, which fails
+   safe. If `endAt <= R`, the share is created ENDED (reason `expired`): the card shows that a live share took place,
+   with no position, and `k` is never stored. Other shares are not touched.
+4. Shares are ordered by their ordering time `ord = min(st, R)`: the start time, but never later than the moment the
+   start was first seen, so that a sender clock that runs ahead does not make its share outrank the shares that
+   follow it. A start whose `ord` is lower than the `ord` of any share already known from `P` in this conversation
+   (in any state) is created ENDED (`superseded`). Equal values are ordered by arrival: the later arrival is newer.
+   The ordering time mixes the sender's clock (`st`) and the receiver's (`R`), so it assumes a roughly correct
+   receiver clock. When the receiver's clock is behind the sender's by `d`, a delayed older start (ordered by its `st`)
+   supersedes a prompt newer start (ordered by its `R`) if the gap between the two shares is smaller than `d`. This
+   needs reordered starts and a skewed receiver clock together; it is accepted behaviour, pinned by the vector
+   `receiver_clock_behind_older_start_wins_accepted_limit`, and every platform does the same.
+5. Otherwise any other ACTIVE or STALE share from `P` in this conversation becomes ENDED (`superseded`), and a share
+   is created: `sid`, `k`, `endAt`, `ord`, `lastCtr = 0`, the first fix (`lat`, `lon`, `acc`, `ap`, fix time `R - age`),
+   `lastFrameAt = R`, the interval in force set to `TX_INTERVAL`, state ACTIVE.
+6. The message row keeps a local form of the body without `k`. The received body with `k` is never persisted.
+
+`endAt` never increases after the start is processed. A stop, a final frame, a delete or any end condition sets the
+share to ENDED at once. There is no extension: to share longer, the sender starts a new share, which supersedes the
+previous one. A share whose `endAt` has been reached is ENDED (`expired`) whether or not anything has looked at it.
+
+#### 14.6.3 The frame (MUST)
+
+From the start body: `sid` (16 bytes) and `k` (32 bytes).
+
+```
+okm      = HKDF-SHA256(salt = sid, ikm = k, info = "qa-loc v1 frame key", L = 44)
+K_frame  = okm[0..32)
+N_base   = okm[32..44)
+
+frame    = 0x01 || ctr (uint32, big endian) || AES-256-GCM-Seal(K_frame, nonce, plaintext, aad)   (16 + 16 bytes)
+nonce    = N_base XOR (0x00 × 8 || ctr as uint32 big endian)
+aad      = "qa-loc v1 frame" || 0x00 || sid || ctr (uint32 BE)
+           || len8(sender_user_id) || sender_user_id || len8(recipient_user_id) || recipient_user_id
+```
+
+- Only the sending device and the receiving devices that decrypted the start message hold `k` (and a device that will
+  not process frames discards it at once, §14.3.4). The share key is local device state: on the sender as §14.6.1 rule 9
+  says, on a receiver in the Keychain or Keystore `ThisDeviceOnly` class or in the at-rest sealed database; excluded from
+  backups; deleted when the share ends (§12.8 and the backup note of §13.7 are overridden for `k`).
+- `ctr` starts at 1 for the first frame of a share and increases by exactly 1 for every frame the sender builds,
+  including the final one. It never wraps; a share ends long before 2^32 - 1 (24 hours at one frame per 30 seconds is
+  2 880 frames). A counter value is sealed at most once under one `k` (§14.6.1 rules 9 and 10).
+- User ids are the bytes of the id strings exactly as the server sends them in `sender_id` and `recipient_id`, each
+  preceded by one length byte (an id is at most 255 bytes). The server issues every user id as the 36-character
+  lowercase canonical UUID text, and a client MUST take those bytes from the strings it received, as they are. A client
+  MUST NOT build the aad from an id that it re-serialised through a platform UUID or binary type (Swift
+  `UUID.uuidString` is upper case) or normalised in any other way: such an id is a different id and the frame fails
+  authentication. The sender writes its own id and the peer's id; the receiver writes the `sender_id` stamped by the
+  server on the relayed frame and its own id. A server that stamps a wrong sender, or a frame replayed into another
+  conversation, fails authentication.
+- The labels belong to the frame version. A frame version other than `0x01` MUST use its own HKDF `info` label and its
+  own aad label (`qa-loc vN frame key`, `qa-loc vN frame`), never the labels of another version with a different
+  layout, so that no key or nonce is ever used under two layouts. A receiver drops a frame whose version it does not
+  know (`frame_format`).
+- The frame is sent as canonical base64 (52 characters) in `eph_relay.encrypted_payload`.
+
+Plaintext (16 bytes, big endian):
+
+| Offset | Size | Field | Rule |
+|---|---|---|---|
+| 0 | 1 | `flags` | bit 0 `FINAL`, bit 1 `APPROX`; bits 2 to 7 MUST be 0 |
+| 1 | 1 | reserved | MUST be 0 |
+| 2 | 2 | `iv` | seconds until the next frame, `IV_MIN`..`IV_MAX` (a sender writes 30 or 60); 0 in a final frame |
+| 4 | 4 | `lat` | signed, as §14.3.1; 0 in a final frame |
+| 8 | 4 | `lon` | signed, as §14.3.1; 0 in a final frame |
+| 12 | 2 | `acc` | `ACC_MIN`..`ACC_MAX`; 0 in a final frame |
+| 14 | 2 | `age` | `floor(now - fix_time)` in seconds, clamped to `FRAME_AGE_MAX` (65 535), never wrapped; 0 in a final frame |
+
+Every frame has the same size whatever it carries. A final frame carries no position: its `flags` are exactly `FINAL`
+and every other field is zero.
+
+#### 14.6.4 Receiver: frames (MUST)
+
+For an `eph_relay` frame relayed from `sender_id = P`, received at local time `now`:
+
+1. The payload is canonical base64 of exactly `FRAME_LEN` bytes and begins with `FRAME_VERSION`; otherwise drop
+   (`frame_format`).
+2. Candidates are the shares from `P` in the 1:1 conversation with `P` that are not ENDED, newest first (by `ord` of
+   §14.6.2, then by arrival), at most `MAX_CANDIDATES`. For each, derive `K_frame` and `N_base` (§14.6.3), build the
+   nonce and aad from the frame's `ctr`, and open. The first share that authenticates wins. None: drop
+   (`frame_unmatched`). Frames are never buffered for a share that is not known yet.
+3. `ctr <= lastCtr`: drop (`frame_old`). This is the whole ordering rule: the frame with the highest counter wins, a
+   late or reordered frame with a lower counter is discarded, and a duplicate is discarded.
+4. Plaintext checks of §14.6.3 (reserved bits and byte, ranges, an all-zero final frame). Failure: drop (`frame_bad`);
+   `lastCtr` does not move.
+5. Apply: `lastCtr = ctr`, `lastFrameAt = now`. A final frame sets ENDED (`stopped`). Otherwise the displayed position
+   becomes this frame's `lat`, `lon`, `acc`, `APPROX`, with fix time `now - age`, and the interval in force becomes
+   `iv`.
+
+Durability. The state a share needs is stored, not kept in memory only: the receiver MUST write `lastCtr` and
+`lastFrameAt` (with the position) to its durable live-share store, flushed, BEFORE it shows the position of a frame or
+acts on a final frame, and it keeps the tombstones of §14.7 in the same store. After a restart it continues from the
+stored values, so a replay of an old frame is `frame_old` as it was before the restart, and staleness still counts
+from `lastFrameAt`. A receiver that cannot restore `lastCtr` of a share it still holds (a missing, corrupted or older
+record, a failed write) MUST end that share (`state_lost`, §14.6.6): it never resumes a share with a counter of 0. The
+same holds for a share whose key `k` can no longer be loaded (a Keychain item missing after a restore or a migration, an
+invalidated Keystore key, a stored key that does not decrypt): it ends as `state_lost` at once and is never left ACTIVE
+or STALE until `endAt` with a key it cannot use.
+
+A frame never creates a row, never changes the unread count, never reorders the conversation list, never notifies and
+never wakes anything. The drop reasons are telemetry labels and are pinned by the `receiver_sequences`.
+
+#### 14.6.5 Staleness
+
+A share is STALE when `now - lastFrameAt > max(STALE_FACTOR × interval in force, STALE_FLOOR)` (120 seconds at the
+interval of 30, 180 at 60). The card then says when the last update arrived and keeps the last position. The next valid
+frame makes it ACTIVE again. STALE is a display state only; the end is decided by `endAt`, stops and final frames.
+
+#### 14.6.6 Ended
+
+When a share becomes ENDED for any reason (`expired`, `stopped`, `superseded`, `deleted`, `blocked`, `state_lost`) the first
+reason sticks and the receiver deletes `k` and every position of that share, the first fix included, and keeps only the
+facts that a live share took place, its duration and its end, and the client message id and the `sid` of its start for
+the duplicate test of §14.6.2 step 1 (those two ids stay for at least `TOMBSTONE_KEEP` seconds after the end, also
+after a clear, a delete for me or a logout, and go only with the deletion of the whole local store, as step 1
+says). A share ended by a delete for everyone (`deleted`) shows no live-share card at
+all: the row is what the platform's delete path leaves (§14.7). Frames and stops for an ENDED share are dropped and
+never bring it back.
+
+A receiver that blocks the sender ends every share it holds from that sender at once (`blocked`), with the deletion
+above. Frames and stops from a blocked sender are dropped.
+
+### 14.7 Stop control `loc_stop` (MUST)
+
+```
+{"qa_ctl":1,"t":"loc_stop","target":"<clientMsgId of the live start>","ts":<unix seconds>}
+```
+
+- It is a variant of the `qa_ctl` control envelope and travels only on the CONTROL lane (first ciphertext byte 0xE6),
+  which the server stores and relays without a wake push. The builder writes the members in the order above, with
+  `target` as a canonical JSON string (§12.7.1 escaping).
+- Validation: the JSON profile of §14.3.2 rule 1; `qa_ctl` the integer 1; `t` the string `loc_stop`; `target` a string of
+  1..`STOP_TARGET_MAX` bytes; `ts` an integer 0..2^53 - 1, informational (never used for ordering or authority).
+  Unknown members are ignored. A rejected envelope is dropped silently: no placeholder, nothing kept.
+- The receiver applies it only when `target` names a live-start row in the SAME 1:1 conversation whose author account is
+  the account that sent the envelope (the spoof check already used for delete and edit). Otherwise it is dropped
+  silently. It is idempotent, and it does not change the reason of a share that has already ended.
+- A stop can overtake its start, which travels on another lane. A `loc_stop`, or a delete for everyone, that names no
+  row known in this conversation and comes from the other account of the conversation is therefore not dropped: the
+  receiver remembers the target and the reason (a tombstone) per 1:1 conversation, in its durable store (§14.6.4), for
+  exactly `TOMBSTONE_KEEP` seconds from the moment the control arrived (`DU_MAX` + `SKEW`: after that a start can no
+  longer be live) and forgets it at that instant, and it keeps the last `TOMBSTONE_MAX` targets: when one more arrives,
+  the oldest is forgotten. A target that is already remembered is not added again, its time is not extended and its
+  reason does not change. A live start with that client message id that arrives while the tombstone is remembered is
+  handled as §14.6.2 step 2 says: ended without a key after a stop, and through the delete path, with no live-share
+  card, after a delete. A control that names no known row and comes from any other account is dropped silently and
+  nothing is remembered. A tombstone holds no key, no position and no body.
+- A sender sends `loc_stop` only after the `msg_sent` echo of the start, and withdraws a start that has not left the
+  device (§14.6.1 rule 2).
+- It never creates a row, a placeholder, an unread or a notification. A client MUST treat `loc_stop` as a silent
+  control type.
+- A delete for everyone of the start row ends the share as well (reason `deleted`), through the existing delete path,
+  under the same author check. No live-share card is shown for it, whether the delete arrives after the start or
+  before it (§14.6.2 step 2).
+- Any device of the sender's account may send a valid stop.
+
+### 14.8 WebSocket frame `eph_relay` (server, MUST)
+
+Inventory in the style of §8.1:
+
+| type | data from sender | data to recipient | server behaviour |
+|---|---|---|---|
+| `eph_relay` | `{recipient_id, encrypted_payload}` | `{sender_id, encrypted_payload}` | authenticated sender; contact-block check; relay live to every connected device of the recipient, on this node and across nodes; never stored, never pushed, no pending queue, no `message_id`, no echo, no error to the sender whatever happens to the frame |
+| `group_eph_relay` | reserved for a later version | | not implemented in version 1; answered like any unknown type |
+
+Server rules:
+
+- The object the recipient reads is built by the server from the two members: `sender_id` is the authenticated sender,
+  `encrypted_payload` is the sender's string unchanged. No other member of the sender's frame is relayed.
+- `encrypted_payload` is a string of at most `EPH_MAX_B64` bytes and `recipient_id` the 36-character lowercase canonical
+  UUID text of an account the server knows; any other frame (a non-string or empty member, a larger payload, a recipient
+  that is not an id of that form or not a known account, a recipient equal to the sender) is dropped and counted. The
+  server does not decode or inspect the payload.
+- A keyed limiter per (sender, recipient) allows `EPH_PAIR_RATE` frames per second with a burst of `EPH_PAIR_BURST` (one
+  frame every 5 seconds sustained); frames over budget are dropped and counted, the connection is not closed. The
+  server applies a further, larger budget per sender (at the time of writing one frame per second with a burst of 10, not
+  part of the client contract) and keeps its tables bounded: a frame for a recipient that is not a known account creates
+  no state, and neither a new pair nor a new sender ever takes the budget of another. A client treats every drop as a
+  lost frame. The existing per-connection token bucket is untouched.
+- A recipient who has blocked the sender receives nothing, on this node and across nodes, and the sender is not told.
+- The type is generic on purpose: the server sees the type name, and a generic ephemeral relay says less than a name
+  that mentions what it carries.
+- The server never logs a payload. The relay handler writes no log line, and a counter by outcome is the only trace it
+  keeps of a frame. The two shared paths it uses can log, as they do for every message type, the type name and a user
+  identifier: the delivery to a socket whose buffer stays full, and the cluster bus when its own limiter drops a
+  message. No log line of any path carries the payload.
+
+What the server can observe: that user A sends small fixed-size frames to user B at a regular interval, when that starts,
+when it actually ends (the frames stop, and the stop of §14.7 travels on the CONTROL lane), roughly how long it lasted,
+and a change of the interval from 30 to 60 seconds (a low-power mode). It cannot see positions, accuracy, the declared
+duration `du`, the end time `endAt`, or whether a frame is final. Because the cadence is fixed (§14.6.1), the frames do
+not reveal movement.
+
+### 14.9 Opening a position in other apps (MUST)
+
+The receiver opens a position in the installed map and navigation applications through standard formats generated
+locally. Nothing is uploaded and no map tile is fetched to draw a message.
+
+`DEC7(v)` is the decimal text of an E7 integer without floating point: a minus sign if `v < 0`, then `|v| / 10^7` in
+decimal, a point, then `|v| mod 10^7` as exactly 7 digits. `0` gives `0.0000000`; there is never `-0.0000000`.
+
+`PCT(s)` percent-encodes the UTF-8 bytes of `s`: the characters `A-Z a-z 0-9 - . _ ~` are written as they are and every
+other byte as `%` and two upper-case hexadecimal digits (so a space is `%20`, never `+`).
+
+`label` is the fixed text of the application's string catalogue for a shared position ("Posizione condivisa" in Italian,
+localised): never a name, an address or the contact's name.
+
+| Output | Text |
+|---|---|
+| `geo:` URI (Android open action, Android Auto navigation) | `geo:<DEC7(lat)>,<DEC7(lon)>?q=<DEC7(lat)>,<DEC7(lon)>`; no label, no uncertainty parameter |
+| Apple Maps link (iOS) | `https://maps.apple.com/?ll=<DEC7(lat)>,<DEC7(lon)>&q=<PCT(label)>` |
+| Google Maps link (iOS, universal link; opens the application when it is installed, a web page otherwise) | `https://www.google.com/maps/search/?api=1&query=<DEC7(lat)>%2C<DEC7(lon)>` |
+| GPX 1.1 file (share action, both platforms) | see below |
+
+GPX file: UTF-8, LF line endings, no byte order mark, one waypoint, no time, no accuracy, no sender name, one LF after the
+last line; `label` is XML-escaped (`&`, `<`, `>`, `"`, `'`):
+
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="QAudion" xmlns="http://www.topografix.com/GPX/1/1">
+<wpt lat="<DEC7(lat)>" lon="<DEC7(lon)>">
+<name><label></name>
+</wpt>
+</gpx>
+```
+
+An application MUST NOT register a custom URL scheme for these links; the links above are `https` and `geo` only.
+
+### 14.10 Logs and telemetry (MUST)
+
+No log line, telemetry event, crash report or diagnostic on any platform contains a position, an accuracy, an `age`, a
+`sid`, a `k`, a body, a frame, a `geo:` URI, a map link or a GPX path with content. Location code logs only event
+names, reason codes, counters, duration presets, permission states and shortened row ids. Telemetry is counters and
+enums only. Every log redactor (including the redactors of log shippers) additionally removes positions that reach it
+through another code path: decimal coordinate pairs, `geo:` URIs, map links with numeric pairs, `lat`, `lon`, `lng`,
+`latitude`, `longitude`, `acc` and `accuracy` key-value forms, E7 integers under those keys, and a whole location body.
+The `redaction_cases` pin the shapes: for each, the listed substrings MUST NOT survive the redactor, whatever
+placeholder it writes in their place.
+
+### 14.11 Vectors
+
+`test/kat/location_v1/location-kat.json` (LF line endings, `-text` in `.gitattributes`, SHA-256 pinned by
+`tools/katgen/location` and by each client). Sections:
+
+- `constants`: every value of §14.1, the member orders, the five recognised prefixes, the closed set of end reasons
+  (`END_REASONS`) and of sender refusals (`SENDER_REFUSALS`), the user id format.
+- `recognition` and `rules`: bodies through the receiver of §14.3 end to end, with the channel (`chat`, `group`,
+  `mesh`) they arrive on. `expect` is `not_location`, `pin`, `live` (with the decoded members in `normalized`) or
+  `rejected` with `code` `bad_location`, `unsupported_version` or `unsupported_context`. A body is carried as
+  `serialized` (text) or, when it is not valid UTF-8 or begins with a byte order mark, as `serialized_b64`; a library
+  compares and parses BYTES.
+- `conversion_cases`: degrees (as IEEE 754 bits) to `lat`/`lon` with ties away from zero in both signs, the double just
+  below a tie, out-of-range and invalid inputs; accuracy; age; `frame_age`: the age of a frame, clamped to 65 535 and
+  never wrapped.
+- `decimal_cases`: `DEC7`.
+- `builder_cases`: structured input and either the exact `expected` text or the `refuse` reason.
+- `entry_point_cases`: user texts that MUST be refused (each of the five prefixes) and look-alikes that are ordinary text.
+- `frame_cases`: `positive`: `k`, `sid`, sender and recipient ids, `ctr`, plaintext fields, and the expected `okm`,
+  `K_frame`, `N_base`, nonce, aad, plaintext and frame (hex and base64); `negative`: frames a receiver MUST drop, with
+  the stage (`format`, `auth`, `plaintext`) and the reason, among them ids written in upper case (an id rebuilt through a
+  platform UUID type does not authenticate).
+- `stop_cases`: the canonical stop and the envelopes a receiver accepts or drops.
+- `receiver_sequences`: a start followed by timed events (frames by counter, out of order, duplicates, a final frame, a
+  `loc_stop`, a delete, a second start, time steps, a block, a reload of the stored state with or without the counter
+  or the key), with the state of every share and the tombstones after each step (a record ended by a delete is marked
+  `no_card`). They pin §14.6 and §14.7 completely, including "late
+  frames never resurrect an ended share", "`endAt` never increases", a stop or a delete that arrives before its start, the
+  ordering time of a start (`min(st, R)`, with its accepted limit when the receiver clock is behind), the replay of an
+  old frame after a reload (`frame_old`), a share whose counter or key cannot be restored (`state_lost`), a final frame
+  under a counter that was already used, a start that repeats a known client message id or `sid` (`start_duplicate`: it
+  never overwrites or resets a record, so the replay of ctr 1 that follows is `frame_old`), and the exact lifetime and
+  cap of a tombstone.
+- `sender_sequences`: the events of a share on the device that started it (start, sent, echo, tick, stop, restart,
+  socket_down, socket_up) with what the sender did after each: the frame and its counter, the refusal
+  (`ended`, `offline`, `no_echo`, `too_fast`), the `loc_stop` (sent or held until the echo), the withdrawal of an unsent
+  start, whether `k` is still held and the counter of the next frame. A step that builds a frame (a `tick`, or a `stop`
+  that builds the final frame at once) may carry `"write":"fails"`; a step without `write` is a write that succeeds. A
+  harness applies it to the client under test by making the transport fail the write of that very frame, during that
+  step, and then compares the whole result of the step, `next_ctr` included: the frame was sealed, so its counter is
+  spent and `next_ctr` is the counter after the one just sealed (a harness whose transport succeeds on a step marked
+  `fails` does not run the vector). A client that advances the counter only after a successful write, or that gives it
+  back on failure, answers `next_ctr` one too low on that step and seals the counter again on the next tick. There is no
+  separate event for a failed write, because it would reach the client after the frame was already sealed and written.
+  The sequences pin §14.6.1 rules 2, 3, 5, 8, 9 and 10: no frame
+  before the echo, never closer than 10 seconds, the final frame on the next tick or at once and never while the socket is
+  down, a counter never sealed twice: not after a restart, and not after a failed write or a dropped socket (the next
+  frame carries the next counter, `next_ctr` never moves back).
+- `end_time_cases`: `R`, `st`, `du` to `endAt` and the state around it, for a share that has received no frame since its
+  start (ACTIVE for 120 seconds, STALE after that, ENDED from `endAt`), including a start delivered 23 hours late, sender
+  clocks 9 and 11 minutes off, and `du` = 86400.
+- `open_cases`: the `geo:` URI, the two map links and the GPX file bytes of §14.9 for given E7 values and labels.
+- `redaction_cases`: log lines with positions in every shape of §14.10 and, for each, the substrings that MUST NOT
+  survive any platform's redactor.
+- `rejection_codes` and `receiver_drops`: the closed sets of the telemetry labels of §14.3.3 and §14.6.4.
+
+The behaviours that depend on the state of a platform (storage, backups, notifications, accessibility, forwarding, the
+end triggers of §14.6.1) are requirements of the platform behaviour tests.
+
+Latest: 2026-10-23 (third review round of §14: the outcome of a write is put on the step that seals the frame in the
+`sender_sequences` (`"write":"fails"` on a `tick` or a `stop`, applied by the harness during that step, so that a client that
+advances its counter only after a successful write is caught; there is no separate `send_failed` event), a share has exactly
+one sealer inside its process and the copies that a platform hands to a new process (Intent extras of a restarted service,
+saved instance state, iOS state restoration, WorkManager input, backups and migrations) never seal (§14.6.1 rule 9), the
+duplicate-test ids of a start survive a clear, a delete for me and a logout, and go only with the whole local store
+(§14.6.2 step 1, §14.6.6).)
+Previous: 2026-10-23 (second review round of §14: a frame is built only while the socket is up and a sealed frame has consumed
+its counter whether or not the write succeeded, it is never re-sealed (§14.6.1 rule 5; `socket_down` and `socket_up` in the
+`sender_sequences`, with the refusal `offline`); a start is a duplicate by client message id or by
+`sid`, in any state, and never overwrites or resets a record, and a start body is never re-sent under a new client message
+id (§14.6.1 rule 2, §14.6.2 step 1); the tombstone lifetime and cap are exact; a start matched by a delete tombstone goes
+through the delete path and shows no card; the ordering limit of `min(st, R)` with a receiver clock behind is documented
+and pinned; a share whose key cannot be loaded ends as `state_lost`; the per-sender relay budget evicts instead of falling
+into a shared overflow bucket.)
+Previous: 2026-10-23 (first review round of §14: a counter is never sealed twice under one share key and a restarted sender builds no
+frame, only `loc_stop` (§14.6.1 rules 9 and 10, `sender_sequences`); the final frame goes out on the next tick or at once,
+exempt from the 10-second minimum; a stop is sent only after the echo of its start and an unsent start is withdrawn; a
+receiver writes `lastCtr` and `lastFrameAt` durably before showing a position, ends a share whose counter it cannot restore
+(`state_lost`) and remembers a stop or delete that arrives before its start (tombstones, `TOMBSTONE_KEEP`, `TOMBSTONE_MAX`);
+shares are ordered by `min(st, R)`; blocking the sender ends its shares (`blocked`); a device that will not process frames
+discards `k` at once; inbound edits on or into a location row are dropped; the age of a frame is clamped; a new frame version
+takes its own labels; the aad ids are the server's lowercase strings; `eph_relay` accepts only a lowercase UUID of a known
+account, bounds its tables and its per-sender budget, and the metadata and logging sentences of §14.8 are exact.)
+Previous: 2026-10-23 (new §14 location messages: a pin or a live start is the text `{"qa_loc":1,...}` recognised by its byte
+prefix, positions are integers in degrees × 10^7 with the rounding pinned, a rejected body is one placeholder and never
+text, a live start is valid in a 1:1 chat only and a pin also in groups and over the mesh; live updates are 37-byte
+AES-256-GCM frames under a per-share key (HKDF-SHA256 key schedule, counter nonce, aad bound to the share id, the counter
+and both user ids), sent at a fixed cadence of 30 seconds (60 in a low-power mode) with the blind relay `eph_relay`, which
+is never stored, queued or pushed, is limited per pair (0.2 per second, burst 4), capped at 256 bytes and judged by the
+contact block on every node; a receiver ends every share at `min(R + du, st + du + 600)`, the highest counter wins, an
+ended share never comes back; `qa_ctl` variant `loc_stop`; the open actions (`geo:` URI, Apple Maps and Google Maps
+links, GPX 1.1) are pinned byte for byte; no position, key or frame in any log, with redaction cases; §13 gains the reply
+kind `location` with an empty `q`; the entry-point rule covers `{"qa_loc":` (five prefixes); §1 gains the frame key label;
+§6 gains the version rule; KAT `test/kat/location_v1/location-kat.json`, and `test/kat/reply_v1/reply-kat.json`
+regenerated.)
+Previous: 2026-10-08 (new §13 message replies: the reference to the quoted message travels inside the end-to-end
 encrypted body, never in the clear (`reply_to_server_msg_id` stays unused); a reply is the text
 `{"qa_reply":1,"to":...,"k":...,"q":...,"b":...}` recognised by its byte prefix like a file message, `to` the server
 message id (lowercase UUID), `k` text, file, image, video or voice, `q` an excerpt of at most 160 scalars, `b` the reply;

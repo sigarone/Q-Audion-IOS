@@ -15,6 +15,8 @@ import Foundation
 /// `k`: the kind of the quoted message. `avatar` and `thumb` are not chat messages and are never quoted.
 public enum MessageReplyKind: String, CaseIterable, Sendable {
     case text, file, image, video, voice
+    /// A quoted pin or live start (WIRE_SPEC 14.3.7): `q` is always empty and a position is never copied into a quote.
+    case location
 }
 
 /// A valid reply, as decoded: `quote` is `q` exactly as received (never display it: use `displayedQuote`).
@@ -36,7 +38,7 @@ public struct MessageReply: Equatable, Sendable {
 
     /// What the quote block shows when `to` is not found among the local rows (section 13.4): `EXCERPT(q)`, nothing for a voice note.
     public var displayedQuote: String {
-        kind == .voice ? "" : MessageReplyCodec.excerpt(quote)
+        (kind == .voice || kind == .location) ? "" : MessageReplyCodec.excerpt(quote)
     }
 }
 
@@ -79,9 +81,9 @@ public enum MessageReplyCodec {
     public static let qMaxScalars: Int = 160
     public static let idLength: Int = 36
 
-    /// The four prefixes user text may not begin with (section 12.7.1 entry points, extended by section 13.5).
+    /// The five prefixes user text may not begin with (section 12.7.1 entry points, extended by sections 13.5 and 14.3.6).
     static var reservedPrefixes: [[UInt8]] {
-        [FileV2Message.descriptorPrefix, FileV2Message.sourcePrefix, FileV2Message.cancelPrefix, prefix]
+        [FileV2Message.descriptorPrefix, FileV2Message.sourcePrefix, FileV2Message.cancelPrefix, prefix, LocationWire.prefix]
     }
 
     // MARK: Prefix tests
@@ -94,8 +96,9 @@ public enum MessageReplyCodec {
         [UInt8](body).starts(with: prefix)
     }
 
-    /// `true` iff the UTF-8 bytes of `text` begin with `{"qa_file":`, `{"qa_file_src":`, `{"qa_file_cancel":` or `{"qa_reply":`.
-    /// User text that begins with one of them is refused as an ordinary message and as the `b` of a reply (section 13.5).
+    /// `true` iff the UTF-8 bytes of `text` begin with `{"qa_file":`, `{"qa_file_src":`, `{"qa_file_cancel":`, `{"qa_reply":` or `{"qa_loc":`.
+    /// User text that begins with one of them is refused as an ordinary message, as the `b` of a reply, as a forwarded text and as the new
+    /// body of an edit, through every entry point (sections 13.5 and 14.3.6).
     public static func hasReservedPrefix(_ text: String) -> Bool {
         for candidate in reservedPrefixes where text.utf8.starts(with: candidate) {
             return true
@@ -186,6 +189,8 @@ public enum MessageReplyCodec {
     /// The text a reply message SHOWS, wherever the body must not appear (bubble, preview, notification, search, copy): `b` for a valid
     /// reply, the whole body for anything else (a rejected reply is displayed as ordinary text, section 13.3).
     public static func shownText(ofBody body: String) -> String {
+        // A location body (a pin, or the row of a live share) is never text: its fixed label stands for it (WIRE_SPEC 14.3.6, 14.6.2).
+        if LocationCodec.hasLocationPrefix(body) { return LocationLabels.shown(forBody: body) }
         if case .reply(let reply) = recognize(body) { return reply.body }
         return body
     }
@@ -244,8 +249,8 @@ public enum MessageReplyCodec {
     /// - body: the reply text as the user wrote it; never cut, trimmed, normalised or sanitised.
     ///
     /// Compact JSON, the members in the fixed order `qa_reply`, `to`, `k`, `q`, `b`, all five always written; escaping as the descriptor
-    /// builder; `q` is empty for a voice note and for an ephemeral quoted message, `EXCERPT(quoteSource)` otherwise. It refuses when
-    /// `b` is empty, `b` begins with one of the four reserved prefixes, `to` or `kind` is not valid, or the text would reach 8192 bytes.
+    /// builder; `q` is empty for a voice note, for a location and for an ephemeral quoted message, `EXCERPT(quoteSource)` otherwise. It refuses when
+    /// `b` is empty, `b` begins with one of the five reserved prefixes, `to` or `kind` is not valid, or the text would reach 8192 bytes.
     /// It never shortens `b` and never drops or shortens `q` to make the text fit.
     public static func build(to: String, kind: String, quoteSource: String?, quotedIsEphemeral: Bool,
                              body: String) -> Result<String, MessageReplyRefusal> {
@@ -253,7 +258,8 @@ public enum MessageReplyCodec {
         guard let parsedKind = kindOf(bytes: Array(kind.utf8)) else { return .failure(.kind) }
         if body.isEmpty { return .failure(.bodyEmpty) }
         if hasReservedPrefix(body) { return .failure(.bodyPrefix) }
-        let noQuote: Bool = parsedKind == .voice || quotedIsEphemeral
+        // A voice note, a message with a lifetime and a location (a pin or a live start) quote nothing: `q` is empty.
+        let noQuote: Bool = parsedKind == .voice || parsedKind == .location || quotedIsEphemeral
         let quote: String = noQuote ? "" : excerpt(quoteSource ?? "")
         var out: [UInt8] = Array(#"{"qa_reply":1,"to":"#.utf8)
         FileV2DescriptorBuilder.string(&out, to)

@@ -57,6 +57,11 @@ targets:
           - IntentHandlerTests.swift
           - KmsSweepStatusTests.swift
           - LegalLinksTests.swift
+          - LocationAppTests.swift
+          - LocationCenterFixture.swift
+          - LocationShareCenterEndTests.swift
+          - LocationShareCenterTests.swift
+          - LogRedactorLocationTests.swift
           - MeshAudioRouteTests.swift
           - MeshConsentPresentationTests.swift
           - MeshConsentTests.swift

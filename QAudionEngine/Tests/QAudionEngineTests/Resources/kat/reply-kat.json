@@ -68,7 +68,8 @@
    "file",
    "image",
    "video",
-   "voice"
+   "voice",
+   "location"
   ],
   "MAX_JSON_INT": 9007199254740991,
   "MEMBER_ORDER": [
@@ -84,10 +85,15 @@
    "{\"qa_file\":",
    "{\"qa_file_src\":",
    "{\"qa_file_cancel\":",
-   "{\"qa_reply\":"
+   "{\"qa_reply\":",
+   "{\"qa_loc\":"
   ],
   "REPLY_MAX_BYTES": 8192,
   "REPLY_MAX_DEPTH": 4,
+  "RESOLUTION_LABELS": [
+   "location",
+   "location_live"
+  ],
   "TO_LEN": 36,
   "TO_PATTERN": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   "VERSION": 1
@@ -202,6 +208,14 @@
    "expect": "text",
    "serialized": "{\"qa_file\":2,\"id\":\"AAAAAAAAAAAAAAAAAAAAAA==\"}",
    "why": "not a reply: a body with a file prefix is a file message under WIRE_SPEC 12.7.1, judged there"
+  },
+  {
+   "name": "location_prefix",
+   "rule": "no_prefix",
+   "context": "1:1",
+   "expect": "text",
+   "serialized": "{\"qa_loc\":1,\"m\":\"pin\",\"lat\":454642110,\"lon\":91899820,\"acc\":12,\"age\":3,\"ap\":0}",
+   "why": "not a reply: a body with the location prefix is a location message under WIRE_SPEC 14.3, judged there"
   },
   {
    "name": "prefix_only",
@@ -401,6 +415,22 @@
     "to": "2fe5325c-e6a4-43c2-984e-b8d7719df2fd"
    },
    "why": "a reply to a voice note: q is empty"
+  },
+  {
+   "name": "kind_location",
+   "topic": "kinds",
+   "rule": "ok",
+   "context": "1:1",
+   "expect": "reply",
+   "serialized": "{\"qa_reply\":1,\"to\":\"02492d4c-5000-4bb5-b3e1-bc2251047168\",\"k\":\"location\",\"q\":\"\",\"b\":\"Arrivo tra poco\"}",
+   "normalized": {
+    "b": "Arrivo tra poco",
+    "k": "location",
+    "q": "",
+    "q_display": "",
+    "to": "02492d4c-5000-4bb5-b3e1-bc2251047168"
+   },
+   "why": "a reply to a location (a pin or a live start): q is empty, a position is never copied into a quote"
   },
   {
    "name": "kind_avatar",
@@ -923,6 +953,22 @@
     "to": "2fe5325c-e6a4-43c2-984e-b8d7719df2fd"
    },
    "why": "on a voice note q is never displayed, whatever it holds"
+  },
+  {
+   "name": "q_location_not_empty",
+   "topic": "q",
+   "rule": "ok",
+   "context": "1:1",
+   "expect": "reply",
+   "serialized": "{\"qa_reply\":1,\"to\":\"02492d4c-5000-4bb5-b3e1-bc2251047168\",\"k\":\"location\",\"q\":\"45.4642110,9.1899820\",\"b\":\"Ok\"}",
+   "normalized": {
+    "b": "Ok",
+    "k": "location",
+    "q": "45.4642110,9.1899820",
+    "q_display": "",
+    "to": "02492d4c-5000-4bb5-b3e1-bc2251047168"
+   },
+   "why": "on a location q is never displayed, whatever it holds (a position in q is not shown)"
   },
   {
    "name": "q_file_name_spoof",
@@ -1521,6 +1567,29 @@
    "expected": "{\"qa_reply\":1,\"to\":\"2fe5325c-e6a4-43c2-984e-b8d7719df2fd\",\"k\":\"voice\",\"q\":\"\",\"b\":\"Ok\"}"
   },
   {
+   "name": "location",
+   "why": "a location (a pin or a live start): q is empty whatever the source, a position is never copied into a quote",
+   "input": {
+    "to": "02492d4c-5000-4bb5-b3e1-bc2251047168",
+    "k": "location",
+    "q_source": "45.4642110,9.1899820",
+    "b": "Arrivo"
+   },
+   "expected": "{\"qa_reply\":1,\"to\":\"02492d4c-5000-4bb5-b3e1-bc2251047168\",\"k\":\"location\",\"q\":\"\",\"b\":\"Arrivo\"}"
+  },
+  {
+   "name": "location_quoted_ephemeral",
+   "why": "a location with a timer: q is empty here too",
+   "input": {
+    "to": "02492d4c-5000-4bb5-b3e1-bc2251047168",
+    "k": "location",
+    "q_source": "45.4642110,9.1899820",
+    "quoted_ephemeral": true,
+    "b": "Visto"
+   },
+   "expected": "{\"qa_reply\":1,\"to\":\"02492d4c-5000-4bb5-b3e1-bc2251047168\",\"k\":\"location\",\"q\":\"\",\"b\":\"Visto\"}"
+  },
+  {
    "name": "ephemeral_quoted",
    "why": "the quoted message has a timer: q is empty so nothing of it outlives it",
    "input": {
@@ -1665,6 +1734,17 @@
    "refuse": "b.prefix"
   },
   {
+   "name": "b_location_prefix_refused",
+   "why": "the same for the location prefix (WIRE_SPEC 14.3.6): no user text can become a location message",
+   "input": {
+    "to": "73740a4d-0d1e-4f08-9f38-5ba1b8fe4472",
+    "k": "text",
+    "q_source": "x",
+    "b": "{\"qa_loc\":1,\"m\":\"pin\"}"
+   },
+   "refuse": "b.prefix"
+  },
+  {
    "name": "b_prefix_later_ok",
    "why": "a prefix that is not at the start is ordinary text",
    "input": {
@@ -1699,7 +1779,7 @@
   },
   {
    "name": "k_avatar_refused",
-   "why": "only text, file, image, video and voice are quoted",
+   "why": "only text, file, image, video, voice and location are quoted",
    "input": {
     "to": "79cff743-6a27-459b-8136-bb811247e010",
     "k": "avatar",
@@ -1872,6 +1952,49 @@
    }
   },
   {
+   "name": "found_location_pin",
+   "why": "a pin row: a link, the fixed label of the row kind and no excerpt, never coordinates",
+   "rows": [
+    {
+     "id": "02492d4c-5000-4bb5-b3e1-bc2251047168",
+     "conversation": "same",
+     "kind": "location",
+     "text": "45.4642110,9.1899820",
+     "author": "peer"
+    }
+   ],
+   "serialized": "{\"qa_reply\":1,\"to\":\"02492d4c-5000-4bb5-b3e1-bc2251047168\",\"k\":\"location\",\"q\":\"\",\"b\":\"Arrivo\"}",
+   "expected": {
+    "source": "local",
+    "link": "02492d4c-5000-4bb5-b3e1-bc2251047168",
+    "author": "peer",
+    "excerpt": "",
+    "label": "location"
+   }
+  },
+  {
+   "name": "found_location_live",
+   "why": "a live start row: the label of a live share",
+   "rows": [
+    {
+     "id": "02492d4c-5000-4bb5-b3e1-bc2251047168",
+     "conversation": "same",
+     "kind": "location",
+     "text": "",
+     "author": "peer",
+     "live": true
+    }
+   ],
+   "serialized": "{\"qa_reply\":1,\"to\":\"02492d4c-5000-4bb5-b3e1-bc2251047168\",\"k\":\"location\",\"q\":\"\",\"b\":\"Visto\"}",
+   "expected": {
+    "source": "local",
+    "link": "02492d4c-5000-4bb5-b3e1-bc2251047168",
+    "author": "peer",
+    "excerpt": "",
+    "label": "location_live"
+   }
+  },
+  {
    "name": "gone_tombstone",
    "why": "the quoted row expired or was deleted: unavailable, q not shown",
    "rows": [
@@ -1914,6 +2037,19 @@
     "link": null,
     "author": null,
     "excerpt": ""
+   }
+  },
+  {
+   "name": "not_found_location",
+   "why": "no row and k location: the generic label, q is not shown whatever it holds",
+   "rows": [],
+   "serialized": "{\"qa_reply\":1,\"to\":\"f02bb058-8a75-4fcf-9c10-b0e8eb84d098\",\"k\":\"location\",\"q\":\"45.4642110,9.1899820\",\"b\":\"Arrivo\"}",
+   "expected": {
+    "source": "q",
+    "link": null,
+    "author": null,
+    "excerpt": "",
+    "label": "location"
    }
   },
   {

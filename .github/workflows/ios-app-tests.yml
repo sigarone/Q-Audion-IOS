@@ -290,6 +290,10 @@ jobs:
             -only-testing:QAudionAppTests/IntentHandlerTests \
             -only-testing:QAudionAppTests/KmsSweepStatusTests \
             -only-testing:QAudionAppTests/LegalLinksTests \
+            -only-testing:QAudionAppTests/LocationAppTests \
+            -only-testing:QAudionAppTests/LocationShareCenterEndTests \
+            -only-testing:QAudionAppTests/LocationShareCenterTests \
+            -only-testing:QAudionAppTests/LogRedactorLocationTests \
             -only-testing:QAudionAppTests/MeshAudioRouteTests \
             -only-testing:QAudionAppTests/MeshConsentPresentationTests \
             -only-testing:QAudionAppTests/MeshConsentTests \

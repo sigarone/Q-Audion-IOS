@@ -93,7 +93,9 @@ final class BackupCoordinator: ObservableObject {
         let conversations = conversationStore.loadConversations()
         var allMessages: [Message] = []
         for c in conversations {
-            allMessages.append(contentsOf: conversationStore.loadMessages(conversationId: c.id))
+            // A location row is written as a backup holds it (docs/LOCATION_SHARING.md 1.3): the row of a live share that has not been
+            // acknowledged yet still holds the full start body, key included, and that key never leaves the device in a backup.
+            allMessages.append(contentsOf: conversationStore.loadMessages(conversationId: c.id).map { LocationBackupBody.normalised($0) })
         }
         let contacts = contactsStore.load()
 
@@ -204,7 +206,8 @@ final class BackupCoordinator: ObservableObject {
             conversationStore.upsertConversation(c)
         }
         for m in payload.messages {
-            conversationStore.appendMessage(m)
+            // What a backup says about a location row is never trusted when it is read back: the same judgement as when it was written.
+            conversationStore.appendMessage(LocationBackupBody.normalised(m))
         }
         for ct in payload.contacts {
             contactsStore.upsert(ct)

@@ -102,6 +102,9 @@ public struct GroupMessageRowUi: Identifiable, Equatable {
     /// Message replies (WIRE_SPEC 13): what the quote block of a received reply shows, resolved by the screen against the rows of the
     /// group; nil for every other row. Internal, and set after the memberwise init (a public init cannot take an app type).
     var replyQuote: ReplyQuoteDisplay? = nil
+    /// Location sharing (WIRE_SPEC 14): the body of a pin, which the bubble draws as a card; nil for every other row. Internal, set after
+    /// the memberwise init like `replyQuote`.
+    var locationBody: String? = nil
 
     public init(id: String, text: String, senderLabel: String,
                 timestamp: String, mine: Bool,

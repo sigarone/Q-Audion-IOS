@@ -3799,6 +3799,9 @@ final class AppState: ObservableObject {
         // it is what lets `submit` hold a payload instead of dropping it as
         // "unconfigured" when the provider came from a refresh, not a connect.
         wireServiceSendHub()
+        // Location sharing (WIRE_SPEC 14): the center reads the user id and the socket at call time; a share of a previous run is
+        // ended (it is never resumed) and the temporary GPX files of earlier runs are swept.
+        wireLocationShare()
         // I4: materialize the presence objectWillChange forwarding before
         // anything can publish a presence update. `lazy` means touching it
         // here is a no-op on every call after the first.
@@ -6439,6 +6442,8 @@ final class AppState: ObservableObject {
                     TelemetryService.shared.emit(kind: "ws.state", attrs: attrs)
                 }
                 self?.wsConnectionState = state
+                // A live location share builds no frame while the socket is down (WIRE_SPEC 14.6.1 rule 5).
+                LocationShareCenter.shared.socketStateChanged(authenticated: state == .authenticated)
                 // W-WSSTUCKWATCHDOG — see the property kdoc. Cancel on every
                 // transition; only re-arm while genuinely disconnected. Any
                 // progress at all (connecting/connected/authenticated)
@@ -9908,6 +9913,29 @@ final class AppState: ObservableObject {
                 self?.handleTypingIndicator(senderId: senderId, isTyping: isTyping)
             }
         }
+        // The server acknowledges every message of this device with `msg_sent` (the real message id, the client message id). It binds the
+        // server id to the row (what the old self-echo did), and for the start of a live share it is the echo that releases the frames
+        // and the stop (WIRE_SPEC 14.6.1 rule 2).
+        ws.registerHandler(type: "msg_sent") { [weak self] _, data in
+            guard let clientMsgId = data["client_msg_id"] as? String, !clientMsgId.isEmpty else { return }
+            let serverMsgId: String = (data["message_id"] as? String) ?? ""
+            DispatchQueue.main.async {
+                // The server id is bound only to a row that exists (an outgoing row with this client message id: a service message has
+                // none) and the echo goes only to a share the center knows: both decided by the center against the rows.
+                LocationShareCenter.shared.handleMsgSent(clientMsgId: clientMsgId, serverMsgId: serverMsgId) { client, server in
+                    self?.bindServerMessageIdWithRetry(clientMsgId: client, serverMsgId: server)
+                }
+            }
+        }
+        // A frame of a live location share (WIRE_SPEC 14.8): live to a connected socket, never stored, never replayed. The server
+        // stamps `sender_id`; the payload is the sealed frame.
+        ws.registerHandler(type: "eph_relay") { _, data in
+            guard let senderId = data["sender_id"] as? String,
+                  let payload = data["encrypted_payload"] as? String else { return }
+            DispatchQueue.main.async {
+                LocationShareCenter.shared.handleFrame(senderId: senderId, payload: payload)
+            }
+        }
 
         // W329: handle server `error` envelope. The server emits
         // `{type:"error", code, message}` for AUTH_FAILED, USER_BLOCKED,
@@ -10853,6 +10881,16 @@ final class AppState: ObservableObject {
             return
         }
 
+        // Location sharing (WIRE_SPEC 14.2): a pin travels in the group payload with msg_type 0 and is accepted under 1 as well. It is
+        // recognised by its prefix, never shown as the text it is; a live start in a group is rejected (`unsupported_context`).
+        if LocationCodec.hasLocationPrefix(plaintext) {
+            landIncomingGroupLocation(
+                plaintext: plaintext, groupIdUuid: groupIdUuid, groupHex: groupHex,
+                senderId: senderId, serverMsgId: serverMsgId,
+                clientMsgId: clientMsgId, ts: ts, live: live)
+            return
+        }
+
         // Fase 1B — attachment frame: the decrypted 0xE4 plaintext is a
         // GroupAttachmentEnvelope JSON, NOT text. Branch on the transport
         // msg_type (never on speculative JSON-sniffing of a text body).
@@ -11078,6 +11116,43 @@ final class AppState: ObservableObject {
         default:
             // A control message, or a file that is not a chat attachment: dropped silently, no row.
             RTLog.info("group", "filev2 nonrow=1 dropped=1 g=" + groupShort)
+        }
+        if live { sendGroupDelivered(serverMsgId) }
+    }
+
+    /// Location sharing in a group (WIRE_SPEC 14.2, 14.3.4): a valid pin becomes a row that keeps its body (the card is drawn from it)
+    /// and previews with the fixed label; a live start (never valid in a group), an invalid body and a version this build cannot read
+    /// become one placeholder row, never their content and never a key.
+    private func landIncomingGroupLocation(
+        plaintext: String, groupIdUuid: String, groupHex: String, senderId: String,
+        serverMsgId: String, clientMsgId: String?, ts: Date, live: Bool
+    ) {
+        var shown: String = LocationBodyPlaceholder.text(.unavailable)
+        var pinBody: String? = nil
+        switch LocationCodec.recognize(plaintext, channel: .group) {
+        case .location(.pin):
+            shown = LocationLabels.text(.pin)
+            pinBody = plaintext
+        case .rejected(let rejection):
+            LocationTelemetry.rejected(rejection.rawValue)
+            let placeholder: LocationBodyPlaceholder = LocationBodyPlaceholder.forRejection(rejection, body: Data(plaintext.utf8))
+            shown = LocationBodyPlaceholder.text(placeholder)
+        case .location, .notLocation:
+            break
+        }
+        let inserted = GroupMessageStore.shared.append(
+            groupHex: groupHex,
+            GroupMessageStore.Stored(
+                id: clientMsgId ?? serverMsgId,
+                serverMessageId: serverMsgId,
+                senderId: senderId,
+                mine: false,
+                text: shown,
+                ts: ts,
+                locationBody: pinBody))
+        if inserted {
+            presentGroupMessageBanner(groupHex: groupHex, senderId: senderId, plaintext: shown)
+            sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId)
         }
         if live { sendGroupDelivered(serverMsgId) }
     }
@@ -11646,6 +11721,9 @@ final class AppState: ObservableObject {
         // marker JSON would already have been replaced by the
         // "(download in arrivo)" placeholder before we get to parse.
         var decryptedRaw: String = ""
+        // The same plaintext as the bytes that were decrypted. A location body (WIRE_SPEC 14.3.2) is recognised on these, never on
+        // `decryptedRaw`: a text built from invalid UTF-8 has had its bad bytes replaced, so it is no longer the body that arrived.
+        var decryptedBytes: Data = Data()
         // 2026-09-19 — true only for the single placeholder row a CHAT frame
         // leaves behind when it is still undecryptable after its retry.
         var isUndecryptablePlaceholder = false
@@ -11782,6 +11860,7 @@ final class AppState: ObservableObject {
                 return
             }
             decryptedRaw = String(decoding: pt, as: UTF8.self)
+            decryptedBytes = pt
             // E2EE avatar transport (2026-07-30) — a successful decrypt
             // from `senderId` proves a real pairwise PSK exists with
             // them right now. Opportunistically deliver our current
@@ -11931,6 +12010,20 @@ final class AppState: ObservableObject {
             }
             plaintext = InboundMessagePolicy.undecryptablePlaceholderText
             isUndecryptablePlaceholder = true
+        }
+
+        // Location sharing (WIRE_SPEC 14.6.2): a live start is given to the receiver of this conversation (its key to the keychain,
+        // its record to the database) BEFORE the row is written. A duplicate start, or one that a delete for everyone overtook, leaves
+        // no row at all. The key is never part of the row: the write boundary keeps the local form only.
+        if !isUndecryptablePlaceholder, LocationCodec.hasLocationPrefix(decryptedBytes) {
+            let locationDecision = LocationShareCenter.shared.handleInboundBody(
+                decryptedBytes, senderId: senderId, clientMsgId: clientMsgId, viaMesh: false)
+            if locationDecision == .skipRow {
+                finishInboundFrame(
+                    serverMsgId: serverMsgId, senderId: senderId,
+                    clientMsgId: clientMsgId, settleClientKey: true)
+                return
+            }
         }
 
         // Persist into the conversation store. The conversation is
@@ -12105,6 +12198,11 @@ final class AppState: ObservableObject {
             msg, preview: plaintext, incrementUnread: !isMuted, kind: inboundKind)
         switch recorded {
         case .inserted:
+            // A live start whose share was created already ended (expired on arrival, stopped before it came, superseded) never "ends"
+            // while the app looks: its row, now written, starts to follow the timer of the conversation.
+            if !isUndecryptablePlaceholder, LocationCodec.hasLocationPrefix(decryptedBytes) {
+                LocationShareCenter.shared.inboundStartRecorded()
+            }
             // File transfer v2: the sender of a file learns it arrived the moment its descriptor lands, like the delivery receipt of a
             // text, not after the download (a video or a document is only fetched on a tap).
             sendFileV2DeliveredReceipt(wireId: fileV2WireId, senderId: senderId)
@@ -12461,6 +12559,11 @@ final class AppState: ObservableObject {
             switch env {
             case .screenshotRequest, .screenshotResponse, .screenshotLock:
                 break
+            case .locStop(let stopTarget, _):
+                // Silent control type (WIRE_SPEC 14.7): never a row, a placeholder, an unread or a notification. The receiver of
+                // the conversation applies it after the author check (a stop that overtook its start is remembered).
+                LocationShareCenter.shared.handleStop(senderId: senderId, target: stopTarget)
+                return
             case .delete, .edit, .reaction:
                 handleControlEnvelope(env, senderId: senderId)
                 return
@@ -13196,7 +13299,7 @@ final class AppState: ObservableObject {
         // the caller doesn't route these variants here — see the parse-guard in
         // `handleInboundServicePayload`.)
         switch env {
-        case .screenshotRequest, .screenshotResponse, .screenshotLock:
+        case .screenshotRequest, .screenshotResponse, .screenshotLock, .locStop:
             return
         case .delete, .edit, .reaction:
             break
@@ -13206,11 +13309,16 @@ final class AppState: ObservableObject {
         case .delete(let t, _): target = t
         case .edit(let t, _, _): target = t
         case .reaction(let t, _, _): target = t
-        case .screenshotRequest, .screenshotResponse, .screenshotLock:
+        case .screenshotRequest, .screenshotResponse, .screenshotLock, .locStop:
             return  // unreachable: handled by the guard above
         }
         guard let (convId, original) = store.findByClientMsgId(target) else {
             print("[AppState] qa_ctl envelope: target \(target.prefix(8))… not found")
+            // A delete for everyone can overtake the start of a live share (WIRE_SPEC 14.7): the target is remembered for the
+            // conversation of the sender, for exactly the time the contract says.
+            if case .delete = env {
+                LocationShareCenter.shared.handleDeleteForEveryone(senderId: envelopeSenderId, target: target)
+            }
             return
         }
         // W87: reactions DON'T require a spoof check — any peer can
@@ -13244,7 +13352,17 @@ final class AppState: ObservableObject {
         switch env {
         case .delete:
             applied = store.applyDeleteByClientMsgId(target)
+            // A live share started by this row ends with it, and no live-share card is left (WIRE_SPEC 14.7).
+            if applied {
+                LocationShareCenter.shared.handleDeleteForEveryone(senderId: envelopeSenderId, target: target)
+            }
         case .edit(_, let newBody, _):
+            // WIRE_SPEC 14.3.6: the coordinates of a pin, and a live start, never change after they were sent. An edit whose target
+            // is a location row, or whose new body is a location message (valid or not), is dropped without a trace: nothing is
+            // displayed, stored or notified.
+            if LocationCodec.hasLocationPrefix(original.plaintext) || LocationCodec.hasLocationPrefix(newBody) {
+                return
+            }
             // An edit rewrites an existing row's text BEHIND the inbound write
             // boundary, so it must pass the same structural gate: otherwise a peer
             // could turn one of its messages into service-shaped text (2026-09-19).
@@ -13255,7 +13373,7 @@ final class AppState: ObservableObject {
             applied = store.applyEditByClientMsgId(target, newPlaintext: newBody)
         case .reaction:
             applied = false  // handled above
-        case .screenshotRequest, .screenshotResponse, .screenshotLock:
+        case .screenshotRequest, .screenshotResponse, .screenshotLock, .locStop:
             applied = false  // unreachable: handled by the top-of-function guard
         }
         guard applied else { return }
@@ -17840,6 +17958,12 @@ final class AppState: ObservableObject {
             print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… id is not a canonical UUID — ignoring")
             return
         }
+        // The row of a live location share, once the share has its record, holds no key and no position (WIRE_SPEC 14.6.2 step 6): there
+        // is nothing in it to send again, and the key is never sent a second time.
+        guard !LocationRowForm.isLocalLiveForm(original.plaintext) else {
+            RTLog.info("chat", "decrypt_nack resend=0 reason=live_share_row")
+            return
+        }
         let already = AppState.nackResendCounts[targetClientMsgId] ?? 0
         guard already < AppState.maxNackResendsPerTarget else {
             print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… resend cap reached — ignoring")
@@ -18115,6 +18239,8 @@ final class AppState: ObservableObject {
         // The service-notice inbox is a singleton polled from boot: its list and unread dot belong to the account
         // that left and must not show under the next one.
         NoticeService.shared.resetForAccountChange()
+        // Location sharing: every share ends and nothing held for the account that left stays in memory (WIRE_SPEC 14.6.1 rule 7).
+        LocationShareCenter.shared.accountLeft()
     }
 
     /// Idempotent: returns the live call engine, building it first when there
@@ -24170,6 +24296,23 @@ extension AppState {
                 self?.noteControlSessionInstalled(peerId: installedPeer)
             }
         }
+    }
+
+    /// Location sharing (WIRE_SPEC 14, docs/LOCATION_SHARING.md): binds the center to the account and the socket with primitive closures
+    /// (CLAUDE.md section 16), each reading the CURRENT user and provider at call time, so binding before any provider exists is safe and
+    /// binding twice is idempotent. `start()` ends the share of a previous run (rule 10) and reconciles the receivers.
+    func wireLocationShare() {
+        LocationShareCenter.shared.configure(LocationShareCenter.Environment(
+            currentUserId: { [weak self] in self?.currentUserId },
+            socketReady: { [weak self] in self?.liveProvider?.persistentConnection.state == .authenticated },
+            sendEphemeral: { [weak self] recipientId, payload in
+                guard let socket = self?.liveProvider?.getWebSocketClient() else { return false }
+                return socket.trySend(type: "eph_relay", data: ["recipient_id": recipientId, "encrypted_payload": payload])
+            },
+            requestConnection: { [weak self] in
+                self?.liveProvider?.getWebSocketClient().requestConnection()
+            }))
+        LocationShareCenter.shared.startOnce()
     }
 }
 

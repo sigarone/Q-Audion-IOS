@@ -32,6 +32,10 @@
 # (Mesh/MeshLog.swift, MeshLinkFraming.swift, MeshRelayGate.swift, MeshBtCallPause.swift,
 # BleMeshTransport.swift, MeshRuntime.swift, MeshOutboxDrain.swift, AppState.swift);
 #
+# test_ship_ios_location_redaction.py legge i sette modelli della regola delle coordinate da
+# QAudionEngine/Sources/QAudionEngine/Location/LocationLogScrub.swift e le righe di redaction_cases da
+# QAudionEngine/Tests/QAudionEngineTests/Resources/kat/location-kat.json (copia byte per byte del file del server).
+#
 # Nessun segreto, nessuna rete; sola lettura del repository.
 
 name: Test del filtro dei log
@@ -43,6 +47,10 @@ on:
       - 'scripts/ship-ios-logs.py'
       - 'scripts/ship-server-logs.py'
       - 'scripts/test_ship_*'
+      - 'scripts/test_redact_structured_parity.py'
+      # La regola delle coordinate (WIRE_SPEC 14.10): i sette modelli di LocationLogScrub.swift e il file dei vettori.
+      - 'QAudionEngine/Sources/QAudionEngine/Location/LocationLogScrub.swift'
+      - 'QAudionEngine/Tests/QAudionEngineTests/Resources/kat/location-kat.json'
       - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift'
       - 'QAudionEngine/Tests/QAudionEngineTests/Diagnostics/AudioWireLinesTests.swift'
       - 'QAudionApp/AppState.swift'
@@ -106,6 +114,13 @@ jobs:
           echo "=== scripts/test_ship_redactor_fuzz.py --server"
           if ! python -I scripts/test_ship_redactor_fuzz.py 4000 7 --server; then
             echo "::error file=scripts/test_ship_redactor_fuzz.py::il fuzz --server e' uscito con codice diverso da 0"
+            status=1
+          fi
+          # Il porting di redactStructured (LogRedactor.swift), con la regola delle coordinate.
+          n=$((n + 1))
+          echo "=== scripts/test_redact_structured_parity.py"
+          if ! python -I scripts/test_redact_structured_parity.py; then
+            echo "::error file=scripts/test_redact_structured_parity.py::il test e' uscito con codice diverso da 0"
             status=1
           fi
           echo "test eseguiti: $n"

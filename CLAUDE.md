@@ -808,6 +808,16 @@ the same pattern is what triggers it.
 shape. The bisect commit chain is v1.0.386→v1.0.397 if this happens
 again — `git log --oneline v1.0.385..v1.0.398` reads like a story.
 
+### 17. Location sharing (WIRE_SPEC section 14)
+
+An instant position (a pin) and a live share, both end-to-end encrypted, behind the remote switch `location_share.enabled` (off by default, per-user overlay allowed: `FeatureFlags.overlayEligibleKeys`). The platform contract is `docs/LOCATION_SHARING.md`; the vectors are `location-kat.json` (byte copy of the server's file, pinned).
+
+- Rules and state machines live in `QAudionEngine/.../Location/` (codec, conversion, frame crypto, `LocationShareSender`, `LocationShareReceiver`, row form and labels, sampling tiers, card state) and in `Persistence/LocationShareStore.swift` (the `live_shares` tables, migration `v10-live-shares`; the position is one sealed column, the share key is in the Keychain). Keep them pure and tested in `QAudionEngineTests`.
+- The app side is a thin wiring: `Services/LocationShareCenter*.swift` (receivers per conversation, one sender per share, ticks, restart recovery), `LocationService.swift` (the only `CLLocationManager`, When In Use, background session only while a share runs), `LocationCard*.swift`, the views `Location*.swift`. While a share runs the app holds a `ConnectionToken` so the socket stays open in the background (W-CONNWANT).
+- Every place that derives display text from a body goes through `MessageReplyCodec.shownText(ofBody:)` (a fixed label for a location) or the write boundary `FileV2ChatBody.applyInboundBoundary` (a pin keeps its body, a live start keeps its local form without the key, a rejected body is one placeholder). Never show or log a position, an accuracy, an `age`, a `sid` or a `k`; the redactors carry the coordinate rule (`LocationLogScrub`).
+- A counter is never sealed twice under one share key: one `LocationShareSender` per share, built once per `sid` in the process; a process that starts again sends the stop only (`recoverSendsAfterRestart`). Do not put the key in anything the system can bring back after a restart.
+- Both send paths (`ChatMessageSendService.sendEncryptedDurable`, `ChatOutboxDrain`) call `LocationShareCenter.startBeingSent` right before the bytes of a message reach the socket and `startNotSent` when the hand-over fails: a start counts as left from the hand-over, so a stop that arrives during the send is held for the echo. The center reaches the stores only through `LocationShareCenter.Ports` (rows and outbox, receiver stores, the durable stop), which the app tests replace with fakes.
+
 ## Audio / call-path changes — mandatory gate (added 2026-08-30 after a 13-build regression spiral)
 
 Before ANY build that touches the audio, session or crypto path:

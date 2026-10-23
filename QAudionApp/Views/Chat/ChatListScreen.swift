@@ -566,6 +566,8 @@ struct ChatListScreen: View {
             container.loadFromStore()
         }
         .onAppear { updateGroupRows() }
+        // A live location share of a previous run was ended at launch (it is never resumed): the user is told once.
+        .locationInterruptedAlert()
         .onChange(of: searchText) { _ in updateGroupRows() }
         .onChange(of: groupRefreshToken) { _ in updateGroupRows() }
         .onChange(of: groupRegistry.entries) { _ in updateGroupRows() }
@@ -1206,6 +1208,10 @@ struct ChatListScreen: View {
                             .qaudionStyle(type.titleSmall)
                             .foregroundStyle(scheme.onSurface)
                             .lineLimit(1)
+                        // "Live" while the user shares their position in this conversation (nothing is drawn otherwise).
+                        if item.kind != .group {
+                            LocationLiveChip(peerUserId: item.peerUserId)
+                        }
                         Spacer(minLength: 6)
                         Text(formatTime(item.lastActivity))
                             .qaudionStyle(type.labelSmall)

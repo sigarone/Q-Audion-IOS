@@ -64,6 +64,12 @@ public enum ChatControlEnvelope: Equatable {
     /// Peer re-locks screenshots for this conversation. No payload; no consent
     /// needed since it only restores the more-secure (locked) state.
     case screenshotLock(ts: Int64?)
+    /// The sender of a live location share ends it (WIRE_SPEC section 14.7): `target` is the client message id of the live start.
+    /// A SILENT control type: it never creates a row, a placeholder, an unread or a notification, and it is applied only when `target`
+    /// names a live-start row of the same 1:1 conversation whose author is the account that sent the envelope (the receiver of the live
+    /// shares, `LocationShareReceiver`, decides). Validated by the strict byte profile of `LocationStopControl`, not by
+    /// `JSONSerialization`; `ts` is informational.
+    case locStop(target: String, ts: Int64?)
 
     public static let qaCtlVersion: Int = 1
 
@@ -74,6 +80,8 @@ public enum ChatControlEnvelope: Equatable {
         case bodyTooLarge(Int)
         case emptyBody
         case emojiTooLong(Int)
+        /// A `loc_stop` envelope that breaks the strict profile; the associated value is the drop label (never content).
+        case invalidLocStop(String)
 
         public var errorDescription: String? {
             switch self {
@@ -83,6 +91,7 @@ public enum ChatControlEnvelope: Equatable {
             case .bodyTooLarge(let n): return "edit new_body too large: \(n) bytes"
             case .emptyBody: return "edit new_body empty / whitespace-only"
             case .emojiTooLong(let n): return "reaction emoji too long: \(n) chars"
+            case .invalidLocStop(let reason): return "invalid loc_stop: \(reason)"
             }
         }
     }
@@ -120,6 +129,14 @@ public enum ChatControlEnvelope: Equatable {
     /// malformed.
     public static func parse(_ jsonText: String) throws -> ChatControlEnvelope? {
         guard let data = jsonText.data(using: .utf8) else { return nil }
+        // `loc_stop` (WIRE_SPEC 14.7) is validated on BYTES by the strict profile (unique names, depth, size, canonical integers), never
+        // by `JSONSerialization`. An envelope that names it and breaks the profile throws: it is dropped silently, never text.
+        if LocationStopControl.names(utf8: data) {
+            switch LocationStopControl.parse(utf8: data) {
+            case .success(let stop): return .locStop(target: stop.target, ts: stop.ts)
+            case .failure(let drop): throw Error.invalidLocStop(drop.rawValue)
+            }
+        }
         guard let any = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
@@ -154,6 +171,9 @@ public enum ChatControlEnvelope: Equatable {
         case "ss_lock":
             let ts: Int64? = (any["ts"] as? Int64) ?? (any["ts"] as? NSNumber)?.int64Value
             return .screenshotLock(ts: ts)
+        case "loc_stop":
+            // A well-formed `loc_stop` returned above; one that reaches this lenient path broke the strict profile.
+            throw Error.invalidLocStop("profile")
         default:
             break
         }
@@ -206,6 +226,13 @@ public enum ChatControlEnvelope: Equatable {
     // MARK: - Encode
 
     public func toJsonString() throws -> String {
+        // The canonical form of a stop (members in a fixed order, canonical escaping), not `JSONSerialization` output.
+        if case .locStop(let target, let ts) = self {
+            switch LocationStopControl.build(target: target, ts: ts ?? Self.nowTsSeconds()) {
+            case .success(let text): return text
+            case .failure(let refusal): throw Error.invalidLocStop(refusal.rawValue)
+            }
+        }
         let data = try JSONSerialization.data(
             withJSONObject: toJsonDict(),
             options: [.sortedKeys]
@@ -263,6 +290,14 @@ public enum ChatControlEnvelope: Equatable {
             var d: [String: Any] = [
                 "qa_ctl": Self.qaCtlVersion,
                 "t": "ss_lock",
+            ]
+            if let ts = ts { d["ts"] = ts }
+            return d
+        case .locStop(let target, let ts):
+            var d: [String: Any] = [
+                "qa_ctl": Self.qaCtlVersion,
+                "t": "loc_stop",
+                "target": target,
             ]
             if let ts = ts { d["ts"] = ts }
             return d

@@ -198,6 +198,8 @@ struct ChatDetailScreen: View {
     @State private var forwardingMessage: Message? = nil
     /// W445: Document picker state.
     @State private var showingDocPicker: Bool = false
+    /// Location sharing (WIRE_SPEC 14): the share sheet, reachable only while the remote switch is on.
+    @State private var showingLocationSheet: Bool = false
     /// W447: gate for the pre-send per-attachment timer picker. Non-nil
     /// → the confirmationDialog is up and holds the payload that will
     /// be sent once the user picks a timer (or discarded on cancel).
@@ -1117,6 +1119,9 @@ struct ChatDetailScreen: View {
                         .qaudionStyle(type.labelSmall)
                 }
                 .foregroundStyle(scheme.onSurfaceVariant)
+            } else if LocationCodec.hasLocationPrefix(msg.plaintext) {
+                // A pin or a live share (WIRE_SPEC 14): drawn as a card, never as the text it is made of.
+                LocationBubbleContent(message: msg)
             } else if let fileInfo = FileV2ChatBody.bubbleInfo(for: msg) {
                 // File transfer v2: the body of such a message is a descriptor, never shown as text (WIRE_SPEC 12.7.1).
                 fileV2Bubble(msg, fileInfo, galleryItems: galleryItems)
@@ -1382,6 +1387,11 @@ struct ChatDetailScreen: View {
         guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else {
             return
         }
+        // A pin and a live share are not forwarded (WIRE_SPEC 14.3.6).
+        guard !LocationCodec.hasLocationPrefix(msg.plaintext) else {
+            snackbar?.show(.init(text: LocationCardStrings.forwardRefused, severity: .warning, durationSeconds: 3))
+            return
+        }
         // A forwarded file would be a new file (new key): not in this version, and the descriptor itself is never forwarded.
         guard FileV2ChatBody.bubbleInfo(for: msg) == nil else {
             snackbar?.show(.init(
@@ -1575,6 +1585,8 @@ struct ChatDetailScreen: View {
     @ViewBuilder
     private var composerView: some View {
         VStack(spacing: 0) {
+            // The live location share of this conversation, with its "Interrompi" (nothing is drawn when none runs here).
+            LocationLiveStrip(peerUserId: container.viewModel.conversation.peerUserId)
             // BLE-mesh transport chip — shown while a mesh peer is the active
             // send target for this conversation. Clearing it returns to the
             // normal transport.
@@ -1634,6 +1646,9 @@ struct ChatDetailScreen: View {
             onAttach: { showAttachmentChoice = true },
             // W445: file attachment callback — opens UIDocumentPickerViewController.
             onAttachFile: { showingDocPicker = true },
+            // Location sharing: its own entry, not behind `Capability.files` (nothing is uploaded and it is free); hidden while the
+            // remote switch `location_share.enabled` is off.
+            onAttachLocation: locationAttachAction,
             // Entitlements Task 5 — Capability.files (server already
             // enforces this at tus HandlePost/IssueToken, Phase 5 server
             // plan Task 2; this is the matching UI trigger). Gates BOTH
@@ -1655,6 +1670,22 @@ struct ChatDetailScreen: View {
             onVoiceNoteBlocked: callAudioBlock
         )
         }
+        .sheet(isPresented: $showingLocationSheet) { locationShareSheetView }
+    }
+
+    /// The composer's location entry: present only while location sharing is enabled.
+    private var locationAttachAction: (() -> Void)? {
+        guard LocationShareCenter.isFeatureEnabled else { return nil }
+        return { showingLocationSheet = true }
+    }
+
+    private var locationShareSheetView: some View {
+        LocationShareSheet(
+            peerName: resolvedPeerTitle,
+            allowsLive: container.viewModel.conversation.kind == .oneToOne,
+            onSendPin: { reading in container.sendLocationPin(reading) },
+            onStartLive: { reading, duration in container.startLiveLocation(reading, duration: duration) })
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: - Composer text-change callback (W260)
@@ -1760,16 +1791,39 @@ struct ChatDetailScreen: View {
         guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else { return }
         // A reply is not edited: the edit would replace the object and lose the quote.
         guard !MessageReplyCodec.hasReplyPrefix(msg.plaintext) else { return }
+        // Nor a pin or a live share (WIRE_SPEC 14.3.6).
+        guard !LocationCodec.hasLocationPrefix(msg.plaintext) else { return }
         editingTarget = .init(messageId: msg.id.uuidString, previewText: msg.plaintext)
         container.composerText = msg.plaintext
     }
 
     private func copyMessage(messageId: UUID) {
         guard let msg = container.viewModel.messages.first(where: { $0.id == messageId }) else { return }
+        // A location copies its coordinates (local-only pasteboard, two-minute expiry), while the card has a position.
+        if LocationCodec.hasLocationPrefix(msg.plaintext) {
+            let state: LocationCardState = LocationShareCenter.shared.cardState(for: msg)
+            if let lat = state.latE7, let lon = state.lonE7 {
+                LocationCardActions.copyCoordinates(latE7: lat, lonE7: lon)
+            }
+            return
+        }
         #if canImport(UIKit)
         // Copying a reply copies `b` (WIRE_SPEC 13.7), never the object.
         UIPasteboard.general.string = MessageReplyCodec.shownText(ofBody: msg.plaintext)
         #endif
+    }
+
+    /// A pin or a live share (WIRE_SPEC 14): drawn as a card, not editable, not forwardable.
+    private func isLocationMessage(_ id: UUID) -> Bool {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == id }) else { return false }
+        return msg.deletedAt == nil && LocationCodec.hasLocationPrefix(msg.plaintext)
+    }
+
+    /// "Copia coordinate" is offered while the card has a position: a pin, or a running share.
+    private func locationCopyEnabled(_ id: UUID) -> Bool {
+        guard let msg = container.viewModel.messages.first(where: { $0.id == id }),
+              LocationCodec.hasLocationPrefix(msg.plaintext) else { return false }
+        return LocationShareCenter.shared.cardState(for: msg).hasPosition
     }
 
     /// A message of the file transfer v2 format (a document received, or being sent / sent): its body is a descriptor, not text.
@@ -1957,7 +2011,7 @@ struct ChatDetailScreen: View {
     private func bubbleActionSheet(for targetId: UUID) -> some View {
         BubbleActionSheet(
             isOwn: messageIsOwn(targetId),
-            isText: !isFileMessage(targetId),  // a file message is not text: no edit, no copy
+            isText: !isFileMessage(targetId) && !isLocationMessage(targetId),  // a file or a location is not text: no edit, no text copy
             onReact: { emoji in
                 // W87: toggle a qa_ctl:1 reaction. ChatContainer
                 // applies the local toggle immediately + emits the
@@ -1999,6 +2053,8 @@ struct ChatDetailScreen: View {
             canReply: canReplyTo(messageId: targetId),
             onReply: { startReply(messageId: targetId) },
             isReply: isReplyMessage(targetId),
+            isLocation: isLocationMessage(targetId),
+            locationCopyEnabled: locationCopyEnabled(targetId),
             // W446: media save/share — gated by mediaKind, routed
             // back to the specific row's ImageBubbleContent /
             // VoiceNoteBubbleContent via the id-scoped bindings

@@ -31,6 +31,10 @@ struct MessageComposer: View {
     /// W445: generic file attachment callback. Opens UIDocumentPickerViewController
     /// via the parent screen. Default no-op preserves all existing call sites.
     var onAttachFile: (() -> Void)? = nil
+    /// Location sharing (WIRE_SPEC 14): opens the share sheet. `nil` hides the button, which is what the screen passes while the remote
+    /// switch is off, so the composer carries no trace of the feature. NOT behind `filesUnlocked`: nothing is uploaded and location
+    /// sharing is free, so it has its own enablement.
+    var onAttachLocation: (() -> Void)? = nil
     /// Entitlements Task 5 — whether `Capability.files` is entitled.
     /// Defaults to `true` so every call site that doesn't pass this
     /// (currently none besides `ChatDetailScreen`, but the preview below
@@ -70,6 +74,7 @@ struct MessageComposer: View {
          recordingElapsedSeconds: TimeInterval = 0,
          onAttach: @escaping () -> Void = {},
          onAttachFile: (() -> Void)? = nil,
+         onAttachLocation: (() -> Void)? = nil,
          filesUnlocked: Bool = true,
          onFilesLocked: (() -> Void)? = nil,
          onSend: @escaping () -> Void = {},
@@ -85,6 +90,7 @@ struct MessageComposer: View {
         self.recordingElapsedSeconds = recordingElapsedSeconds
         self.onAttach = onAttach
         self.onAttachFile = onAttachFile
+        self.onAttachLocation = onAttachLocation
         self.filesUnlocked = filesUnlocked
         self.onFilesLocked = onFilesLocked
         self.onSend = onSend
@@ -304,6 +310,16 @@ struct MessageComposer: View {
                         .frame(width: 30, height: 36)
                 }
                 .accessibilityLabel("Allega file")
+            }
+            if let attachLocation = onAttachLocation {
+                Button(action: attachLocation) {
+                    Image(systemName: "mappin.and.ellipse")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(scheme.onSurfaceVariant)
+                        .frame(width: 30, height: 36)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(LocationCardStrings.attachAccessibility)
             }
 
             // Multi-line text field. iOS 16+ TextField with axis: .vertical

@@ -53,6 +53,15 @@ public final class PeerIdentityPinStore {
     /// identity never collide.
     private static let keychainService = "com.bcrypto.qaudion.peerpins"
 
+    /// Posted when the identity keys known for a peer CHANGED: a pin was replaced (a rotation) or a pin was added for a peer that
+    /// already had one (a device added to the peer's account). A live location share with that peer ends when it fires (WIRE_SPEC
+    /// 14.6.1 rule 7). `userInfo["contactId"]` is the peer's user id. It carries no key and no content, and nothing else listens for it.
+    public static let didChangeNotification = Notification.Name("qaudion.peerIdentityPin.didChange")
+
+    private static func announceChange(contactId: String) {
+        NotificationCenter.default.post(name: didChangeNotification, object: nil, userInfo: ["contactId": contactId])
+    }
+
     public init() {}
 
     // MARK: - Account keying (D11 per-(peer,device))
@@ -190,6 +199,8 @@ public final class PeerIdentityPinStore {
         }
 
         #if canImport(Security)
+        // A device added to a peer that already has a pin is a change of what is known about the peer.
+        let peerHadAnotherPin: Bool = !allPinnedKeys(contactId: contactId).isEmpty
         let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
@@ -214,6 +225,7 @@ public final class PeerIdentityPinStore {
             // caller fails closed; the pin can be retried on a later handshake.
             return .mismatch
         }
+        if peerHadAnotherPin { Self.announceChange(contactId: contactId) }
         return .pinnedNew
         #else
         return .mismatch
@@ -272,8 +284,11 @@ public final class PeerIdentityPinStore {
                 kSecAttrAccount as String: account
             ]
             let update: [String: Any] = [kSecValueData as String: ed25519Pub]
-            return SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecSuccess ? .overwritten : .failed
+            let replaced: Bool = SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecSuccess
+            if replaced { Self.announceChange(contactId: contactId) }
+            return replaced ? .overwritten : .failed
         }
+        let peerHadAnotherPin: Bool = !allPinnedKeys(contactId: contactId).isEmpty
         let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
@@ -281,7 +296,9 @@ public final class PeerIdentityPinStore {
             kSecValueData as String: ed25519Pub,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess ? .added : .failed
+        let added: Bool = SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        if added && peerHadAnotherPin { Self.announceChange(contactId: contactId) }
+        return added ? .added : .failed
         #else
         return .failed
         #endif

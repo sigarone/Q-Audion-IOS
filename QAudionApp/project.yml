@@ -121,6 +121,9 @@ targets:
       - sdk: PushKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreNFC.framework
+      # Location sharing (WIRE_SPEC 14): CLLocationManager (When In Use only) and the system LocationButton.
+      - sdk: CoreLocation.framework
+      - sdk: CoreLocationUI.framework
       - sdk: Contacts.framework
       - sdk: ContactsUI.framework
       # CarPlay/Siri state-of-the-art plan S1 — "Hey Siri, chiama X su

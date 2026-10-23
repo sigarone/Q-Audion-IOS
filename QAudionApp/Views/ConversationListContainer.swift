@@ -123,8 +123,19 @@ final class ConversationListContainer: ObservableObject {
     }
 
     func deleteConversation(conversationId: UUID) {
+        // The live location shares with this peer end with the conversation (WIRE_SPEC 14.6.1 rule 7), those that are received and
+        // that this device sends: the peer is read BEFORE the conversation goes, and the shares end first, so that nothing keeps
+        // sealing positions for a chat that is no longer there.
+        if let peerUserId = store.loadConversations().first(where: { $0.id == conversationId })?.peerUserId {
+            onConversationDeleted(peerUserId)
+        }
         store.deleteConversation(id: conversationId)
         loadFromStore()
+    }
+
+    /// What deleting a conversation tells the rest of the app, with its peer: the location shares end. A seam (internal) for the tests.
+    var onConversationDeleted: @MainActor (_ peerUserId: String) -> Void = { peerUserId in
+        LocationShareCenter.shared.conversationCleared(peerUserId: peerUserId)
     }
 
     /// W140: clear the unread badge on a single row. Useful when the

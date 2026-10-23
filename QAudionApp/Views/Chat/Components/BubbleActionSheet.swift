@@ -59,6 +59,10 @@ struct BubbleActionSheet: View {
     var onReply: () -> Void = {}
     /// A reply cannot be edited: the edit would replace the object and lose the quote.
     var isReply: Bool = false
+    /// A pin or a live share (WIRE_SPEC 14): it is not text, so it cannot be edited or forwarded (copying the coordinates is allowed
+    /// while the card has a position: a pin, or a running share).
+    var isLocation: Bool = false
+    var locationCopyEnabled: Bool = false
     /// W446: media type of this bubble — gates the save/share rows
     /// below. Default `.none` preserves old behaviour for text-only
     /// call sites.
@@ -175,13 +179,21 @@ struct BubbleActionSheet: View {
                               danger: false,
                               action: { onShareMedia(); dismiss() })
                 }
+                if isLocation && locationCopyEnabled {
+                    actionRow(label: LocationCardStrings.copyCoordinates,
+                              icon: "doc.on.doc",
+                              danger: false,
+                              action: { onCopy(); dismiss() })
+                }
                 // W445: forward action — always visible (own and peer messages
                 // can both be forwarded). Parity with Android ChatDetailScreen.kt
-                // commented-out ActionRow for "Inoltra".
-                actionRow(label: "Inoltra",
-                          icon: "arrowshape.turn.up.right.fill",
-                          danger: false,
-                          action: { onForward(); dismiss() })
+                // commented-out ActionRow for "Inoltra". Not for a location (WIRE_SPEC 14.3.6).
+                if !isLocation {
+                    actionRow(label: "Inoltra",
+                              icon: "arrowshape.turn.up.right.fill",
+                              danger: false,
+                              action: { onForward(); dismiss() })
+                }
                 if isOwn {
                     actionRow(label: "Elimina per tutti",
                               icon: "trash",

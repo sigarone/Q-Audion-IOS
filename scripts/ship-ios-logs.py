@@ -431,6 +431,40 @@ def _nfkc(s):
 # 1a. Mirror of RuntimeLogSink.redact() (RuntimeLogSink.swift lines 246-255),
 # applied in the SAME order (secretPrefixed first, then longBlob). We MIRROR it
 # only to stay aligned; the real protection is the positive gate below.
+# 0. COORDINATE RULE (WIRE_SPEC section 14.10). A position that reaches a log through another code path is removed here, FIRST, before the
+# benign key=value tokens step out of the sweeps below (`acc=12` is a harmless-looking token). Location code never logs a position, an
+# accuracy, an age, a share id or a share key; this is the net under it. The seven shapes, with the SAME patterns, as
+# QAudionEngine/Sources/QAudionEngine/Location/LocationLogScrub.swift (the iOS redactors) and scripts/test_redact_structured_parity.py:
+#   1 a whole location body   2 a geo: URI   3 a link to a map service   4 key-value forms of lat/lon/lng/latitude/longitude/acc/accuracy
+#   (a latency such as lat=12ms stays)   5 ll=, q=, daddr=, destination=... with a numeric pair   6 a pair of decimals with 3+ decimals
+#   7 a share id or key written with its member name (sid=, k=).
+# The `redaction_cases` of location-kat.json pin the shapes (scripts/test_ship_ios_location_redaction.py).
+LOCATION_PLACEHOLDER = "[REDACTED:loc]"
+LOCATION_PATTERNS = (
+    r'''\{\s*\\?"qa_loc\\?"\s*:[^}]*\}?''',
+    r'''(?i)\bgeo:[^\s"'<>]*''',
+    r'''(?i)https?://(?:[a-z0-9-]+\.)*(?:maps\.apple\.com|google\.[a-z.]+/maps|maps\.google\.[a-z.]+|goo\.gl/maps|maps\.app\.goo\.gl)[^\s"'<>]*''',
+    r'''(?i)["']?\b(?:lat|lon|lng|latitude|longitude|acc|accuracy)\b["']?\s*[:=]\s*["']?[-+]?\d+(?:\.\d+)?(?![\d.])(?!\s?ms\b)["']?''',
+    r'''(?i)\b(?:ll|sll|q|daddr|saddr|destination|query|center)\s*=\s*[-+]?\d+(?:\.\d+)?\s*(?:,|;|%2[Cc])\s*[-+]?\d+(?:\.\d+)?''',
+    r'''(?<![\d.])[-+]?\d{1,3}\.\d{3,}(?:\s*[,;]\s*|\s*%2[Cc]\s*|\s+)[-+]?\d{1,3}\.\d{3,}(?!\d)''',
+    r'''(?i)["']?\b(?:sid|k|share[_-]?key|share[_-]?id)\b["']?\s*[:=]\s*["']?[A-Za-z0-9+/_-]{20,}={0,2}["']?''',
+)
+RE_LOCATION_RULES = tuple(re.compile(p) for p in LOCATION_PATTERNS)
+RE_ASCII_DIGIT = re.compile(r"[0-9]")
+
+
+def _scrub_location(s, placeholder=LOCATION_PLACEHOLDER):
+    """Remove every position shape of section 14.10 from `s`. Every shape but the last holds a digit (or the prefix of a body, which
+    always carries one), so a text without a digit skips them; the share id and key rule always runs (a base64 text can have no digit)."""
+    has_digit = RE_ASCII_DIGIT.search(s) is not None
+    last = len(RE_LOCATION_RULES) - 1
+    for index, rx in enumerate(RE_LOCATION_RULES):
+        if not has_digit and index != last:
+            continue
+        s = rx.sub(placeholder, s)
+    return s
+
+
 PLACEHOLDER = "[REDACTED:secret]"
 RE_SECRET_PREFIXED = re.compile(
     r"(?i)(bearer|authorization|token|secret|api[-_]?key|password)([\"'\s:=]+)\S+")
@@ -2022,6 +2056,8 @@ def _scrub_body_ex(body):
     by construction and invisible to the blob/hex/JWT/phone sweeps."""
     # private-use sentinels can never come from the device: strip them first.
     s = RE_PRIVATE_USE.sub("", body)
+    # The coordinate rule runs first (WIRE_SPEC 14.10): a position, a geo: URI, a map link, a share id or key.
+    s = _scrub_location(s)
     # Mirror of redact(): secretPrefixed first, then longBlob (Swift order).
     s = RE_SECRET_PREFIXED.sub(PLACEHOLDER, s)
     # W-KVPRECISION: provably-benign key=value tokens step out of the sweeps.

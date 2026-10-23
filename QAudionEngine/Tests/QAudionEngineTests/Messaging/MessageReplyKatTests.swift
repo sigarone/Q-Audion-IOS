@@ -73,12 +73,14 @@ struct ReplyKat: Decodable {
         let id: String, conversation: String, kind: String, text: String, author: String
         let view_once: Bool?
         let gone: Bool?
+        let live: Bool?
     }
     struct Expected: Decodable {
         let source: String
         let link: String?
         let author: String?
         let excerpt: String
+        let label: String?
     }
     struct ResolutionVector: Decodable {
         let name: String, why: String, serialized: String
@@ -110,8 +112,8 @@ struct ReplyKat: Decodable {
 /// This code was written on a machine that cannot compile Swift: the macOS CI job is the only thing that has run it.
 final class MessageReplyKatTests: XCTestCase {
 
-    static let pinnedSHA256 = "d09254402dd11a35889539ba0cef3e64ae2c999072a29ca02c2ff9cb7130abb5"
-    static let pinnedLength = 140_668
+    static let pinnedSHA256 = "e586babcb21499b08940e7f87fd23d7ae5e48b59f09c1a8944b30bb2dafc9bfa"
+    static let pinnedLength = 144_980
 
     // MARK: The file
 
@@ -165,19 +167,19 @@ final class MessageReplyKatTests: XCTestCase {
         let kat = try loadKat()
         XCTAssertEqual(kat.format, "qaudion-reply-kat")
         XCTAssertEqual(kat.version, 1)
-        XCTAssertEqual(kat.constants.count, 13)
-        XCTAssertEqual(kat.recognition.count, 25)
-        XCTAssertEqual(kat.recognition.filter { $0.expect == "text" }.count, 10)
+        XCTAssertEqual(kat.constants.count, 14)
+        XCTAssertEqual(kat.recognition.count, 26)
+        XCTAssertEqual(kat.recognition.filter { $0.expect == "text" }.count, 11)
         XCTAssertEqual(kat.recognition.filter { $0.expect == "reply" }.count, 2)
         XCTAssertEqual(kat.recognition.filter { $0.expect == "fallback" }.count, 13)
-        XCTAssertEqual(kat.rules.count, 74)
-        XCTAssertEqual(kat.rules.filter { $0.expect == "reply" }.count, 26)
+        XCTAssertEqual(kat.rules.count, 76)
+        XCTAssertEqual(kat.rules.filter { $0.expect == "reply" }.count, 28)
         XCTAssertEqual(kat.rules.filter { $0.expect == "fallback" }.count, 48)
         XCTAssertEqual(kat.excerpt_cases.count, 25)
         XCTAssertEqual(kat.excerpt_cases.filter { $0.input_utf16 != nil }.count, 3)
-        XCTAssertEqual(kat.builder_cases.count, 26)
-        XCTAssertEqual(kat.builder_cases.filter { $0.refuse != nil }.count, 8)
-        XCTAssertEqual(kat.resolution_cases.count, 13)
+        XCTAssertEqual(kat.builder_cases.count, 29)
+        XCTAssertEqual(kat.builder_cases.filter { $0.refuse != nil }.count, 9)
+        XCTAssertEqual(kat.resolution_cases.count, 16)
         XCTAssertEqual(kat.fallback_codes, ["bad_reply", "unsupported_version"])
         // Every code of a rejected body is one of the two of the file.
         for vector in kat.recognition + kat.rules where vector.expect == "fallback" {
@@ -207,6 +209,7 @@ final class MessageReplyKatTests: XCTestCase {
         XCTAssertEqual(integer("MAX_JSON_INT"), FileV2.maxJSONInteger)
         XCTAssertEqual(utf8(text("PREFIX")), MessageReplyCodec.prefix)
         XCTAssertEqual(constants["KINDS"]?.texts, MessageReplyKind.allCases.map { $0.rawValue })
+        XCTAssertEqual(constants["RESOLUTION_LABELS"]?.texts, ["location", "location_live"])
         XCTAssertEqual(constants["MEMBER_ORDER"]?.texts, ["qa_reply", "to", "k", "q", "b"])
         let prefixes: [String] = MessageReplyCodec.reservedPrefixes.map { String(decoding: $0, as: UTF8.self) }
         XCTAssertEqual(constants["RECOGNISED_PREFIXES"]?.texts, prefixes)
@@ -282,13 +285,13 @@ final class MessageReplyKatTests: XCTestCase {
 
     func testEveryRecognitionVector() throws {
         let vectors = try loadKat().recognition
-        XCTAssertEqual(vectors.count, 25)
+        XCTAssertEqual(vectors.count, 26)
         for vector in vectors { try run(vector) }
     }
 
     func testEveryRulesVector() throws {
         let vectors = try loadKat().rules
-        XCTAssertEqual(vectors.count, 74)
+        XCTAssertEqual(vectors.count, 76)
         for vector in vectors { try run(vector) }
     }
 
@@ -321,7 +324,7 @@ final class MessageReplyKatTests: XCTestCase {
 
     func testEveryBuilderVector() throws {
         let vectors = try loadKat().builder_cases
-        XCTAssertEqual(vectors.count, 26)
+        XCTAssertEqual(vectors.count, 29)
         for vector in vectors {
             let input = vector.input
             var body: String = ""
@@ -364,7 +367,7 @@ final class MessageReplyKatTests: XCTestCase {
 
     func testEveryResolutionVector() throws {
         let vectors = try loadKat().resolution_cases
-        XCTAssertEqual(vectors.count, 13)
+        XCTAssertEqual(vectors.count, 16)
         for vector in vectors {
             guard case .reply(let reply) = MessageReplyCodec.recognize(utf8: Data(vector.serialized.utf8)) else {
                 XCTFail("\(vector.name): the reply of the vector is not a valid reply")
@@ -375,13 +378,15 @@ final class MessageReplyKatTests: XCTestCase {
                 let kind = try XCTUnwrap(MessageReplyKind(rawValue: row.kind), "\(vector.name): unknown kind")
                 rows.append(MessageReplyRow(id: row.id, sameConversation: row.conversation == "same", kind: kind,
                                             text: row.text, author: row.author, viewOnce: row.view_once ?? false,
-                                            gone: row.gone ?? false))
+                                            gone: row.gone ?? false, live: row.live ?? false))
             }
             let block = MessageReplyCodec.resolve(reply, rows: rows)
             XCTAssertEqual(block.source.rawValue, vector.expected.source, vector.name)
             XCTAssertEqual(utf8(block.link), utf8(vector.expected.link), vector.name)
             XCTAssertEqual(utf8(block.author), utf8(vector.expected.author), vector.name)
             XCTAssertEqual(utf8(block.excerpt), utf8(vector.expected.excerpt), vector.name)
+            // The fixed label of a quoted location (`location`, `location_live`); every other block has none.
+            XCTAssertEqual(utf8(block.label), utf8(vector.expected.label), vector.name)
         }
     }
 }

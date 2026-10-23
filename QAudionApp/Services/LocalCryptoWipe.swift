@@ -45,6 +45,9 @@ enum LocalCryptoWipe {
         PeerIdentityPinStore().wipeAll()
         ContactsStore().wipeAll()
         ConversationStore().wipeAll()
+        // The live-share records, the tombstones, the sender's journal and the keys of the shares: the deletion of the whole local
+        // store, which is the one thing that takes the ids of the starts with it (WIRE_SPEC 14.6.2 step 1).
+        GRDBLocationShareStore.wipeEverything()
         ThreatReportLogStore().wipeAll()
         // The call history of the account that is leaving: without this the next account on the
         // device saw the previous account's calls (the encrypted file and its copies, the Keychain
