@@ -348,6 +348,13 @@ final class ServerSelector {
         return trustedHosts.contains(host.lowercased())
     }
 
+    /// The lowercased host of `urlString` when it uses `scheme` and the host is a trusted node, else nil.
+    private func trustedHost(of urlString: String, scheme: String) -> String? {
+        guard let u = URL(string: urlString), u.scheme == scheme, let host = u.host else { return nil }
+        let lowered = host.lowercased()
+        return trustedHosts.contains(lowered) ? lowered : nil
+    }
+
     /// SECURITY-CRITICAL failover filter: keep ONLY nodes that are not the dead one
     /// and on a trusted `wss://` host. Dropping untrusted/cleartext hosts means a
     /// failover can never be steered to a weaker endpoint.
@@ -367,6 +374,10 @@ final class ServerSelector {
             guard let httpsUrl = node["https_url"] as? String, !httpsUrl.isEmpty,
                   let wssUrl = node["wss_url"] as? String, !wssUrl.isEmpty,
                   isTrustedFailoverHost(wssUrl) else { continue }
+            // The https URL receives the access token and becomes the provider URL, so it must be an
+            // `https://` URL on a trusted host and on the same host as the `wss://` URL.
+            guard let httpsHost = trustedHost(of: httpsUrl, scheme: "https"),
+                  httpsHost == URL(string: wssUrl)?.host?.lowercased() else { continue }
             let readyUrl = httpsUrl.trimmingCharacters(in: .init(charactersIn: "/")) + "/api/v1/ready"
             if let rtt = await measureRtt(url: readyUrl) {
                 let load = (node["load_pct"] as? NSNumber)?.doubleValue ?? 0
