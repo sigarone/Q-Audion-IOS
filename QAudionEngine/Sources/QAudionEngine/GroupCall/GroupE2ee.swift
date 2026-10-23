@@ -352,7 +352,7 @@ public final class GroupE2eeCoordinator {
     // MARK: Control envelopes
 
     public func onEnvelope(_ envelope: GroupKeyEnvelope, from user: String) {
-        guard !stopped, user != selfUserId, envelope.callId == callId else { return }
+        guard !stopped, user != selfUserId, GroupCallIds.ieq(envelope.callId, callId) else { return }
         switch envelope {
         case .mediaKey(_, let keyEpoch, let index, let key, let claimedPseudonym):
             // A key older than our epoch is stale (replay, or a slow member).

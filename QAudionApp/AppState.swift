@@ -1669,6 +1669,9 @@ final class AppState: ObservableObject {
     @Published var groupCallControllerState: GroupCallController.State = .idle {
         didSet {
             guard oldValue != groupCallControllerState else { return }
+            // The group call this question was about is gone (it ended on its own): the question
+            // is moot and nothing is started on its behalf.
+            if case .idle = groupCallControllerState, leaveGroupPrompt != nil { leaveGroupPrompt = nil }
             // W-CALLAWAKE — group calls never touch `isInCall` (parallel
             // signal, see the busy-check), so the auto-lock hold has to be
             // re-evaluated from here too.
@@ -1863,9 +1866,13 @@ final class AppState: ObservableObject {
         /// foregrounded on the live 1:1 call being promoted, so the WS
         /// invite is the only path that needs it).
         let promotedFromCallId: String
+        /// The server's attestation of that promotion (`"promoted"` is the JSON boolean true). It is one of the
+        /// conditions of the automatic join, never the only one: the peer joins without a ring only when it also
+        /// holds a valid promotion token from its live 1:1 peer (`GroupPromotionDecision`).
+        let promoted: Bool
 
         init(callId: String, creatorId: String, creatorName: String, callType: String,
-             groupId: String, groupName: String, promotedFromCallId: String = "") {
+             groupId: String, groupName: String, promotedFromCallId: String = "", promoted: Bool = false) {
             self.callId = callId
             self.creatorId = creatorId
             self.creatorName = creatorName
@@ -1873,6 +1880,7 @@ final class AppState: ObservableObject {
             self.groupId = groupId
             self.groupName = groupName
             self.promotedFromCallId = promotedFromCallId
+            self.promoted = promoted
         }
 
         var hasVideo: Bool { callType == "video" }
@@ -1965,15 +1973,68 @@ final class AppState: ObservableObject {
     /// stays up until the group media is connected AND the promoted peer is in
     /// the group (or a timeout), so a failed group setup never costs the 1:1
     /// call. Set on both sides (the creator that tapped "+", and the peer that
-    /// accepted the ring); consumed by `finishGroupPromotionIfReady`.
+    /// joined the group, by itself or by accepting the ring); consumed by `evaluateGroupPromotion`.
     struct GroupPromotion {
         let groupCallId: String
         /// The 1:1 peer (must show up in the group roster before the hand-over).
         let peerId: String
         var mediaConnected = false
+        /// This device joined the group by itself, as the peer of the promotion (GROUP_CALLS_V2 2.7, Consent): it
+        /// never hangs up the 1:1 leg, the creator does that.
+        var autoJoined = false
     }
-    var groupPromotion: GroupPromotion?
+    var groupPromotion: GroupPromotion? {
+        didSet { groupPromotionDidChange() }
+    }
+    /// The 50 s cap of the hand-over (`GroupHandOverPolicy.capSeconds`).
     var groupPromotionTimeout: DispatchWorkItem?
+    /// The 30 s deadline of the group media (`GroupHandOverPolicy.mediaDeadlineSeconds`).
+    var groupPromotionMediaCheck: DispatchWorkItem?
+
+    /// GROUP_CALLS_V2 2.7 (promotion token): what this device keeps about the live 1:1 call to judge a promotion token (the
+    /// anchor, the tokens received), by lower-cased 1:1 call id. In memory, for the life of the call.
+    var promotionContexts: [String: PromotionCallContext] = [:]
+
+    /// An invite that claims to promote the live 1:1 call, held silently for its token (at most 3 s) or ringing
+    /// while a late token can still convert the ring into a join. By lower-cased group call id.
+    struct PromotedInviteWatch {
+        let invite: IncomingGroupCallInvite
+        /// Monotonic ms at which the invite arrived.
+        let receivedAtMonoMs: Int64
+        var holdTimer: DispatchWorkItem?
+    }
+    var promotedInviteWatches: [String: PromotedInviteWatch] = [:]
+
+    /// The token this device sent for the promotion in progress, kept for the one re-send after a socket
+    /// re-authentication (the same bytes, only while it has not expired).
+    struct SentPromotionToken {
+        let recipientId: String
+        let data: String
+        let expiresAtWallMs: Int64
+        let invitees: Int
+        var resent = false
+    }
+    var sentPromotionToken: SentPromotionToken?
+
+    /// A "leave the group?" question waiting for the user: placing or accepting a 1:1 call while
+    /// a group call is live (spec 27). Nothing is started until it is answered.
+    struct LeaveGroupPrompt: Equatable, Identifiable {
+        enum Purpose: Equatable {
+            case dial(contactId: String, video: Bool)
+            case answer(uuid: UUID)
+        }
+        let id = UUID()
+        let purpose: Purpose
+
+        var isAnswer: Bool {
+            if case .answer = purpose { return true }
+            return false
+        }
+    }
+    @Published var leaveGroupPrompt: LeaveGroupPrompt?
+    /// An audio-session activation that arrived while the "leave the group?" question for an answered 1:1 call was
+    /// up (the group owned the audio then): replayed once the call is answered.
+    var deferredAnswerActivationSource: AudioSessionActivationSource?
     /// The call id `startGroupCallAudioPath` already ran for (idempotency).
     var groupAudioPathCallId: String?
     /// The app itself activated the shared audio session for the live group call
@@ -2104,6 +2165,11 @@ final class AppState: ObservableObject {
     /// created or extended (`completeGroupCreation`, `handleGroupMemberNotAdded`). It names nobody and gives no
     /// reason. Shown by `ContentView` (same shape as `groupCallFatalErrorToastText`).
     @Published var groupMembersNotAddedToastText: String? = nil
+
+    /// One-shot notice that the app left a group call it had joined by itself, as the peer of a promoted 1:1 call:
+    /// the group's roster went outside what the peer's promotion token listed (GROUP_CALLS_V2 2.7, Consent). The 1:1 call
+    /// stays. Shown by `ContentView` (same shape as `groupCallFatalErrorToastText`).
+    @Published var groupPromotionMismatchToastText: String? = nil
 
     /// W-VIDPARITY — re-entrancy guard for `promoteReceiveOnlyToCamera`: a
     /// fast double tap on "Attiva video" must not start two competing
@@ -3934,11 +4000,7 @@ final class AppState: ObservableObject {
                 // Mirror dialAndCall's label handling: seed the call UI name
                 // before routing keys off peerUserId.
                 if !displayName.isEmpty { self.incomingCallerName = displayName }
-                let busyAtEntry = self.callStartGate.inFlight || self.isInCall
-                await self.startCall(contactId: peerUserId)
-                if CarCallStartNotice.isDue(busyAtEntry: busyAtEntry, inCallAfter: self.isInCall) {
-                    CarPlayBridge.shared.report(.callNotStarted)
-                }
+                await self.startCallFromCar(contactId: peerUserId)
             }
         }
         // What the car screen lists depends on the session (which is restored after `initialize()`, so "not signed
@@ -4806,6 +4868,10 @@ final class AppState: ObservableObject {
                         if case .idle = self.groupCallControllerState { return self.groupCallKitId != nil }
                         return true
                     }()
+                    // The user answered a 1:1 call while a group call is live and has not yet said "leave the
+                    // group": the system activates the audio now, the group owns it, and the answered call
+                    // would stay without audio. The activation is kept and replayed once the call is answered.
+                    if self.leaveGroupPrompt?.isAnswer == true { self.deferredAnswerActivationSource = source }
                     if groupLive { self.groupCallController?.audioSessionActivated(source: source) }
                     // W-GRPVPIO-CRASH (2026-07-17) — CXProvider's didActivate:
                     // fires for the app's ONE shared AVAudioSession regardless of
@@ -4910,7 +4976,7 @@ final class AppState: ObservableObject {
                     self.groupPromotionTimeout?.cancel()
                     self.groupPromotionTimeout = nil
                     if case .idle = self.groupCallControllerState {} else {
-                        self.groupCallController?.leave()
+                        _ = self.groupCallController?.leaveOrEnd()
                     }
                     self.videoPipeline?.stop()
                     self.videoPipeline = nil
@@ -6201,7 +6267,8 @@ final class AppState: ObservableObject {
                             callType: invite.callType,
                             groupId: invite.groupId,
                             groupName: invite.groupName,
-                            promotedFromCallId: invite.promotedFromCallId),
+                            promotedFromCallId: invite.promotedFromCallId,
+                            promoted: invite.promoted),
                         source: .webSocket)
                 }
             }
@@ -6289,9 +6356,17 @@ final class AppState: ObservableObject {
                 DispatchQueue.main.async { self?.groupCallFatalErrorToastText = text }
             }
             let viewModelParticipantsHook = groupController.onParticipantsChanged
-            groupController.onParticipantsChanged = { [weak self] list in
+            groupController.onParticipantsChanged = { list in
                 viewModelParticipantsHook?(list)
+            }
+            // The hand-over decision reads the roster and the ringing list from the controller, so it is taken
+            // after the controller stored the update (`onParticipantsChanged` fires before it did).
+            groupController.onUpdateApplied = { [weak self] _, _ in
                 DispatchQueue.main.async { self?.groupRosterChangedForPromotion() }
+            }
+            // GROUP_CALLS_V2 2.7, Consent: the roster of an automatically joined call left what the token listed.
+            groupController.onAutoJoinRosterRefused = { [weak self] extra in
+                DispatchQueue.main.async { self?.autoJoinRosterRefused(extra: extra) }
             }
             // Spec 2.6 — declines latched during a cold start go out now.
             if !self.pendingGroupCallDeclineIds.isEmpty {
@@ -6435,6 +6510,7 @@ final class AppState: ObservableObject {
                     // rebind (which runs before the socket even dials).
                     if prev != .authenticated {
                         self?.groupCallController?.rejoinAfterReconnect()
+                        self?.resendPromotionTokenAfterReauth()
                     }
                     // Entitlements Task 3 (2026-08-17) — same
                     // once-per-reconnect gate as `rejoinAfterReconnect`
@@ -15059,6 +15135,9 @@ final class AppState: ObservableObject {
         case .sasReveal(let callId, let raw):
             // R-COMMIT-CHECK — the caller's REVEAL of its SAS nonce (WIRE_SPEC §3.7.4).
             handleInboundSasReveal(callId: callId, raw: raw, senderId: senderId)
+        case .groupPromotion(let callId, let raw):
+            // GROUP_CALLS_V2 2.7 — the signed promotion token of the 1:1 peer. Every failure is a silent drop.
+            handleInboundGroupPromotionToken(callId: callId, raw: raw, senderId: senderId)
         case .voiceKey(let callId, let enrolled):
             // "Voce come chiave" cross-device attestation — the peer's own
             // self-declared local enrollment state. Sender guard mirrors
@@ -15161,6 +15240,9 @@ final class AppState: ObservableObject {
         case .sasReady:
             RTLog.info("call", "sascommit r=1")
             callSasRevision &+= 1
+            // Round 1 is bound on this device (GROUP_CALLS_V2 2.7, Consent): the anchor of the call can be defined.
+            promotionContexts[key]?.anchor.noteBound()
+            reevaluatePromotedInvites(trigger: .anchor)
             // The callee's own round-1 `kc_mac` was held until now (a sibling never sends it).
             if let pending = kcPendingOwnMac.removeValue(forKey: key), let provider = liveProvider {
                 // Only a round-1 callee ever holds its MAC (the SAS words exist from round 1 on).
@@ -15253,6 +15335,7 @@ final class AppState: ObservableObject {
     @MainActor
     private func handleKcMacReady(_ event: QAudionCallIntegration.KcMacReadyEvent) {
         let key = event.callId.lowercased()
+        notePromotionAnchor(from: event)
         let state = KeyConfirmationCallState(event: event)
         // R-KCMAC-ROUNDS: one context per key round, each with its own window. Arming this round never cancels,
         // shortens, extends or decides an earlier round that is still pending: it keeps its state and its own deadline
@@ -15390,6 +15473,11 @@ final class AppState: ObservableObject {
             state.kcStatus = .verified
             state.resultRecorded = true
             state.deadlineTask?.cancel()
+            // GROUP_CALLS_V2 2.7, Consent: the peer's round-1 KCMAC is what lets a promotion token admit an automatic join.
+            if round == 1 {
+                promotionContexts[key]?.anchor.noteKcMacVerified(round: round)
+                reevaluatePromotedInvites(trigger: .kcmac)
+            }
             // Section 4a, F2: a verified round (signature and the peer's MAC) that proves the other phone holds a new
             // in-person key finalizes it.
             finalizeInPersonKeys(provenBy: state, callId: callId)
@@ -15852,6 +15940,7 @@ final class AppState: ObservableObject {
         let key = callId.lowercased()
         applyPresenceAuthOutcomeIfAny(callId: key)
         if let call = kcCalls.removeValue(forKey: key) { for state in call.states.values { state.deadlineTask?.cancel() } }
+        promotionContexts.removeValue(forKey: key)
         kcPendingOwnMac.removeValue(forKey: key)
         kcRecentOwnMacs.removeValue(forKey: key)
         keyConfirmationTelemetryByCall.removeValue(forKey: key)
@@ -17451,6 +17540,7 @@ final class AppState: ObservableObject {
             // Same local teardown a WS call_cancel / call_hangup would drive.
             self.stopInAppRingtone()
             self.incomingCallRingVisible = false
+            self.withdrawLeaveGroupAnswerPrompt()
         case .unparsed:
             break
         }
@@ -18436,7 +18526,19 @@ final class AppState: ObservableObject {
         }
         incomingCallerName = match.displayName
         Task { @MainActor in
-            await startCall(contactId: match.userId, video: video)
+            await startCallFromCar(contactId: match.userId, video: video)
+        }
+    }
+
+    /// A start asked for by CarPlay or by Siri (what the car speaks to). It is the same start as the phone's, except that
+    /// a live group call refuses it instead of asking "leave the group?" on the phone screen (the driver is never told to
+    /// use the phone), and a start that leaves no call up is told on the car screen (`callNotStarted`).
+    @MainActor
+    private func startCallFromCar(contactId: String, video: Bool = false) async {
+        let busyAtEntry = callStartGate.inFlight || isInCall
+        await startCall(contactId: contactId, video: video, origin: .car)
+        if CarCallStartNotice.isDue(busyAtEntry: busyAtEntry, inCallAfter: isInCall) {
+            CarPlayBridge.shared.report(.callNotStarted)
         }
     }
 
@@ -18586,7 +18688,7 @@ final class AppState: ObservableObject {
         ChatOutboxDrain.shared.kick(reason: "siri-outbox")
     }
 
-    func startCall(contactId: String, video: Bool = false) async {
+    func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
         // Admission, before ANY side effect and before any `await`.
         //
@@ -18614,6 +18716,18 @@ final class AppState: ObservableObject {
             // doing nothing.
             callScreenMinimized = CallMinimizePolicy.next(
                 minimized: callScreenMinimized, event: .newCallRefused, canMinimize: false)
+            return
+        }
+        // A group call is live here: ask "leave the group?" first (spec 27). Nothing is started until
+        // the user says yes; the same call is placed then, through this function again. A start from the car (CarPlay,
+        // Siri) is refused instead, with no question on the phone: the caller tells the car screen.
+        if GroupAdmissionPolicy.decide(groupState: groupCallControllerState, isInCall: false) == .confirmLeaveGroup {
+            callStartGate.end()
+            if origin.mayAskToLeaveGroup {
+                askToLeaveGroup(.dial(contactId: contactId, video: video))
+            } else {
+                groupDiag(GroupDiagnostics.admissionLine(.refusedFromCar, roster: groupCallController?.currentRoster.count ?? 0))
+            }
             return
         }
         // Rebuilds the engine when logout() released it and nothing has made a
@@ -20846,6 +20960,14 @@ extension AppState {
             print("[AppState] performAcceptIncoming: duplicate answer for \(uuid.uuidString.prefix(8))… ignored (Bug A guard)")
             return true
         }
+        // A group call is live here: ask "leave the group?" before the call is accepted (spec 27). This comes
+        // AFTER the duplicate-answer guard: an answer that was already taken never asks again. "Yes" comes back
+        // through this function (and replays the audio activation that arrived meanwhile); "no" declines the
+        // call as busy.
+        if GroupAdmissionPolicy.decide(groupState: groupCallControllerState, isInCall: false) == .confirmLeaveGroup {
+            askToLeaveGroup(.answer(uuid: uuid))
+            return true
+        }
         self.answeredCallKitId = uuid
         // Numeric diagnostics of a call: once per answered incoming 1:1 call (every accept path converges here, the
         // refused and duplicate answers have already returned above). Read now, on the main actor, no hop.
@@ -21849,11 +21971,26 @@ extension AppState {
         // moot, and a live group call that shared the 1:1's audio unit must take it
         // over (the 1:1 PeerConnection releases it during this teardown). A strict
         // no-op without a live group call.
+        //
+        // The promotion state of THIS call only: read now, because the teardown below clears the id.
+        let endedPromotionCallId: String? = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId().flatMap { $0.isEmpty ? nil : $0 }
         defer {
+            // A hand-over still pending while the group is down to this device alone and nobody is
+            // ringing: the group goes with the 1:1 call (spec 29).
+            let leavesGroup: Bool = shouldLeaveGroupAfterOneToOneEnded()
             groupPromotion = nil
             groupPromotionTimeout?.cancel()
             groupPromotionTimeout = nil
-            groupCallController?.oneToOneEnded()
+            if leavesGroup {
+                leaveLiveGroupCall(why: .oneToOneEndedAlone)
+            } else {
+                groupCallController?.oneToOneEnded()
+            }
+            if let ended = endedPromotionCallId {
+                promotionContexts.removeValue(forKey: ended.lowercased())
+                releasePromotedInviteWatchesAfterOneToOneEnd(endedCallId: ended)
+            }
+            withdrawLeaveGroupAnswerPrompt()
         }
         // W-STALESEALER — no bump needed here: `callService.endCall()` below
         // (reached unconditionally further down this function) already bumps
@@ -22398,17 +22535,14 @@ extension AppState {
     /// existing "answer a group invite mid-something-else" case this app
     /// already handles.
     ///
-    /// `promotedFromCallId` is informational only (see
-    /// `BCryptoGroupCallManager.createGroupCall`'s kdoc): it lets the OTHER
-    /// 1:1 peer's client recognize the resulting `group_call_invite` as a
-    /// continuation of the call they're already on so THEY are not silently
-    /// busy-dropped by `presentIncomingGroupCall`'s guard (see that
-    /// function's `isSelfPromotion` carve-out) — it never skips their own
-    /// Accept/Decline ring, matching Android/Desktop's identical posture
-    /// (an earlier Android draft of this feature tried an auto-accept
-    /// shortcut on this same field; a security review found it let any
-    /// current 1:1 peer force a silent call-hijack with zero consent, so
-    /// every platform's port keeps the ring mandatory).
+    /// Consent of the peer (GROUP_CALLS_V2 2.7, spec 28): the group call id is minted first, and the creator signs a
+    /// promotion token with the identity key that signed its handshake bundle of this 1:1 call. The token binds that
+    /// 1:1 session, the group call id, this account, the complete list of invitees and the call type (always audio). It
+    /// goes to the peer as an `opaque_message` on the same socket and BEFORE the `group_call_create`. The server
+    /// additionally attests the promotion on the peer's `group_call_invite` (`promoted`, `promoted_from_call_id`), and
+    /// the peer's client joins without a ring only when the token and the attestation agree; otherwise the peer rings
+    /// and waits for Accept. When a precondition of the token is missing (no round-1 binding, an id that is not a
+    /// UUID) no token is sent, the group is created as before and the peer rings.
     ///
     /// The 1:1 leg is torn down only once the group media is connected AND the
     /// peer is in the group (make-before-break, `completeGroupPromotion`); a
@@ -22419,14 +22553,50 @@ extension AppState {
         guard let peer = callContactId, let controller = groupCallController else { return }
         let callType = isVideoCall ? "video" : "audio"
         let activeOneToOneId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
+        let identity = sovereignIdentity.loadIdentity()
+        let plan: GroupPromotionPlan.Plan = GroupPromotionPlan.plan(
+            peerUserId: peer,
+            others: newPeerIds,
+            selfUserId: promotionSelfUserId,
+            oneToOneCallId: activeOneToOneId,
+            anchor: promotionContexts[activeOneToOneId.lowercased()]?.anchor ?? OneToOneAnchor(),
+            liveSigningPublicKey: identity?.signingPublic,
+            nowMs: UInt64(max(promotionWallMs, 0)),
+            groupCallId: UUID().uuidString.lowercased(),
+            sign: { tbs in
+                guard let seed = identity?.signingPrivate else { return nil }
+                return try? HandshakeTranscript.sign(transcript: tbs, signingPrivateKeyRaw: seed)
+            })
+        var tokenData: String?
+        if let built = plan.token {
+            let wire = built.wireData(callId: activeOneToOneId)
+            // Self-echo guard (see OpaqueSelfEchoFilter doc): the relay bounces every opaque_message back.
+            OpaqueSelfEchoFilter.shared.markSent(wire)
+            tokenData = wire
+        }
+        let opaque: BCryptoGroupCallManager.PreCreateOpaque? = tokenData.map {
+            BCryptoGroupCallManager.PreCreateOpaque(recipientId: peer, data: $0)
+        }
         // A muted 1:1 call stays muted as a group call: the controller applies it before
         // the group publisher exists, so the microphone is never live, not even briefly.
         guard let groupCallId = controller.createCall(
-            invitees: [peer] + newPeerIds,
+            invitees: plan.recipients,
             callType: callType,
             promotedFromCallId: activeOneToOneId,
-            startMuted: callService.isMuted
+            startMuted: callService.isMuted,
+            groupCallId: plan.groupCallId,
+            preCreateOpaque: opaque
         ) else { return }
+        if let built = plan.token, let data = tokenData {
+            sentPromotionToken = SentPromotionToken(
+                recipientId: peer, data: data,
+                expiresAtWallMs: Int64(built.fields.issuedAtMs) + Int64(built.fields.lifetimeMs),
+                invitees: built.fields.invitees.count)
+            groupDiag(GroupDiagnostics.promoSentLine(resend: false, invitees: built.fields.invitees.count))
+        } else {
+            sentPromotionToken = nil
+            groupDiag(GroupDiagnostics.promoNotSentLine(invitees: plan.recipients.count))
+        }
         // Group calls v2 — make-before-break: the 1:1 leg stays up until the group
         // media is connected and the peer is in the group (`beginGroupPromotion`),
         // so a group call that cannot be set up never costs the 1:1 call.
@@ -26491,16 +26661,26 @@ extension AppState {
         }
         // Already accepted or rejected (push ⇄ WS race, or a WS reconnect
         // replaying the invite) — never ring twice for the same room.
-        if handledGroupCallIds.contains(invite.callId) {
+        if isGroupCallHandled(invite.callId) {
             let dupId: String = String(invite.callId.prefix(8))
             let dupMsg: String = "[AppState] W-GRPRING dup dropped (already handled) call=" + dupId
             print(dupMsg)
             return false
         }
+        // A candidate for the automatic join of a promotion: attested by the server (`promoted` is the JSON boolean
+        // true) and delivered on the WebSocket. The group-call push never carries the attestation.
+        let attested: Bool = invite.promoted && source == .webSocket
         // Already ringing for THIS call from the other source: adopt the richer
         // payload (the WS invite and the push carry the same fields, but an
         // older peer may omit the group context on one of them).
-        if let current = incomingGroupCallInvite, current.callId == invite.callId {
+        if let current = incomingGroupCallInvite, GroupCallIds.ieq(current.callId, invite.callId) {
+            // The push that rang first carries no attestation. The attested WS copy of a promotion invite is
+            // judged as a candidate: when its token holds, the ring is taken down (no decline) and the join
+            // follows. The call id deduplication lets it through to that decision.
+            if attested {
+                _ = startPromotedInviteWatch(invite)
+                if incomingGroupCallInvite == nil { return false }
+            }
             if current.groupName.isEmpty && !invite.groupName.isEmpty {
                 incomingGroupCallInvite = invite
             }
@@ -26512,41 +26692,55 @@ extension AppState {
             }
             return true
         }
-        // Busy: in a 1:1 call, ringing for one, or already in a group call.
-        // We simply do not join (a busy drop sends no `group_call_decline`: the
-        // ring on our other devices and the server's ring timeout deal with it)
-        // and the room stays open for the other invitees.
-        //
-        // W-CALLPROMOTE carve-out: an invite that continues the SAME 1:1
-        // call we're on RIGHT NOW, from the SAME peer, must not be
-        // silently dropped by this guard — it's the one busy state this
-        // exact invite is meant to interrupt (see
-        // `BCryptoGroupCallManager.createGroupCall`'s `promotedFromCallId`
-        // kdoc: the other peer tapped "+" on the call we're both already
-        // on). Matched on BOTH `promotedFromCallId` == our active 1:1
-        // callId AND `creatorId` == our active 1:1 peer, so a stale or
-        // forged value only ever falls through to the normal drop below —
-        // this NEVER skips the ring/ Accept-Decline screen further down,
-        // it only stops the invite from being thrown away before the user
-        // ever sees it. Every other busy case (a DIFFERENT 1:1 call,
-        // another ringing call, already in a group call) still drops
-        // exactly as before.
-        let isSelfPromotion: Bool = {
-            guard !invite.promotedFromCallId.isEmpty else { return false }
-            let activeOneToOneId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
-            return invite.promotedFromCallId == activeOneToOneId && invite.creatorId == callContactId
-        }()
-        if (isInCall || callState != .idle || groupCallControllerState != .idle) && !isSelfPromotion {
-            let shortId: String = String(invite.callId.prefix(8))
-            let busyMsg: String = "[AppState] W-GRPRING busy — ignoring group call " + shortId
-            print(busyMsg)
+        // Busy: in a 1:1 call, ringing for one, or already in a group call. The room stays open for the other
+        // invitees, this device just does not join (see `groupInviteBusyCode`).
+        if let busyCode = groupInviteBusyCode(invite) {
+            groupDiag(GroupDiagnostics.ringLine(.busyDrop, code: busyCode))
             return false
         }
+        // D-P: an invite that claims to promote the live 1:1 call never rings or joins on the strength of the
+        // server's word alone. It waits, silently and for at most 3 s, for the peer's signed token; with a valid
+        // one it joins at once (audio only), otherwise it rings and waits for Accept as always.
+        if attested {
+            return startPromotedInviteWatch(invite)
+        }
+        return presentGroupInviteRing(invite, source: source)
+    }
 
+    /// The busy state that drops an invite, as the numeric `GroupDiagnostics.BusyCode`, or nil when none does.
+    ///
+    /// W-CALLPROMOTE carve-out: an invite that continues the SAME 1:1 call we're on RIGHT NOW, from the SAME peer
+    /// (both ids compared ASCII case-insensitively), is not dropped for that 1:1 call being live: it is the one
+    /// busy state this exact invite is meant to interrupt. It is only let through to the consent decision
+    /// (`GroupPromotionDecision`); it never joins by itself. Any other value falls through to the normal
+    /// drop. A group call live here (any call id) keeps the invite busy: there is nothing to bypass.
+    @MainActor
+    private func groupInviteBusyCode(_ invite: IncomingGroupCallInvite) -> Int? {
+        let isSelfPromotion: Bool = GroupPromotionPolicy.isSelfPromotion(
+            promotedFromCallId: invite.promotedFromCallId,
+            creatorId: invite.creatorId,
+            liveOneToOneCallId: (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+            liveOneToOnePeerId: callContactId)
+        let oneToOneBusy: Bool = isInCall || callState != .idle
+        let groupBusy: Bool = groupCallControllerState != .idle
+        guard (oneToOneBusy && !isSelfPromotion) || groupBusy else { return nil }
+        return groupBusy ? GroupDiagnostics.BusyCode.groupCall.rawValue : GroupDiagnostics.BusyCode.oneToOne.rawValue
+    }
+
+    /// Rings for an invite: the in-app ring surface (or the CallKit call a push reported) and the 45 s timeout. The
+    /// busy rule is applied here too, so an invite that was held and now has to ring is judged against the state of
+    /// the moment. Returns true when a ring is live for the invite afterwards.
+    @discardableResult
+    @MainActor
+    fileprivate func presentGroupInviteRing(_ invite: IncomingGroupCallInvite, source: IncomingGroupCallSource) -> Bool {
+        if let current = incomingGroupCallInvite, GroupCallIds.ieq(current.callId, invite.callId) { return true }
+        if let busyCode = groupInviteBusyCode(invite) {
+            groupDiag(GroupDiagnostics.ringLine(.busyDrop, code: busyCode))
+            dropPromotedInviteWatch(key: GroupCallIds.lower(invite.callId))
+            return false
+        }
         incomingGroupCallInvite = invite
-        let shortId: String = String(invite.callId.prefix(8))
-        let ringMsg: String = "[AppState] W-GRPRING ring " + shortId + " type=" + invite.callType
-        print(ringMsg)
+        groupDiag(GroupDiagnostics.ringLine(.shown))
 
         switch source {
         case .push:
@@ -26570,8 +26764,8 @@ extension AppState {
     private func armGroupCallRingTimeout(callId: String) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 45.0) { [weak self] in
             guard let self = self,
-                  self.incomingGroupCallInvite?.callId == callId else { return }
-            print("[AppState] W-GRPRING ring timed out (unanswered) call=\(callId.prefix(8))…")
+                  GroupCallIds.ieq(callId, self.incomingGroupCallInvite?.callId) else { return }
+            self.groupDiag(GroupDiagnostics.ringLine(.timedOut))
             self.stopInAppRingtone()
             self.markGroupCallHandled(callId)
             self.incomingGroupCallInvite = nil
@@ -26765,9 +26959,19 @@ extension AppState {
         markGroupCallHandled(invite.callId)
         incomingGroupCallInvite = nil
         NotificationCenterService.shared.clearIncomingCall(callId: invite.callId)
+        groupDiag(GroupDiagnostics.ringLine(.accepted))
+        joinAcceptedGroupCall(invite)
+    }
+
+    /// The join of an invite that was accepted or, for an attested promotion, joined at once.
+    /// A group call live here under ANOTHER call id is left first (ended, when this device is
+    /// the creator and the last one in it): two group calls never run on one device, and the
+    /// accept of an invite does not carry the old one along.
+    @MainActor
+    private func joinAcceptedGroupCall(_ invite: IncomingGroupCallInvite, autoJoin: GroupAutoJoinGuard? = nil) {
         // The CallKit call (if any) stays UP for the duration of the group call
         // — `onEndCall` on it routes to `endGroupCallFromSystemUI()`.
-        guard let controller = groupCallController else {
+        guard groupCallController != nil else {
             // Cold start: the WS (and the controller) do not exist yet — the
             // push woke us. Latch; `connectPersistentSocket()` consumes it.
             pendingGroupCallJoinId = invite.callId
@@ -26778,6 +26982,30 @@ extension AppState {
             print("[AppState] W-GRPRING accept latched (no controller yet) call=\(invite.callId.prefix(8))…")
             return
         }
+        var otherGroupLive = false
+        switch groupCallControllerState {
+        case .connecting(let liveId): otherGroupLive = !GroupCallIds.ieq(liveId, invite.callId)
+        case .active(let liveId, _): otherGroupLive = !GroupCallIds.ieq(liveId, invite.callId)
+        case .idle, .failed: break
+        }
+        if otherGroupLive {
+            leaveLiveGroupCall(why: .acceptOther)
+            // The old call's teardown reaches this object on the main queue (its idle cleanup
+            // resets the promotion and audio-path state): the new call starts after it.
+            DispatchQueue.main.async { [weak self] in
+                self?.continueAcceptedGroupCall(invite, autoJoin: autoJoin)
+            }
+            return
+        }
+        continueAcceptedGroupCall(invite, autoJoin: autoJoin)
+    }
+
+    /// `autoJoin`: this device joins the group by itself, as the peer of a promoted 1:1 call (GROUP_CALLS_V2 2.7, Consent):
+    /// audio only with the camera off whatever the invite's call type says, the microphone held until the roster has
+    /// been checked, and the 1:1 leg is never hung up from here.
+    @MainActor
+    private func continueAcceptedGroupCall(_ invite: IncomingGroupCallInvite, autoJoin: GroupAutoJoinGuard? = nil) {
+        guard let controller = groupCallController else { return }
         // Flip the surface state SYNCHRONOUSLY: the group-call cover in
         // ContentView is presented while (invite != nil || state != .idle), and
         // the controller re-publishes `.connecting` only on a LATER main-queue
@@ -26789,10 +27017,12 @@ extension AppState {
         // Group calls v2: an invite that continues the 1:1 call we are on (same peer,
         // same call id) is a make-before-break hand-over — the 1:1 leg ends once the
         // group media is up (armed BEFORE the join so the audio path knows).
-        if !invite.promotedFromCallId.isEmpty,
-           invite.promotedFromCallId == (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
-           invite.creatorId == callContactId {
-            beginGroupPromotion(groupCallId: invite.callId, peerId: invite.creatorId)
+        if GroupPromotionPolicy.isSelfPromotion(
+            promotedFromCallId: invite.promotedFromCallId,
+            creatorId: invite.creatorId,
+            liveOneToOneCallId: (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+            liveOneToOnePeerId: callContactId) {
+            beginGroupPromotion(groupCallId: invite.callId, peerId: invite.creatorId, autoJoined: autoJoin != nil)
         }
         groupCallControllerState = .connecting(callId: invite.callId)
         // In-call chat panel — bind the persisted-group id (if any) BEFORE
@@ -26821,7 +27051,9 @@ extension AppState {
         // joining, so the join always fires on the connection that will
         // still be there to receive `group_call_update`.
         let callId = invite.callId
-        let hasVideo = invite.hasVideo
+        // An automatic join never reads the call type of the invite: it is audio only and the camera stays off
+        // until the user turns it on.
+        let hasVideo = autoJoin == nil ? invite.hasVideo : false
         Task { [weak self] in
             guard let self else { return }
             if let live = self.liveProvider {
@@ -26833,9 +27065,9 @@ extension AppState {
             // The SAME join path as before: single source of truth for the WS
             // `group_call_join` AND the GroupSession crypto bootstrap. A hand-over keeps
             // the mute of the 1:1 leg (read now, at the join, not at the tap).
-            let promotedHere: Bool = self.groupPromotion?.groupCallId == callId
+            let promotedHere: Bool = GroupCallIds.ieq(callId, self.groupPromotion?.groupCallId)
             let startMuted: Bool = promotedHere && self.callService.isMuted
-            controller.join(callId: callId, video: hasVideo, startMuted: startMuted)
+            controller.join(callId: callId, video: hasVideo, startMuted: startMuted, autoJoinGuard: autoJoin)
             self.armGroupCallJoinTimeout(callId: callId)
             // W-GRPJOINRETRY (2026-08-04): waiting for authentication (above)
             // closed the STALE-MANAGER race, confirmed live — rebind now
@@ -26932,7 +27164,7 @@ extension AppState {
             pendingGroupCallDeclineIds.append(invite.callId)
             if pendingGroupCallDeclineIds.count > 8 { pendingGroupCallDeclineIds.removeFirst() }
         }
-        print("[AppState] W-GRPRING declined group call \(invite.callId.prefix(8))…")
+        groupDiag(GroupDiagnostics.ringLine(.declined))
     }
 
     /// True when an INCOMING_CALL notification belongs to a GROUP call. Two
@@ -26947,7 +27179,7 @@ extension AppState {
     /// plain String here.
     @MainActor
     func isGroupCallNotification(callId: String, info: [String: String]) -> Bool {
-        if incomingGroupCallInvite?.callId == callId { return true }
+        if GroupCallIds.ieq(callId, incomingGroupCallInvite?.callId) { return true }
         return info["type"] == "incoming_group_call"
     }
 
@@ -26963,7 +27195,7 @@ extension AppState {
         callId: String,
         info: [String: String]
     ) {
-        if incomingGroupCallInvite?.callId != callId {
+        if !GroupCallIds.ieq(callId, incomingGroupCallInvite?.callId) {
             let creatorId = info["creator_id"] ?? ""
             let invite = IncomingGroupCallInvite(
                 callId: callId,
@@ -27001,7 +27233,9 @@ extension AppState {
             declineIncomingGroupCall()
             return
         }
-        groupCallController?.leave()   // → onStateChange(.idle) → clears CallKit
+        // Routed hang-up (CallKit End, headset button): the creator that is the last one in the call ends it,
+        // everybody else leaves (`GroupExitPolicy`). → onStateChange(.idle) → clears CallKit
+        leaveLiveGroupCall(why: .hangUp)
         clearGroupCallKitCall(reason: .userEnded)
     }
 
@@ -27016,11 +27250,433 @@ extension AppState {
         }
     }
 
+    // MARK: - Group calls v2: promotion consent, leaving, admission (spec 27, 28)
+
+    /// The promotion-token state and the decision work in wall-clock ms (the token's own timestamps) and in
+    /// monotonic ms (freshness at decision time, the 3 s hold).
+    private var promotionWallMs: Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+    private var promotionMonoMs: Int64 { Int64(SasCommit.monotonicNowMs()) }
+    /// This device's own account, as the token names its invitees.
+    private var promotionSelfUserId: String { currentUserId ?? groupCallManager?.selfUserId ?? "" }
+
+    /// The microphone permission is granted: an automatic join never opens a microphone the user has not
+    /// allowed (without it the invite rings and the usual prompts follow the accept).
+    private func promotionMicGranted() -> Bool {
+        return AVAudioSession.sharedInstance().recordPermission == .granted
+    }
+
+    /// The id of the 1:1 call that is live on this device (answered, not ended), or nil.
+    @MainActor
+    fileprivate func liveOneToOneCallIdForPromotion() -> String? {
+        guard isInCall, callContactId != nil else { return nil }
+        guard let id = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), !id.isEmpty else {
+            return nil
+        }
+        return id
+    }
+
+    /// The token state of the live 1:1 call, created on first use when `createIfLive`.
+    @MainActor
+    fileprivate func promotionContext(createIfLive: Bool) -> PromotionCallContext? {
+        guard let id = liveOneToOneCallIdForPromotion(), let peer = callContactId, !peer.isEmpty else { return nil }
+        let key = id.lowercased()
+        if let existing = promotionContexts[key] { return existing }
+        guard createIfLive else { return nil }
+        let created = PromotionCallContext(callId: id, peerUserId: peer)
+        promotionContexts[key] = created
+        return created
+    }
+
+    /// GROUP_CALLS_V2 2.7, Consent: a key round of the 1:1 call is armed. Round 1 defines the anchor (the key that
+    /// signed the peer's bundle, the binding of the ACCEPT, our own signing key); a later round can only poison it.
+    @MainActor
+    private func notePromotionAnchor(from event: QAudionCallIntegration.KcMacReadyEvent) {
+        let key = event.callId.lowercased()
+        var context = promotionContexts[key] ?? PromotionCallContext(callId: event.callId, peerUserId: event.peerId)
+        if event.round == 1 {
+            context.anchor.noteRoundOne(
+                sigOk: event.sigOk, signerKey: event.signerIdentityKey, acceptBinding: event.acceptBinding,
+                ownSignerKey: event.ownSignerKey, bound: event.isInitiator)
+        } else {
+            context.anchor.noteLaterRound(sigOk: event.sigOk, signerKey: event.signerIdentityKey)
+        }
+        promotionContexts[key] = context
+        reevaluatePromotedInvites(trigger: .anchor)
+    }
+
+    /// GROUP_CALLS_V2 2.7, Promotion token: a `GRPPROMO:` payload from the peer. Every failure is a silent drop with one
+    /// numeric log line: no reply, no hang-up, no change to the 1:1 call.
+    @MainActor
+    private func handleInboundGroupPromotionToken(callId: String, raw: String, senderId: String) {
+        var context: PromotionCallContext? = promotionContext(createIfLive: true)
+        let data = GroupPromotionToken.wireData(callId: callId, encoded: raw)
+        let outcome = GroupPromotionReceiver.receive(
+            data: data, senderId: senderId, selfUserId: promotionSelfUserId, context: &context,
+            nowWallMs: promotionWallMs, nowMonoMs: promotionMonoMs)
+        if let updated = context { promotionContexts[updated.callId.lowercased()] = updated }
+        switch outcome {
+        case .identicalCopy:
+            return
+        case .dropped(let drop):
+            groupDiag(GroupDiagnostics.promoReceivedLine(ok: false, code: drop.rawValue))
+        case .stored(let groupCallId):
+            groupDiag(GroupDiagnostics.promoReceivedLine(ok: true, code: 0))
+            reevaluatePromotedInvites(groupCallId: groupCallId, trigger: .token)
+        case .storedEvicting(let groupCallId, _):
+            groupDiag(GroupDiagnostics.promoReceivedLine(ok: true, code: GroupDiagnostics.promoStoredEvictingCode))
+            reevaluatePromotedInvites(groupCallId: groupCallId, trigger: .token)
+        }
+    }
+
+    /// What can re-run the decision on a held or ringing candidate (GROUP_CALLS_V2 2.7, Consent).
+    fileprivate enum PromotionTrigger {
+        case invite
+        case token
+        case kcmac
+        case anchor
+        case hold
+    }
+
+    /// Re-takes the decision on the candidate for `groupCallId`, or on every candidate.
+    @MainActor
+    fileprivate func reevaluatePromotedInvites(groupCallId: String? = nil, trigger: PromotionTrigger) {
+        if let id = groupCallId {
+            runPromotionDecision(key: GroupCallIds.lower(id), trigger: trigger)
+            return
+        }
+        for key in Array(promotedInviteWatches.keys) {
+            runPromotionDecision(key: key, trigger: trigger)
+        }
+    }
+
+    /// The decision input for a candidate: the invite, the live 1:1 call, its anchor, the token held for this group
+    /// call, and the state of the device.
+    @MainActor
+    private func promotionDecisionInput(for invite: IncomingGroupCallInvite, receivedAtMonoMs: Int64)
+        -> GroupPromotionDecision.Input {
+        let liveId: String? = liveOneToOneCallIdForPromotion()
+        let context: PromotionCallContext? = promotionContext(createIfLive: false)
+        let anchor: OneToOneAnchor = context?.anchor ?? OneToOneAnchor()
+        let token: PromotionTokenBook.Freshness = context?.book.state(
+            forGroupCallId: invite.callId, nowWallMs: promotionWallMs, nowMonoMs: promotionMonoMs) ?? .absent
+        let ringUp: Bool = incomingGroupCallInvite.map { GroupCallIds.ieq($0.callId, invite.callId) } ?? false
+        return GroupPromotionDecision.Input(
+            promoted: invite.promoted, promotedFromCallId: invite.promotedFromCallId, creatorId: invite.creatorId,
+            liveCallId: liveId, livePeerId: liveId == nil ? nil : callContactId,
+            anchorDefined: anchor.isDefined, anchorPoisoned: anchor.poisoned, kcmacVerified: anchor.kcmacVerified,
+            token: token, groupLive: GroupAdmissionPolicy.isLive(groupCallControllerState),
+            micGranted: promotionMicGranted(), msSinceInvite: promotionMonoMs - receivedAtMonoMs,
+            ringUp: ringUp, userActed: false)
+    }
+
+    /// An invite that claims to promote a 1:1 call (`promoted` is the JSON boolean true): the decision of GROUP_CALLS_V2
+    /// 2.7 (Consent) is taken now and again on every event that can change it. Returns true when a ring is live for
+    /// the invite afterwards.
+    @MainActor
+    fileprivate func startPromotedInviteWatch(_ invite: IncomingGroupCallInvite) -> Bool {
+        let key = GroupCallIds.lower(invite.callId)
+        if promotedInviteWatches[key] == nil {
+            promotedInviteWatches[key] = PromotedInviteWatch(invite: invite, receivedAtMonoMs: promotionMonoMs)
+        }
+        runPromotionDecision(key: key, trigger: .invite)
+        return incomingGroupCallInvite.map { GroupCallIds.ieq($0.callId, invite.callId) } ?? false
+    }
+
+    /// Takes the decision on one candidate and carries it out.
+    @MainActor
+    fileprivate func runPromotionDecision(key: String, trigger: PromotionTrigger) {
+        guard let watch = promotedInviteWatches[key] else { return }
+        let invite = watch.invite
+        if isGroupCallHandled(invite.callId) {
+            dropPromotedInviteWatch(key: key)
+            return
+        }
+        let input = promotionDecisionInput(for: invite, receivedAtMonoMs: watch.receivedAtMonoMs)
+        switch GroupPromotionDecision.decide(input) {
+        case .fallback:
+            groupDiag(GroupDiagnostics.promoDecisionLine(.fallback, why: .notCandidate))
+            dropPromotedInviteWatch(key: key)
+            if !input.ringUp { _ = presentGroupInviteRing(invite, source: .webSocket) }
+        case .noConversion:
+            dropPromotedInviteWatch(key: key)
+        case .hold:
+            groupDiag(GroupDiagnostics.promoDecisionLine(.hold, why: GroupPromotionDecision.waitWhy(input.token)))
+            armPromotionHoldTimer(key: key)
+        case .ring(let why):
+            groupDiag(GroupDiagnostics.promoDecisionLine(.ring, why: why))
+            watch.holdTimer?.cancel()
+            if !input.ringUp { _ = presentGroupInviteRing(invite, source: .webSocket) }
+        case .autoJoin:
+            groupDiag(GroupDiagnostics.promoDecisionLine(.auto, why: .token))
+            startAutoJoin(invite, key: key, converting: false)
+        case .convert:
+            groupDiag(GroupDiagnostics.promoDecisionLine(.convert, why: .token))
+            startAutoJoin(invite, key: key, converting: true)
+        }
+    }
+
+    /// The silent hold of a candidate ends 3 s after the invite arrived: the decision runs once more and, without
+    /// a token, the invite rings.
+    @MainActor
+    private func armPromotionHoldTimer(key: String) {
+        guard var watch = promotedInviteWatches[key] else { return }
+        watch.holdTimer?.cancel()
+        let elapsed: Int64 = promotionMonoMs - watch.receivedAtMonoMs
+        let remaining: Int64 = max(GroupPromotionToken.inviteWaitMs - elapsed, 0)
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.reevaluatePromotedInvites(groupCallId: key, trigger: .hold)
+        }
+        watch.holdTimer = timer
+        promotedInviteWatches[key] = watch
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(remaining) + 20), execute: timer)
+    }
+
+    /// The invite is over (handled, ended, replaced): the candidate is forgotten.
+    @MainActor
+    fileprivate func dropPromotedInviteWatch(key: String) {
+        guard let watch = promotedInviteWatches.removeValue(forKey: key) else { return }
+        watch.holdTimer?.cancel()
+    }
+
+    /// The 1:1 call `endedCallId` ended: the invites that claim to promote it are not candidates any more. One that is
+    /// still held takes today's path (it rings, or is dropped as busy). An invite that names another call is left alone.
+    @MainActor
+    fileprivate func releasePromotedInviteWatchesAfterOneToOneEnd(endedCallId: String) {
+        let ended = promotedInviteWatches.filter { GroupCallIds.ieq($0.value.invite.promotedFromCallId, endedCallId) }
+        guard !ended.isEmpty else { return }
+        for key in ended.keys { promotedInviteWatches.removeValue(forKey: key) }
+        for (_, watch) in ended {
+            watch.holdTimer?.cancel()
+            let invite = watch.invite
+            groupDiag(GroupDiagnostics.promoDecisionLine(.fallback, why: .notCandidate))
+            let ringUp: Bool = incomingGroupCallInvite.map { GroupCallIds.ieq($0.callId, invite.callId) } ?? false
+            if ringUp || isGroupCallHandled(invite.callId) { continue }
+            // The 1:1 call's teardown is still running: the invite is judged once it has settled.
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                _ = self.presentIncomingGroupCall(invite, source: .webSocket)
+            }
+        }
+    }
+
+    /// A ring that was already up (the push rang first) goes away: the attested invite joins instead. This is not a
+    /// dismissal by the user: no `group_call_decline` is sent, and the CallKit call ends with a non-decline reason.
+    @MainActor
+    private func dismissGroupRingForAutoJoin(callId: String) {
+        stopInAppRingtone()
+        incomingGroupCallInvite = nil
+        NotificationCenterService.shared.clearIncomingCall(callId: callId)
+        clearGroupCallKitCall(reason: .remoteEnded)
+    }
+
+    /// GROUP_CALLS_V2 2.7, Consent: joins the promoted group with no ring and no chime. In this order: the token is
+    /// consumed, the join goes out first (before anything touches the 1:1 leg, which this device never hangs up),
+    /// audio-only with the camera off whatever the invite says, the microphone held until the roster is checked.
+    @MainActor
+    private func startAutoJoin(_ invite: IncomingGroupCallInvite, key: String, converting: Bool) {
+        guard groupCallController != nil,
+              let liveId = liveOneToOneCallIdForPromotion(),
+              var context = promotionContexts[liveId.lowercased()],
+              let token = context.book.consume(groupCallId: invite.callId) else {
+            // Nothing can be consumed (the 1:1 call or the controller is gone): the invite rings.
+            dropPromotedInviteWatch(key: key)
+            if incomingGroupCallInvite == nil { _ = presentGroupInviteRing(invite, source: .webSocket) }
+            return
+        }
+        promotionContexts[liveId.lowercased()] = context
+        if converting { dismissGroupRingForAutoJoin(callId: invite.callId) }
+        let rosterGuard = GroupAutoJoinGuard(
+            creatorUserId: token.creatorUserId, invitees: token.invitees, selfUserId: promotionSelfUserId)
+        // Handled from now on: neither source rings this call again, and its candidate is forgotten.
+        markGroupCallHandled(invite.callId)
+        groupDiag(GroupDiagnostics.ringLine(.autoJoin))
+        groupPromotionDiag(.autoJoined)
+        joinAcceptedGroupCall(invite, autoJoin: rosterGuard)
+    }
+
+    /// GROUP_CALLS_V2 2.7, Consent: the roster of the group this device joined by itself went outside what the token
+    /// listed. The device leaves (`group_call_leave` before the media teardown), keeps the 1:1 call, and says so.
+    @MainActor
+    fileprivate func autoJoinRosterRefused(extra: Int) {
+        guard groupCallController?.currentCallId != nil else { return }
+        groupDiag(GroupDiagnostics.promoRosterLine(extra: extra))
+        leaveLiveGroupCall(why: .rosterMismatch)
+        groupPromotionMismatchToastText = String(
+            localized: "group_call.promotion_mismatch_notice",
+            defaultValue: "La chiamata di gruppo non corrispondeva a quella proposta dal tuo interlocutore: sei uscito dal gruppo.",
+            comment: "Notice after the app left a group call by itself: the group did not match what the person on the 1:1 call had proposed")
+    }
+
+    /// docs/GROUP_CALLS_V2_SPEC.md item 32: a socket that re-authenticates while the hand-over is pending and the token
+    /// has not expired by this device's clock gets the byte-identical token once more, never a re-signed copy.
+    @MainActor
+    fileprivate func resendPromotionTokenAfterReauth() {
+        guard var sent = sentPromotionToken, !sent.resent, groupPromotion != nil,
+              promotionWallMs <= sent.expiresAtWallMs, let provider = liveProvider else { return }
+        sent.resent = true
+        sentPromotionToken = sent
+        groupDiag(GroupDiagnostics.promoSentLine(resend: true, invitees: sent.invitees))
+        OpaqueSelfEchoFilter.shared.markSent(sent.data)
+        let recipient = sent.recipientId
+        let data = sent.data
+        Task {
+            try? await provider.callingApi.sendOpaqueMessageString(recipientId: recipient, payload: data)
+        }
+    }
+
+    /// Leaves the group call that is live here, or ends it when this device is the creator and the
+    /// last one in it (`GroupExitPolicy`). `group_call_leave` goes out before the media teardown.
+    /// A group call that is only waiting for its join to be sent (the accept is waiting for the
+    /// socket) is dropped, so that join is not sent afterwards.
+    @MainActor
+    func leaveLiveGroupCall(why: GroupDiagnostics.ExitReason) {
+        guard let controller = groupCallController else { return }
+        let selfId: String = groupCallManager?.selfUserId ?? ""
+        let action = GroupExitPolicy.action(
+            isCreator: controller.isCreatedLocally, participants: controller.currentRoster, selfId: selfId)
+        let endsForAll: Bool = action == .endForAll
+        groupDiag(GroupDiagnostics.exitLine(why, endsForAll: endsForAll))
+        if controller.currentCallId == nil {
+            groupCallControllerState = .idle
+            clearGroupCallKitCall(reason: .userEnded)
+            return
+        }
+        switch action {
+        case .endForAll:
+            controller.endCallForAll()
+        case .leave:
+            controller.leave()
+        }
+        clearGroupCallKitCall(reason: .userEnded)
+    }
+
+    /// The 1:1 call ended while its hand-over was still pending (spec 29): leave the group too when
+    /// it is down to this device and nobody is still ringing.
+    @MainActor
+    private func shouldLeaveGroupAfterOneToOneEnded() -> Bool {
+        guard groupPromotion != nil, let controller = groupCallController,
+              controller.currentCallId != nil else { return false }
+        return GroupHandOverPolicy.shouldLeaveGroupWhenOneToOneEnds(
+            promotionPending: true,
+            participants: controller.currentRoster,
+            selfId: groupCallManager?.selfUserId ?? "",
+            ringing: controller.currentRinging)
+    }
+
+    /// D-B: a 1:1 call is about to be placed or accepted while a group call is live. Asks "leave the
+    /// group?" (the alert on the group screen) and starts nothing until the answer. A second
+    /// question while one is up changes nothing.
+    @MainActor
+    func askToLeaveGroup(_ purpose: LeaveGroupPrompt.Purpose) {
+        guard leaveGroupPrompt == nil else { return }
+        let prompt = LeaveGroupPrompt(purpose: purpose)
+        let phase: GroupDiagnostics.AdmissionPhase = prompt.isAnswer ? .askedToAnswer : .askedToDial
+        groupDiag(GroupDiagnostics.admissionLine(phase, roster: groupCallController?.currentRoster.count ?? 0))
+        leaveGroupPrompt = prompt
+    }
+
+    /// The ring a "leave the group?" question was asked for is over (the caller hung up, the ring timed out, a cancel
+    /// push arrived): the question is withdrawn, nothing is left to start and the group stays (spec 27). Called wherever
+    /// the 1:1 ring ends; a question about a dial is not affected.
+    @MainActor
+    fileprivate func withdrawLeaveGroupAnswerPrompt() {
+        guard leaveGroupPrompt?.isAnswer == true else { return }
+        leaveGroupPrompt = nil
+        deferredAnswerActivationSource = nil
+        groupDiag(GroupDiagnostics.admissionLine(.withdrawn, roster: groupCallController?.currentRoster.count ?? 0))
+    }
+
+    /// Whether the incoming 1:1 call a "leave the group?" question was asked for is still the one that rings: the
+    /// answer is not taken for a call that ended, or was replaced, while the question was up.
+    @MainActor
+    private func isIncomingAnswerStillLive(uuid: UUID) -> Bool {
+        guard incomingCallRingVisible else { return false }
+        let verdict: GhostCallPolicy.AnswerVerdict = GhostCallPolicy.answerVerdict(
+            uuid: uuid,
+            activeCallKitId: activeCallKitId,
+            isRecentlyEnded: recentlyEndedCallIds.wasRecentlyEnded(uuid),
+            isGhostPlaceholder: ghostPlaceholderCallIds.wasRecentlyEnded(uuid))
+        return verdict == .accept
+    }
+
+    /// "Yes": the group is left (or ended, for the last creator), then the 1:1 call goes ahead.
+    @MainActor
+    func confirmLeaveGroupPrompt() {
+        guard let prompt = leaveGroupPrompt else { return }
+        leaveGroupPrompt = nil
+        // The call the question was about may have ended while it was up: nothing is left to start, the group stays.
+        if case .answer(let uuid) = prompt.purpose, !isIncomingAnswerStillLive(uuid: uuid) {
+            deferredAnswerActivationSource = nil
+            groupDiag(GroupDiagnostics.admissionLine(.withdrawn, roster: groupCallController?.currentRoster.count ?? 0))
+            return
+        }
+        groupDiag(GroupDiagnostics.admissionLine(.confirmed, roster: groupCallController?.currentRoster.count ?? 0))
+        leaveLiveGroupCall(why: .oneToOne)
+        Task { [weak self] in
+            guard let self = self else { return }
+            // The group's teardown reaches this object on the main queue; the 1:1 call starts after it.
+            await self.waitForMainQueueTurn()
+            await self.startOneToOneAfterLeavingGroup(prompt.purpose)
+        }
+    }
+
+    @MainActor
+    private func startOneToOneAfterLeavingGroup(_ purpose: LeaveGroupPrompt.Purpose) async {
+        switch purpose {
+        case .dial(let contactId, let video):
+            await startCall(contactId: contactId, video: video)
+        case .answer(let uuid):
+            let accepted: Bool = performAcceptIncoming(uuid: uuid)
+            replayDeferredAnswerAudioActivation(accepted: accepted)
+        }
+    }
+
+    /// The system activated the audio session while the question was up: the group owned the audio then, so the 1:1
+    /// call's audio was not started. Now that the call is answered, the activation is replayed once.
+    @MainActor
+    private func replayDeferredAnswerAudioActivation(accepted: Bool) {
+        let source = deferredAnswerActivationSource
+        deferredAnswerActivationSource = nil
+        guard accepted, isInCall, let source = source else { return }
+        callService.handleAudioSessionActivated(source: source)
+        markOutgoingAudioSessionReady()
+        if callSpeakerOn {
+            setSpeaker(true)
+        }
+    }
+
+    @MainActor
+    private func waitForMainQueueTurn() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    /// "No": nothing happens, the group call goes on; an incoming 1:1 call is declined as busy.
+    @MainActor
+    func cancelLeaveGroupPrompt() {
+        guard let prompt = leaveGroupPrompt else { return }
+        leaveGroupPrompt = nil
+        deferredAnswerActivationSource = nil
+        groupDiag(GroupDiagnostics.admissionLine(.cancelled, roster: groupCallController?.currentRoster.count ?? 0))
+        if prompt.isAnswer {
+            declineIncomingCall()
+        }
+    }
+
+    /// Whether this group call was accepted or rejected already (call ids are compared ASCII case-insensitively).
+    @MainActor
+    fileprivate func isGroupCallHandled(_ callId: String) -> Bool {
+        return GroupCallIds.contains(handledGroupCallIds, callId)
+    }
+
     /// Remember an accepted/rejected room so neither source re-rings it.
     /// Bounded at 32 (a hostile peer must not be able to grow this forever).
     @MainActor
     private func markGroupCallHandled(_ callId: String) {
-        guard !handledGroupCallIds.contains(callId) else { return }
+        dropPromotedInviteWatch(key: GroupCallIds.lower(callId))
+        guard !isGroupCallHandled(callId) else { return }
         handledGroupCallIds.append(callId)
         if handledGroupCallIds.count > 32 {
             handledGroupCallIds.removeFirst(handledGroupCallIds.count - 32)
@@ -27684,61 +28340,170 @@ extension AppState {
         if let uuid = groupCallKitId, groupCallController?.isCreatedLocally == true {
             Task { [weak self] in await self?.callKit?.reportCallConnected(uuid: uuid) }
         }
-        if var promotion = groupPromotion, promotion.groupCallId == groupCallController?.currentCallId {
+        if var promotion = groupPromotion, GroupCallIds.ieq(promotion.groupCallId, groupCallController?.currentCallId) {
             if !promotion.mediaConnected { groupPromotionDiag(.mediaConnected) }
             promotion.mediaConnected = true
             groupPromotion = promotion
-            finishGroupPromotionIfReady()
+            evaluateGroupPromotion()
         }
     }
 
     @MainActor
     func groupRosterChangedForPromotion() {
-        finishGroupPromotionIfReady()
+        evaluateGroupPromotion()
     }
 
-    /// Arms the hand-over of a 1:1 call into `groupCallId`. If the group media
-    /// does not come up within 30 s the group call is abandoned and the 1:1 call
-    /// stays. Once it is up the 1:1 leg waits for the promoted peer to show up in
-    /// the group; if the peer has neither joined nor had its ring end after 50 s
-    /// in total (the server's ring timeout is 45 s) the hand-over still happens
-    /// (the user asked for the group).
+    /// Arms the hand-over of a 1:1 call into `groupCallId` (spec 29, `GroupHandOverPolicy`).
+    /// If the group media does not come up within 30 s the group call is abandoned and the
+    /// 1:1 call stays. Once it is up the 1:1 leg stays until the promoted peer is in the group,
+    /// or its invite is over (declined, ring timeout: the server's ringing list), or the 1:1
+    /// call ended; 50 s after the start (the server's ring timeout is 45 s) the hand-over
+    /// happens anyway (the user asked for the group). A group that ends first aborts it.
     @MainActor
-    func beginGroupPromotion(groupCallId: String, peerId: String) {
-        groupPromotion = GroupPromotion(groupCallId: groupCallId, peerId: peerId)
+    func beginGroupPromotion(groupCallId: String, peerId: String, autoJoined: Bool = false) {
+        groupPromotion = GroupPromotion(groupCallId: groupCallId, peerId: peerId, autoJoined: autoJoined)
         groupPromotionStartedAt = Date()
         groupPromotionDiag(.begun)
         groupRouteDiag()
         groupPromotionTimeout?.cancel()
-        let final = DispatchWorkItem { [weak self] in
+        groupPromotionMediaCheck?.cancel()
+        let cap = DispatchWorkItem { [weak self] in
             guard let self = self, let promotion = self.groupPromotion,
-                  promotion.groupCallId == groupCallId else { return }
-            self.groupPromotionDiag(.forced)
-            self.completeGroupPromotion()
+                  GroupCallIds.ieq(promotion.groupCallId, groupCallId) else { return }
+            self.evaluateGroupPromotion(minElapsed: GroupHandOverPolicy.capSeconds)
         }
         let mediaCheck = DispatchWorkItem { [weak self] in
             guard let self = self, let promotion = self.groupPromotion,
-                  promotion.groupCallId == groupCallId else { return }
-            if promotion.mediaConnected {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: final)
-                self.groupPromotionTimeout = final
-            } else {
-                RTLog.warn("call", "group promotion: media not up in time - keeping the 1:1 call")
-                self.abandonGroupPromotion()
-            }
+                  GroupCallIds.ieq(promotion.groupCallId, groupCallId) else { return }
+            self.evaluateGroupPromotion(minElapsed: GroupHandOverPolicy.mediaDeadlineSeconds)
         }
-        groupPromotionTimeout = mediaCheck
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: mediaCheck)
+        groupPromotionTimeout = cap
+        groupPromotionMediaCheck = mediaCheck
+        DispatchQueue.main.asyncAfter(deadline: .now() + GroupHandOverPolicy.capSeconds, execute: cap)
+        DispatchQueue.main.asyncAfter(deadline: .now() + GroupHandOverPolicy.mediaDeadlineSeconds, execute: mediaCheck)
+    }
+
+    /// The promotion changed (begun, completed, dropped): the group controller needs to know
+    /// whether a hand-over is pending (a call waiting for its promoted peer is not a lone call),
+    /// and the media-deadline timer goes with the promotion.
+    @MainActor
+    func groupPromotionDidChange() {
+        if groupPromotion == nil {
+            groupPromotionMediaCheck?.cancel()
+            groupPromotionMediaCheck = nil
+            // The hand-over is over: the token kept for its one re-send goes.
+            sentPromotionToken = nil
+        }
+        groupCallController?.setPromotionPending(groupPromotion != nil)
+    }
+
+    /// Takes the hand-over decision again and carries it out: from every roster update (the
+    /// peer joined, or its invite is over), from the group media connecting, and from the two
+    /// timers (`minElapsed` is the timer's own length, so a clock that moved cannot make a
+    /// timer that fired act early).
+    @MainActor
+    func evaluateGroupPromotion(minElapsed: Double = 0) {
+        guard let promotion = groupPromotion, let controller = groupCallController else { return }
+        let started: Date = groupPromotionStartedAt ?? Date()
+        let elapsed: Double = max(Date().timeIntervalSince(started), minElapsed)
+        let groupEnded: Bool = controller.currentCallId == nil && !GroupAdmissionPolicy.isLive(groupCallControllerState)
+        let inputs = GroupHandOverPolicy.Inputs(
+            peerId: promotion.peerId,
+            selfId: groupCallManager?.selfUserId ?? "",
+            participants: controller.currentRoster,
+            ringing: controller.currentRinging,
+            oneToOneLive: isInCall,
+            groupEnded: groupEnded,
+            mediaConnected: promotion.mediaConnected,
+            elapsedSeconds: elapsed)
+        switch GroupHandOverPolicy.decide(inputs) {
+        case .wait:
+            break
+        case .abort:
+            // The group is gone: nothing to hand over, the 1:1 call stays.
+            groupPromotionDiag(.aborted)
+            groupPromotionStartedAt = nil
+            groupPromotion = nil
+            groupPromotionTimeout?.cancel()
+            groupPromotionTimeout = nil
+        case .abandonMediaNotUp:
+            RTLog.warn("call", "group promotion: media not up in time - keeping the 1:1 call")
+            abandonGroupPromotion()
+        case .abortKeepOneToOne:
+            // The peer's invite is over and nobody else is in the group or rings: there is nothing to hand the
+            // call over to. The 1:1 call stays and the group is left (ended, for the creator that is the last
+            // one in it).
+            groupPromotionDiag(.aborted)
+            groupPromotionStartedAt = nil
+            groupPromotion = nil
+            groupPromotionTimeout?.cancel()
+            groupPromotionTimeout = nil
+            leaveLiveGroupCall(why: .promotionAborted)
+        case .handOver(let reason):
+            carryOutHandOver(reason)
+        }
+    }
+
+    /// A device that joined the group by itself never hangs up the 1:1 leg: the creator does that (GROUP_CALLS_V2 2.7,
+    /// Ordering). The promotion is just over for it (and, when the 1:1 call ended by itself, the group takes the audio unit).
+    @MainActor
+    private func releaseAutoJoinedPromotion(_ reason: GroupHandOverPolicy.Reason) {
+        switch reason {
+        case .peerJoined: groupPromotionDiag(.peerJoined)
+        case .peerInviteOver: groupPromotionDiag(.peerInviteOver)
+        case .capReached: groupPromotionDiag(.forced)
+        case .oneToOneEnded: groupPromotionDiag(.oneToOneEnded)
+        }
+        if reason == .oneToOneEnded {
+            completeGroupPromotion(hangUp: false)
+            return
+        }
+        groupPromotion = nil
+        groupPromotionTimeout?.cancel()
+        groupPromotionTimeout = nil
+        groupPromotionStartedAt = nil
     }
 
     @MainActor
-    private func finishGroupPromotionIfReady() {
-        guard let promotion = groupPromotion, promotion.mediaConnected else { return }
-        let peerInGroup = groupCallManager?.participants.contains { $0.id == promotion.peerId } ?? false
-        if peerInGroup {
+    private func carryOutHandOver(_ reason: GroupHandOverPolicy.Reason) {
+        if groupPromotion?.autoJoined == true {
+            releaseAutoJoinedPromotion(reason)
+            return
+        }
+        switch reason {
+        case .peerJoined:
             groupPromotionDiag(.peerJoined)
             completeGroupPromotion()
+        case .peerInviteOver:
+            groupPromotionDiag(.peerInviteOver)
+            completeGroupPromotion()
+        case .capReached:
+            groupPromotionDiag(.forced)
+            completeGroupPromotion()
+        case .oneToOneEnded:
+            groupPromotionDiag(.oneToOneEnded)
+            completeGroupPromotion(hangUp: false)
         }
+    }
+
+    /// The 1:1 leg of a promotion goes with the reason `promoted-to-group`, on every channel the
+    /// peer could still use: the in-band control frame, then the reason-bearing envelope by
+    /// explicit id after a synchronous unbind, so `endCall()`'s own generic hangup paths find no
+    /// binding and no-op (exactly one hangup reaches the wire).
+    @MainActor
+    private func hangUpOneToOneForPromotion() {
+        guard let impl = liveProvider?.callingApi as? BCryptoCallingApiImpl,
+              let callId = impl.getActiveCallId(),
+              let peer = callContactId else {
+            endCall()
+            return
+        }
+        callService.sendControlHangup(reason: "promoted-to-group")
+        impl.unbindActiveCallId(matching: callId)
+        Task {
+            try? await impl.sendCallHangupForId(callId: callId, recipientId: peer, reason: "promoted-to-group")
+        }
+        endCall(notifyPeerInBand: false)
     }
 
     /// Make-before-break: the group media is up, now the 1:1 leg goes.
@@ -27759,15 +28524,21 @@ extension AppState {
     /// group is live, with its reason (`grp route why=<n> old=<n> out=<n> vol=<n>`, see
     /// `groupRouteChangeDiag`).
     @MainActor
-    private func completeGroupPromotion() {
+    private func completeGroupPromotion(hangUp: Bool = true) {
         guard groupPromotion != nil else { return }
         groupPromotion = nil
         groupPromotionTimeout?.cancel()
         groupPromotionTimeout = nil
         RTLog.info("call", "group promotion: hand-over complete - ending the 1:1 leg")
         BugReporter.shared.noteAudioTransition()
+        guard hangUp else {
+            // The 1:1 call ended by itself: nothing to hang up, the group takes the audio unit.
+            groupCallController?.oneToOneEnded()
+            groupPromotionStartedAt = nil
+            return
+        }
         // `endCall()` itself tells the group audio unit to take over (below).
-        endCall()
+        hangUpOneToOneForPromotion()
         groupPromotionDiag(.handedOver)
         groupRouteDiag()
         // The 1:1 leg's CallKit / audio-unit teardown finishes asynchronously: where did
@@ -27794,7 +28565,8 @@ extension AppState {
         groupPromotion = nil
         groupPromotionTimeout?.cancel()
         groupPromotionTimeout = nil
-        groupCallController?.leave()
+        // The creator that is the last one in the group ends it; the 1:1 call goes on in both cases.
+        leaveLiveGroupCall(why: .mediaNotUp)
     }
 
     /// `group_call_ended` for a call we never joined (spec 2.6: creator hung up,
@@ -27803,10 +28575,17 @@ extension AppState {
     /// ringing here until the local 45 s timer).
     @MainActor
     func groupRingEnded(callId: String, reason: String) {
-        guard incomingGroupCallInvite?.callId == callId else { return }
+        let rings: Bool = GroupCallIds.ieq(callId, incomingGroupCallInvite?.callId)
+        // A promoted invite that is only HELD (no ring up yet, waiting for its token) is over too: marking it handled
+        // drops the watch, so the end of the hold does not ring a call that no longer exists.
+        let held: Bool = promotedInviteWatches[GroupCallIds.lower(callId)] != nil
+        guard rings || held else { return }
         RTLog.info("call", "group ring ended call=" + String(callId.prefix(8)) + " reason=" + String(reason.prefix(16)))
-        stopInAppRingtone()
+        groupDiag(GroupDiagnostics.ringLine(.endedByServer, code: GroupDiagnostics.endReasonCode(reason)))
         markGroupCallHandled(callId)
+        // Nothing of the ring surface is touched for an invite that never rang: another call may be ringing.
+        guard rings else { return }
+        stopInAppRingtone()
         incomingGroupCallInvite = nil
         NotificationCenterService.shared.clearIncomingCall(callId: callId)
         clearGroupCallKitCall(reason: reason == "ring_timeout" ? .unanswered : .remoteEnded)

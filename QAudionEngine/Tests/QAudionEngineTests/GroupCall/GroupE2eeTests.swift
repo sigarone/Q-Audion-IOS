@@ -511,6 +511,17 @@ final class GroupE2eeCoordinatorTests: XCTestCase {
         XCTAssertTrue(env.sent.isEmpty)
     }
 
+    func testAnEnvelopeNamingTheCallInAnotherCaseIsTheSameCall() {
+        let (coordinator, env) = make()
+        coordinator.onRoster(epoch: 17, members: [selfUser, userB], pseudonyms: pseudonyms)
+        env.installs.removeAll()
+        env.sent.removeAll()
+        coordinator.onEnvelope(.mediaKey(callId: call.uppercased(), epoch: 17, index: 1, key: Data(repeating: 0x42, count: 32),
+                                         pseudonym: GroupCallFixtures.pseudoB), from: userB)
+        XCTAssertEqual(env.installs, [.init(key: Data(repeating: 0x42, count: 32), index: 1, participantId: GroupCallFixtures.pseudoB)])
+        XCTAssertEqual(env.parsedSent().map { $0.envelope }, [.ack(callId: call, epoch: 17)], "the ack names the call as this device knows it")
+    }
+
     // MARK: nack
 
     func testMissingKeyNacksAtMostFourTimesEveryTwoSeconds() {

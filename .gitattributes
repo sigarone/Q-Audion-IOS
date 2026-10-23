@@ -48,3 +48,7 @@ QAudionEngine/Tests/QAudionEngineTests/Resources/kat/nfc-pairing-kat.json -text
 docs/mesh/MESH_LINK_SPEC.md -text
 docs/mesh/gen_mesh_vectors.py -text
 QAudionEngine/Tests/QAudionEngineTests/Mesh/Resources/mesh-vectors.json -text
+# The group promotion token known-answer vectors (docs/GROUP_CALLS_V2.md section 2.7 of that repository) are a byte-for-byte copy of the file the server repository
+# holds (test/kat/group_promotion_token_v1/promotion-token-kat.json, generated there by tools/katgen/grouptoken) and the tests pin its
+# SHA-256: git must never rewrite its line endings.
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/promotion-token-kat.json -text

@@ -5,6 +5,7 @@ import Foundation
 // dependency-injected @MainActor class with no lightweight test init):
 //
 //  - `CallStartGate`: the in-flight latch for `startCall`.
+//  - `CallStartOrigin`: whether a start came from the phone or from the car (the car is never asked to use the phone).
 //  - `CarCallStartNotice`: when the car screen tells the driver that a call did not start.
 //  - `CallEngineLifecycle`: who owns the call engine, and how it comes back
 //    after a logout.
@@ -42,6 +43,17 @@ struct CallStartGate {
     mutating func end() {
         inFlight = false
     }
+}
+
+/// Where a call start was asked for. A start asked for from the car (a tap on the car screen, or Siri, which is what
+/// the car speaks to) never raises a question on the phone: the driver is not told to use it.
+enum CallStartOrigin: Equatable {
+    case phone
+    case car
+
+    /// Whether a live group call may be answered with the "leave the group?" question on the phone screen. From the car
+    /// the start is refused instead, and the car screen says so (`CarCallStartNotice`).
+    var mayAskToLeaveGroup: Bool { self == .phone }
 }
 
 /// When a call started from the car screen that left no call up is told to the driver.

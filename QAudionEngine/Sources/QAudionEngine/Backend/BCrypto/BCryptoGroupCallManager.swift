@@ -43,15 +43,24 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         public let groupId: String
         public let groupName: String
         /// W-CALLPROMOTE — set when this invite continues a 1:1 call the
-        /// creator was already on (the in-call "+" button). Informational
-        /// only, no auth weight — see `createGroupCall`'s `promotedFromCallId`
-        /// kdoc for the full cross-platform rationale. Empty for an ordinary
-        /// group call or an old server that doesn't know the field.
+        /// creator was already on (the in-call "+" button). It lets the invite
+        /// past the busy state of that very 1:1 call, and it is one of the four
+        /// conditions of the automatic join (spec 28); it admits nobody by
+        /// itself. Empty for an ordinary group call or an old server that does
+        /// not know the field.
         public let promotedFromCallId: String
+        /// Server attestation of that promotion (`"promoted": true`, spec 28): the server
+        /// checked that `promotedFromCallId` is an answered 1:1 call whose two parties are
+        /// the creator and exactly this one invitee. It is read only from the JSON boolean
+        /// true. The attestation alone never joins anything: the app joins without a ring
+        /// only when a valid promotion token from its live 1:1 peer backs it
+        /// (`GroupPromotionDecision`). false from a server that does not send it: the
+        /// invite rings as always.
+        public let promoted: Bool
 
         public init(callId: String, creatorId: String, creatorName: String,
                     callType: String, groupId: String, groupName: String,
-                    promotedFromCallId: String = "") {
+                    promotedFromCallId: String = "", promoted: Bool = false) {
             self.callId = callId
             self.creatorId = creatorId
             self.creatorName = creatorName
@@ -59,6 +68,18 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             self.groupId = groupId
             self.groupName = groupName
             self.promotedFromCallId = promotedFromCallId
+            self.promoted = promoted
+        }
+    }
+
+    /// A literal-string `opaque_message` the creator sends right before its `group_call_create`.
+    public struct PreCreateOpaque: Equatable, Sendable {
+        public let recipientId: String
+        public let data: String
+
+        public init(recipientId: String, data: String) {
+            self.recipientId = recipientId
+            self.data = data
         }
     }
 
@@ -242,6 +263,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         }
     }
 
+    /// The display name the roster shows for `userId` (the injected resolver): the ringing
+    /// tiles of the group screen name people who are not in the roster yet.
+    public func resolvedName(for userId: String) -> String { nameResolver(userId) }
+
     /// Re-resolve the cached roster's display names against the (just
     /// changed) rubrica and republish if anything actually differs. Resolver
     /// calls run OUTSIDE the lock — the injected resolver reads ContactsStore
@@ -282,6 +307,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     // MARK: - Actions
 
+    /// Sends a literal-string `opaque_message` on the same funnel, and so in the same order, as the
+    /// group signalling frames.
+    public func sendOpaqueString(recipientId: String, data: String) {
+        send(type: "opaque_message", data: ["recipient_id": recipientId, "data": data])
+    }
+
     /// Create a new group call and invite recipients.
     ///
     /// Wire: `{call_id, recipients, call_type, group_id, group_name,
@@ -302,14 +333,21 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         groupId: String = "",
         groupName: String = "",
         /// W-CALLPROMOTE - set when this call is a live promotion of a 1:1
-        /// call this client was already on. Relayed verbatim by the server
-        /// onto `group_call_invite` so THAT SAME peer's client can recognise
-        /// the invite as a continuation of the call they are already on -
-        /// informational only, never used for join authorisation.
-        promotedFromCallId: String = ""
+        /// call this client was already on. The server attests it (answered 1:1
+        /// call between the creator and exactly this invitee) and relays it onto
+        /// `group_call_invite`; THAT SAME peer's client then joins without a
+        /// ring only when it also holds the signed promotion token sent below.
+        promotedFromCallId: String = "",
+        /// The call id to create under (a promotion mints it first, because the
+        /// promotion token names it). nil: a fresh id, in lower case like every group call id.
+        groupCallId: String? = nil,
+        /// An `opaque_message` sent on the same socket immediately BEFORE the
+        /// `group_call_create`: the promotion token for the 1:1 peer
+        /// (`GroupPromotionToken`, GROUP_CALLS_V2 2.7, Promotion token).
+        preCreateOpaque: PreCreateOpaque? = nil
     ) -> String? {
         guard state == .idle else { return nil }
-        let newCallId = UUID().uuidString
+        let newCallId = groupCallId ?? UUID().uuidString.lowercased()
         lock.lock()
         _state = .creating
         _callId = newCallId
@@ -322,6 +360,9 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         lock.unlock()
         onStateChanged?(.creating)
 
+        if let pre = preCreateOpaque {
+            send(type: "opaque_message", data: ["recipient_id": pre.recipientId, "data": pre.data])
+        }
         send(type: "group_call_create", data: [
             "call_id": newCallId,
             "recipients": recipients,
@@ -469,25 +510,14 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
 
     private func registerHandlers() {
         // W-GRPRING - `group_call_invite` wire: {call_id, creator_id,
-        // call_type, group_id, group_name, promoted_from_call_id}. The invite
-        // is a RING, not a join: this handler never touches `_state` /
-        // `_callId`. The app layer rings, and only `GroupCallController.join`
-        // (on accept) moves us into the call.
+        // call_type, group_id, group_name, promoted_from_call_id, promoted?}.
+        // The invite is a RING, not a join: this handler never touches `_state` /
+        // `_callId`. The app layer rings (or, for an attested promotion of the
+        // 1:1 call this device is on, joins at once), and only
+        // `GroupCallController.join` (on accept) moves us into the call.
         ws.registerHandler(type: "group_call_invite") { [weak self] _, data in
-            guard let self = self,
-                  let callId = data["call_id"] as? String,
-                  let creatorId = data["creator_id"] as? String else { return }
-            self.onIncomingInvite?(IncomingGroupInvite(
-                callId: callId,
-                creatorId: creatorId,
-                // The server ships only UUIDs - resolve the creator to a human
-                // name via the local rubrica, same as the participant list.
-                creatorName: self.nameResolver(creatorId),
-                callType: (data["call_type"] as? String) ?? "audio",
-                groupId: (data["group_id"] as? String) ?? "",
-                groupName: (data["group_name"] as? String) ?? "",
-                promotedFromCallId: (data["promoted_from_call_id"] as? String) ?? ""
-            ))
+            guard let self = self, let invite = self.parseInvite(data: data) else { return }
+            self.onIncomingInvite?(invite)
         }
 
         // Sent on every roster change and when the room appears. Wire (spec
@@ -496,9 +526,10 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             self?.handleGroupCallUpdate(data: data)
         }
 
-        // Wire: {call_id, reason?} - "ended" | "ring_timeout" | "declined".
-        // For the active call this ends it; for any other call id it is a ring
-        // we never joined going away (the caller dismisses it).
+        // Wire: {call_id, reason?} - "ended" | "ring_timeout" | "declined" | "alone"
+        // | "answered_elsewhere". For the active call this ends it (the two ring-only
+        // reasons excepted); for any other call id it is a ring we never joined going
+        // away (the caller dismisses it).
         ws.registerHandler(type: "group_call_ended") { [weak self] _, data in
             self?.handleGroupCallEnded(data: data)
         }
@@ -558,10 +589,30 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         }
     }
 
+    /// Decodes a `group_call_invite` (nil without a call id or a creator id).
+    /// `promoted` / `promoted_from_call_id` are the server's attestation of a 1:1
+    /// promotion (spec 28), present only in the invite of the attested peer.
+    func parseInvite(data: [String: Any]) -> IncomingGroupInvite? {
+        guard let callId = data["call_id"] as? String,
+              let creatorId = data["creator_id"] as? String else { return nil }
+        return IncomingGroupInvite(
+            callId: callId,
+            creatorId: creatorId,
+            // The server ships only UUIDs - resolve the creator to a human
+            // name via the local rubrica, same as the participant list.
+            creatorName: nameResolver(creatorId),
+            callType: (data["call_type"] as? String) ?? "audio",
+            groupId: (data["group_id"] as? String) ?? "",
+            groupName: (data["group_name"] as? String) ?? "",
+            promotedFromCallId: (data["promoted_from_call_id"] as? String) ?? "",
+            promoted: GroupCallWire.isJsonTrue(data["promoted"])
+        )
+    }
+
     func handleGroupCallEnded(data: [String: Any]) {
         let endedId = data["call_id"] as? String ?? ""
         let reason = (data["reason"] as? String) ?? "ended"
-        if let active = callId, endedId.isEmpty || endedId == active {
+        if let active = callId, endedId.isEmpty || GroupCallIds.ieq(endedId, active) {
             if Self.ringOnlyEndReasons.contains(reason) {
                 // A ring going away for a call this device already joined (or is joining):
                 // not the end of the call.
@@ -580,12 +631,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             print("[BCryptoGroupCallManager] group_call_media_ready UNPARSEABLE (refused)")
             return
         }
-        guard ready.callId == callId else { return }
+        guard GroupCallIds.ieq(ready.callId, callId) else { return }
         onMediaReady?(ready)
     }
 
     func handleMediaUnavailable(data: [String: Any]) {
-        guard let cid = data["call_id"] as? String, cid == callId else { return }
+        guard let cid = data["call_id"] as? String, GroupCallIds.ieq(cid, callId) else { return }
         let wireReason = (data["reason"] as? String) ?? ""
         if wireReason == Self.answeredElsewhere {
             // Another live device of this account holds the seat (server D24): this device's
@@ -603,12 +654,12 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
             print("[BCryptoGroupCallManager] group_call_media_token UNPARSEABLE (refused)")
             return
         }
-        guard token.callId == callId else { return }
+        guard GroupCallIds.ieq(token.callId, callId) else { return }
         onMediaToken?(token)
     }
 
     func handleMediaMoved(data: [String: Any]) {
-        guard let cid = data["call_id"] as? String, cid == callId else { return }
+        guard let cid = data["call_id"] as? String, GroupCallIds.ieq(cid, callId) else { return }
         onMediaMoved?(cid, (data["node_id"] as? String) ?? "")
     }
 
@@ -633,7 +684,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         // sends it to every device of a participant). With no call at all (`_callId` nil)
         // it must not make the manager `.active` with a phantom roster: that refuses every
         // later `createGroupCall` (`state == .idle`).
-        guard let active = _callId, active == update.callId else {
+        guard let active = _callId, GroupCallIds.ieq(update.callId, active) else {
             lock.unlock()
             return
         }

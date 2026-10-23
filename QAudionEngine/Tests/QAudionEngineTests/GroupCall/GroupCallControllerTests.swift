@@ -125,6 +125,43 @@ final class FakePathMonitor: GroupPathMonitoring {
     func fire(_ reason: String) { handler?(reason) }
 }
 
+/// A scheduler for `GroupAloneWatchdog` that never runs anything by itself: `fire()` runs the
+/// timers still armed, `armed` says how many are.
+final class ManualAloneScheduler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [Int: (seconds: Double, work: () -> Void)] = [:]
+    private var next = 0
+    private var _scheduledSeconds: [Double] = []
+
+    var scheduler: GroupAloneWatchdog.Scheduler {
+        return { [self] seconds, work in
+            lock.lock()
+            next += 1
+            let id = next
+            entries[id] = (seconds, work)
+            _scheduledSeconds.append(seconds)
+            lock.unlock()
+            return { [self] in
+                lock.lock(); entries[id] = nil; lock.unlock()
+            }
+        }
+    }
+
+    /// Timers armed right now.
+    var armed: Int { lock.lock(); defer { lock.unlock() }; return entries.count }
+    /// The length of every timer ever armed, in order.
+    var scheduledSeconds: [Double] { lock.lock(); defer { lock.unlock() }; return _scheduledSeconds }
+
+    /// Runs (and consumes) every timer still armed.
+    func fire() {
+        lock.lock()
+        let due = entries.sorted { $0.key < $1.key }.map { $0.value.work }
+        entries.removeAll()
+        lock.unlock()
+        for work in due { work() }
+    }
+}
+
 // MARK: - Harness
 
 /// A controller over a manager whose outbound messages are captured, a fake media
@@ -149,6 +186,11 @@ final class ControllerHarness: @unchecked Sendable {
     private var _states: [GroupCallController.State] = []
     var controlSendResult = true
 
+    /// The lone-call timer of the controller runs on this scheduler: a test fires it by hand.
+    let alone = ManualAloneScheduler()
+    private var _ringing: [[String]] = []
+    private var _diag: [String] = []
+
     init(iceRefreshRetrySeconds: Double = 60, mediaReadyTimeoutSeconds: Double = 10,
          tokenReplyTimeoutSeconds: Double = 8, tokenRetryBackoffSeconds: [Double] = [6, 12, 24, 48]) {
         let ws = BCryptoWebSocketClient(config: BackendConfig(serverUrl: "https://example.invalid"))
@@ -157,7 +199,14 @@ final class ControllerHarness: @unchecked Sendable {
                                          iceRefreshRetrySeconds: iceRefreshRetrySeconds,
                                          mediaReadyTimeoutSeconds: mediaReadyTimeoutSeconds,
                                          tokenReplyTimeoutSeconds: tokenReplyTimeoutSeconds,
-                                         tokenRetryBackoffSeconds: tokenRetryBackoffSeconds)
+                                         tokenRetryBackoffSeconds: tokenRetryBackoffSeconds,
+                                         aloneScheduler: alone.scheduler)
+        controller.onRingingChanged = { [weak self] list in
+            self?.lock.lock(); self?._ringing.append(list); self?.lock.unlock()
+        }
+        controller.diagLog = { [weak self] line in
+            self?.lock.lock(); self?._diag.append(line); self?.lock.unlock()
+        }
         manager.sendOverride = { [weak self] type, data in
             self?.lock.lock(); self?._sent.append((type, data)); self?.lock.unlock()
         }
@@ -177,6 +226,10 @@ final class ControllerHarness: @unchecked Sendable {
         }
     }
 
+    /// Every value `onRingingChanged` reported, in order.
+    var ringingReports: [[String]] { lock.lock(); defer { lock.unlock() }; return _ringing }
+    /// Every diagnosis line the controller wrote.
+    var diagLines: [String] { lock.lock(); defer { lock.unlock() }; return _diag }
     var sent: [(type: String, data: [String: Any])] { lock.lock(); defer { lock.unlock() }; return _sent }
     var sentTypes: [String] { sent.map { $0.type } }
     var control: [(peer: String, json: String)] { lock.lock(); defer { lock.unlock() }; return _control }
@@ -189,7 +242,7 @@ final class ControllerHarness: @unchecked Sendable {
     static let pseudoC = GroupCallFixtures.pseudoC
 
     func update(epoch: UInt32, members: [String]? = nil, withMedia: Bool = true,
-                callId: String = ControllerHarness.callId) -> GroupCallWire.Update {
+                callId: String = ControllerHarness.callId, ringing: [String]? = nil) -> GroupCallWire.Update {
         let roster = members ?? [Self.selfUser, Self.peerB]
         var map: [String: String] = [:]
         if withMedia {
@@ -199,7 +252,7 @@ final class ControllerHarness: @unchecked Sendable {
             map = map.filter { roster.contains($0.key) }
         }
         return GroupCallWire.Update(callId: callId, participants: roster, epoch: epoch,
-                                    nodeId: withMedia ? "node-a" : nil, pseudonyms: map)
+                                    nodeId: withMedia ? "node-a" : nil, pseudonyms: map, ringing: ringing)
     }
 
     func ready(callId: String = ControllerHarness.callId) -> GroupCallWire.MediaReady {
@@ -377,6 +430,21 @@ final class GroupCallControllerTests: XCTestCase {
         XCTAssertTrue(installed)
         let keys = h.backend.keys.filter { $0.participant == ControllerHarness.pseudoB }
         XCTAssertEqual(keys.map { $0.key }, [GroupCallFixtures.keyBytes(0x51)])
+        h.controller.leave()
+    }
+
+    func testAKeyThatArrivedBeforeTheJoinIsReplayedWhateverTheCaseOfTheCallId() async {
+        let h = ControllerHarness()
+        let lower = "0a1b2c3d-2222-3333-4444-5555555555ff"
+        h.controller.onGroupCallControlEnvelope(
+            json: keyEnvelope(epoch: 1, from: 0x53, callId: lower.uppercased()), fromUserId: ControllerHarness.peerB)
+        h.controller.join(callId: lower)
+        h.manager.onGroupUpdate?(h.update(epoch: 1, withMedia: true, callId: lower))
+        h.manager.onMediaReady?(h.ready(callId: lower))
+        let installed = await h.waitUntil { h.backend.keys.contains { $0.participant == ControllerHarness.pseudoB } }
+        XCTAssertTrue(installed, "the same call, spelled in another case")
+        XCTAssertEqual(h.backend.keys.filter { $0.participant == ControllerHarness.pseudoB }.map { $0.key },
+                       [GroupCallFixtures.keyBytes(0x53)])
         h.controller.leave()
     }
 

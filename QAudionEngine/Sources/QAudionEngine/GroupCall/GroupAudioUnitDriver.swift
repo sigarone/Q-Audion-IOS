@@ -101,7 +101,9 @@ public final class NoopGroupAudioUnit: GroupAudioUnitControlling {
 public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked Sendable {
 
     /// Numeric `admgate` lines go through `NativeAudioSessionGate.log`; this is
-    /// the group-specific side channel (ids and numbers only).
+    /// the group-specific side channel (`GroupDiagnostics.audioDriverLine`: numbers
+    /// only). `GroupCallController` points it at its `diagLog`, so the lines reach the
+    /// phone log with the "group" tag.
     public var log: ((String) -> Void)?
     /// The unit cannot run because no session is active (after a 1:1 call
     /// released it): the app layer activates one and calls `sessionActivated`.
@@ -128,11 +130,11 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         activationRequested = false
         lock.unlock()
         if NativeAudioSessionGate.isArmed {
-            log?("grpaudio begin=1 shared=1")
+            log?(GroupDiagnostics.audioDriverLine(.begun, shared: true))
             return
         }
         arm()
-        log?("grpaudio begin=1 shared=0")
+        log?(GroupDiagnostics.audioDriverLine(.begun, shared: false))
         armActivationWatchdog()
     }
 
@@ -162,12 +164,13 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         watchdog = nil
         lock.unlock()
         guard due else { return }
-        log?("grpaudio watchdog=1 noactivation=1")
+        log?(GroupDiagnostics.audioDriverLine(.watchdog, shared: false))
         onNeedsSessionActivation?()
     }
 
     private func arm() {
         let newToken = NativeAudioSessionGate.armManualMode()
+        NativeAudioSessionGate.markGroupArm(token: newToken)
         lock.lock()
         token = newToken
         ownsArm = true
@@ -187,7 +190,7 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         // Shared unit (promotion overlap): the activation is recorded, the unit is
         // the 1:1 leg's until `oneToOneEnded()` takes it over.
         guard GroupAudioUnitDecisions.unitMayBeEnabled(ownsArm: owns) else {
-            log?("grpaudio activated=1 shared=1")
+            log?(GroupDiagnostics.audioDriverLine(.activatedShared, shared: true))
             return
         }
         switch GroupAudioUnitDecisions.action(begun: started, source: source, callKitAlreadySeen: alreadySeen) {
@@ -246,7 +249,7 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         guard started else { return }
         if !NativeAudioSessionGate.isArmed || (owns && !NativeAudioSessionGate.isCurrent(token: current)) {
             arm()
-            log?("grpaudio rearm=1")
+            log?(GroupDiagnostics.audioDriverLine(.rearmed, shared: false))
         }
         guard NativeAudioSessionGate.isArmed else { return }
         lock.lock()

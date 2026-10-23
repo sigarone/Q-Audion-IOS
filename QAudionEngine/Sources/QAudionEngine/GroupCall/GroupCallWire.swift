@@ -10,6 +10,14 @@ import Foundation
 /// fingerprints, ICE credentials and ip addresses are never logged at all.
 public enum GroupCallWire {
 
+    /// A JSON boolean true and nothing else: the string "true", the number 1, null and an absent
+    /// field are all false. `promoted` of `group_call_invite` is read this way (GROUP_CALLS_V2 2.7,
+    /// Consent): an NSNumber bridged from the number 1 would otherwise read as true.
+    public static func isJsonTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber else { return false }
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
+    }
+
     /// A pseudonym / room id / join token is 128 random bits as 32 lowercase
     /// hex characters (spec §2.1 / §2.3).
     public static func isHex128(_ value: String) -> Bool {
@@ -175,14 +183,23 @@ public enum GroupCallWire {
         public let nodeId: String?
         /// user id -> pseudonym. Empty until the room exists.
         public let pseudonyms: [String: String]
+        /// User ids still ringing (invited, not joined, not declined, ring not expired). nil
+        /// when the server does not send the field (an older one). A change of this list alone
+        /// does not bump the epoch (spec 31).
+        public let ringing: [String]?
 
-        public init(callId: String, participants: [String], epoch: UInt32, nodeId: String?, pseudonyms: [String: String]) {
+        public init(callId: String, participants: [String], epoch: UInt32, nodeId: String?, pseudonyms: [String: String],
+                    ringing: [String]? = nil) {
             self.callId = callId
             self.participants = participants
             self.epoch = epoch
             self.nodeId = nodeId
             self.pseudonyms = pseudonyms
+            self.ringing = ringing
         }
+
+        /// At most this many ringing ids are read (a group call holds a handful of members).
+        static let maxRinging = 64
 
         /// pseudonym -> user id, for mapping Janus feeds back to tiles.
         public var userByPseudonym: [String: String] {
@@ -207,8 +224,18 @@ public enum GroupCallWire {
                     }
                 }
             }
+            var ringing: [String]?
+            if let raw = data["ringing"] as? [String] {
+                var seen = Set<String>()
+                var list: [String] = []
+                for user in raw where !user.isEmpty && !seen.contains(user) && list.count < maxRinging {
+                    seen.insert(user)
+                    list.append(user)
+                }
+                ringing = list
+            }
             return Update(callId: callId, participants: participants, epoch: UInt32(epochValue),
-                          nodeId: nodeId, pseudonyms: pseudonyms)
+                          nodeId: nodeId, pseudonyms: pseudonyms, ringing: ringing)
         }
     }
 }

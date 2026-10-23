@@ -83,11 +83,196 @@ public enum GroupDiagnostics {
         case abandoned = 8
         /// The peer never showed up: hand-over forced by the timeout.
         case forced = 9
+        /// An attested promotion invite was joined with no ring (invitee side).
+        case autoJoined = 6
+        /// The peer's invite is over (declined, ring timeout): the hand-over goes ahead.
+        case peerInviteOver = 7
+        /// The 1:1 leg ended by itself while the hand-over was pending.
+        case oneToOneEnded = 10
+        /// The group ended while the hand-over was pending: the 1:1 call stays.
+        case aborted = 11
     }
 
     /// `grp swap phase=<n> ms=<since the hand-over began>`
     public static func promotionLine(_ phase: PromotionPhase, ms: Int) -> String {
         "grp swap phase=\(phase.rawValue) ms=\(clamp(ms))"
+    }
+
+    // MARK: - Ring, lone call, admission (spec 27-31)
+
+    public enum RingPhase: Int, Sendable {
+        /// An invite rings.
+        case shown = 1
+        /// An invite was dropped as busy (`code` = `BusyCode`).
+        case busyDrop = 2
+        /// The 45 s ring timer ran out here.
+        case timedOut = 3
+        /// The user declined.
+        case declined = 4
+        /// The server ended the ring (`code` = `endReasonCode`).
+        case endedByServer = 5
+        /// An attested promotion invite was joined with no ring.
+        case autoJoin = 6
+        /// The user accepted.
+        case accepted = 7
+    }
+
+    /// Why an invite was dropped as busy: 1 a 1:1 call is live or ringing, 3 a group call is live.
+    public enum BusyCode: Int, Sendable {
+        case oneToOne = 1
+        case groupCall = 3
+    }
+
+    /// `grp ring phase=<1-7> code=<n>`
+    public static func ringLine(_ phase: RingPhase, code: Int = 0) -> String {
+        "grp ring phase=\(phase.rawValue) code=\(clamp(code))"
+    }
+
+    /// The `group_call_ended` reason as a number: 1 ring_timeout, 2 declined,
+    /// 3 answered_elsewhere, 4 ended, 5 alone, 9 anything else.
+    public static func endReasonCode(_ reason: String) -> Int {
+        switch reason {
+        case "ring_timeout": return 1
+        case "declined": return 2
+        case "answered_elsewhere": return 3
+        case "ended": return 4
+        case "alone": return 5
+        default: return 9
+        }
+    }
+
+    public enum AlonePhase: Int, Sendable {
+        /// The roster became only this device with nobody ringing: the 50 s timer is armed.
+        case armed = 1
+        /// A join, another participant or a ringing invitee: the timer is cancelled.
+        case cancelled = 2
+        /// The timer ran out and this device left.
+        case left = 3
+        /// The timer ran out and this device, the creator, ended the call.
+        case ended = 4
+    }
+
+    /// `grp alone phase=<1-4> ms=<n>` (`ms` = the timer's length)
+    public static func aloneLine(_ phase: AlonePhase, ms: Int) -> String {
+        "grp alone phase=\(phase.rawValue) ms=\(clamp(ms))"
+    }
+
+    /// `grp ringing n=<invitees still ringing> roster=<participants>`
+    public static func ringingLine(count: Int, roster: Int) -> String {
+        "grp ringing n=\(clamp(count)) roster=\(clamp(roster))"
+    }
+
+    public enum AdmissionPhase: Int, Sendable {
+        /// "Leave the group?" was asked before placing a 1:1 call.
+        case askedToDial = 1
+        /// "Leave the group?" was asked before accepting a 1:1 call.
+        case askedToAnswer = 2
+        /// The user chose to leave: the group is left, then the 1:1 call goes ahead.
+        case confirmed = 3
+        /// The user chose to stay: nothing happens, an incoming 1:1 call is declined as busy.
+        case cancelled = 4
+        /// The incoming call the question was about is over: the question is withdrawn, the group stays.
+        case withdrawn = 5
+        /// A 1:1 call asked for from the car (CarPlay, Siri) while a group call is live: refused, no question is asked
+        /// on the phone, the car screen says the call did not start.
+        case refusedFromCar = 6
+    }
+
+    /// `grp busy why=<1-6> roster=<participants of the group call>`
+    public static func admissionLine(_ phase: AdmissionPhase, roster: Int) -> String {
+        "grp busy why=\(phase.rawValue) roster=\(clamp(roster))"
+    }
+
+    public enum ExitReason: Int, Sendable {
+        /// The lone-call timer.
+        case alone = 1
+        /// A 1:1 call was placed or accepted.
+        case oneToOne = 2
+        /// Another group call was accepted.
+        case acceptOther = 3
+        /// The 1:1 call ended while the hand-over was pending and nobody else is in the group.
+        case oneToOneEndedAlone = 4
+        /// The hang-up of the group screen or of the system (CallKit End, headset button).
+        case hangUp = 5
+        /// The promoted peer's invite is over and this device is alone with nobody ringing: the
+        /// promotion is aborted, the 1:1 call stays.
+        case promotionAborted = 6
+        /// The roster of an automatically joined call went outside what the promotion token listed.
+        case rosterMismatch = 7
+        /// The group media never came up during a promotion.
+        case mediaNotUp = 8
+    }
+
+    /// `grp end why=<1-4> role=<0|1>` (role 1 = this device ends the call for all)
+    public static func exitLine(_ why: ExitReason, endsForAll: Bool) -> String {
+        "grp end why=\(why.rawValue) role=\(endsForAll ? 1 : 0)"
+    }
+
+    // MARK: - Promotion token (docs/GROUP_CALLS_V2_SPEC.md item 32)
+
+    /// `grp promo tx=<1|2> n=<invitees>`: the creator sent its promotion token (1) or re-sent the same
+    /// bytes once after a socket re-authentication (2).
+    public static func promoSentLine(resend: Bool, invitees: Int) -> String {
+        "grp promo tx=\(resend ? 2 : 1) n=\(clamp(invitees))"
+    }
+
+    /// `grp promo tx=0 n=<recipients>`: no token was sent (a precondition of the token, GROUP_CALLS_V2 2.7, failed),
+    /// the group was created as before and the peer rings.
+    public static func promoNotSentLine(invitees: Int) -> String {
+        "grp promo tx=0 n=\(clamp(invitees))"
+    }
+
+    /// The `code=` of a received token: 0 stored, 1-15 a `GroupPromotionToken.Drop`, 16 stored and the
+    /// oldest held token was evicted.
+    public static let promoStoredEvictingCode = 16
+
+    /// `grp promo rx=1 ok=<0|1> code=<n>`: a token arrived (never the token, a signature, a key or an id).
+    public static func promoReceivedLine(ok: Bool, code: Int) -> String {
+        "grp promo rx=1 ok=\(ok ? 1 : 0) code=\(clamp(code))"
+    }
+
+    /// The outcome of the auto-join decision as a number.
+    public enum PromoDecision: Int, Sendable {
+        case auto = 1
+        case hold = 2
+        case ring = 3
+        case convert = 4
+        case fallback = 5
+    }
+
+    /// `grp promo dec=<1-5> why=<1-10>` (`GroupPromotionDecision.Why`)
+    public static func promoDecisionLine(_ decision: PromoDecision, why: GroupPromotionDecision.Why) -> String {
+        "grp promo dec=\(decision.rawValue) why=\(why.rawValue)"
+    }
+
+    /// `grp promo roster=0 n=<people the token did not list>`: the roster rule failed, the device leaves.
+    public static func promoRosterLine(extra: Int) -> String {
+        "grp promo roster=0 n=\(clamp(extra))"
+    }
+
+    /// The audio unit driver of a group call (`GroupAudioUnitDriver`).
+    public enum AudioDriverPhase: Int, Sendable {
+        /// The call began (`shared` = the 1:1 leg already holds the arm).
+        case begun = 1
+        /// No session activation arrived in time: the app is asked for one.
+        case watchdog = 2
+        /// A session activation arrived while the 1:1 leg holds the unit.
+        case activatedShared = 3
+        /// The driver took the arm over after the 1:1 leg released it.
+        case rearmed = 4
+    }
+
+    /// `grp audio phase=<1-4> shared=<0|1>`
+    public static func audioDriverLine(_ phase: AudioDriverPhase, shared: Bool) -> String {
+        "grp audio phase=\(phase.rawValue) shared=\(shared ? 1 : 0)"
+    }
+
+    /// The 1:1 audio start was refused because a group call owns the audio unit (RTLog tag
+    /// "call", level warn): `audioIO skip=1 gate=1 nat=<0|1> en=<0|1>`. `nat` = the 1:1 call
+    /// negotiated native audio, `en` = WebRTC's unit is enabled right now. With `nat=1 en=0` the
+    /// 1:1 call has no audio unit running at all, which is what the line is there to show.
+    public static func audioStartRefusedLine(native: Bool, unitEnabled: Bool) -> String {
+        "audioIO skip=1 gate=1 nat=\(native ? 1 : 0) en=\(unitEnabled ? 1 : 0)"
     }
 
     // MARK: - Camera publish

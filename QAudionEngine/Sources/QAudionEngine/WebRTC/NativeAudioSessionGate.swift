@@ -201,6 +201,10 @@ public enum NativeAudioSessionGate {
     /// OFFER) closing late cannot disarm the one that replaced it.
     private static var armedToken: Int = 0
     private static var lastToken: Int = 0
+    /// The arm token that belongs to a live GROUP call (`markGroupArm(token:)`), or 0. The arm in
+    /// force is a group's exactly when `armedToken == groupArmToken` and both are non-zero: a
+    /// later arm by anybody else makes the two differ, so a stale mark never protects it.
+    private static var groupArmToken: Int = 0
     // W-ADMBALANCE-UUID (2026-09-26) — the process-wide "native call awaiting
     // balance" flag that lived here is gone: `CallKitProvider` now records the
     // native call by its CallKit uuid (`CallKitCallLedger.recordNativeBalance`)
@@ -216,6 +220,21 @@ public enum NativeAudioSessionGate {
     public static var isArmed: Bool {
         lock.lock(); defer { lock.unlock() }
         return armedToken != 0
+    }
+
+    /// The group audio driver marks the arm it just took as a group's. While it is the arm in
+    /// force, a 1:1 call that starts (`auditAtCallStart`, `armManualMode`) must not switch the
+    /// unit the group call is running on off.
+    public static func markGroupArm(token: Int) {
+        lock.lock()
+        if token != 0, armedToken == token { groupArmToken = token }
+        lock.unlock()
+    }
+
+    /// `true` while the arm in force belongs to a live group call.
+    public static var isGroupArmHeld: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return armedToken != 0 && armedToken == groupArmToken
     }
 
     /// Item 1 — arm manual mode for a native-SRTP call. Must run before the
@@ -246,7 +265,14 @@ public enum NativeAudioSessionGate {
         let prevEnabled = session.isAudioEnabled
         // Disable first, then manual on: `canPlayOrRecord` (= !manual || enabled)
         // flips to false at most once, and never to true on the way.
-        session.isAudioEnabled = false
+        //
+        // A unit a live GROUP call is running on is not disabled by a 1:1 call that arms next to
+        // it: the unit stays as it is (manual mode already on, unit enabled), so the group keeps
+        // its audio; the new arm takes the token as before.
+        lock.lock()
+        let keepsGroupUnit = armedToken != 0 && armedToken == groupArmToken && prevManual && prevEnabled
+        lock.unlock()
+        if !keepsGroupUnit { session.isAudioEnabled = false }
         session.useManualAudio = true
         lock.lock()
         lastToken &+= 1
@@ -402,6 +428,9 @@ public enum NativeAudioSessionGate {
             emit("admgate disarm=0 tok=\(token) cur=\(current)")
             return
         }
+        lock.lock()
+        if groupArmToken == token { groupArmToken = 0 }
+        lock.unlock()
         if session.isAudioEnabled { session.isAudioEnabled = false }
         let manualFlag = session.useManualAudio ? 1 : 0
         session.unlockForConfiguration()
@@ -416,6 +445,12 @@ public enum NativeAudioSessionGate {
     /// one (its reportCallEnded drain never depended on this type: such a
     /// call's uuid is never recorded as native, see W-ADMBALANCE-UUID).
     public static func auditAtCallStart(nativeCall: Bool) {
+        // A unit a live GROUP call holds is neither a leaked unit nor a stale arm: it is left
+        // as it is, with a line that says so.
+        if isGroupArmHeld {
+            emit("admgate audit=1 held=1 grp=1")
+            return
+        }
         if !nativeCall {
             lock.lock()
             let wasArmed = armedToken != 0

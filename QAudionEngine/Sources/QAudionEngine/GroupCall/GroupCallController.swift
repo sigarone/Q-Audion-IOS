@@ -56,6 +56,9 @@ public final class GroupCallController: @unchecked Sendable {
     /// `tokenRetryBackoffSeconds.count + 1` attempts), each +-25 % jittered: always above the
     /// server's 5 s per-(call, member) interval and far below its 12 per minute.
     private let tokenRetryBackoffSeconds: [Double]
+    /// The lone-call timer of this call (spec 30); its length is `GroupAlonePolicy.backstopSeconds`
+    /// unless a test shortens it.
+    private let aloneWatchdog: GroupAloneWatchdog
     private static let iceRefreshMaxAttempts = 3
     /// A late answer (after the retries) of a refresh is still a refresh, not a new path.
     private static let iceRefreshAnswerWindowMs: Int64 = 300_000
@@ -72,6 +75,21 @@ public final class GroupCallController: @unchecked Sendable {
     private var muted = false
     private var cameraOn = false
     private var lastUpdate: GroupCallWire.Update?
+    /// Who is in the call, as last reported: the creator itself from the moment it creates
+    /// (the server sends it nothing until somebody joins), a joiner nobody (unknown) until its
+    /// first `group_call_update`. Feeds the lone-call rule.
+    private var rosterIds: [String] = []
+    /// Who is still ringing, as last reported; nil = the server does not say (spec 31).
+    private var ringingIds: [String]?
+    /// The app's 1:1 -> group hand-over of this call is pending (`setPromotionPending`): a
+    /// call waiting for its promoted peer is not a lone call.
+    private var promotionPending = false
+    /// The roster check of a call this device joined automatically as the peer of a promoted 1:1
+    /// call (GROUP_CALLS_V2 2.7, Consent), nil for every other call. It lives for the whole call.
+    private var autoJoinGuard: GroupAutoJoinGuard?
+    /// The microphone of an automatically joined call stays off until the first roster that passes
+    /// the guard and lists this device (GROUP_CALLS_V2 2.7, Consent).
+    private var micHeld = false
     private var currentReady: GroupCallWire.MediaReady?
     private var link: GroupMediaLink?
     /// Bumped whenever the link is replaced or closed: events of an older link
@@ -149,6 +167,10 @@ public final class GroupCallController: @unchecked Sendable {
     /// CHANGE, never for a repeat of the current value, so the app layer can mirror it
     /// to the roster badge and to the system call UI without looping.
     public var onMutedChanged: ((_ muted: Bool) -> Void)?
+    /// The hold on the microphone of an automatically joined call began (the join) or ended (the first roster that passed
+    /// the guard and lists this device, or the end of the call). Fired once per CHANGE. While it holds, the microphone is
+    /// off whatever the mute state says, and the screen shows it as held.
+    public var onMicrophoneHeldChanged: ((_ held: Bool) -> Void)?
     /// A clear, user-visible media error (spec §2.4 / §8). Fatal ones end the
     /// call right after; a camera problem does not.
     public var onMediaError: ((GroupCallMediaError) -> Void)?
@@ -162,6 +184,18 @@ public final class GroupCallController: @unchecked Sendable {
     /// owned by this controller).
     public var onManagerStateChanged: ((BCryptoGroupCallManager.State) -> Void)?
     public var onParticipantsChanged: (([BCryptoGroupCallManager.Participant]) -> Void)?
+    /// The list of invitees still ringing changed (spec 31); `[]` when the call ends. Called
+    /// from any thread. The group screen shows them as "ringing" tiles.
+    public var onRingingChanged: (([String]) -> Void)?
+    /// A `group_call_update` was stored (roster, ringing list, epoch): the app re-takes the
+    /// hand-over decision from these values and not from the earlier roster callback, which fires
+    /// before the controller has stored them. Called from any thread, after the update is applied.
+    public var onUpdateApplied: ((_ participants: [String], _ ringing: [String]?) -> Void)?
+    /// The roster of an automatically joined call went outside what the promotion token listed
+    /// (GROUP_CALLS_V2 2.7, Consent). The update was NOT applied: no media key left for its epoch and the
+    /// microphone was never enabled for it. The app leaves the call. `extra` = how many people the token
+    /// did not list.
+    public var onAutoJoinRosterRefused: ((_ extra: Int) -> Void)?
 
     /// Forwards this call's media telemetry to the app layer (QAudionEngine cannot
     /// import QAudionApp). Kinds: the spec §7 `group.*` set plus the
@@ -209,8 +243,11 @@ public final class GroupCallController: @unchecked Sendable {
                 iceRefreshRetrySeconds: Double = 60,
                 mediaReadyTimeoutSeconds: Double = 10,
                 tokenReplyTimeoutSeconds: Double = 8,
-                tokenRetryBackoffSeconds: [Double] = [6, 12, 24, 48]) {
+                tokenRetryBackoffSeconds: [Double] = [6, 12, 24, 48],
+                aloneBackstopSeconds: Double = GroupAlonePolicy.backstopSeconds,
+                aloneScheduler: @escaping GroupAloneWatchdog.Scheduler = GroupAloneWatchdog.dispatchScheduler) {
         self.manager = manager
+        self.aloneWatchdog = GroupAloneWatchdog(seconds: aloneBackstopSeconds, scheduler: aloneScheduler)
         self.iceRefreshRetrySeconds = iceRefreshRetrySeconds
         self.mediaReadyTimeoutSeconds = mediaReadyTimeoutSeconds
         self.tokenReplyTimeoutSeconds = tokenReplyTimeoutSeconds
@@ -220,6 +257,11 @@ public final class GroupCallController: @unchecked Sendable {
         self.pathMonitor = pathMonitor ?? GroupNetworkPathWatcher()
         self.nowMs = nowMs
         self.audio.onNeedsSessionActivation = { [weak self] in self?.onNeedsAudioSessionActivation?() }
+        #if canImport(WebRTC)
+        // The driver's own steps (begin, shared, rearm) reach the phone log through `diagLog`.
+        (self.audio as? GroupAudioUnitDriver)?.log = { [weak self] line in self?.diagLog?(line) }
+        #endif
+        aloneWatchdog.onExpired = { [weak self] in self?.aloneExpired() }
         backend?.onMissingKey = { [weak self] pseudonym in
             self?.e2eeQueue.async { self?.coordinatorSnapshot()?.onMissingKey(pseudonym: pseudonym) }
         }
@@ -309,14 +351,24 @@ public final class GroupCallController: @unchecked Sendable {
         promotedFromCallId: String = "",
         /// The microphone state the call begins with: a promotion carries the mute of
         /// the 1:1 leg over (see `beginCall`).
-        startMuted: Bool = false
+        startMuted: Bool = false,
+        /// The call id to create under (a promotion mints it first: its token names it).
+        groupCallId: String? = nil,
+        /// Sent on the same socket right before the create (the promotion token of the 1:1 peer).
+        preCreateOpaque: BCryptoGroupCallManager.PreCreateOpaque? = nil
     ) -> String? {
         guard let callId = manager.createGroupCall(
             recipients: invitees, title: title, callType: callType,
-            groupId: groupId, groupName: groupName, promotedFromCallId: promotedFromCallId
+            groupId: groupId, groupName: groupName, promotedFromCallId: promotedFromCallId,
+            groupCallId: groupCallId, preCreateOpaque: preCreateOpaque
         ) else {
             return nil
         }
+        // A call promoted from a 1:1 call waits for its peer: not a lone call until the app
+        // says the hand-over is over (`setPromotionPending`).
+        lock.lock()
+        promotionPending = !promotedFromCallId.isEmpty
+        lock.unlock()
         beginCall(callId: callId, video: callType == "video", created: true, startMuted: startMuted)
         setState(.connecting(callId: callId))
         // The creator is a participant from the moment the server has the create, and a
@@ -334,8 +386,14 @@ public final class GroupCallController: @unchecked Sendable {
     ///   camera is published from the start once the media path is up.
     /// - Parameter startMuted: the microphone state the call begins with: joining the
     ///   group a 1:1 call is promoted into carries the mute of the 1:1 leg over.
-    public func join(callId: String, video: Bool = false, startMuted: Bool = false) {
-        beginCall(callId: callId, video: video, created: false, startMuted: startMuted)
+    /// - Parameter autoJoinGuard: set for the automatic join of the peer of a promoted 1:1 call
+    ///   (GROUP_CALLS_V2 2.7, Consent). The join is then audio-only (the caller passes `video: false`),
+    ///   the microphone is held off until the first roster that passes the guard and lists this
+    ///   device, and every later `group_call_update` must pass it too, or `onAutoJoinRosterRefused`
+    ///   fires before the update reaches the key exchange.
+    public func join(callId: String, video: Bool = false, startMuted: Bool = false,
+                     autoJoinGuard: GroupAutoJoinGuard? = nil) {
+        beginCall(callId: callId, video: video, created: false, startMuted: startMuted, autoJoinGuard: autoJoinGuard)
         manager.joinGroupCall(callId: callId)
         setState(.connecting(callId: callId))
     }
@@ -343,6 +401,23 @@ public final class GroupCallController: @unchecked Sendable {
     public func leave() {
         manager.leaveGroupCall()
         teardown(reason: "user_left")
+    }
+
+    /// Leaves the call the way every exit of this device does: the creator that is the last one in
+    /// the call ends it, everybody else leaves and keeps it up for the others (`GroupExitPolicy`).
+    /// `group_call_leave` / `group_call_end` goes out before the media teardown. Returns what it did.
+    @discardableResult
+    public func leaveOrEnd() -> GroupExitPolicy.Action {
+        lock.lock()
+        let creator = createdLocally
+        let roster = rosterIds
+        lock.unlock()
+        let action = GroupExitPolicy.action(isCreator: creator, participants: roster, selfId: manager.selfUserId)
+        switch action {
+        case .endForAll: endCallForAll()
+        case .leave: leave()
+        }
+        return action
     }
 
     public func endCallForAll() {
@@ -356,6 +431,22 @@ public final class GroupCallController: @unchecked Sendable {
     public var isCreatedLocally: Bool { lock.lock(); defer { lock.unlock() }; return createdLocally }
     /// The id of the call this controller is in, if any.
     public var currentCallId: String? { lock.lock(); defer { lock.unlock() }; return activeCallId }
+    /// Who is in the call as last reported (the creator: itself until the first update; a
+    /// joiner: empty until its first update).
+    public var currentRoster: [String] { lock.lock(); defer { lock.unlock() }; return rosterIds }
+    /// Who is still ringing as last reported; nil = the server does not report it.
+    public var currentRinging: [String]? { lock.lock(); defer { lock.unlock() }; return ringingIds }
+
+    /// The app's 1:1 -> group hand-over of this call is pending (or over): a call waiting
+    /// for its promoted peer is not a lone call. Called from the main thread; the verdict is
+    /// re-taken at once.
+    public func setPromotionPending(_ pending: Bool) {
+        lock.lock()
+        let changed = promotionPending != pending
+        promotionPending = pending
+        lock.unlock()
+        if changed { evaluateAlone() }
+    }
     /// Both PeerConnections' media path is up right now.
     public var isMediaConnected: Bool { lock.lock(); defer { lock.unlock() }; return mediaConnected }
     /// A media link exists (connecting or connected): the UI gates the camera on it.
@@ -367,11 +458,29 @@ public final class GroupCallController: @unchecked Sendable {
         lock.lock()
         let changed = self.muted != muted
         self.muted = muted
+        // An automatically joined call keeps its microphone off until the roster has been checked:
+        // the choice is kept in `muted` and applied at the release.
+        let held = micHeld
         let current = link
         lock.unlock()
-        current?.setMicrophoneEnabled(!muted)
+        current?.setMicrophoneEnabled(!muted && !held)
         if changed { onMutedChanged?(muted) }
     }
+
+    /// The first roster that passed the guard and lists this device: the hold is over and the
+    /// microphone follows the mute state (GROUP_CALLS_V2 2.7, Consent).
+    private func releaseMicrophoneHold() {
+        lock.lock()
+        guard micHeld else { lock.unlock(); return }
+        micHeld = false
+        let current = link
+        lock.unlock()
+        if let current = current { applyMicrophoneState(to: current) }
+        onMicrophoneHeldChanged?(false)
+    }
+
+    /// The microphone of this call is still held off (an automatic join that has not seen a passing roster).
+    public var isMicrophoneHeld: Bool { lock.lock(); defer { lock.unlock() }; return micHeld }
 
     public var isMuted: Bool { lock.lock(); defer { lock.unlock() }; return muted }
 
@@ -647,7 +756,8 @@ public final class GroupCallController: @unchecked Sendable {
     /// promoted to a group must not open the microphone, not even for one frame, so the
     /// state is set here, under the same lock that publishes the call id, long before
     /// any media hand-out can build a link.
-    private func beginCall(callId: String, video: Bool, created: Bool, startMuted: Bool = false) {
+    private func beginCall(callId: String, video: Bool, created: Bool, startMuted: Bool = false,
+                           autoJoinGuard: GroupAutoJoinGuard? = nil) {
         lock.lock()
         let previousLink = link
         let previousCoordinator = coordinator
@@ -658,8 +768,15 @@ public final class GroupCallController: @unchecked Sendable {
         createdLocally = created
         wantsVideo = video
         muted = startMuted
+        self.autoJoinGuard = autoJoinGuard
+        let heldBefore = micHeld
+        micHeld = autoJoinGuard != nil
+        let heldNow = micHeld
         cameraOn = false
         lastUpdate = nil
+        rosterIds = created ? [manager.selfUserId] : []
+        let hadRinging = !(ringingIds ?? []).isEmpty
+        ringingIds = nil
         currentReady = nil
         recovery = GroupMediaRecoveryPolicy()
         speaking = GroupSpeakingDetector()
@@ -687,11 +804,13 @@ public final class GroupCallController: @unchecked Sendable {
             callId: callId, selfUserId: manager.selfUserId, environment: GroupCallE2eeEnvironment(controller: self, queue: e2eeQueue))
         coordinator = newCoordinator
         let now = nowMs()
-        let early = earlyKeys.filter { $0.envelope.callId == callId && now - $0.atMs <= Self.earlyKeyTtlMs }
+        let early = earlyKeys.filter { GroupCallIds.ieq($0.envelope.callId, callId) && now - $0.atMs <= Self.earlyKeyTtlMs }
         earlyKeys.removeAll()
         let replay = lastAudioActivation
         lock.unlock()
         if mutedBefore != startMuted { onMutedChanged?(startMuted) }
+        if heldBefore != heldNow { onMicrophoneHeldChanged?(heldNow) }
+        if hadRinging { onRingingChanged?([]) }
         if !early.isEmpty {
             e2eeQueue.async { for item in early { newCoordinator.onEnvelope(item.envelope, from: item.user) } }
         }
@@ -704,6 +823,9 @@ public final class GroupCallController: @unchecked Sendable {
         if let source = replay { audio.sessionActivated(source: source) }
         startPolicyObservers()
         pathMonitor.start { [weak self] reason in self?.networkPathChanged(reason: reason) }
+        // A new call never inherits the deadline of an earlier one.
+        aloneWatchdog.cancel()
+        evaluateAlone()
     }
 
     private func teardown(reason: String) {
@@ -720,10 +842,17 @@ public final class GroupCallController: @unchecked Sendable {
         let oldCoordinator = coordinator
         coordinator = nil
         let wasMuted = muted
+        let wasHeld = micHeld
         muted = false
+        autoJoinGuard = nil
+        micHeld = false
         cameraOn = false
         wantsVideo = false
         lastUpdate = nil
+        rosterIds = []
+        let hadRinging = !(ringingIds ?? []).isEmpty
+        ringingIds = nil
+        promotionPending = false
         currentReady = nil
         mediaJoinRequested = false
         mediaConnected = false
@@ -749,6 +878,8 @@ public final class GroupCallController: @unchecked Sendable {
         let hadConnected = connectedTelemetrySent
         connectedTelemetrySent = false
         lock.unlock()
+        aloneWatchdog.cancel()
+        if hadRinging { onRingingChanged?([]) }
         timeout?.cancel()
         reset?.cancel()
         refreshRetry?.cancel()
@@ -764,6 +895,7 @@ public final class GroupCallController: @unchecked Sendable {
         }
         setState(.idle)
         if wasMuted { onMutedChanged?(false) }
+        if wasHeld { onMicrophoneHeldChanged?(false) }
         onReactionEventsChanged?([])
         onRaisedHandsChanged?([])
         onLocalVideoTrack?(nil)
@@ -820,7 +952,7 @@ public final class GroupCallController: @unchecked Sendable {
         manager.onGroupCallRaiseHandReceived = { [weak self] callId, senderId, raised in
             guard let self = self else { return }
             self.lock.lock()
-            guard callId == self.activeCallId else { self.lock.unlock(); return }
+            guard GroupCallIds.ieq(callId, self.activeCallId) else { self.lock.unlock(); return }
             if raised { self._raisedHands.insert(senderId) } else { self._raisedHands.remove(senderId) }
             let snapshot = self._raisedHands
             self.lock.unlock()
@@ -834,7 +966,7 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func isActive(_ callId: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return callId == activeCallId
+        return GroupCallIds.ieq(callId, activeCallId)
     }
 
     // MARK: - Roster / E2EE
@@ -844,17 +976,48 @@ public final class GroupCallController: @unchecked Sendable {
     /// the media hand-out.
     private func handleUpdate(_ update: GroupCallWire.Update) {
         lock.lock()
-        guard update.callId == activeCallId else {
+        guard GroupCallIds.ieq(update.callId, activeCallId) else {
+            lock.unlock()
+            return
+        }
+        let rosterGuard = autoJoinGuard
+        lock.unlock()
+        // GROUP_CALLS_V2 2.7, Consent: the roster of an automatically joined call is checked before
+        // anything else sees it: before the key exchange (no media key for this epoch leaves the device
+        // if it fails), before the microphone can be enabled for it.
+        if let rosterGuard = rosterGuard {
+            switch rosterGuard.check(participants: update.participants, ringing: update.ringing) {
+            case .refuse(let extra):
+                onAutoJoinRosterRefused?(extra)
+                return
+            case .pass(let release):
+                if release { releaseMicrophoneHold() }
+            }
+        }
+        lock.lock()
+        guard GroupCallIds.ieq(update.callId, activeCallId) else {
             lock.unlock()
             return
         }
         lastUpdate = update
+        rosterIds = update.participants
+        let ringingBefore = ringingIds ?? []
+        ringingIds = update.ringing
         let readyPseudonym = currentReady?.pseudonym
         let selfId = manager.selfUserId
         let current = link
         let needsMedia = !mediaJoinRequested && link == nil
         let coordinator = self.coordinator
         lock.unlock()
+
+        // The ringing list moves without an epoch bump (spec 31): tell the screen, leave a line.
+        let ringingNow = update.ringing ?? []
+        if ringingNow != ringingBefore {
+            diagLog?(GroupDiagnostics.ringingLine(count: ringingNow.count, roster: update.participants.count))
+            onRingingChanged?(ringingNow)
+        }
+        evaluateAlone()
+        onUpdateApplied?(update.participants, update.ringing)
 
         var pseudonyms = update.pseudonyms
         if pseudonyms[selfId] == nil, let own = readyPseudonym { pseudonyms[selfId] = own }
@@ -929,7 +1092,7 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func mediaReadyTimedOut(callId: String) {
         lock.lock()
-        guard callId == activeCallId, currentReady == nil || link == nil, mediaReadyTimeout != nil else {
+        guard GroupCallIds.ieq(callId, activeCallId), currentReady == nil || link == nil, mediaReadyTimeout != nil else {
             lock.unlock()
             return
         }
@@ -947,7 +1110,7 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func handleMediaReady(_ ready: GroupCallWire.MediaReady) {
         lock.lock()
-        guard ready.callId == activeCallId, let backend = backend else {
+        guard GroupCallIds.ieq(ready.callId, activeCallId), let backend = backend else {
             lock.unlock()
             return
         }
@@ -1006,7 +1169,7 @@ public final class GroupCallController: @unchecked Sendable {
                     return
                 }
                 self.lock.lock()
-                let stillCurrent = generation == self.linkGeneration && ready.callId == self.activeCallId
+                let stillCurrent = generation == self.linkGeneration && GroupCallIds.ieq(ready.callId, self.activeCallId)
                 if stillCurrent { self.link = newLink }
                 self.lock.unlock()
                 guard stillCurrent else {
@@ -1045,7 +1208,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// changes nothing.
     private func handleServerError(code: String, callId: String?) {
         lock.lock()
-        guard let active = activeCallId, link == nil, callId == active else {
+        guard let active = activeCallId, link == nil, GroupCallIds.ieq(callId, active) else {
             lock.unlock()
             return
         }
@@ -1081,7 +1244,7 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func iceRefreshTimedOut(callId: String, generation: Int) {
         lock.lock()
-        let stillWaiting = callId == activeCallId && generation == linkGeneration && iceRefreshPending
+        let stillWaiting = GroupCallIds.ieq(callId, activeCallId) && generation == linkGeneration && iceRefreshPending
         lock.unlock()
         if stillWaiting { requestIceRefresh() }
     }
@@ -1092,7 +1255,7 @@ public final class GroupCallController: @unchecked Sendable {
     /// `group_call_media_ready` carries its own).
     private func handleMediaToken(_ token: GroupCallWire.MediaToken) {
         lock.lock()
-        guard token.callId == activeCallId else {
+        guard GroupCallIds.ieq(token.callId, activeCallId) else {
             lock.unlock()
             return
         }
@@ -1135,7 +1298,7 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func sendTokenRefresh(callId: String, generation: Int) {
         lock.lock()
-        guard callId == activeCallId, generation == linkGeneration, tokenRefreshPending,
+        guard GroupCallIds.ieq(callId, activeCallId), generation == linkGeneration, tokenRefreshPending,
               tokenRefreshGeneration == generation else {
             lock.unlock()
             return
@@ -1155,7 +1318,7 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func tokenRefreshTimedOut(callId: String, generation: Int, attempt: Int) {
         lock.lock()
-        guard callId == activeCallId, generation == linkGeneration, tokenRefreshPending,
+        guard GroupCallIds.ieq(callId, activeCallId), generation == linkGeneration, tokenRefreshPending,
               tokenRefreshGeneration == generation, attempt == tokenRefreshAttempt else {
             lock.unlock()
             return
@@ -1196,11 +1359,11 @@ public final class GroupCallController: @unchecked Sendable {
     private func applyMicrophoneState(to target: GroupMediaLink) {
         while true {
             lock.lock()
-            let wanted = muted
+            let wanted = muted || micHeld
             lock.unlock()
             target.setMicrophoneEnabled(!wanted)
             lock.lock()
-            let settled = wanted == muted
+            let settled = wanted == (muted || micHeld)
             lock.unlock()
             if settled { return }
         }
@@ -1402,7 +1565,7 @@ public final class GroupCallController: @unchecked Sendable {
 
     private func handleTrigger(_ trigger: GroupMediaRecoveryPolicy.Trigger, forCall callId: String) {
         lock.lock()
-        guard callId == activeCallId else {
+        guard GroupCallIds.ieq(callId, activeCallId) else {
             lock.unlock()
             return
         }
@@ -1433,7 +1596,7 @@ public final class GroupCallController: @unchecked Sendable {
         let run: () -> Void = { [weak self] in
             guard let self = self else { return }
             self.lock.lock()
-            let valid = callId == self.activeCallId && generation == self.linkGeneration
+            let valid = GroupCallIds.ieq(callId, self.activeCallId) && generation == self.linkGeneration
             self.lock.unlock()
             if valid { block() }
         }
@@ -1473,6 +1636,50 @@ public final class GroupCallController: @unchecked Sendable {
         setState(.failed(reason: reason))
         manager.leaveGroupCall()
         teardown(reason: reason)
+    }
+
+    // MARK: - Lone call (spec 30, client backstop)
+
+    /// Re-takes the verdict "this device is the only one in the call, nobody is ringing, no
+    /// promotion is pending" and arms / cancels the 50 s timer on a change. Any thread.
+    private func evaluateAlone() {
+        lock.lock()
+        let live = activeCallId != nil
+        let roster = rosterIds
+        let ringing = ringingIds
+        let pending = promotionPending
+        lock.unlock()
+        let selfId = manager.selfUserId
+        let alone = live && GroupAlonePolicy.isAlone(participants: roster, selfId: selfId, ringing: ringing, promotionPending: pending)
+        let change = aloneWatchdog.update(alone: alone)
+        let ms = Int(aloneWatchdog.seconds * 1000)
+        switch change {
+        case .armed: diagLog?(GroupDiagnostics.aloneLine(.armed, ms: ms))
+        case .cancelled: diagLog?(GroupDiagnostics.aloneLine(.cancelled, ms: ms))
+        case .unchanged: break
+        }
+    }
+
+    /// The timer ran out: if the call is still lone, the creator ends it, anybody else leaves.
+    private func aloneExpired() {
+        lock.lock()
+        let live = activeCallId != nil
+        let creator = createdLocally
+        let roster = rosterIds
+        let ringing = ringingIds
+        let pending = promotionPending
+        lock.unlock()
+        let selfId = manager.selfUserId
+        guard live, GroupAlonePolicy.isAlone(participants: roster, selfId: selfId, ringing: ringing, promotionPending: pending) else { return }
+        let ms = Int(aloneWatchdog.seconds * 1000)
+        switch GroupExitPolicy.action(isCreator: creator, participants: roster, selfId: selfId) {
+        case .endForAll:
+            diagLog?(GroupDiagnostics.aloneLine(.ended, ms: ms))
+            endCallForAll()
+        case .leave:
+            diagLog?(GroupDiagnostics.aloneLine(.left, ms: ms))
+            leave()
+        }
     }
 
     // MARK: - Publish policy (thermal / battery / congestion)

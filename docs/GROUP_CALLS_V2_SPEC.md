@@ -54,6 +54,13 @@ Removed: `group_call_sfu_token`, `group_call_sfu_token_recv`, `group_call_sfu_un
   rotation.
 - `group_call_decline` (C->S) `{call_id}`; server ring timeout 45 s per invitee, after which the
   invitee devices get `group_call_ended {reason:"ring_timeout"}`.
+- `group_call_invite` (S->C) `{call_id, creator_id, call_type, group_id, group_name,
+  promoted_from_call_id?, promoted?}`. `promoted: true` and `promoted_from_call_id` are present ONLY in
+  the invite of the peer of an attested promotion (item 28); an older server never sends them.
+- `group_call_update` also carries `ringing: [user_id]`, the invitees still ringing (members only; a
+  change of this list alone does not bump `sender_key_epoch`). Absent from an older server (item 31).
+- `group_call_ended {reason}`: `ended`, `ring_timeout`, `declined`, `answered_elsewhere`, and `alone`
+  (a call down to one participant with nobody ringing, item 30).
 - `group_call_media_refresh` (C->S) `{call_id}` -> `group_call_media_token` (S->C) `{call_id,
   session_token, ttl_s:600}` (spec section 11): Janus re-validates the signed session token on EVERY
   request, keepalive included, so a client with a Janus session asks for a fresh one every 300 s and
@@ -337,3 +344,121 @@ Therefore:
     remove the seat from under the device that holds it. A `group_call_update` for a
     call this device is not in is dropped (another device of the same account joined it), and the
     delayed `.ended -> .idle` reset of the manager never overwrites a call started inside its second.
+27. **A 1:1 call while a group call is live.** Placing a 1:1 call, or accepting one, while a group call
+    is live on this device asks "Vuoi uscire dal gruppo?" (localised in every shipped language)
+    before anything is started. Yes: the group call is left, then the 1:1 call is placed or accepted.
+    No: nothing happens, and an incoming 1:1 call is declined as busy. A second live 1:1 call is
+    still refused first, and an answer that was already taken never asks again. The question belongs
+    to the call it was asked for: when that incoming call ends while the question is up, the question
+    is withdrawn and the group stays. An audio-session activation that arrives while the question is
+    up (the group owns the audio then) is kept and replayed once the call is answered. Accepting a
+    group call while ANOTHER group call is live leaves (or ends) that one first. The audio unit a live
+    group call runs on is not switched off by a 1:1 call that starts next to it
+    (`NativeAudioSessionGate`), and a 1:1 audio start refused for that reason leaves a numeric warn
+    line (`audioIO skip=1 gate=1 nat= en=`).
+
+    A 1:1 call asked for from the car (a tap on the CarPlay screen, or Siri, which the car speaks to)
+    never raises the question on the phone: the driver is not told to use it. While a group call is
+    live the start is refused, nothing is placed, the car screen shows its own "call not started"
+    notice, and the phone log gets one numeric line (`grp busy why=6`). Accepting an incoming call
+    is not a start and keeps asking.
+
+    Every way out of a live group call is the same exit: the confirmed question above, the hang-up of
+    the group screen, the End of the system call UI, the 50 s lone-call backstop (30) and an aborted
+    promotion (29). `group_call_leave` goes out before the media teardown; the creator that is the last
+    one in the call ends it (`group_call_end`) instead of leaving.
+28. **Promotion consent.** The invite of the peer of a 1:1 call promoted to a group carries
+    `promoted: true` and `promoted_from_call_id` only when the server attested the promotion (an
+    answered 1:1 call between the creator and exactly this invitee). The server's attestation alone
+    never admits anyone. The peer joins the group at once, with no ring and no chime, when and only
+    when all of the following hold:
+    - `promoted` is the JSON boolean `true` (the string `"true"`, a number, `null` and an absent field
+      are not);
+    - `promoted_from_call_id` names, case-insensitively, the 1:1 call that is live on this device;
+    - the creator is that call's peer;
+    - that call's round 1 is bound, authenticated and KCMAC-verified;
+    - this device holds an unused, fresh promotion token for this group call id (item 32), signed by
+      the key that signed the peer's round-1 bundle and naming this user among its invitees;
+    - no group call is live here, and the microphone permission is granted.
+
+    Without the token the invite is held silently for at most 3 s, then rings. A held invite that the
+    server ends meanwhile (`group_call_ended`: the creator ended it, the invitee declined elsewhere, the
+    ring ran out) is marked handled and dropped: it never rings. A ring that is up for the
+    same call (the push rang first) is taken down, with no decline sent and the CallKit call ended with
+    a non-decline reason, once the conditions hold. The group-call push carries no attestation, so it
+    always rings, and the WebSocket invite for the same `call_id` is judged on its own.
+
+    The automatic join:
+    - consumes the token (one use) and sends `group_call_join` first, before anything that ends, mutes,
+      re-routes or tears down the 1:1 leg;
+    - never hangs up the 1:1 itself: the creator does that (29);
+    - is audio-only with the camera off, whatever the invite's `call_type` says;
+    - keeps the microphone off, and sends no media key, until a roster passes the invitee check (33).
+
+    Any other invite keeps the ring and the manual accept, including an attested invite without a valid
+    token. A call accepted by hand joins as it did before and takes the call type of its invite.
+29. **Creator hand-over.** The 1:1 leg of a promotion goes when the 1:1 peer is a participant of the
+    group, or the peer's invite is over (not in the roster and no longer in `ringing`), or the 1:1 call
+    ended; at the latest 50 s after the hand-over began (the cap). The group media must be up first: if
+    it is not up after 30 s the group is abandoned and the 1:1 call stays. The creator sends the
+    promotion token on its socket before its `group_call_create`. A group that ends meanwhile aborts the
+    hand-over and keeps the 1:1 call. The 1:1 call is hung up with reason `promoted-to-group`, on the
+    in-band control frame and as one `call_hangup`. If the peer's invite is over and the creator is alone
+    in the group with nobody ringing, the promotion is aborted instead: the 1:1 call stays and the group
+    is left (ended, since the creator is the last one in it). If the 1:1 call ends while the hand-over
+    is pending and the group is down to this device alone with an empty `ringing` list, the group is
+    left with it. The invited peer runs the same decision with the creator as the "peer", but a peer that
+    joined automatically never hangs up the 1:1 leg: the promotion is simply over for it.
+30. **Lone call.** A group call whose roster is only this device, with nobody ringing and no hand-over
+    pending, is over after 50 s (the 45 s ring plus a margin): the client leaves, or ends the call when
+    it is the creator that is the last one in it. The server ends the same call by itself with
+    `group_call_ended {reason:"alone"}`; the timer is the backstop for a server that does not. `alone`
+    is not a ring-only reason: it ends the call this device is in.
+31. **Ringing invitees.** The `ringing` list of `group_call_update` drives "ringing" tiles on the group
+    screen (the invitee's name, dimmed, with "Squilla…") that disappear when the person joins or the
+    ring ends; an update without the field means the server does not report it. The hand-over decision
+    reads the roster and the ringing list after the controller has stored the update. The ring decisions,
+    the lone-call timer, the admission question and the audio unit driver leave numeric phone-log lines
+    (`grp ring`, `grp alone`, `grp ringing`, `grp busy`, `grp end`, `grp audio`, `grp swap`). Every group
+    call id this device mints is in lower case, like the server's and Android's; ids are compared ASCII
+    case-insensitively everywhere (key envelopes, the early-key replay, the ringing tiles).
+32. **Promotion token.** The creator signs, with the identity key that signed its round-1 handshake bundle of
+    the live 1:1 call, a token that binds that 1:1 session (the SHA-256 of the round-1 ACCEPT transcript),
+    the group call id, the 1:1 call id, its own account, the complete list of invitees (the recipients of
+    the `group_call_create` that follows, sorted, without the creator) and the call type, which is always
+    audio. It is valid for at most 60 s and goes to the 1:1 peer as an `opaque_message`,
+    `<callId>|GRPPROMO:<base64>`, before the create, on the same socket; a socket that re-authenticates
+    while the hand-over is pending gets the same bytes once more. The receiver checks it in the order of
+    docs/GROUP_CALLS_V2.md section 2.7 of the server repository (size, live call, sender, anchor, canonical base64, domain and version, strict
+    parse, signer key, Ed25519 signature with S below the group order, bindings, freshness, replay) and
+    drops it silently when any step fails; it never ends or changes the 1:1 call. A device keeps at most
+    4 tokens per live 1:1 call and one token per group call id, in memory, for the life of that call;
+    the end of a 1:1 call removes the anchor, the tokens and the held invites of THAT call only.
+    The auto-join decision (28) runs on an invite received over the WebSocket, when a token is stored,
+    when the peer's round-1 KCMAC verifies and when the 3 s hold ends. The byte layout, the constants and
+    the vectors are in docs/GROUP_CALLS_V2.md section 2.7 of the server repository (it moves to a WIRE_SPEC
+    section when the four copies of that file take it) and
+    `QAudionEngine/Tests/QAudionEngineTests/Resources/kat/promotion-token-kat.json`, a byte-for-byte copy of
+    the shared vector file of the server repository (`test/kat/group_promotion_token_v1/`, generated there
+    by `tools/katgen/grouptoken` with deterministic Ed25519; `GroupPromotionTokenTests` pins its SHA-256
+    and replays every vector: layout, builder refusals, receipt, freshness, replay, decision, roster); the
+    Swift side is
+    `GroupPromotionToken.swift`, `GroupPromotionBook.swift`, `GroupPromotionDecision.swift` and
+    `GroupPromotionPlan.swift`. When a precondition for sending a token fails (round 1 not bound, an id
+    that is not a UUID, more than 63 invitees) no token is sent, the group is created as before and the
+    peer rings. The phone log carries only numbers (never an id, a key, a token or a signature):
+    `grp promo tx=<0|1|2> n=<invitees>` (not sent, sent, sent again), `grp promo rx=1 ok=<0|1> code=<n>`
+    (0 stored, 1 to 15 the drop code in the order too_long, no_call, not_peer, no_anchor, malformed,
+    bad_version, signer_diff, bad_sig, from_diff, bind_diff, creator_diff, not_invited, future, stale,
+    dup_group; 16 stored and the oldest held token evicted), `grp promo dec=<n> why=<n>` (1 join, 2 hold,
+    3 ring, 4 convert a ring, 5 fall back; why 1 token, 2 no_token, 3 kc_pending, 4 no_anchor, 5 poisoned,
+    6 consumed, 7 stale, 8 group_live, 9 no_mic, 10 not_candidate) and
+    `grp promo roster=0 n=<people the token did not list>`.
+33. **Roster rule after an automatic join.** For every `group_call_update` of a call joined automatically,
+    for the whole life of that call, `participants` plus `ringing` must be a subset of the token's
+    invitees plus its creator (ids compared case-insensitively). Until an update passes the rule and
+    lists this user, the microphone stays off (the mute of the 1:1 leg is applied then), the group screen
+    shows it as held (the button and the own tile look muted, the button does nothing) and no media key
+    is sent for that epoch. When an update fails the rule the device leaves the group at once
+    (`group_call_leave` before the media teardown), keeps the 1:1 call if it is still live, and shows a
+    localised notice that the group did not match what the person on the 1:1 call had proposed.

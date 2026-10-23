@@ -979,12 +979,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         /// `mutualFingerprints` are keys it matched through a tag. A static match does not set it. Evidence F2(b) of
         /// docs/security/CALL_KEY_PRIORITY.md section 4a.
         public let advertIsBlinded: Bool
+        /// `SHA-256(ACCEPT_v6)` of this round: the KDF / SAS / KCMAC binding. Round 1's value is the
+        /// `acceptBinding1` the group promotion token is bound to (GROUP_CALLS_V2 2.7, Promotion token). `nil` when
+        /// a test builds an event without it.
+        public let acceptBinding: Data?
+        /// The identity key that signed THIS device's bundle of this round (`localSignerIdentityKey`).
+        public let ownSignerKey: Data?
 
         public init(
             peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
             kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
             sigOk: Bool, signerIdentityKey: Data?, mutualFingerprints: [String],
-            selectedFp: String? = nil, round: UInt32 = 1, advertIsBlinded: Bool = false
+            selectedFp: String? = nil, round: UInt32 = 1, advertIsBlinded: Bool = false,
+            acceptBinding: Data? = nil, ownSignerKey: Data? = nil
         ) {
             self.peerId = peerId
             self.callId = callId
@@ -1000,6 +1007,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             self.selectedFp = selectedFp
             self.round = round
             self.advertIsBlinded = advertIsBlinded
+            self.acceptBinding = acceptBinding
+            self.ownSignerKey = ownSignerKey
         }
     }
     public var onKcMacReady: ((KcMacReadyEvent) -> Void)?
@@ -2643,7 +2652,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
                     signerIdentityKey: offerSigOk ? v4PeerSik : nil,
                     mutualFingerprints: kcMutualFingerprints, selectedFp: selectedFp,
-                    round: innerAadEpoch, advertIsBlinded: resolvedAdvert.dialect == .v3Blinded
+                    round: innerAadEpoch, advertIsBlinded: resolvedAdvert.dialect == .v3Blinded,
+                    acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey
                 ))
 
                 // Pre-negotiation: the PQC OFFER is fully deserialised and our ACCEPT is on the
@@ -3284,7 +3294,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // placed the call — see establishedPskFp's derivation at :2177.
                 selectedFp: establishedPskFp,
                 round: innerAadEpochCaller,
-                advertIsBlinded: kcCallerResolved.dialect == .v3Blinded
+                advertIsBlinded: kcCallerResolved.dialect == .v3Blinded,
+                acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey
             ))
 
             // W529: caller's ACCEPT decapsulation succeeded → cancel
