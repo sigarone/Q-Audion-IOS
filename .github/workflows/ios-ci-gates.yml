@@ -1,6 +1,11 @@
-# GitHub Actions -- self-tests of the iOS release gates, on ubuntu (seconds, no macOS minutes).
+# GitHub Actions -- self-tests of the iOS release gates.
 #
-# What this covers, none of which needs a Mac:
+# Two jobs. `gates` runs on ubuntu (seconds, no macOS minutes) and covers everything below
+# except the macOS repeat of the signing key check. `signing-key-macos` is the one macOS job:
+# a short run of the signing key check against the OpenSSL builds of a
+# macOS image.
+#
+# What the `gates` job covers, none of which needs a Mac:
 #   * the earbud hardware stack is a compile-time switch (QAUDION_EARBUD, see
 #     QAudionApp/project-earbud.yml). scripts/ci/check_earbud_gating.py proves on the SOURCES that
 #     with the flag off no symbol of the stack is left in code the compiler would see, and that the
@@ -16,6 +21,18 @@
 #     a tampered tarball), scripts/ci/encrypt-dsyms.sh and the recipient committed in
 #     ios-testflight.yml are tested with throwaway keys, and scripts/test_symbolicate_decrypt.py tests
 #     the decrypting side of scripts/symbolicate.py.
+#
+#   * the Xcode selector used by every macOS workflow (scripts/ci/select-xcode.sh) is run against
+#     fake /Applications trees shaped like the runner images: only release installs are chosen,
+#     an alias of a release candidate is not, and nothing matching is a failure.
+#   * the simulator picker (scripts/ci/resolve_simulator.py) on simulator lists shaped like the
+#     Xcode 27 image.
+#   * the check of the distribution signing key (scripts/ci/check-signing-key.sh, used by
+#     ios-testflight.yml) runs against throwaway keys with the OpenSSL of this image, and the job
+#     signing-key-macos repeats it on a macOS image, with the default openssl and (report only)
+#     with every OpenSSL build that image carries. The openssl command lines of the signing tools
+#     (provisioning profile read, certificate container unwrap) are exercised report-only too.
+#     Only throwaway keys are used, never a key of the repository.
 #
 # Needs network access to github.com for the age release only. No secrets.
 
@@ -92,3 +109,58 @@ jobs:
 
       - name: symbolicate.py decrypts the dSYM artifact
         run: python3 -I scripts/test_symbolicate_decrypt.py
+
+      - name: Xcode selector, self-test
+        run: sh scripts/ci/test-select-xcode.sh
+
+      - name: Simulator picker, tests
+        run: python3 -I scripts/ci/test_resolve_simulator.py
+
+      - name: Signing key check, self-test
+        run: sh scripts/ci/test-check-signing-key.sh
+
+      - name: openssl calls of the signing tools (report only)
+        continue-on-error: true
+        run: sh scripts/ci/test-openssl-signing-calls.sh
+
+  # The same signing key check on a macOS image, where the openssl a workflow gets by name is
+  # the one ios-testflight.yml runs. The images carry more than one OpenSSL build (3 now, 4 as
+  # the default from November 2026); the default one has to pass, the others are reported.
+  signing-key-macos:
+    name: Signing key check (macOS OpenSSL)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: OpenSSL builds on this image
+        run: |
+          which -a openssl || true
+          openssl version
+          for b in /opt/homebrew/opt/openssl@*/bin/openssl /usr/bin/openssl; do
+            [ -x "$b" ] && echo "$b: $("$b" version)"
+          done
+          exit 0
+
+      - name: Signing key check, default openssl
+        run: sh scripts/ci/test-check-signing-key.sh
+
+      - name: Signing key check, every OpenSSL build (report only)
+        continue-on-error: true
+        run: |
+          set --
+          for b in /opt/homebrew/opt/openssl@*/bin/openssl /usr/bin/openssl; do
+            [ -x "$b" ] && set -- "$@" "$b"
+          done
+          sh scripts/ci/test-check-signing-key.sh "$@"
+
+      - name: openssl calls of the signing tools (report only)
+        continue-on-error: true
+        run: |
+          set --
+          for b in openssl /opt/homebrew/opt/openssl@*/bin/openssl; do
+            command -v "$b" > /dev/null && set -- "$@" "$b"
+          done
+          sh scripts/ci/test-openssl-signing-calls.sh "$@"

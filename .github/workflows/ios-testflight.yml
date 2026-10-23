@@ -263,37 +263,14 @@ jobs:
 
       # ----------------------------------------------------------
       # 2) Pin Xcode version. Adjust XCODE_VERSION env above.
+      #    scripts/ci/select-xcode.sh picks the newest installed RELEASE of
+      #    that family (XCODE_VERSION="26" -> the highest 26.x; "26.6" would
+      #    be exactly 26.6). A beta or release candidate is never chosen,
+      #    the job fails when nothing matches, and the exact path, build and
+      #    SDK list are printed.
       # ----------------------------------------------------------
       - name: Select Xcode
-        run: |
-          set -e
-          echo "=== Runner OS ==="
-          sw_vers
-          echo ""
-          echo "=== All Xcode installations ==="
-          ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none found)"
-          echo ""
-
-          # Find the latest Xcode matching XCODE_VERSION prefix.
-          # XCODE_VERSION="26" matches Xcode_26.0, _26.1, _26.4, etc.
-          # Pick the highest version number (sort -V).
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-
-          if [ -z "$MATCH" ]; then
-            echo "? No Xcode matching '${PIN}*' found on this runner."
-            echo "Apple requires Xcode 26+ since 2026-04-28 for App Store submissions."
-            echo "Available Xcodes:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-
-          echo "Selecting: $MATCH"
-          sudo xcode-select -s "$MATCH"
-          echo ""
-          echo "=== Active Xcode ==="
-          xcodebuild -version
-          xcrun swift --version 2>&1 | head -2 || true
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       # ----------------------------------------------------------
       # 3) Install xcodegen + codemagic-cli-tools.
@@ -652,7 +629,7 @@ jobs:
           CERT_KEY_PATH=/tmp/dist_cert_key.pem
           printf '%s' "$CERTIFICATE_PRIVATE_KEY" > "$CERT_KEY_PATH"
           chmod 600 "$CERT_KEY_PATH"
-          openssl rsa -in "$CERT_KEY_PATH" -noout -check && echo "private key OK"
+          sh scripts/ci/check-signing-key.sh "$CERT_KEY_PATH"
 
           # Main app profile
           app-store-connect fetch-signing-files "$BUNDLE_ID" \

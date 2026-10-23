@@ -98,20 +98,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Same pattern as ios-testflight.yml / ios-ui-smoke.yml.
+      # Same selector as ios-testflight.yml / ios-ui-smoke.yml (newest installed Xcode 26 release).
       - name: Select Xcode
-        run: |
-          set -e
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$MATCH" ]; then
-            echo "No Xcode matching '${PIN}*' found. Available:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-          echo "Selecting: $MATCH"
-          sudo xcode-select -s "$MATCH"
-          xcodebuild -version
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       - name: Restore SPM packages
         id: cache-spm
@@ -337,18 +326,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Select Xcode
-        run: |
-          set -e
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$MATCH" ]; then
-            echo "No Xcode matching '${PIN}*' found. Available:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-          echo "Selecting: $MATCH"
-          sudo xcode-select -s "$MATCH"
-          xcodebuild -version
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       # Read only: the entry is written by the other job, on main.
       - name: Restore SPM packages
@@ -455,18 +433,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Select Xcode
-        run: |
-          set -e
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$MATCH" ]; then
-            echo "No Xcode matching '${PIN}*' found. Available:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-          echo "Selecting: $MATCH"
-          sudo xcode-select -s "$MATCH"
-          xcodebuild -version
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       # Read only: the entry is written by the first job, on main.
       - name: Restore SPM packages

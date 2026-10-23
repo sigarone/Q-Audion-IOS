@@ -91,21 +91,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Same pattern as ios-testflight.yml -- pin to the newest installed
-      # 26.x Xcode on the runner image.
+      # Same selector as ios-testflight.yml -- the newest installed 26.x Xcode
+      # release on the runner image.
       - name: Select Xcode
-        run: |
-          set -e
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$MATCH" ]; then
-            echo "No Xcode matching '${PIN}*' found. Available:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-          echo "Selecting: $MATCH"
-          sudo xcode-select -s "$MATCH"
-          xcodebuild -version
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       - name: Cache SPM packages
         id: cache-spm
