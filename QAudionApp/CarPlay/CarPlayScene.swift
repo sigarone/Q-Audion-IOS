@@ -27,26 +27,28 @@
 //                  (SiriMessageBridgeStore's opt-in cache/outbox) — the
 //                  screen itself still shows only names/unread counts.
 //
-//  ── HOW TO ENABLE (after Apple grants the entitlement) ──────────────────
+//  What the lists contain, and how many rows they may have, is decided in
+//  `CarPlayListModel.swift`, which is compiled in every build and unit tested.
+//  This file only draws it.
+//
+//  ── HOW TO BUILD IT ─────────────────────────────────────────────────────
+//  The spec `QAudionApp/project-carplay.yml` includes `project.yml` and adds
+//  the compilation condition QAUDION_CARPLAY and the CarPlay scene
+//  configuration (CPTemplateApplicationSceneSessionRoleApplication, with
+//  UIApplicationSupportsMultipleScenes on). `ios-app-tests.yml` compiles it on
+//  every pull request. `project-carplay.yml` links CarPlay.framework weakly (-weak_framework CarPlay).
+//  The default spec and every release build leave all of it out.
+//
+//  ── HOW TO ENABLE IT FOR A DEVICE (after Apple grants the entitlement) ───
 //  1. Request entitlement:  developer.apple.com/contact/request/carplay-entitlement
 //     category = "Communication app" → `com.apple.developer.carplay-communication`.
 //     (Free, discretionary, can take weeks. NOT MFi — no hardware program.)
-//  2. Add to QAudion.entitlements:
+//  2. Add to the entitlements the build is signed with:
 //        <key>com.apple.developer.carplay-communication</key><true/>
-//  3. Add the CarPlay scene to Info.plist (set MultipleScenes = true):
-//        <key>UIApplicationSceneManifest</key><dict>
-//          <key>UIApplicationSupportsMultipleScenes</key><true/>
-//          <key>UISceneConfigurations</key><dict>
-//            <key>CPTemplateApplicationSceneSessionRoleApplication</key><array><dict>
-//              <key>UISceneConfigurationName</key><string>QAudionCarPlay</string>
-//              <key>UISceneDelegateClassName</key>
-//              <string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
-//            </dict></array>
-//          </dict>
-//        </dict>
-//  4. Turn on the compile flag (project.yml → SWIFT_ACTIVE_COMPILATION_CONDITIONS
-//     += QAUDION_CARPLAY) and re-run xcodegen. CarPlay.framework is already
-//     linked (inert until the scene is created), so no other build change.
+//     and enable the CarPlay capability on the App ID, then regenerate the
+//     provisioning profile. Until then the entitlement is NOT in any
+//     entitlements file of this repository, and no release build carries the flag.
+//  3. Generate the project from project-carplay.yml.
 //
 
 #if QAUDION_CARPLAY
@@ -57,9 +59,14 @@ import QAudionEngine
 
 @available(iOS 16.0, *)
 @MainActor
-final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
+final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPSessionConfigurationDelegate {
 
     private var interfaceController: CPInterfaceController?
+    private var carSession: CPSessionConfiguration?
+
+    /// How many rows the lists may show. Starts at the strictest case and follows what the template and the vehicle
+    /// report once the session exists.
+    private var limits: CarPlayListLimits = .conservative
 
     // One store instance reused for the session (ConversationStore() runs a
     // one-time migration on init; constructing it per reload would be wasteful).
@@ -88,11 +95,26 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
     // MARK: - Lifecycle
 
+    /// The car starts the app with only this scene when the phone has no window, so everything the app needs is
+    /// started from here (`CarPlayBridge.carPlayConnected()` runs the app's start-up first) and nothing below relies on
+    /// the phone's window having appeared.
     func templateApplicationScene(
         _ scene: CPTemplateApplicationScene,
         didConnect interfaceController: CPInterfaceController
     ) {
         self.interfaceController = interfaceController
+
+        CarPlayBridge.shared.noticeSink = { [weak self] notice in
+            Task { @MainActor in self?.present(notice) }
+        }
+        // A launch made by the car starts with the session still being restored, and the app lock can change while the
+        // car is connected: the lists follow both.
+        CarPlayBridge.shared.onSignInChanged = { [weak self] in self?.reloadAll() }
+        CarPlayBridge.shared.onLockChanged = { [weak self] in self?.reloadAll() }
+        CarPlayBridge.shared.carPlayConnected()
+
+        carSession = CPSessionConfiguration(delegate: self)
+        refreshLimits()
 
         recentsTemplate.tabSystemItem = .recents
         contactsTemplate.tabSystemItem = .contacts
@@ -108,8 +130,6 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         recentsTemplate.assistantCellConfiguration = CPAssistantCellConfiguration(
             position: .top, visibility: .always, assistantAction: .startCall)
 
-        configureEmptyStates()
-
         let tabBar = CPTabBarTemplate(templates: [
             recentsTemplate, contactsTemplate, messagesTemplate
         ])
@@ -117,7 +137,6 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
 
         reloadAll()
         startObserving()
-        CarPlayBridge.shared.carPlayConnected()
     }
 
     func templateApplicationScene(
@@ -126,8 +145,49 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     ) {
         stopObserving()
         self.interfaceController = nil
+        self.carSession = nil
         CarPlayBridge.shared.carPlayDisconnected()
     }
+
+    // MARK: - Siri
+
+    /// A cold launch from Siri ("call X on Q-Audion") that reaches only this scene carries the request in its
+    /// connection options.
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        for activity in connectionOptions.userActivities {
+            CarPlayBridge.shared.deliverSiriActivity(activity)
+        }
+    }
+
+    /// A Siri request that arrives while the scene is already up.
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        CarPlayBridge.shared.deliverSiriActivity(userActivity)
+    }
+
+    // MARK: - Limits
+
+    private func refreshLimits() {
+        let limited: Bool = carSession?.limitedUserInterfaces.contains(.lists) ?? true
+        limits = CarPlayListLimits(
+            templateMaximumItems: CPListTemplate.maximumItemCount, listsLimited: limited)
+    }
+
+    func sessionConfiguration(
+        _ sessionConfiguration: CPSessionConfiguration,
+        limitedUserInterfacesChanged limitedUserInterfaces: CPLimitableUserInterface
+    ) {
+        refreshLimits()
+        reloadAll()
+    }
+
+    func sessionConfiguration(
+        _ sessionConfiguration: CPSessionConfiguration,
+        contentStyleChanged contentStyle: CPContentStyle
+    ) {}
 
     // MARK: - Live refresh
 
@@ -140,15 +200,19 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // mutation has completed, so `.records` reads the fresh value.
         recordsCancellable = PersistentCallRecordStore.shared.objectWillChange
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.reloadRecents() }
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.reloadRecents() }
+            }
         // Contacts list change → refresh contacts + messages (a new contact may
         // change a conversation's display name). ConversationStore has no
         // publisher, so the messages tab also refreshes on connect.
         contactsObserver = NotificationCenter.default.addObserver(
             forName: .contactsDidChange, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.reloadContacts()
-            self?.reloadMessages()
+            Task { @MainActor in
+                self?.reloadContacts()
+                self?.reloadMessages()
+            }
         }
     }
 
@@ -160,98 +224,107 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     }
 
     private func reloadAll() {
+        // A detail screen pushed before the app lock went up must not stay on the car screen.
+        if currentAccess() != .open, let controller = interfaceController, controller.templates.count > 1 {
+            controller.popToRootTemplate(animated: false, completion: nil)
+        }
         reloadRecents()
         reloadContacts()
         reloadMessages()
     }
 
+    /// What the lists may show: nothing while the session is not known, while nobody is signed in, or while the app
+    /// lock is up.
+    private func currentAccess() -> CarPlayAccess {
+        CarPlayListBuilder.access(
+            session: CarPlayBridge.shared.currentSession(), isLocked: CarPlayBridge.shared.appIsLocked())
+    }
+
+    /// Names are resolved against one snapshot of the address book per reload, not one read per row.
+    private func nameResolver() -> (String) -> String {
+        let snapshot = contactsStore.load()
+        return { userId in DisplayName.forUser(userId, contacts: snapshot) }
+    }
+
+    // MARK: - Calling
+
+    /// Starts a call from a row or a button. If the app cannot take the request the driver is told, on the car screen.
+    private func startCall(peerUserId: String, label: String) {
+        switch CarPlayBridge.shared.requestCall(peerUserId: peerUserId, displayName: label) {
+        case .handedOver: break
+        case .appNotReady: present(.notReady)
+        case .locked: present(.appLocked)
+        }
+    }
+
     // MARK: - Recenti
 
     private func reloadRecents() {
-        let records = Array(PersistentCallRecordStore.shared.records.prefix(20))
-        let items: [CPListItem] = records.map { rec in
-            let carTitle = DisplayName.looksLikeUUID(rec.peerDisplayName) || rec.peerDisplayName.isEmpty
-                ? DisplayName.forUser(rec.peerUserId)
-                : rec.peerDisplayName
-            let item = CPListItem(text: carTitle,
-                                  detailText: Self.recentSubtitle(rec))
-            item.handler = { _, completion in
-                CarPlayBridge.shared.requestCall(
-                    peerUserId: rec.peerUserId, displayName: rec.peerDisplayName)
+        let access = currentAccess()
+        defer { applyEmptyState(.recents, to: recentsTemplate, access: access) }
+        guard access == .open else {
+            recentsTemplate.updateSections([])
+            return
+        }
+        let rows = CarPlayListBuilder.recents(
+            PersistentCallRecordStore.shared.records, limits: limits, resolve: nameResolver())
+        let items: [CPListItem] = rows.map { row in
+            let item = CPListItem(text: row.title, detailText: Self.recentSubtitle(row))
+            item.handler = { [weak self] _, completion in
+                Task { @MainActor in self?.startCall(peerUserId: row.peerUserId, label: row.title) }
                 completion()
             }
             return item
         }
-        recentsTemplate.updateSections([CPListSection(items: items)])
+        recentsTemplate.updateSections(items.isEmpty ? [] : [CPListSection(items: items)])
     }
 
-    private static func recentSubtitle(_ rec: CallRecord) -> String {
+    private static func recentSubtitle(_ row: CarPlayRecentRow) -> String {
         var parts: [String] = []
-        switch rec.direction {
+        switch row.direction {
         case .incoming: parts.append(String(localized: "carplay.recents.direction.incoming", defaultValue: "In entrata", comment: "CarPlay recents row — call direction"))
         case .outgoing: parts.append(String(localized: "carplay.recents.direction.outgoing", defaultValue: "In uscita", comment: "CarPlay recents row — call direction"))
         case .missed:   parts.append(String(localized: "carplay.recents.direction.missed", defaultValue: "Persa", comment: "CarPlay recents row — call direction"))
         }
-        if let d = rec.durationSeconds {
-            parts.append(formatDuration(d))
+        if let d = row.durationSeconds {
+            parts.append(CarPlayListBuilder.formatDuration(d))
         }
-        if rec.isVideo {
+        if row.isVideo {
             parts.append(String(localized: "carplay.recents.video_tag", defaultValue: "Video", comment: "CarPlay recents row — tag marking a video call"))
         }
         return parts.joined(separator: " · ")
     }
 
-    private static func formatDuration(_ seconds: Int) -> String {
-        let m = seconds / 60
-        let s = seconds % 60
-        return String(format: "%02d:%02d", m, s)
-    }
-
     // MARK: - Contatti
 
     private func reloadContacts() {
-        // Verified first, then alphabetical; cap at 50 rows for the head unit.
-        // W-ORPHANPEER — drop accounts that no longer exist server-side before
-        // sorting; these rows dial on tap, so offering a dead account here is
-        // the worst version of the bug.
-        let orphans = CarPlayBridge.shared.orphanPeerIds
-        let contacts = contactsStore.load()
-            .filter { !shouldHideContact(orphans.contains($0.userId)) }
-            .sorted { lhs, rhs in
-                if lhs.isVerified != rhs.isVerified { return lhs.isVerified }
-                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-            }
-            .prefix(50)
-
-        // W-EXTPREFIX consolidation (2026-07-29): this used `c.displayName`
-        // verbatim — a stale "Phone #100"/"New User" row would render as-is
-        // on the head-unit list AND get handed to `requestCall` as the
-        // in-call label. Resolved through the canonical `DisplayName
-        // .forUser` instead (this file is gated behind `QAUDION_CARPLAY`,
-        // off by default, but should not carry the same bug the moment it
-        // ships).
-        //
-        // CarPlay/Siri state-of-the-art plan S4 — a row tap now PUSHES a
+        let access = currentAccess()
+        defer { applyEmptyState(.contacts, to: contactsTemplate, access: access) }
+        guard access == .open else {
+            contactsTemplate.updateSections([])
+            return
+        }
+        // CarPlay/Siri state-of-the-art plan S4 — a row tap PUSHES a
         // CPContactTemplate (contact detail: call + optional message
-        // button) instead of dialing immediately. One extra tap versus the
-        // old direct-dial behavior, accepted deliberately now that the
-        // detail screen has a real second action to offer
-        // (CPContactMessageButton, S2) — pushing an extra tap for a screen
-        // with only a call button would have been a pure regression, which
-        // is why this was deferred until S2 existed.
-        let items: [CPListItem] = contacts.map { c in
-            let resolvedName = DisplayName.forUser(c.userId, contacts: [c])
-            let item = CPListItem(text: resolvedName,
-                                  detailText: c.isVerified
-                                      ? String(localized: "carplay.contacts.verified", defaultValue: "Verificato", comment: "CarPlay contact row — verified badge")
-                                      : nil)
+        // button) instead of dialing immediately.
+        let rows = CarPlayListBuilder.contacts(
+            contactsStore.load(), orphanPeerIds: CarPlayBridge.shared.orphanPeerIds,
+            limits: limits, resolve: nameResolver())
+        let items: [CPListItem] = rows.map { row in
+            let item = CPListItem(
+                text: row.title,
+                detailText: row.isVerified
+                    ? String(localized: "carplay.contacts.verified", defaultValue: "Verificato", comment: "CarPlay contact row — verified badge")
+                    : nil)
             item.handler = { [weak self] _, completion in
-                self?.pushContactDetail(userId: c.userId, displayName: resolvedName, phoneNumber: c.phoneNumber)
+                Task { @MainActor in
+                    self?.pushContactDetail(userId: row.userId, displayName: row.title, phoneNumber: row.phoneNumber)
+                }
                 completion()
             }
             return item
         }
-        contactsTemplate.updateSections([CPListSection(items: items)])
+        contactsTemplate.updateSections(items.isEmpty ? [] : [CPListSection(items: items)])
     }
 
     /// CarPlay/Siri state-of-the-art plan S4 — contact-detail push screen.
@@ -266,8 +339,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         let placeholderImage = UIImage(systemName: "person.crop.circle.fill") ?? UIImage()
         let contact = CPContact(name: displayName, image: placeholderImage)
         var actions: [CPButton] = [
-            CPContactCallButton { _ in
-                CarPlayBridge.shared.requestCall(peerUserId: userId, displayName: displayName)
+            CPContactCallButton { [weak self] _ in
+                Task { @MainActor in self?.startCall(peerUserId: userId, label: displayName) }
             }
         ]
         if let phoneNumber, !phoneNumber.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -280,58 +353,131 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
     // MARK: - Messaggi (screen NEVER draws plaintext; Siri may read it aloud via S2)
 
     /// CarPlay/Siri state-of-the-art plan S5 — real `CPMessageListItem`
-    /// rows instead of the old `CPListItem`-that-just-calls-the-peer
-    /// workaround. `CPMessageListItem` has no `handler`: selecting a row
+    /// rows. `CPMessageListItem` has no `handler`: selecting a row
     /// with no unread indicator launches Siri's REPLY flow (routes to
     /// `IntentHandler`'s `INSendMessageIntentHandling`); one WITH an unread
     /// indicator launches the READ flow (`INSearchForMessagesIntentHandling`,
     /// reading from `SiriMessageBridgeStore`'s opt-in cache). Either way
-    /// Siri does the talking — this screen's own `text`/`detailText`
-    /// deliberately still carry only the peer's name and an unread count,
-    /// never message content, preserving the exact no-plaintext-on-screen
-    /// policy the old implementation already had.
+    /// Siri does the talking, and it names the conversation through
+    /// `conversationIdentifier`, which the handlers honour. This screen's own
+    /// `text`/`detailText` deliberately carry only the peer's name and an
+    /// unread count, never message content.
     private func reloadMessages() {
-        // 1:1 only — INSendMessageIntent/INSearchForMessagesIntent both key
-        // off a single peer; a group conversation has no single recipient.
-        let convs = conversationStore.loadConversations()
-            .filter { $0.kind == .oneToOne }
-            .prefix(20)
-        let items: [CPMessageListItem] = convs.map { conv in
-            let convTitle = DisplayName.looksLikeUUID(conv.peerDisplayName) || conv.peerDisplayName.isEmpty
-                ? DisplayName.forUser(conv.peerUserId)
-                : conv.peerDisplayName
-            let unread = conv.unreadCount > 0
+        let access = currentAccess()
+        defer { applyEmptyState(.messages, to: messagesTemplate, access: access) }
+        guard access == .open else {
+            messagesTemplate.updateSections([])
+            updatePinnedGrid([])
+            return
+        }
+        let resolve = nameResolver()
+        let all = conversationStore.loadConversations()
+        let rows = CarPlayListBuilder.conversations(all, limits: limits, resolve: resolve)
+        let items: [CPMessageListItem] = rows.map { row in
+            let unread = row.unreadCount > 0
             let leadingConfig = CPMessageListItemLeadingConfiguration(
-                leadingItem: .none, leadingImage: nil, unread: unread)
+                leadingItem: row.isPinned ? .pin : .none, leadingImage: nil, unread: unread)
             let detail = unread
-                ? String(localized: "carplay.messages.unread_count", defaultValue: "\(conv.unreadCount) non letti", comment: "CarPlay conversation row — unread message count, %lld is the count")
+                ? String(localized: "carplay.messages.unread_count", defaultValue: "\(row.unreadCount) non letti", comment: "CarPlay conversation row — unread message count, %lld is the count")
                 : nil
             return CPMessageListItem(
-                conversationIdentifier: conv.peerUserId,
-                text: convTitle,
+                conversationIdentifier: row.conversationIdentifier,
+                text: row.title,
                 leadingConfiguration: leadingConfig,
                 trailingConfiguration: nil,
                 detailText: detail,
                 trailingText: nil)
         }
-        messagesTemplate.updateSections([CPListSection(items: items)])
+        messagesTemplate.updateSections(items.isEmpty ? [] : [CPListSection(items: items)])
+        updatePinnedGrid(CarPlayListBuilder.pinnedConversations(
+            all, maximum: Self.maximumPinnedButtons(), resolve: resolve))
     }
 
-    // MARK: - Empty states
+    /// iOS 26 puts pinned conversations in a grid above the list. Older systems have no such header, so there are
+    /// none to fill.
+    private static func maximumPinnedButtons() -> Int {
+        if #available(iOS 26.0, *) { return CPListTemplate.maximumHeaderGridButtonCount }
+        return 0
+    }
 
-    private func configureEmptyStates() {
-        recentsTemplate.emptyViewTitleVariants =
-            [String(localized: "carplay.recents.empty.title", defaultValue: "Nessuna chiamata recente", comment: "CarPlay recents tab — empty state title")]
-        recentsTemplate.emptyViewSubtitleVariants =
-            [String(localized: "carplay.recents.empty.subtitle", defaultValue: "Le chiamate sicure compaiono qui", comment: "CarPlay recents tab — empty state subtitle")]
-        contactsTemplate.emptyViewTitleVariants =
-            [String(localized: "carplay.contacts.empty.title", defaultValue: "Nessun contatto", comment: "CarPlay contacts tab — empty state title")]
-        contactsTemplate.emptyViewSubtitleVariants =
-            [String(localized: "carplay.contacts.empty.subtitle", defaultValue: "Aggiungi contatti dall'app sul telefono", comment: "CarPlay contacts tab — empty state subtitle")]
-        messagesTemplate.emptyViewTitleVariants =
-            [String(localized: "carplay.messages.empty.title", defaultValue: "Nessuna conversazione", comment: "CarPlay messages tab — empty state title")]
-        messagesTemplate.emptyViewSubtitleVariants =
-            [String(localized: "carplay.messages.empty.subtitle", defaultValue: "Le conversazioni cifrate compaiono qui", comment: "CarPlay messages tab — empty state subtitle")]
+    private func updatePinnedGrid(_ pinned: [CarPlayConversationRow]) {
+        guard #available(iOS 26.0, *) else { return }
+        let image = UIImage(systemName: "person.crop.circle.fill") ?? UIImage()
+        let buttons: [CPGridButton] = pinned.map { row in
+            CPGridButton(
+                titleVariants: [row.title],
+                image: image,
+                messageConfiguration: CPMessageGridItemConfiguration(
+                    conversationIdentifier: row.conversationIdentifier, unread: row.unreadCount > 0),
+                handler: nil)
+        }
+        messagesTemplate.headerGridButtons = buttons.isEmpty ? nil : buttons
+    }
+
+    // MARK: - Empty states and notices
+    //
+    // Nothing on the car screen may tell the driver to use the phone: a CarPlay flow has to be possible without
+    // touching it. Every state below says what is (or is not) there and stops.
+
+    private func applyEmptyState(_ tab: CarPlayTab, to template: CPListTemplate, access: CarPlayAccess) {
+        let (title, subtitle) = Self.emptyCopy(CarPlayListBuilder.emptyKind(for: tab, access: access))
+        template.emptyViewTitleVariants = [title]
+        template.emptyViewSubtitleVariants = [subtitle]
+    }
+
+    private static func emptyCopy(_ kind: CarPlayEmptyKind) -> (title: String, subtitle: String) {
+        switch kind {
+        case .starting:
+            return (
+                String(localized: "carplay.empty.starting.title", defaultValue: "Q-Audion si sta avviando", comment: "CarPlay empty state title — the app is starting and the account is being checked"),
+                String(localized: "carplay.empty.starting.subtitle", defaultValue: "Verifica dell'account in corso", comment: "CarPlay empty state subtitle — the account is being checked"))
+        case .locked:
+            return (
+                String(localized: "carplay.empty.locked.title", defaultValue: "Q-Audion bloccato", comment: "CarPlay empty state title — the app lock is on"),
+                String(localized: "carplay.empty.locked.subtitle", defaultValue: "Il blocco dell'app è attivo", comment: "CarPlay empty state subtitle — the app lock is on"))
+        case .signedOut:
+            return (
+                String(localized: "carplay.empty.signed_out.title", defaultValue: "Q-Audion non disponibile", comment: "CarPlay empty state title — no account is signed in"),
+                String(localized: "carplay.empty.signed_out.subtitle", defaultValue: "Nessun account attivo", comment: "CarPlay empty state subtitle — no account is signed in"))
+        case .nothingYet(.recents):
+            return (
+                String(localized: "carplay.recents.empty.title", defaultValue: "Nessuna chiamata recente", comment: "CarPlay recents tab — empty state title"),
+                String(localized: "carplay.recents.empty.subtitle", defaultValue: "Le chiamate sicure compaiono qui", comment: "CarPlay recents tab — empty state subtitle"))
+        case .nothingYet(.contacts):
+            return (
+                String(localized: "carplay.contacts.empty.title", defaultValue: "Nessun contatto", comment: "CarPlay contacts tab — empty state title"),
+                String(localized: "carplay.contacts.empty.subtitle", defaultValue: "I contatti Q-Audion compaiono qui", comment: "CarPlay contacts tab — empty state subtitle"))
+        case .nothingYet(.messages):
+            return (
+                String(localized: "carplay.messages.empty.title", defaultValue: "Nessuna conversazione", comment: "CarPlay messages tab — empty state title"),
+                String(localized: "carplay.messages.empty.subtitle", defaultValue: "Le conversazioni cifrate compaiono qui", comment: "CarPlay messages tab — empty state subtitle"))
+        }
+    }
+
+    private static func noticeTitle(_ notice: CarPlayNotice) -> String {
+        switch notice {
+        case .contactNotFound:
+            return String(localized: "carplay.notice.contact_not_found", defaultValue: "Contatto non trovato", comment: "CarPlay alert — the requested contact is not one the app can call")
+        case .callNotStarted:
+            return String(localized: "carplay.notice.call_not_started", defaultValue: "Chiamata non avviata", comment: "CarPlay alert — a call could not be started")
+        case .notReady:
+            return String(localized: "carplay.notice.not_ready", defaultValue: "Q-Audion non è ancora pronto", comment: "CarPlay alert — the app cannot take the request yet")
+        case .appLocked:
+            return String(localized: "carplay.notice.app_locked", defaultValue: "Q-Audion è bloccato", comment: "CarPlay alert — the app lock is on, so no call is placed")
+        }
+    }
+
+    /// A short modal alert with one button. Skipped while another template is already presented.
+    private func present(_ notice: CarPlayNotice) {
+        guard let interfaceController, interfaceController.presentedTemplate == nil else { return }
+        let ok = CPAlertAction(
+            title: String(localized: "carplay.notice.ok", defaultValue: "OK", comment: "CarPlay alert — dismiss button"),
+            style: .default
+        ) { [weak self] _ in
+            Task { @MainActor in self?.interfaceController?.dismissTemplate(animated: true, completion: nil) }
+        }
+        let alert = CPAlertTemplate(titleVariants: [Self.noticeTitle(notice)], actions: [ok])
+        interfaceController.presentTemplate(alert, animated: true, completion: nil)
     }
 }
 #endif

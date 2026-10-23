@@ -32,6 +32,7 @@ targets:
         includes:
           - AbuseReportCategoryTests.swift
           - AgeDeclarationTests.swift
+          - AppLockServiceTests.swift
           - AppUpdateLinkTests.swift
           - AppStateFilesServerUrlTests.swift
           - AvatarAnnounceReductionTests.swift
@@ -45,12 +46,15 @@ targets:
           - CallMinimizePolicyTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
+          - CarPlayBridgeTests.swift
+          - CarPlayListModelTests.swift
           - ConfidenceToneTests.swift
           - DesignSystemAccessibilityTests.swift
           - DeviceSymbolTests.swift
           - EarbudCompileConditionTests.swift
           - FeatureFlagKillSwitchTests.swift
           - FileV2ImageCleanerTests.swift
+          - IntentHandlerTests.swift
           - KmsSweepStatusTests.swift
           - LegalLinksTests.swift
           - MeshAudioRouteTests.swift
@@ -65,11 +69,18 @@ targets:
           - RecoveryEnrollmentStatusTests.swift
           - ReKeyAvatarRingTests.swift
           - RuntimeLogSinkTeeTests.swift
+          - SiriIntentPolicyTests.swift
           - TrustEvaluationModelTests.swift
           - VoiceDisplayFormatTests.swift
           - VoiceGuardModelTests.swift
           - VoiceToneRowTests.swift
           - VoiceWordTests.swift
+      # The Siri Intents extension and the files it shares with the app, compiled into the bundle itself so that
+      # IntentHandlerTests and SiriIntentPolicyTests drive the real source with a fake bridge. The bundle's own
+      # copies shadow the app's: the types are different (another module), the code is the same file.
+      - path: ../QAudionIntents/IntentHandler.swift
+      - path: ../QAudionApp/Siri/SiriMessageBridgeStore.swift
+      - path: ../QAudionApp/Siri/SiriIntentPolicy.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

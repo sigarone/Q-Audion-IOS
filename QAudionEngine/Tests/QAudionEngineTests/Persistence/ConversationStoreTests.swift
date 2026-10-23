@@ -74,6 +74,30 @@ final class ConversationStoreTests: XCTestCase {
         XCTAssertTrue(store.loadConversations().first?.pinned ?? false)
     }
 
+    func test_setUnreadCount_changesOnlyTheCount() {
+        let conv = Conversation(id: convId, peerUserId: "u-1", peerDisplayName: "Peer", lastMessagePreview: "p",
+                                lastActivity: Date(timeIntervalSince1970: 1_745_000_000),
+                                unreadCount: 5, pinned: true)
+        store.upsertConversation(conv)
+        store.setUnreadCount(2, forConversation: convId)
+        let after = store.loadConversations().first
+        XCTAssertEqual(after?.unreadCount, 2)
+        XCTAssertEqual(after?.peerUserId, "u-1")
+        XCTAssertEqual(after?.peerDisplayName, "Peer")
+        XCTAssertEqual(after?.pinned, true)
+    }
+
+    func test_setUnreadCount_neverGoesBelowZeroAndIgnoresUnknownConversations() {
+        store.upsertConversation(Conversation(
+            id: convId, peerUserId: "u-1", peerDisplayName: "Peer", lastMessagePreview: nil,
+            lastActivity: Date(timeIntervalSince1970: 1_745_000_000), unreadCount: 3, pinned: false))
+        store.setUnreadCount(-4, forConversation: convId)
+        XCTAssertEqual(store.loadConversations().first?.unreadCount, 0)
+        store.setUnreadCount(7, forConversation: UUID())
+        XCTAssertEqual(store.loadConversations().count, 1)
+        XCTAssertEqual(store.loadConversations().first?.unreadCount, 0)
+    }
+
     func test_deleteConversation_removesItAndMessages() {
         store.upsertConversation(makeConv(id: convId))
         store.appendMessage(makeMsg(in: convId))

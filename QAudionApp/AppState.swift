@@ -84,6 +84,7 @@ final class AppState: ObservableObject {
                 ensureCallEngine(reason: "login")
                 requestSiriAuthorizationIfNeeded()
             }
+            if isAuthenticated != oldValue { CarPlayBridge.shared.signInDidChange() }
         }
     }
     /// Entitlements Task 3 (2026-08-17) — `didSet` fires on EVERY
@@ -468,6 +469,8 @@ final class AppState: ObservableObject {
     /// whether the route IS CarPlay right now, independent of Tier B's
     /// `QAUDION_CARPLAY` flag (see `isCarPlayConnected()`).
     private var carPlayRouteLogObserver: NSObjectProtocol?
+    /// Listens for the Intents extension queuing a message or a read mark while this app is running.
+    private var siriBridgeObserver: SiriBridgeSignalObserver?
 
     /// W-ORPHANPEER — peers the server has answered a definitive 404 for:
     /// accounts that no longer exist. Hidden from the address book and from
@@ -3931,9 +3934,23 @@ final class AppState: ObservableObject {
                 // Mirror dialAndCall's label handling: seed the call UI name
                 // before routing keys off peerUserId.
                 if !displayName.isEmpty { self.incomingCallerName = displayName }
+                let busyAtEntry = self.callStartGate.inFlight || self.isInCall
                 await self.startCall(contactId: peerUserId)
+                if CarCallStartNotice.isDue(busyAtEntry: busyAtEntry, inCallAfter: self.isInCall) {
+                    CarPlayBridge.shared.report(.callNotStarted)
+                }
             }
         }
+        // What the car screen lists depends on the session (which is restored after `initialize()`, so "not signed
+        // in" and "not known yet" are different answers) and on the app lock.
+        CarPlayBridge.shared.sessionState = { [weak self] in
+            guard let self else { return .unknown }
+            return CarPlaySession.of(
+                isAuthenticated: self.isAuthenticated, hasStoredSession: self.authService.loadToken() != nil)
+        }
+        CarPlayBridge.shared.isAppLocked = { [weak self] in self?.isAppLocked?() ?? true }
+        CarPlayBridge.shared.refreshAppLock = { AppLockService.shared.lockIfGraceExpiredWithoutPrompt() }
+        CarPlayBridge.shared.onCarPlayConnected = { [weak self] in self?.drainSiriOutbox() }
 
         // CarPlay/Siri state-of-the-art plan S1 — request Siri authorization.
         // Apple's own doc ("Requesting Authorization to Use Siri"): the
@@ -3948,6 +3965,15 @@ final class AppState: ObservableObject {
         // over the Welcome screen; this call only covers the case where a
         // session was already live before this point.
         if isAuthenticated { requestSiriAuthorizationIfNeeded() }
+
+        // The extension signals every message and read mark it queues: while the app runs (in the background in the
+        // car) they are picked up at once. Observing starts before the first pass below, so nothing queued in between
+        // is missed.
+        if siriBridgeObserver == nil {
+            siriBridgeObserver = SiriBridgeSignalObserver { [weak self] in
+                Task { @MainActor in self?.drainSiriOutbox() }
+            }
+        }
 
         // CarPlay/Siri state-of-the-art plan S2 — cold-launch pass: pick up
         // any message the Intents Extension queued while the app wasn't
@@ -5175,6 +5201,8 @@ final class AppState: ObservableObject {
                             self.connectPersistentSocket()
                         }
                     }
+                    // The stored session can be gone while `isAuthenticated` stays false (no `didSet` change).
+                    CarPlayBridge.shared.signInDidChange()
                 }
             }
         }
@@ -17177,6 +17205,28 @@ final class AppState: ObservableObject {
     /// Runs of `initialize()` in this process (`voip init count=N site=2`).
     private static var initializeCount: Int = 0
 
+    /// Which door ran `initialize()` first: the phone window or the CarPlay scene (see `AppInitializeGate`).
+    private static var initializeGate = AppInitializeGate()
+
+    /// The CarPlay scene's way into the app. A launch started by the car has no phone window, so the root view's
+    /// `onAppear`, which normally runs `initialize()`, never fires; this runs it once, and does nothing when something
+    /// already did.
+    func initializeForCarPlayLaunch() {
+        guard Self.initializeGate.carPlayNeedsInitialize() else { return }
+        RTLog.info("call", "carplay: initialize() from the CarPlay scene")
+        initialize()
+    }
+
+    /// The phone window's way in (`onAppear`). It skips the one run the CarPlay scene already did; any later
+    /// appearance of the window (a reconnected scene) runs it again, as before.
+    func initializeForPhoneWindow() {
+        guard Self.initializeGate.phoneWindowNeedsInitialize() else {
+            RTLog.info("call", "carplay: initialize() already ran for the CarPlay scene, not repeated")
+            return
+        }
+        initialize()
+    }
+
     /// W-VOIPSYNC (2026-10-08) — what CallKit is told for this VoIP push, decided ON
     /// MAIN inside the PushKit callback (`PushKitProvider.PrepareHandler`); the
     /// provider hands it to CallKit before the callback returns. These are the
@@ -18380,6 +18430,8 @@ final class AppState: ObservableObject {
         ) else {
             RTLog.warn("call", "Siri INStartCallIntent: no Q-Audion match for spoken name")
             errorMessage = "Nessun contatto Q-Audion trovato per \"\(spokenName)\"."
+            // In the car nobody reads `errorMessage`: say it on the car screen when one is connected.
+            CarPlayBridge.shared.report(.contactNotFound)
             return
         }
         incomingCallerName = match.displayName
@@ -18436,10 +18488,13 @@ final class AppState: ObservableObject {
         let store = ConversationStore()
         var cached: [SiriMessageBridgeStore.CachedMessage] = []
         for conv in store.loadConversations() where conv.kind == .oneToOne {
-            let recent = store.loadMessages(conversationId: conv.id).suffix(10)
+            let recent = Array(store.loadMessages(conversationId: conv.id).suffix(10))
+            // The last `unreadCount` incoming messages are the unread ones: a search for new messages returns those.
+            let unreadFlags = SiriIntentPolicy.unreadFlags(
+                isIncoming: recent.map { $0.direction == .incoming }, unreadCount: conv.unreadCount)
             // Never cache a view-once message — this second, persistent
             // copy would defeat the whole point of that feature.
-            for msg in recent where msg.deletedAt == nil && !(msg.isViewOnce ?? false) {
+            for (index, msg) in recent.enumerated() where msg.deletedAt == nil && !(msg.isViewOnce ?? false) {
                 // A file message (WIRE_SPEC 12.7.1) is cached as its one-line preview, never as the descriptor it is made of.
                 let cachedText: String = FileV2ChatBody.classify(text: msg.plaintext).displayText ?? MessageReplyCodec.shownText(ofBody: msg.plaintext)
                 cached.append(SiriMessageBridgeStore.CachedMessage(
@@ -18447,10 +18502,36 @@ final class AppState: ObservableObject {
                     peerDisplayName: conv.peerDisplayName,
                     text: cachedText,
                     sentAt: msg.sentAt,
-                    isOutgoing: msg.direction == .outgoing))
+                    isOutgoing: msg.direction == .outgoing,
+                    isUnread: unreadFlags[index]))
             }
         }
         SiriMessageBridgeStore.shared.replaceRecentMessages(cached)
+    }
+
+    /// Applies the read marks the Intents Extension queued after Siri read messages aloud
+    /// (`INSetMessageAttributeIntent`). A mark covers the messages Siri was given, up to the newest of them: what
+    /// arrived after that stays unread. Local only, like opening the conversation without a receipt being sent from
+    /// here. The search cache is refreshed afterwards so the next "read my new messages" no longer offers what was read.
+    func applySiriReadMarks() {
+        let marks = SiriMessageBridgeStore.shared.drainReadMarks()
+        guard !marks.isEmpty else { return }
+        let store = ConversationStore()
+        let conversations = store.loadConversations()
+        var applied: Int = 0
+        for mark in SiriIntentPolicy.mergedReadMarks(marks) {
+            guard let conversation = conversations.first(where: { $0.peerUserId == mark.peerUserId && $0.kind == .oneToOne }) else { continue }
+            let messages = store.loadMessages(conversationId: conversation.id)
+            let remaining = SiriIntentPolicy.unreadCountAfterRead(
+                isIncoming: messages.map { $0.direction == .incoming },
+                sentAt: messages.map { Int($0.sentAt.timeIntervalSince1970) },
+                unreadCount: conversation.unreadCount,
+                upToSentAt: mark.upToSentAt)
+            store.setUnreadCount(remaining, forConversation: conversation.id)
+            applied += 1
+        }
+        RTLog.info("chat", "Siri read marks: queued=\(marks.count) applied=\(applied)")
+        refreshSiriMessageCache()
     }
 
     /// Drains `SiriMessageBridgeStore`'s outbox (queued by
@@ -18467,9 +18548,12 @@ final class AppState: ObservableObject {
     /// `cryptography-security-expert` consultation recorded in the plan
     /// doc for why this indirection matters).
     func drainSiriOutbox() {
+        applySiriReadMarks()
         let pending = SiriMessageBridgeStore.shared.drainOutbox()
         guard !pending.isEmpty else { return }
         let store = ConversationStore()
+        // The peers of the one-to-one conversations that exist: a conversation identifier from the car names one of them.
+        let conversationPeerIds = Set(store.loadConversations().filter { $0.kind == .oneToOne }.map { $0.peerUserId })
         var refusedByEntryRule: Int = 0
         for item in pending {
             // The entry-point rule of the composer (WIRE_SPEC 12.7.1, 13.5): the text of an intent is user text, trimmed as the composer
@@ -18479,10 +18563,13 @@ final class AppState: ObservableObject {
                 refusedByEntryRule += 1
                 continue
             }
-            guard let match = SiriCallResolution.resolve(
+            guard let match = SiriCallResolution.resolveMessageTarget(
+                conversationIdentifier: item.conversationIdentifier,
+                conversationPeerIds: conversationPeerIds,
+                appIdentifier: item.customIdentifier,
                 handle: item.handle, displayName: item.spokenName, contacts: cachedContacts
             ) else {
-                RTLog.warn("chat", "Siri outbox: no Q-Audion match for spoken name, dropped")
+                RTLog.warn("chat", "Siri outbox: no Q-Audion match for the target, dropped")
                 continue
             }
             let conversationId = resolveOrCreateConversationId(forPeerUserId: match.userId)

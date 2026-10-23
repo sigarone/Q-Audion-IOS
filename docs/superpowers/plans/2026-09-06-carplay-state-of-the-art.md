@@ -189,32 +189,117 @@ template reads from — no new data layer, only new presentation surfaces.
   `INSearchForMessagesIntentHandling` (S2). The no-plaintext-on-screen
   policy is unchanged — only what Siri may say aloud changed, not what the
   screen draws.
-- **S4/S5 status: code complete, ZERO live verification possible** — both
-  still compile out entirely behind `QAUDION_CARPLAY` (off), so nothing
-  here has run on a simulator, a real head unit, or even been through a
-  single `xcodebuild` pass. Blocked on S3 (the entitlement) for the first
-  real signal.
+- **S7 — Tier B is built by CI, tested, and has its own start-up path
+  (2026-10-23).** The scene is behind `QAUDION_CARPLAY` (off in the default
+  spec and in every release build):
+  - `QAudionApp/project-carplay.yml` is the variant spec (flag
+    `-DQAUDION_CARPLAY` through `OTHER_SWIFT_FLAGS`, like the VPN and
+    earbud variants). A build phase (`scripts/ci/carplay-add-scene.sh`) adds
+    the CarPlay scene configuration (`CPTemplateApplicationSceneSessionRole
+    Application`, `CarPlaySceneDelegate`, multiple scenes on) to the BUILT
+    Info.plist; the source `Info.plist` never has it.
+    `ios-app-tests.yml` builds the variant on every pull request
+    (`carplay-variant-build`) and reads the built Info.plist; the default
+    build is checked for the opposite (no scene configuration, no scene class
+    in the binary, no CarPlay.framework load command, no CarPlay entitlement).
+  - `CarPlay.framework` is linked only by the variant spec, weakly
+    (`-weak_framework CarPlay` in `OTHER_LDFLAGS`); the variant job fails when
+    the binary has no weak load command for it or has a strong one.
+  - `scripts/ci/check_carplay_gating.py` (with its tests, run by
+    `ios-ci-gates.yml`): the flag, the framework link and the entitlement
+    appear in no spec but the variant (every `project*.yml`), no
+    entitlements file carries a CarPlay key, `ios-testflight.yml` never
+    mentions the variant or the flag, every CarPlay reference in the app and
+    Intents sources is inside `#if QAUDION_CARPLAY`, and no car-screen text
+    points at the phone.
+  - Lists are built by `CarPlayListModel.swift` (compiled in every build, no
+    CarPlay type): rows are capped by `CPListTemplate.maximumItemCount` and
+    by 12 on a vehicle that limits lists (`CPLimitableUserInterface.lists`),
+    verified contacts first, orphaned accounts left out. Nothing is listed
+    while the session is not known yet, while nobody is signed in, or while
+    the app lock is up (`CarPlayAccess`). Pinned one-to-one conversations go
+    into the iOS 26 header grid (`CPMessageGridItemConfiguration`), behind
+    `#available(iOS 26.0, *)`.
+  - Cold launch with only the car: `AppDelegate` wires
+    `CarPlayBridge.bootApp` at process launch; the scene's connect calls
+    `CarPlayBridge.carPlayConnected()`, which runs the app's start-up
+    (`AppState.initializeForCarPlayLaunch()`) before anything is listed or
+    dialled, so `placeCall` is wired without the phone window's `onAppear`.
+    `AppInitializeGate` makes `initialize()` run once whichever door comes
+    first. A Siri call request that reaches the scene (`scene(_:continue:)`,
+    or the connection options of a cold launch) goes through
+    `CarPlayBridge.deliverSiriActivity` into `handleSiriStartCall`.
+  - The session is restored after `initialize()`, so a launch made by the car
+    starts with the session not known (a stored token, `isAuthenticated` still
+    false), which is not "signed out". `AppState.isAuthenticated` fires
+    `CarPlayBridge.onSignInChanged` and the scene reloads its lists. The app
+    lock is `AppLockService.shared`: a launch with only the car sets an enabled
+    lock without a prompt, `AppState.isAppLocked` reads it, and the lists stay
+    empty and calls are refused until the phone window unlocks
+    (`CarPlayBridge.onLockChanged`). In a process that is already running,
+    `CarPlayBridge.refreshAppLock` (`AppLockService.lockIfGraceExpiredWithoutPrompt`)
+    sets the lock when the grace period ran out while the phone window was in
+    the background; it runs when the car connects and before every read of the
+    lock, and asks nobody. A revoked session found at restore also fires
+    `onSignInChanged`.
+  - Empty and error states are complete on the car screen: starting,
+    signed-out and locked states, and four alert notices (contact not found,
+    call not started, app not ready, app locked) drawn with `CPAlertTemplate`.
+    A call that could not be set up after a tap on a row (no engine, or the
+    setup failed) raises "call not started"; a second tap while a start is in
+    flight or a call is up does not (`CallStartOutcome`). All strings are in
+    the catalog in the six languages.
+  - Intents extension: `INSetMessageAttributeIntent` is handled (Siri marks a
+    conversation as read after reading it aloud; the mark is queued in the
+    bridge and applied by the main app) and listed in `IntentsSupported`.
+    A read mark covers the messages Siri was given, up to the newest of them
+    (the message identifier carries the second it was sent), and the unread
+    count keeps what arrived after. The extension posts a Darwin notification
+    after it queues a message or a read mark; a running app drains the queue
+    on it and when a CarPlay session connects.
+    `intent.conversationIdentifier` (the peer id of a conversation row) is
+    honoured on send and search before any name is looked at. For a message,
+    a person Siri tied to a contact card or this app donated is resolved
+    (`SiriIntentPolicy`): several such candidates are a disambiguation,
+    several recipients are put to the user as a choice. A bare spoken name is
+    passed on unchanged. A call request passes every person on as Siri gave
+    it, as before: the app matches it by phone number or display name and
+    reports "contact not found" on the car screen. The call resolvers use the result types the protocols declare
+    (`INStartCallContactResolutionResult`,
+    `INStartCallCallCapabilityResolutionResult`), and a test checks that
+    SiriKit's Objective-C selectors reach every resolve, confirm and handle
+    method.
+  - Unit tests: `CarPlayListModelTests`, `CarPlayBridgeTests`,
+    `AppLockServiceTests`, `CallStartSupportTests`, `SiriIntentPolicyTests`, `IntentHandlerTests` (the extension source is
+    compiled into the test bundle with a fake bridge), and the new cases of
+    `SiriCallResolutionTests` in the engine.
+  - Not yet run on a head unit: the scene itself (templates) is compiled by
+    CI, not driven by a test. That needs the CarPlay entitlement or the
+    CarPlay simulator.
 - S6: deferred, explicitly, no change.
 
-## Current state (confirmed 2026-09-06, all via `Read`/`Grep`, not assumed)
+## Current state (confirmed 2026-10-23, from the files at `main`)
 
 - Tier A (CallKit-driven incoming/active call on CarPlay): **works today**,
   zero code, zero entitlement. Unaffected by this programme.
-- Tier B (`CarPlayScene.swift`): compiled out behind `QAUDION_CARPLAY`
-  (absent from `SWIFT_ACTIVE_COMPILATION_CONDITIONS` in `project.yml`).
-  Three `CPListTemplate` tabs (Recenti/Contatti/Messaggi), every row a plain
-  `CPListItem` with a manual `handler` that places a call. No
-  `CPContactTemplate`, no `CPMessageListItem`, no `CPAssistantCellConfiguration`.
-- `QAudion.entitlements`: no `com.apple.developer.siri`, no
-  `com.apple.developer.carplay-communication`.
-- `project.yml`: zero Intents-Extension target (compare
-  `QAudionPacketTunnel`/`QAudionBroadcastExtension`, the two existing
-  app-extension targets this new one should structurally match).
-- `Info.plist`: `UIApplicationSupportsMultipleScenes = false` (must flip for
-  the CarPlay scene itself — already documented in `CarPlayScene.swift`'s own
-  header checklist, unchanged by this plan).
-- Zero `INStartCallIntent`/`INSendMessageIntent`/`INSearchForMessagesIntent`/
-  `Intents` imports anywhere in the codebase. Full absence, not partial.
+- Tier B (`CarPlayScene.swift`): compiled only by `project-carplay.yml`
+  (`QAUDION_CARPLAY`), built by CI on every pull request, absent from the
+  default spec and from every release build. Three
+  `CPListTemplate` tabs (Recenti/Contatti/Messaggi) plus the assistant cell on
+  Recenti, `CPContactTemplate` with call and message buttons,
+  `CPMessageListItem` rows, an iOS 26 pinned grid. The rows and their caps
+  come from `CarPlayListModel.swift` (always compiled, unit tested).
+- `QAudion.entitlements`: `com.apple.developer.siri` and the Siri App Group;
+  no CarPlay key (a gate fails the pull request that adds one).
+- `project.yml`: `QAudionIntents` app-extension target (compiles
+  `SiriMessageBridgeStore.swift` and `SiriIntentPolicy.swift` from
+  `QAudionApp/Siri/`), `Intents.framework`. No CarPlay link: only
+  `project-carplay.yml` links it.
+- `Info.plist`: `UIApplicationSupportsMultipleScenes = false` and no scene
+  configuration; the variant build adds the CarPlay scene to the built file.
+- Intents: `INStartCallIntent`, `INSendMessageIntent`,
+  `INSearchForMessagesIntent`, `INSetMessageAttributeIntent`. Donations: the
+  call donation after every outgoing call.
 - `CXProviderConfiguration.includesCallsInRecents = false`
   (`CallKitProvider.swift`) — a product decision that predates this plan and
   interacts with Siri donation (see S1 below); flagged, not silently changed.
@@ -244,7 +329,10 @@ template reads from — no new data layer, only new presentation surfaces.
 6. S1/S2: testable TODAY on a real iPhone via Xcode's "run Siri or Maps as
    the host app" debug flow — no CarPlay hardware or entitlement needed to
    verify the Intents Extension in isolation.
-7. S4/S5: **cannot be verified end-to-end until S3's entitlement is granted**
+7. Every pull request: `ios-app-tests.yml` builds the CarPlay variant
+   (`carplay-variant-build`) and runs the app-target tests, `ios-ci-gates.yml`
+   runs `check_carplay_gating.py` and its tests.
+8. S4/S5: **cannot be verified end-to-end until S3's entitlement is granted**
    — Apple will not sign a build carrying `com.apple.developer.carplay-
    communication` without it. Write and review the code regardless (gated
    behind `QAUDION_CARPLAY`, same as today), but do not expect a TestFlight

@@ -23,13 +23,16 @@ extension Notification.Name {
 @MainActor
 final class AppLockService: ObservableObject {
 
+    /// The lock of the process. The phone window and a launch made by the CarPlay scene alone use the same one.
+    static let shared = AppLockService()
+
     @Published private(set) var isLocked: Bool = false
 
     /// SECURITY H-13 — UserDefaults key persisting the wall-clock time
     /// the app last entered background. Survives process death so a
     /// cold start (app killed in background, relaunched) still locks:
     /// an in-memory-only timestamp was lost on kill, bypassing the lock.
-    private static let backgroundedAtKey = "qaudion.lock.backgroundedAt"
+    static let backgroundedAtKey = "qaudion.lock.backgroundedAt"
 
     // MARK: - Scene phase callbacks
 
@@ -39,6 +42,40 @@ final class AppLockService: ObservableObject {
         UserDefaults.standard.set(Date().timeIntervalSince1970,
                                   forKey: Self.backgroundedAtKey)
         RTLog.info("call", "W-CALLFG-DIAG AppLockService.handleBackground — timestamp persisted")
+    }
+
+    /// A launch with no window (the CarPlay scene alone) has nobody to prompt: an enabled lock is set and no prompt is
+    /// shown. The persisted background time is dropped, so the first time the window comes to the foreground it
+    /// locks and asks, whatever the grace period.
+    func lockWithoutPrompt() {
+        guard PrivacyGate.appLockEnabled else { return }
+        UserDefaults.standard.removeObject(forKey: Self.backgroundedAtKey)
+        isLocked = true
+        RTLog.info("call", "AppLockService.lockWithoutPrompt — window-less launch, app lock set")
+    }
+
+    /// For a reader with no window to prompt on (the car screen of a process that is already running): sets the lock
+    /// when the app went to the background and the grace period has run out since. Nothing is asked. The background
+    /// time is kept, so the window locks and asks when it comes to the foreground. An app that is in the foreground
+    /// has no background time and stays as it is.
+    func lockIfGraceExpiredWithoutPrompt(
+        now: Date = Date(),
+        policy: () -> (enabled: Bool, graceMs: Int) = {
+            (enabled: PrivacyGate.appLockEnabled, graceMs: PrivacyGate.appLockTimeoutMs)
+        }
+    ) {
+        let defaults = UserDefaults.standard
+        guard !isLocked, defaults.object(forKey: Self.backgroundedAtKey) != nil else { return }
+        let backgroundedAt = Date(timeIntervalSince1970: defaults.double(forKey: Self.backgroundedAtKey))
+        let current = policy()
+        guard current.enabled, Self.graceExpired(backgroundedAt: backgroundedAt, graceMs: current.graceMs, now: now) else { return }
+        isLocked = true
+        RTLog.info("call", "AppLockService.lockIfGraceExpiredWithoutPrompt — grace expired in the background, app lock set")
+    }
+
+    /// True once `graceMs` has passed since `backgroundedAt`.
+    static func graceExpired(backgroundedAt: Date, graceMs: Int, now: Date) -> Bool {
+        now.timeIntervalSince(backgroundedAt) >= Double(graceMs) / 1000.0
     }
 
     func handleForeground() {

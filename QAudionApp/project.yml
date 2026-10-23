@@ -106,11 +106,10 @@ targets:
         # is OFF by default so `v*` TestFlight builds stay green WITHOUT the
         # Apple-approval-gated `com.apple.developer.carplay-communication`
         # entitlement. CarPlay/CarPlayScene.swift is excluded from compilation
-        # while the flag is absent. To ENABLE (after Apple grants the entitlement
-        # — see the header of CarPlay/CarPlayScene.swift for the full checklist):
-        #   1. SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) QAUDION_CARPLAY
-        #   2. add `- sdk: CarPlay.framework` to the dependencies list below
-        #   3. add the entitlement + Info.plist CarPlay scene config
+        # while the flag is absent, and so is the CarPlay scene configuration
+        # of the app's Info.plist. This spec never sets the flag and never links
+        # CarPlay.framework: the variant with both is project-carplay.yml (see
+        # its header), which ios-app-tests.yml builds on every pull request.
         # CallKit-driven incoming/active calls already surface on CarPlay with
         # NONE of the above (Tier A) — that path needs no flag and no entitlement.
     dependencies:
@@ -195,6 +194,7 @@ targets:
     sources:
       - path: ../QAudionIntents
       - path: ../QAudionApp/Siri/SiriMessageBridgeStore.swift
+      - path: ../QAudionApp/Siri/SiriIntentPolicy.swift
     settings:
       base:
         INFOPLIST_FILE: ../QAudionIntents/Info.plist

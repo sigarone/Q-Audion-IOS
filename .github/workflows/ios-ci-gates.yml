@@ -13,6 +13,11 @@
 #     its tests include mutations of the real sources. scripts/ci/test-assert-no-earbud.sh is the
 #     self-test of the BINARY gate (the real gate runs on the built app in ios-app-tests.yml and on
 #     the shipped IPA in ios-testflight.yml).
+#   * the CarPlay scene is a compile-time switch (QAUDION_CARPLAY, see QAudionApp/project-carplay.yml).
+#     scripts/ci/check_carplay_gating.py proves on the SOURCES that the flag is set only by the variant spec,
+#     that no entitlements file carries a CarPlay key, that ios-testflight.yml never builds the variant, that
+#     every CarPlay reference is inside the flag, and that no car-screen text points at the phone; its tests
+#     include mutations of the real files. The built app is checked on macOS by ios-app-tests.yml.
 #   * the audio wire policy on the RTP sender (a fixed 32 kbps / packet time pin, applied when the sender is
 #     created and after every negotiation, no adaptive packet time anywhere) is exercised on the simulator by
 #     the engine tests; scripts/ci/check_audio_wire_shape.py proves on the sources that it is still wired.
@@ -87,6 +92,11 @@ jobs:
         run: |
           python3 -I scripts/ci/check_audio_wire_shape.py
           python3 -I scripts/ci/test_check_audio_wire_shape.py
+
+      - name: CarPlay scene, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_carplay_gating.py
+          python3 -I scripts/ci/test_check_carplay_gating.py
 
       - name: Earbud stack, binary gate self-test
         run: sh scripts/ci/test-assert-no-earbud.sh

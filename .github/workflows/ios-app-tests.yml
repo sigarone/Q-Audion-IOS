@@ -30,6 +30,12 @@
 # hardware stack in the default build" runs scripts/ci/assert-no-earbud.sh on the
 # built app. Both gates and the source check run again on every release.
 #
+# The fourth job (carplay-variant-build) does the same for the CarPlay scene (QAudionApp/project-carplay.yml:
+# QAUDION_CARPLAY) and checks that the built Info.plist carries the CarPlay scene configuration. The default
+# build proves the opposite: step "No CarPlay scene in the default build" reads the built app. The CarPlay
+# entitlement is not in any entitlements file; scripts/ci/check_carplay_gating.py fails the pull request that
+# changes that, and the one that makes a release build enable the scene.
+#
 # Runs on public-repo runners (free); no signing secrets, no network to any
 # real backend: the tests are pure.
 
@@ -55,6 +61,9 @@ on:
       - 'scripts/ci/assert-no-earbud.sh'
       - 'scripts/ci/test-assert-no-earbud.sh'
       - 'scripts/ci/check_earbud_gating.py'
+      - 'scripts/ci/check_carplay_gating.py'
+      - 'scripts/ci/test_check_carplay_gating.py'
+      - 'scripts/ci/carplay-add-scene.sh'
       - '.github/workflows/ios-app-tests.yml'
   pull_request:
     branches: [main]
@@ -69,6 +78,9 @@ on:
       - 'scripts/ci/assert-no-earbud.sh'
       - 'scripts/ci/test-assert-no-earbud.sh'
       - 'scripts/ci/check_earbud_gating.py'
+      - 'scripts/ci/check_carplay_gating.py'
+      - 'scripts/ci/test_check_carplay_gating.py'
+      - 'scripts/ci/carplay-add-scene.sh'
       - '.github/workflows/ios-app-tests.yml'
   workflow_dispatch:
 
@@ -188,6 +200,37 @@ jobs:
           test -d "$APP"
           sh scripts/ci/assert-no-earbud.sh "$APP"
 
+      # The CarPlay scene is a compile-time switch (QAUDION_CARPLAY, QAudionApp/project-carplay.yml) and the default
+      # spec does not set it: the sources first (python, no build needed), then the app just built. Its Info.plist has
+      # no scene configuration at all and multiple scenes stay off, the scene class is not in the binary, CarPlay.framework
+      # is not linked, and the app is not signed with a CarPlay entitlement. The variant that has all of it is built by
+      # carplay-variant-build.
+      - name: No CarPlay scene in the default build
+        run: |
+          set -e
+          python3 -I scripts/ci/check_carplay_gating.py
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          test -d "$APP"
+          for BIN in "$APP/QAudionApp.debug.dylib" "$APP/QAudionApp"; do
+            if [ -f "$BIN" ] && otool -l "$BIN" | grep -q 'CarPlay\.framework'; then
+              echo "::error::the default build links CarPlay.framework ($BIN)"
+              exit 1
+            fi
+          done
+          if plutil -extract UIApplicationSceneManifest.UISceneConfigurations raw -o - "$APP/Info.plist" >/dev/null 2>&1; then
+            echo "::error::the default build has a scene configuration (CarPlay role) in its Info.plist"
+            exit 1
+          fi
+          test "$(plutil -extract UIApplicationSceneManifest.UIApplicationSupportsMultipleScenes raw -o - "$APP/Info.plist")" = "false"
+          if [ -n "$(grep -rlaF '20CarPlaySceneDelegate' "$APP" | head -1)" ]; then
+            echo "::error::the default build contains the CarPlay scene delegate"
+            exit 1
+          fi
+          if codesign -d --entitlements :- "$APP" 2>/dev/null | grep -qi 'carplay'; then
+            echo "::error::the default build is signed with a CarPlay entitlement"
+            exit 1
+          fi
+
       - name: Generate Xcode project (with the app-test target)
         working-directory: QAudionApp
         run: |
@@ -213,6 +256,7 @@ jobs:
             -parallel-testing-enabled NO \
             -only-testing:QAudionAppTests/AbuseReportCategoryTests \
             -only-testing:QAudionAppTests/AgeDeclarationTests \
+            -only-testing:QAudionAppTests/AppLockServiceTests \
             -only-testing:QAudionAppTests/AppUpdateLinkTests \
             -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
             -only-testing:QAudionAppTests/AvatarAnnouncePolicyTests \
@@ -235,12 +279,15 @@ jobs:
             -only-testing:QAudionAppTests/CallMinimizePolicyTests \
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \
+            -only-testing:QAudionAppTests/CarPlayBridgeTests \
+            -only-testing:QAudionAppTests/CarPlayListModelTests \
             -only-testing:QAudionAppTests/ConfidenceToneTests \
             -only-testing:QAudionAppTests/DesignSystemAccessibilityTests \
             -only-testing:QAudionAppTests/DeviceSymbolTests \
             -only-testing:QAudionAppTests/EarbudCompileConditionTests \
             -only-testing:QAudionAppTests/FeatureFlagKillSwitchTests \
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
+            -only-testing:QAudionAppTests/IntentHandlerTests \
             -only-testing:QAudionAppTests/KmsSweepStatusTests \
             -only-testing:QAudionAppTests/LegalLinksTests \
             -only-testing:QAudionAppTests/MeshAudioRouteTests \
@@ -255,6 +302,7 @@ jobs:
             -only-testing:QAudionAppTests/RecoveryEnrollmentStatusTests \
             -only-testing:QAudionAppTests/ReKeyAvatarRingTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
+            -only-testing:QAudionAppTests/SiriIntentPolicyTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -only-testing:QAudionAppTests/VoiceDisplayFormatTests \
             -only-testing:QAudionAppTests/VoiceGuardModelTests \
@@ -553,5 +601,118 @@ jobs:
           path: |
             QAudionApp/build-earbud.log
             QAudionApp/build-earbud-dev.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The variant WITH the CarPlay scene (QAUDION_CARPLAY). The scene is compiled out of every default and release
+  # build, so this job is what keeps it compiling. It needs no extension, no entitlement and no Go, so a device
+  # destination without signing is enough. The build phase of project-carplay.yml adds the CarPlay scene
+  # configuration to the built Info.plist; the steps below check that it is there and that CarPlay.framework is
+  # linked weakly. The default build (first job) is checked for none of it.
+  carplay-variant-build:
+    # Not on push to main: that run exists to write the SPM cache (the first job does it) and this variant was
+    # already built on the pull request.
+    if: github.event_name != 'push'
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    env:
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '26'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # The job does not write to the repository: no stored credentials.
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # Read only: the entry is written by the first job, on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      # The flag is only in the variant spec, the entitlement is nowhere, the TestFlight workflow never builds the
+      # variant, and every CarPlay reference in the sources is inside the flag.
+      - name: CarPlay gating (specs, sources, entitlements, car-screen text)
+        run: |
+          python3 -I scripts/ci/check_carplay_gating.py
+          python3 -I scripts/ci/test_check_carplay_gating.py
+
+      - name: Generate Xcode project (CarPlay spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-carplay.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build QAudionApp with the CarPlay scene (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-carplay \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-carplay.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-carplay.log ==="; tail -300 build-carplay.log; exit 1)
+
+      # The scene is really compiled in (its class is in the binary), the built Info.plist declares it (the CarPlay
+      # role with the scene delegate, multiple scenes on), and CarPlay.framework is a weak load command and not a
+      # strong one: the variant spec asks for it with -weak_framework CarPlay, and this step fails if that line is
+      # missing or a strong link comes back.
+      - name: Check the CarPlay variant contents
+        run: |
+          set -e
+          APP="/tmp/dd-ios-carplay/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP"
+          ROLE="UIApplicationSceneManifest.UISceneConfigurations.CPTemplateApplicationSceneSessionRoleApplication"
+          plutil -p "$APP/Info.plist" | grep -A12 UIApplicationSceneManifest || true
+          test "$(plutil -extract "$ROLE.0.UISceneDelegateClassName" raw -o - "$APP/Info.plist")" = "QAudionApp.CarPlaySceneDelegate"
+          test "$(plutil -extract "$ROLE.0.UISceneConfigurationName" raw -o - "$APP/Info.plist")" = "QAudionCarPlay"
+          test "$(plutil -extract UIApplicationSceneManifest.UIApplicationSupportsMultipleScenes raw -o - "$APP/Info.plist")" = "true"
+          test -n "$(grep -rlaF '20CarPlaySceneDelegate' "$APP" | head -1)"
+          LOADS=""
+          for BIN in "$APP/QAudionApp.debug.dylib" "$APP/QAudionApp"; do
+            if [ -f "$BIN" ]; then
+              LOADS="$LOADS $(otool -l "$BIN" | awk '/cmd LC_/ {cmd=$2} /name .*CarPlay\.framework\/CarPlay/ {print cmd}' | tr '\n' ' ')"
+            fi
+          done
+          echo "CarPlay load commands:${LOADS:- none}"
+          case " $LOADS " in
+            *" LC_LOAD_WEAK_DYLIB "*) ;;
+            *) echo "::error::CarPlay.framework is not weak-linked in the variant (project-carplay.yml needs -weak_framework CarPlay)"; exit 1 ;;
+          esac
+          case " $LOADS " in
+            *" LC_LOAD_DYLIB "*) echo "::error::CarPlay.framework is linked strongly in the variant"; exit 1 ;;
+          esac
+
+      - name: Upload logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-carplay-variant-logs-${{ github.run_number }}
+          path: QAudionApp/build-carplay.log
           retention-days: 7
           if-no-files-found: ignore
