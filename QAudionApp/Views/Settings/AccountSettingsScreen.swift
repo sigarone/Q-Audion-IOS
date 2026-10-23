@@ -302,6 +302,10 @@ final class AccountSettingsContainer: ObservableObject {
                         activityItems: [tmp],
                         applicationActivities: nil,
                     )
+                    // The export file is a plaintext copy in the temporary directory: remove it once shared or dismissed.
+                    share.completionWithItemsHandler = { _, _, _, _ in
+                        try? FileManager.default.removeItem(at: tmp)
+                    }
                     presenting.present(share, animated: true)
                     self.isLoading = false
                 }

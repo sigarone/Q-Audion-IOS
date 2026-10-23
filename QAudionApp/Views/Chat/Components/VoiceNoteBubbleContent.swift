@@ -8,9 +8,15 @@ import QAudionEngine
 /// dance — caller already has the URL on disk.
 struct ActivityShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
+    /// Called when the share sheet finishes or is dismissed (for callers that must remove a temporary file).
+    var onComplete: (() -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        if let onComplete {
+            controller.completionWithItemsHandler = { _, _, _, _ in onComplete() }
+        }
+        return controller
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController,
                                 context: Context) {}
