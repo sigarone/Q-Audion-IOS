@@ -1,0 +1,459 @@
+# GitHub Actions -- Xcode 27 canary (report only).
+#
+# Builds and tests the app with the iOS 27 SDK on the runner image that carries Xcode 27, next
+# to the pipeline that ships with Xcode 26 (ios-testflight.yml and the PR workflows stay on
+# Xcode 26). Nothing here is signed, uploaded or required: the jobs are `continue-on-error`, the
+# workflow is not a required check, and no secret is used.
+#
+# Jobs
+#   sdk27-engine-tests   QAudionEngine tests on an iOS 27 simulator (same command as
+#                        engine-tests.yml, Release configuration). Manual and weekly runs only.
+#   sdk27-app-ui-smoke   Debug build of QAudionApp for an iOS 27 simulator, then the Maestro
+#                        smoke flow (maestro/smoke-launch.yaml) on iPhone 17 and, report
+#                        only, on iPhone Duo. Only the flow that does not register an account.
+#                        Manual and weekly runs only: it launches the app, so it never runs
+#                        from a pull request.
+#   carplay-compile      Compiles the app with QAUDION_CARPLAY defined, for a device
+#                        destination without signing, once with SDK 26 and once with SDK 27.
+#                        The condition comes from a spec generated in the job (it includes
+#                        QAudionApp/project.yml and adds one compiler flag); no spec, build
+#                        setting or entitlement in the repository enables it, and the build is
+#                        never signed or uploaded. Runs on every trigger.
+#
+# Xcode: scripts/ci/select-xcode.sh with an exact release (27.1 by default; the manual run
+# takes another one). A release candidate or beta is never selected and the job fails when
+# the release is not installed. The SDK list is printed in the "Select Xcode" step.
+#
+# Each job writes its distinct compiler warnings and errors to the job summary
+# (scripts/ci/xcode-diagnostics-summary.sh) and uploads them as a small text artifact. A job
+# that fails also leaves a ::warning:: annotation on the run, since the jobs do not fail it.
+#
+# Triggers: a manual run and a weekly run start all three jobs. A pull request that touches
+# this workflow, select-xcode.sh, xcode-diagnostics-summary.sh or the CarPlay sources starts
+# only carplay-compile. No push trigger.
+
+name: iOS Xcode 27 canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      xcode_version:
+        description: 'Xcode release to select, for example 27.1 (an exact release; a release candidate or beta is refused).'
+        required: false
+        default: '27.1'
+  schedule:
+    - cron: '17 5 * * 1'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-xcode27-canary.yml'
+      - 'scripts/ci/select-xcode.sh'
+      - 'scripts/ci/xcode-diagnostics-summary.sh'
+      - 'QAudionApp/CarPlay/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-xcode27-canary-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  XCODE_PROJECT: QAudionApp.xcodeproj
+  # An input is read through the environment, never spliced into a script; select-xcode.sh
+  # refuses anything but digits and dots.
+  XCODE_VERSION: ${{ github.event.inputs.xcode_version || '27.1' }}
+
+jobs:
+  sdk27-engine-tests:
+    name: Engine tests, iOS 27 simulator
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: xcode-27
+    continue-on-error: true
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        id: select-xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # The newest iOS runtime does not carry every device (the image lists iPhone 17 under
+      # iOS 27.0 only), so the simulator is picked by UDID instead of OS=latest.
+      - name: Pick the simulator
+        id: sim
+        run: |
+          xcrun simctl list runtimes
+          xcrun simctl list devices available
+          python3 -I scripts/ci/resolve_simulator.py "iPhone 17" --min-ios 27
+
+      # Read only: the entry is written by ios-app-tests.yml on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Test QAudionEngine (Release, iOS 27 simulator)
+        timeout-minutes: 55
+        working-directory: QAudionEngine
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme QAudionEngine \
+            -configuration Release \
+            -jobs 2 \
+            SWIFT_ENABLE_TESTABILITY=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath /tmp/dd-sdk27-engine \
+            -resultBundlePath /tmp/sdk27-engine.xcresult \
+            2>&1 | tee engine-tests.log
+
+      - name: Check the test results
+        run: |
+          set -e
+          xcrun xcresulttool get test-results summary --path /tmp/sdk27-engine.xcresult | tee /tmp/sdk27-engine-summary.json
+          PASSED=$(grep -oE '"passedTests"[^0-9]*[0-9]+' /tmp/sdk27-engine-summary.json | grep -oE '[0-9]+$' | head -1)
+          FAILED=$(grep -oE '"failedTests"[^0-9]*[0-9]+' /tmp/sdk27-engine-summary.json | grep -oE '[0-9]+$' | head -1)
+          echo "passed=${PASSED:-?} failed=${FAILED:-?}"
+          if [ -z "$PASSED" ] || [ "$PASSED" -eq 0 ] || [ "${FAILED:-0}" -ne 0 ]; then
+            echo "::error::engine tests did not run cleanly on the iOS 27 simulator (passed=${PASSED:-?} failed=${FAILED:-?})"
+            exit 1
+          fi
+
+      - name: Warnings and errors
+        if: always()
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-engine.txt
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "Engine tests, iOS 27 SDK" QAudionEngine/engine-tests.log
+
+      - name: Upload the diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk27-diagnostics-engine-${{ github.run_number }}
+          path: ${{ runner.temp }}/diagnostics-engine.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          echo "Engine tests on the iOS 27 simulator finished with status $JOB_STATUS." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$JOB_STATUS" = failure ]; then
+            echo "::warning title=Xcode 27 canary::Engine tests on the iOS 27 simulator failed. See the job summary."
+          fi
+
+  sdk27-app-ui-smoke:
+    name: App build and UI smoke, iOS 27 simulator
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: xcode-27
+    continue-on-error: true
+    timeout-minutes: 90
+
+    env:
+      BUNDLE_ID: com.qaudion.app
+      MAESTRO_CLI_NO_ANALYTICS: '1'
+      MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        id: select-xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      - name: Pick the simulator
+        id: sim
+        run: |
+          xcrun simctl list runtimes
+          xcrun simctl list devices available
+          python3 -I scripts/ci/resolve_simulator.py "iPhone 17" --min-ios 27
+
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project (default spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      # Ad-hoc local signing, as in ios-app-tests.yml: the entitlements have to be embedded
+      # or the app stops at the Siri authorization request.
+      - name: Build QAudionApp for the iOS 27 simulator
+        working-directory: QAudionApp
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath /tmp/dd-sdk27-app \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee build-sim.log
+
+      - name: Warnings and errors of the build
+        if: always()
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-app.txt
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "App build, iOS 27 SDK" QAudionApp/build-sim.log
+
+      - name: Boot the simulator, install and launch the app
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -e
+          APP_PATH=$(find /tmp/dd-sdk27-app -name "QAudionApp.app" -path "*iphonesimulator*" | head -1)
+          echo "App: $APP_PATH"
+          sh scripts/ci/ui-smoke-sim.sh "$SIM_UDID" "$APP_PATH" "$BUNDLE_ID"
+
+      - name: Install Maestro
+        run: |
+          brew tap mobile-dev-inc/tap
+          brew install mobile-dev-inc/tap/maestro
+          maestro --version
+
+      # Only the flow that reaches the welcome screen: flows that register an account are not
+      # run from CI.
+      - name: Run the smoke flow on iPhone 17
+        id: smoke
+        run: maestro test maestro/smoke-launch.yaml
+
+      - name: Screenshot of the final state
+        if: always()
+        continue-on-error: true
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: xcrun simctl io "$SIM_UDID" screenshot "$RUNNER_TEMP/sdk27-iphone17.png"
+
+      # Report only: the foldable-size simulator that ships with the iOS 27.1 runtime.
+      - name: Pick the iPhone Duo simulator
+        id: duo
+        if: always()
+        continue-on-error: true
+        run: python3 -I scripts/ci/resolve_simulator.py "iPhone Duo" --min-ios 27
+
+      - name: Run the smoke flow on iPhone Duo
+        id: duo_flow
+        if: always() && steps.duo.outcome == 'success'
+        continue-on-error: true
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+          DUO_UDID: ${{ steps.duo.outputs.udid }}
+        run: |
+          set -e
+          APP_PATH=$(find /tmp/dd-sdk27-app -name "QAudionApp.app" -path "*iphonesimulator*" | head -1)
+          xcrun simctl shutdown "$SIM_UDID" || true
+          sh scripts/ci/ui-smoke-sim.sh "$DUO_UDID" "$APP_PATH" "$BUNDLE_ID"
+          maestro test maestro/smoke-launch.yaml
+
+      # The simulator has two displays and simctl needs one of them named; the ids differ
+      # between runtimes, so 1 to 4 are tried and the ones that exist are kept.
+      - name: Screenshots on iPhone Duo
+        if: always() && steps.duo.outcome == 'success'
+        continue-on-error: true
+        env:
+          DUO_UDID: ${{ steps.duo.outputs.udid }}
+        run: |
+          for d in 1 2 3 4; do
+            xcrun simctl io "$DUO_UDID" screenshot "--display=$d" "$RUNNER_TEMP/sdk27-iphone-duo-display$d.png" || true
+          done
+          ls -l "$RUNNER_TEMP"/sdk27-iphone-duo-display*.png
+
+      - name: Upload the diagnostics and screenshots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk27-app-smoke-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/diagnostics-app.txt
+            ${{ runner.temp }}/sdk27-iphone17.png
+            ${{ runner.temp }}/sdk27-iphone-duo-display*.png
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload the Maestro debug output
+        if: failure() || steps.duo_flow.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk27-maestro-debug-${{ github.run_number }}
+          path: ~/.maestro/tests/**
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          DUO_OUTCOME: ${{ steps.duo_flow.outcome }}
+        run: |
+          {
+            echo "App build and UI smoke on the iOS 27 simulator finished with status $JOB_STATUS."
+            echo ""
+            echo "- iPhone 17 (iOS 27.0), smoke flow: $SMOKE_OUTCOME"
+            echo "- iPhone Duo (iOS 27.1), smoke flow: $DUO_OUTCOME (report only)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$JOB_STATUS" = failure ]; then
+            echo "::warning title=Xcode 27 canary::App build and UI smoke on the iOS 27 simulator failed. See the job summary."
+          fi
+
+  carplay-compile:
+    name: CarPlay code compile (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: SDK 26
+            runner: macos-latest
+            xcode: '26'
+          - label: SDK 27
+            runner: xcode-27
+            xcode: ${{ github.event.inputs.xcode_version || '27.1' }}
+
+    env:
+      MATRIX_XCODE: ${{ matrix.xcode }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        id: select-xcode
+        run: bash scripts/ci/select-xcode.sh "$MATRIX_XCODE"
+
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      # The spec only exists in this job. It adds the compilation condition to the app target
+      # through OTHER_SWIFT_FLAGS, the way project-earbud.yml does for its condition.
+      - name: Generate Xcode project with QAUDION_CARPLAY defined
+        working-directory: QAudionApp
+        run: |
+          cat > project-carplay-compile.yml <<'EOF'
+          include:
+            - project.yml
+
+          targets:
+            QAudionApp:
+              settings:
+                base:
+                  OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_CARPLAY
+          EOF
+          xcodegen generate --spec project-carplay-compile.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build QAudionApp with QAUDION_CARPLAY (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-carplay \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-carplay.log
+
+      # The CarPlay scene delegate is really in the app, so the build above compiled it.
+      - name: The CarPlay code is compiled in
+        run: |
+          set -e
+          APP="/tmp/dd-carplay/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP"
+          test -n "$(grep -rlaF 'CarPlaySceneDelegate' "$APP" | head -1)"
+          echo "CarPlaySceneDelegate found in the built app"
+
+      - name: Warnings and errors
+        if: always()
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-carplay.txt
+          DIAG_TITLE: 'CarPlay code compile, ${{ matrix.label }}'
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "$DIAG_TITLE" QAudionApp/build-carplay.log
+
+      - name: Upload the diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdk-carplay-diagnostics-${{ strategy.job-index }}-${{ github.run_number }}
+          path: ${{ runner.temp }}/diagnostics-carplay.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          MATRIX_LABEL: ${{ matrix.label }}
+        run: |
+          echo "CarPlay code compile ($MATRIX_LABEL) finished with status $JOB_STATUS." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$JOB_STATUS" = failure ]; then
+            echo "::warning title=Xcode 27 canary::CarPlay code compile ($MATRIX_LABEL) failed. See the job summary."
+          fi

@@ -20,11 +20,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  # Same discovery pattern as ios-testflight.yml's "Select Xcode" step —
-  # kept in lockstep 2026-07-28 so ios-simulator-tests below builds/tests
-  # against the same Xcode major version that actually ships to
-  # TestFlight, instead of silently running on macos-14's old Xcode 15.4
-  # default while production ships on Xcode 26.x.
+  # Same selector as ios-testflight.yml's "Select Xcode" step
+  # (scripts/ci/select-xcode.sh) — kept in lockstep 2026-07-28 so
+  # ios-simulator-tests below builds/tests against the same Xcode major
+  # version that actually ships to TestFlight, instead of silently running
+  # on macos-14's old Xcode 15.4 default while production ships on Xcode 26.x.
+  # ios-xcode27-canary.yml runs the iOS 27 SDK next to it, report only.
   XCODE_VERSION: '26'
 
 jobs:
@@ -53,29 +54,16 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
+      # Newest installed Xcode 26 RELEASE (a beta or release candidate is never chosen); the exact
+      # path, build and SDK list are printed. The explicit-module cache below is keyed on the
+      # exact toolchain build number (output `build`), not just the ${XCODE_VERSION} major pin,
+      # because a .pcm built by one Xcode build is not guaranteed compatible with another (same
+      # major, different point release/build on a runner-image bump), and a stale/incompatible
+      # module cache produces confusing compiler errors that look nothing like the OOM this cache
+      # is meant to fix.
       - name: Select Xcode
         id: select-xcode
-        run: |
-          set -e
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$MATCH" ]; then
-            echo "No Xcode matching '${PIN}*' found. Available:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-          echo "Selecting: $MATCH"
-          sudo xcode-select -s "$MATCH"
-          xcodebuild -version
-          # Exact toolchain build number (e.g. "Build version 17A400"), not
-          # just the ${XCODE_VERSION} major pin -- the explicit-module cache
-          # below is keyed on this because a .pcm built by one Xcode build
-          # is not guaranteed compatible with another (same major, different
-          # point release/build on a runner-image bump), and a stale/
-          # incompatible module cache produces confusing compiler errors
-          # that look nothing like the OOM this cache is meant to fix.
-          BUILD=$(xcodebuild -version | grep '^Build version' | awk '{print $3}')
-          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       - name: Cache SPM (iOS Simulator)
         id: cache-spm-ios

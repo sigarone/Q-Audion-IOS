@@ -46,7 +46,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  # Same discovery pattern as ios-testflight.yml's "Select Xcode" step —
+  # Same selector as ios-testflight.yml's "Select Xcode" step (scripts/ci/select-xcode.sh) —
   # kept in lockstep 2026-07-28 so this workflow tests against the same
   # Xcode major version that actually ships to TestFlight, instead of
   # drifting behind on an old runner default (was hard-pinned to 15.4).
@@ -61,18 +61,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Select Xcode
-        run: |
-          set -e
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$MATCH" ]; then
-            echo "No Xcode matching '${PIN}*' found. Available:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-          echo "Selecting: $MATCH"
-          sudo xcode-select -s "$MATCH"
-          xcodebuild -version
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       - name: Run SPM tests
         run: |

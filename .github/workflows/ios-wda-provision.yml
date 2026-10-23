@@ -43,9 +43,10 @@ on:
         default: 'Q-Audion test iPhone'
 
 # Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
-# no job here uses GITHUB_TOKEN (no checkout: WebDriverAgent is cloned from its public
-# repository, signing goes through the App Store Connect API key secrets, and artifact
-# upload uses the runner's own token), so the token gets no scope at all.
+# no job here needs more than that: WebDriverAgent is cloned from its public repository,
+# signing goes through the App Store Connect API key secrets, and artifact upload uses the
+# runner's own token. The only repository read is the sparse checkout of the Xcode selector
+# script in build-wda, which asks for contents: read on that job alone.
 permissions: {}
 
 jobs:
@@ -99,22 +100,23 @@ jobs:
     if: always() && (needs.register-device.result == 'success' || needs.register-device.result == 'skipped')
     runs-on: macos-latest
     timeout-minutes: 45
+    # Reads the repository for the Xcode selector script only (a sparse checkout without
+    # stored credentials); the signing material still comes from the secrets below.
+    permissions:
+      contents: read
     env:
       XCODE_VERSION: '26'
       WDA_BUNDLE_ID: com.facebook.WebDriverAgentRunner.xctrunner
     steps:
+      - name: Fetch the Xcode selector
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/ci/select-xcode.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Select Xcode
-        run: |
-          set -e
-          PIN="${XCODE_VERSION}"
-          MATCH=$(ls -d /Applications/Xcode_${PIN}*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$MATCH" ]; then
-            echo "No Xcode matching '${PIN}*' found. Available:"
-            ls -d /Applications/Xcode*.app 2>/dev/null || echo "(none)"
-            exit 1
-          fi
-          sudo xcode-select -s "$MATCH"
-          xcodebuild -version
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
 
       - name: Clone WebDriverAgent (appium fork, pinned)
         run: |
