@@ -27,6 +27,29 @@ final class PqcKeyExchangeTests: XCTestCase {
         XCTAssertThrowsError(try pqc.encapsulate(remotePublicKey: Data()))
     }
 
+    func testWrongPublicKeyLengthThrows() throws {
+        let pqc = PqcKeyExchange()
+        let kp = try pqc.generateKeyPair()
+        XCTAssertThrowsError(try pqc.encapsulate(remotePublicKey: kp.publicKey.dropLast())) { error in
+            XCTAssertEqual(error as? PqcKeyExchangeError, .wrongPublicKeyLength)
+        }
+        XCTAssertThrowsError(try pqc.encapsulate(remotePublicKey: kp.publicKey + Data([0]))) { error in
+            XCTAssertEqual(error as? PqcKeyExchangeError, .wrongPublicKeyLength)
+        }
+    }
+
+    func testWrongCiphertextOrPrivateKeyLengthThrows() throws {
+        let pqc = PqcKeyExchange()
+        let kp = try pqc.generateKeyPair()
+        let enc = try pqc.encapsulate(remotePublicKey: kp.publicKey)
+        XCTAssertThrowsError(try pqc.decapsulate(ciphertext: enc.ciphertext.dropLast(), privateKey: kp.privateKey)) { error in
+            XCTAssertEqual(error as? PqcKeyExchangeError, .wrongCiphertextLength)
+        }
+        XCTAssertThrowsError(try pqc.decapsulate(ciphertext: enc.ciphertext, privateKey: kp.privateKey.dropLast())) { error in
+            XCTAssertEqual(error as? PqcKeyExchangeError, .wrongPrivateKeyLength)
+        }
+    }
+
     func testEmptyCiphertextThrows() {
         let pqc = PqcKeyExchange()
         XCTAssertThrowsError(try pqc.decapsulate(ciphertext: Data(), privateKey: Data(repeating: 0, count: 32)))
