@@ -26,6 +26,7 @@ struct ProfileSetupScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Spacer().frame(height: 32)
 
@@ -88,6 +89,8 @@ struct ProfileSetupScreen: View {
                 .padding(.top, 4)
 
                 Spacer()
+            }
+            .qaudionReadableWidth()
             }
         }
     }

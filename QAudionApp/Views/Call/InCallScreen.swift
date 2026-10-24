@@ -997,6 +997,8 @@ struct InCallScreen: View {
                 // Old 1-row: 140pt. New 2-row: ~160pt (2×48+10gap+28padding+20bottom).
                 Spacer().frame(height: 170)
             }
+            // A readable column on a wide canvas (the unfolded foldable iPhone, a tablet); unchanged on a phone.
+            .qaudionReadableWidth()
         }
     }
 
@@ -2594,6 +2596,7 @@ struct InCallScreen: View {
                              fallbackStroke: scheme.outline.opacity(0.4))
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
+        .qaudionReadableWidth()
     }
 
     /// Row 1 (primary, top): mute · speaker · video/upgrade · screen-share.

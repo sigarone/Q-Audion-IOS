@@ -47,6 +47,8 @@ struct GroupChatScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
+    /// False when the chat is the detail column next to the list: there is no list to go back to.
+    @Environment(\.qaudionChatShowsBack) private var showsBack
     @Environment(\.qaudionSnackbar) private var snackbar
     /// W409: needed to call AppState.leaveGroup from the
     /// GroupInfoScreen.onLeft callback.
@@ -89,7 +91,12 @@ struct GroupChatScreen: View {
 
     init(groupId: UUID, initial: GroupChatUiState) {
         self.groupId = groupId
-        _state = State(initialValue: initial)
+        // The text typed and not sent survives a rebuild of the screen (a change of layout), as in the 1:1 chat.
+        var start = initial
+        if start.composerText.isEmpty {
+            start.composerText = ComposerDraftStore.load(for: groupId)
+        }
+        _state = State(initialValue: start)
     }
 
     var body: some View {
@@ -283,13 +290,15 @@ struct GroupChatScreen: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            Button(action: { dismiss() }) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.onSurface)
-                    .frame(width: 32, height: 32)
+            if showsBack {
+                Button(action: { dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(scheme.onSurface)
+                        .frame(width: 32, height: 32)
+                }
+                .accessibilityLabel("Indietro")
             }
-            .accessibilityLabel("Indietro")
 
             // Header tappabile → GroupInfoScreen
             // W320: long-press copia il groupId nella clipboard con
@@ -580,6 +589,7 @@ struct GroupChatScreen: View {
                     // NOT explicitly clear typing — the 3s timer does.
                     let wasEmpty = state.composerText.isEmpty
                     state.composerText = newValue
+                    ComposerDraftStore.save(newValue, for: groupId)
                     let gid = groupId.uuidString.lowercased()
                     if !newValue.isEmpty {
                         appState.notifyGroupComposerInput(groupId: gid)
@@ -780,6 +790,7 @@ struct GroupChatScreen: View {
             return
         }
         state.composerText = ""
+        ComposerDraftStore.clear(for: groupId)
 
         let memberRows = makeInfoState().members
         let memberIds = memberRows.map { $0.userId }

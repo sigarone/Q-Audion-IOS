@@ -224,6 +224,7 @@ struct PhoneEntryScreen: View {
 
                     Spacer()
                 }
+                .qaudionReadableWidth()
             }
         }
     }
