@@ -34,6 +34,15 @@
 				<string>Cherche des messages sur Q-Audion</string>
 			</array>
 		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSetMessageAttributeIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Marque les messages de Marc comme lus sur Q-Audion</string>
+				<string>Marque mes messages comme lus sur Q-Audion</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

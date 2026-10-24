@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<!-- W-L10N-BATCH1 (2026-09-08) — English counterpart of it.lproj's
-	     AppIntentVocabulary.plist (ITMS-90626 fix). Same 3 intents, same
+	     AppIntentVocabulary.plist (ITMS-90626 fix). Same 4 intents, same
 	     "two examples per intent, app name included" shape Apple's
 	     validator expects — see it.lproj's own header comment for the
 	     full rationale, unchanged here. -->
@@ -34,6 +34,15 @@
 			<array>
 				<string>Search John's messages on Q-Audion</string>
 				<string>Search messages on Q-Audion</string>
+			</array>
+		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSetMessageAttributeIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Mark John's messages as read on Q-Audion</string>
+				<string>Mark my messages as read on Q-Audion</string>
 			</array>
 		</dict>
 	</array>

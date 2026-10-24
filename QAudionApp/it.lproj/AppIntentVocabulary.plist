@@ -8,7 +8,8 @@
 	     (QAudionApp/Info.plist), so Apple validates example phrases against
 	     THIS locale specifically for every intent QAudionIntents/Info.plist
 	     declares in IntentsSupported: INStartCallIntent (S1),
-	     INSendMessageIntent / INSearchForMessagesIntent (S2). Each phrase
+	     INSendMessageIntent / INSearchForMessagesIntent (S2),
+	     INSetMessageAttributeIntent (read marks). Each phrase
 	     MUST name the app so Siri can route the utterance here — same
 	     convention already used for NSSiriUsageDescription in
 	     QAudionApp/Info.plist ("Chiama [nome] su Q-Audion"), with a real
@@ -41,6 +42,15 @@
 			<array>
 				<string>Cerca i messaggi di Marco su Q-Audion</string>
 				<string>Cerca messaggi su Q-Audion</string>
+			</array>
+		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSetMessageAttributeIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Segna come letti i messaggi di Marco su Q-Audion</string>
+				<string>Segna i miei messaggi come letti su Q-Audion</string>
 			</array>
 		</dict>
 	</array>

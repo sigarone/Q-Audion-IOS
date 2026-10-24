@@ -34,6 +34,15 @@
 				<string>Suche Nachrichten auf Q-Audion</string>
 			</array>
 		</dict>
+		<dict>
+			<key>IntentName</key>
+			<string>INSetMessageAttributeIntent</string>
+			<key>IntentExamples</key>
+			<array>
+				<string>Markiere Max' Nachrichten auf Q-Audion als gelesen</string>
+				<string>Markiere meine Nachrichten auf Q-Audion als gelesen</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>
