@@ -12,6 +12,8 @@ import QAudionEngine
 /// they have nothing to report, and the path in the chip does the same.
 struct CallSecurityBadge: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.qaudionScheme) private var scheme
     @State private var isExpanded = false
     @State private var redPulse = false
 
@@ -28,6 +30,15 @@ struct CallSecurityBadge: View {
                 expandedDetails
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+        }
+    }
+
+    /// What the badge is drawn with where there is no glass: the translucent material, or the opaque surface colour when
+    /// "Reduce Transparency" is on (what `qaudionMaterialBackground` did).
+    private var surfaceFallback: AnyShapeStyle {
+        switch QAudionBackdrop.resolve(reduceTransparency: reduceTransparency) {
+        case .material: return AnyShapeStyle(Material.ultraThinMaterial)
+        case .opaque: return AnyShapeStyle(scheme.surfaceVariant)
         }
     }
 
@@ -76,8 +87,7 @@ struct CallSecurityBadge: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .qaudionMaterialBackground()
-        .cornerRadius(20)
+        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 20), fallback: surfaceFallback)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("Sicurezza chiamata: \(statusLabel)")
@@ -132,8 +142,7 @@ struct CallSecurityBadge: View {
             detailRow(label: String(localized: "call_security.label.signaling_ping", defaultValue: "Ping segnalazione", comment: "Call security detail panel — field label for the last ping round trip of the signalling connection (this device to the server); it is not the delay of the call"), value: Self.pingWord(ms: appState.latencyMs))
         }
         .padding(16)
-        .qaudionMaterialBackground()
-        .cornerRadius(16)
+        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 16), fallback: surfaceFallback)
         .padding(.horizontal, 16)
         .padding(.top, 4)
     }
