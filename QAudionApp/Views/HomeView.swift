@@ -42,6 +42,13 @@ struct HomeView: View {
     /// utile per accedere rapidamente a chat, chiamate e impostazioni.
     /// L'utente può chiuderla con il bottone toolbar se vuole più spazio.
     @State private var splitVisibility: NavigationSplitViewVisibility = .all
+    /// The chat open in the Chats tab, above the tab so that a change of layout (folding or unfolding a foldable iPhone,
+    /// Split View) keeps it. See `ChatSelectionModel`.
+    @State private var chatSelection = ChatSelectionModel()
+    /// Width of this view, from the first frame (the window scene) and then measured. The navigation is a sidebar only when
+    /// the window is regular AND wide (`QAudionAdaptive.shellStyle`): the unfolded foldable iPhone is regular but keeps
+    /// the tab bar and gives the width to the content.
+    @State private var shellWidth: CGFloat = QAudionAdaptive.sceneWidth()
 
     enum Tab: Hashable, CaseIterable, Identifiable {
         case chats
@@ -77,8 +84,8 @@ struct HomeView: View {
 
     var body: some View {
         Group {
-            if horizontalSizeClass == .regular {
-                // W55: iPad / regular size class — sidebar + detail.
+            if QAudionAdaptive.shellStyle(horizontalRegular: horizontalSizeClass == .regular, width: shellWidth) == .sidebar {
+                // W55: iPad / wide regular window — sidebar + detail.
                 splitLayout
             } else {
                 // iPhone / compact size class — preservato il TabView
@@ -86,6 +93,7 @@ struct HomeView: View {
                 tabLayout
             }
         }
+        .qaudionReportsWidth($shellWidth)
         // W32: tint del tab bar (icona + label selezionati) sul primary
         // del design system Q-Audion. La tab non-selezionata mantiene
         // il default UIKit (grigio iOS) per leggibilità. Si applica
@@ -400,9 +408,7 @@ struct HomeView: View {
         // Data layer (`ConversationListContainer`) is unchanged: only the
         // presentation layer flipped, so the existing chat / search /
         // pin / delete / new-conversation flows keep working.
-        NavigationStack(path: $chatsPath) {
-            ChatListScreen()
-        }
+        ChatsRootView(path: $chatsPath, selection: chatSelection)
     }
 
     private var contactsTab: some View {
