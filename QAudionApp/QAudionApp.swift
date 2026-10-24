@@ -79,6 +79,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
+#if SCREENSHOT_DEMO
+/// The store screenshot build swaps the root for the demo scenes (see Views/ScreenshotDemo).
+typealias AppRootView = ScreenshotDemoRoot
+#else
+typealias AppRootView = ContentView
+#endif
+
 @main
 struct QAudionApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -125,6 +132,9 @@ struct QAudionApp: App {
     @State private var currentLanguageCode = AppLanguageManager.effectiveLanguageCode
 
     init() {
+        #if SCREENSHOT_DEMO
+        ScreenshotDemo.seedEarly()
+        #endif
         _screenshotProtectionEnabled = State(initialValue: PrivacyGate.screenshotProtectionEnabled)
         // W472 — install the native-crash catcher as the very first
         // thing, before any code that could crash. It persists a
@@ -281,7 +291,7 @@ struct QAudionApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                ContentView()
+                AppRootView()
                     // In-app language override — SwiftUI re-evaluates every
                     // Text/LocalizedStringKey that reads this environment
                     // value on change, WITHOUT discarding ContentView's own
@@ -368,6 +378,12 @@ struct QAudionApp: App {
                 }
             }
             .onAppear {
+                #if SCREENSHOT_DEMO
+                if ScreenshotDemo.isActive {
+                    ScreenshotDemo.seed(appState)
+                    return
+                }
+                #endif
                 // W416 ... W-FLAGS ... band hint: the window-less start-up steps, in the order they have always had.
                 QAudionApp.startServicesBeforeInitialize()
                 let lock = lockService

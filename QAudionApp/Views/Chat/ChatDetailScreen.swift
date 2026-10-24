@@ -292,6 +292,9 @@ struct ChatDetailScreen: View {
         // affected. Extraction to methods keeps the closure bodies trivial
         // (CLAUDE.md §13).
         .onAppear(perform: handleScreenAppear)
+        #if SCREENSHOT_DEMO
+        .onAppear { ScreenshotDemo.chatOpened = true }
+        #endif
         .onDisappear(perform: handleScreenDisappear)
         .onChange(of: container.screenshotGrantedByPeer) { _ in
             handleScreenAppear()

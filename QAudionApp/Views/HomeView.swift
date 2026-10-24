@@ -9,7 +9,11 @@ struct HomeView: View {
     /// full-screen risultano "non multitasking ready"; questo soddisfa il
     /// requisito senza duplicare logica.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #if SCREENSHOT_DEMO
+    @State private var selectedTab: Tab = ScreenshotDemo.initialTab
+    #else
     @State private var selectedTab: Tab = .chats
+    #endif
     @State private var presentingInCall: Bool = false
     /// W-MISSEDBADGE (2026-10-04) — the number on the Calls tab (unread missed calls) and what tells it the tab is
     /// being looked at. See `MissedCallsBadge`.
@@ -467,6 +471,16 @@ struct HomeView: View {
     private var settingsTab: some View {
         NavigationStack(path: $settingsPath) {
             SettingsScreen()
+            #if SCREENSHOT_DEMO
+                .navigationDestination(for: ScreenshotDemoRoute.self) { _ in
+                    PrivacySettingsScreen(state: appState)
+                }
+                .onAppear {
+                    if ScreenshotDemo.opensPrivacy, settingsPath.isEmpty {
+                        settingsPath.append(ScreenshotDemoRoute.privacy)
+                    }
+                }
+            #endif
         }
     }
 
