@@ -53553,6 +53553,594 @@
           }
         }
       }
+    },
+    "location.intent.confirm": {
+      "extractionState": "manual",
+      "comment": "Said by Siri after the Share location shortcut opened the app: nothing is sent until the user taps.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conferma in Q-Audion con un tocco per condividere la posizione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm in Q-Audion with a tap to share your location."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirma en Q-Audion con un toque para compartir la ubicación."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmez dans Q-Audion d’un toucher pour partager la position."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätige in Q-Audion mit einem Tipp, um den Standort zu teilen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirme no Q-Audion com um toque para compartilhar a localização."
+          }
+        }
+      }
+    },
+    "location.intent.feature_off": {
+      "extractionState": "manual",
+      "comment": "Said by Siri when the Share location shortcut runs while the feature is switched off.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La condivisione della posizione non è disponibile al momento."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location sharing is not available right now."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir la ubicación no está disponible en este momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le partage de position n’est pas disponible pour le moment."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Teilen des Standorts ist im Moment nicht verfügbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O compartilhamento de localização não está disponível no momento."
+          }
+        }
+      }
+    },
+    "location.intent.signed_out": {
+      "extractionState": "manual",
+      "comment": "Said by Siri when the Share location shortcut runs while nobody is signed in.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi a Q-Audion per condividere la posizione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in to Q-Audion to share your location."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inicia sesión en Q-Audion para compartir la ubicación."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez-vous à Q-Audion pour partager la position."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Melde dich bei Q-Audion an, um den Standort zu teilen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entre no Q-Audion para compartilhar a localização."
+          }
+        }
+      }
+    },
+    "location.intent.contact_not_found": {
+      "extractionState": "manual",
+      "comment": "Said by Siri when the contact of the Share location shortcut is not available.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non trovo questo contatto in Q-Audion."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I cannot find this contact in Q-Audion."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No encuentro este contacto en Q-Audion."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je ne trouve pas ce contact dans Q-Audion."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich finde diesen Kontakt in Q-Audion nicht."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não encontro este contato no Q-Audion."
+          }
+        }
+      }
+    },
+    "Condividi posizione": {
+      "extractionState": "manual",
+      "comment": "Name of the Share location app intent and of its shortcut (Siri, Shortcuts, Action button).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi posizione"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share location"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir ubicación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partager la position"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standort teilen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhar localização"
+          }
+        }
+      }
+    },
+    "Apre la chat con un contatto e mostra la conferma per condividere la posizione. Non invia nulla finché non confermi con un tocco.": {
+      "extractionState": "manual",
+      "comment": "Description of the Share location app intent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apre la chat con un contatto e mostra la conferma per condividere la posizione. Non invia nulla finché non confermi con un tocco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens the chat with a contact and shows the confirmation to share your location. Nothing is sent until you confirm with a tap."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre el chat con un contacto y muestra la confirmación para compartir la ubicación. No se envía nada hasta que confirmes con un toque."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre la conversation avec un contact et affiche la confirmation pour partager la position. Rien n’est envoyé tant que vous ne confirmez pas d’un toucher."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet den Chat mit einem Kontakt und zeigt die Bestätigung zum Teilen des Standorts. Es wird nichts gesendet, bis du mit einem Tipp bestätigst."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre a conversa com um contato e mostra a confirmação para compartilhar a localização. Nada é enviado até você confirmar com um toque."
+          }
+        }
+      }
+    },
+    "Contatto": {
+      "extractionState": "manual",
+      "comment": "Contact parameter of the Share location app intent, and the name of its entity type.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contatto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contacto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contato"
+          }
+        }
+      }
+    },
+    "Modalità": {
+      "extractionState": "manual",
+      "comment": "Mode parameter of the Share location app intent: one-off position or live share.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modalità"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modus"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modo"
+          }
+        }
+      }
+    },
+    "Posizione attuale": {
+      "extractionState": "manual",
+      "comment": "Mode of the Share location app intent: the current position, once.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Posizione attuale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current location"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ubicación actual"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Position actuelle"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktueller Standort"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Localização atual"
+          }
+        }
+      }
+    },
+    "In tempo reale, 15 minuti": {
+      "extractionState": "manual",
+      "comment": "Mode of the Share location app intent: live share for 15 minutes.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In tempo reale, 15 minuti"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 15 minutes"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En tiempo real, 15 minutos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En direct, 15 minutes"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 15 Minuten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em tempo real, 15 minutos"
+          }
+        }
+      }
+    },
+    "In tempo reale, 1 ora": {
+      "extractionState": "manual",
+      "comment": "Mode of the Share location app intent: live share for 1 hour.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In tempo reale, 1 ora"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 1 hour"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En tiempo real, 1 hora"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En direct, 1 heure"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 1 Stunde"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em tempo real, 1 hora"
+          }
+        }
+      }
+    },
+    "In tempo reale, 8 ore": {
+      "extractionState": "manual",
+      "comment": "Mode of the Share location app intent: live share for 8 hours.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In tempo reale, 8 ore"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 8 hours"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En tiempo real, 8 horas"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En direct, 8 heures"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 8 Stunden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em tempo real, 8 horas"
+          }
+        }
+      }
+    },
+    "In tempo reale, 24 ore": {
+      "extractionState": "manual",
+      "comment": "Mode of the Share location app intent: live share for 24 hours.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In tempo reale, 24 ore"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 24 hours"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En tiempo real, 24 horas"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En direct, 24 heures"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live, 24 Stunden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em tempo real, 24 horas"
+          }
+        }
+      }
+    },
+    "Condividi la posizione con ${contact}": {
+      "extractionState": "manual",
+      "comment": "Parameter summary of the Share location app intent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi la posizione con ${contact}"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share location with ${contact}"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir ubicación con ${contact}"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partager la position avec ${contact}"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standort teilen mit ${contact}"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhar localização com ${contact}"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

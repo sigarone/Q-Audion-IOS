@@ -353,6 +353,17 @@ final class AppState: ObservableObject {
     /// once consumed it's reset to nil.
     @Published var pendingDeepLinkConversationId: UUID?
 
+    /// The "Share location" app intent (Siri, Shortcuts, Action button) asked for the share sheet of a chat. The chat screen of
+    /// that peer shows the sheet and clears this; a request nobody picked up expires (`LocationShareIntentPolicy.isFresh`).
+    @Published var pendingLocationShareRequest: LocationShareRequest?
+
+    /// Opens the chat of `request.peerUserId` with the same deep link a notification tap uses, and leaves the request for it.
+    func requestLocationShare(_ request: LocationShareRequest) {
+        let conversationId = resolveOrCreateConversationId(forPeerUserId: request.peerUserId)
+        pendingLocationShareRequest = request
+        pendingDeepLinkConversationId = conversationId
+    }
+
     /// W77: pairwise PSK first-contact handshake. Built in
     /// `connectPersistentSocket()` once the WS is up so `sendOpaque`
     /// rides the live transport. The closure stored in
