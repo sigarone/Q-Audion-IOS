@@ -2,3 +2,6 @@
 "Condividi la posizione con ${contact} su ${applicationName}" = "Partage ma position avec ${contact} sur ${applicationName}";
 "Manda la mia posizione a ${contact} su ${applicationName}" = "Envoie ma position à ${contact} sur ${applicationName}";
 "Condividi la mia posizione su ${applicationName}" = "Partage ma position sur ${applicationName}";
+/* App shortcut phrases of the New message intent (fr). Every phrase names the app. */
+"Nuovo messaggio su ${applicationName}" = "Nouveau message sur ${applicationName}";
+"Scrivi un messaggio su ${applicationName}" = "Écris un message sur ${applicationName}";

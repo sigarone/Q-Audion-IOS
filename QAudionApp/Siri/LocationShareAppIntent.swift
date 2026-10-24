@@ -121,7 +121,7 @@ struct ShareLocationIntent: AppIntent {
 
 // MARK: - Shortcuts
 
-/// The phrases are written in Italian, the development language; `<lang>.lproj/AppShortcuts.strings` has them in en, fr, de, es and pt-BR.
+/// The phrases of both shortcuts (Share location, New message) are written in Italian, the development language; `<lang>.lproj/AppShortcuts.strings` has them in en, fr, de, es and pt-BR.
 /// Every phrase names the app, as the framework requires.
 struct QAudionAppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
@@ -134,6 +134,15 @@ struct QAudionAppShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Condividi posizione",
             systemImageName: "location.fill"
+        )
+        AppShortcut(
+            intent: NewMessageIntent(),
+            phrases: [
+                "Nuovo messaggio su \(.applicationName)",
+                "Scrivi un messaggio su \(.applicationName)"
+            ],
+            shortTitle: "Nuovo messaggio",
+            systemImageName: "square.and.pencil"
         )
     }
 }

@@ -252,11 +252,13 @@ final class LocationShareIntentTests: XCTestCase {
 
     // MARK: Phrases
 
-    /// The phrase templates of `QAudionAppShortcuts` (the Italian text of the code, the key of every strings file).
+    /// The phrase templates of `QAudionAppShortcuts`, both shortcuts (the Italian text of the code, the key of every strings file).
     private let phraseTemplates: Set<String> = [
         "Condividi la posizione con ${contact} su ${applicationName}",
         "Manda la mia posizione a ${contact} su ${applicationName}",
-        "Condividi la mia posizione su ${applicationName}"
+        "Condividi la mia posizione su ${applicationName}",
+        "Nuovo messaggio su ${applicationName}",
+        "Scrivi un messaggio su ${applicationName}"
     ]
 
     func testEveryLanguageHasExactlyThePhraseTemplatesAndNamesTheApp() throws {
