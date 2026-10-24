@@ -4327,7 +4327,13 @@ final class CallService: @unchecked Sendable {
         // string: 1=group_active 2=no_session 3=no_answer. "call" is
         // already allow-listed in TAG_SCOPE_PREFIXES.
         if isGroupCallActive?() == true {
-            RTLog.warn("call", "audioIO skip=1 gate=1")
+            // A warn line, numeric: whether this 1:1 call negotiated native audio and whether WebRTC's
+            // unit is running right now (`GroupDiagnostics.audioStartRefusedLine`). `nat=1 en=0` is a 1:1
+            // call with no audio unit at all.
+            let nativeCall: Bool = getUsesNativeAudioSrtp?() == true
+            let unitEnabled: Bool = NativeAudioSessionGate.isNativeAudioEnabled
+            let refusedLine: String = GroupDiagnostics.audioStartRefusedLine(native: nativeCall, unitEnabled: unitEnabled)
+            RTLog.warn("call", refusedLine)
             return
         }
         guard audioSessionActive else {

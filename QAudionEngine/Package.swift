@@ -384,6 +384,12 @@ let package = Package(
                 // implementation; the Android app runs the same file). NfcPairingV2KatTests pins its SHA-256 and
                 // .gitattributes marks it -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
                 .copy("Resources/kat/nfc-pairing-kat.json"),
+                // Group promotion token (docs/GROUP_CALLS_V2.md section 2.7 of bcrypto-server): the known-answer vectors, a
+                // BYTE-FOR-BYTE copy of bcrypto-server
+                // test/kat/group_promotion_token_v1/promotion-token-kat.json (generated there by
+                // tools/katgen/grouptoken, standard library only). GroupPromotionTokenTests pins its SHA-256 and .gitattributes
+                // marks it -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
+                .copy("Resources/kat/promotion-token-kat.json"),
                 // Remote-voice analysis: the expected output of the reference implementation of the
                 // specification in docs/voice-analysis-spec.md (28 synthetic cases, 804 steps, the input of each
                 // described by generator parameters). A BYTE-FOR-BYTE copy of the file that ships with the

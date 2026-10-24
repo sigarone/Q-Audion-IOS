@@ -611,6 +611,12 @@ public enum CallPiggyBack: Equatable {
     /// and-drop; `raw` is the undecoded payload after the tag.
     case kcmac(callId: String, raw: String)
 
+    /// `<callId>|GRPPROMO:<base64(TOKEN)>` — the signed promotion token of a 1:1 call that its peer is
+    /// promoting to a group call (GROUP_CALLS_V2 2.7). Recognised here so it is consumed BEFORE the
+    /// JSON bundle parser; `raw` is the undecoded payload after the tag, validated strictly by
+    /// `GroupPromotionReceiver` (the consumer owns strictness, exactly like KCMAC).
+    case groupPromotion(callId: String, raw: String)
+
     /// `<callId>|VNACK:<frameId>:<idx1>,<idx2>,...` — W-VNACK (2026-08-16)
     /// fragment-level NACK/retransmission for the WS-relay video fallback.
     /// The receiver's reassembler asks the sender to resend specific
@@ -729,6 +735,11 @@ public enum CallPiggyBack: Equatable {
         // it must never reach AndroidHandshakeEnvelope.parse.
         if let v = stripPrefix(payload, "KCMAC:") {
             return .kcmac(callId: callId, raw: v)
+        }
+        // GRPPROMO:<base64> — the signed promotion token. Case-sensitive tag, consumed here so it never
+        // reaches the JSON bundle parser, whatever the payload holds.
+        if let v = stripPrefix(payload, GroupPromotionToken.tag) {
+            return .groupPromotion(callId: callId, raw: v)
         }
         // VNACK:<frameId>:<idx1>,<idx2>,... — malformed (non-numeric
         // frameId, missing colon, non-numeric index) drops the whole

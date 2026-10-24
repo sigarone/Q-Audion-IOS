@@ -212,7 +212,7 @@ final class CallMinimizeWiringTests: XCTestCase {
     func testARefusedStartBringsTheCallScreenBack() throws {
         let app = try code("QAudionApp/AppState.swift")
         let admission = try slice(
-            app, from: "func startCall(contactId: String, video: Bool = false) async {",
+            app, from: "func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {",
             to: "guard let engine = ensureCallEngine(reason: \"startCall\")")
         let refusal = try slice(admission, from: "guard !isInCall else {", to: "return }")
         XCTAssertTrue(

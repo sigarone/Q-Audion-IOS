@@ -79,6 +79,16 @@ final class CallStartSupportTests: XCTestCase {
         XCTAssertTrue(gate.tryBegin())
     }
 
+    // MARK: - CallStartOrigin
+
+    func test_origin_thePhoneMayAskToLeaveTheGroup() {
+        XCTAssertTrue(CallStartOrigin.phone.mayAskToLeaveGroup)
+    }
+
+    func test_origin_theCarIsNeverAskedToUseThePhone() {
+        XCTAssertFalse(CallStartOrigin.car.mayAskToLeaveGroup)
+    }
+
     // MARK: - CarCallStartNotice
 
     func test_carNotice_aStartThatLeftNoCallUpIsToldToTheDriver() {

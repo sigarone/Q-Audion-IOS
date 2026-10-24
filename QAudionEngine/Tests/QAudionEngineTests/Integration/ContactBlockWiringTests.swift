@@ -639,7 +639,7 @@ final class ContactBlockWiringTests: XCTestCase {
     func testEveryGroupCallSourceGoesThroughTheCreatorDecisionAndNoRosterIsConsulted() throws {
         let app = try code("QAudionApp/AppState.swift")
         // WebSocket invite, PushKit group push and notification action all end in `presentIncomingGroupCall`.
-        let present = try slice(app, from: "func presentIncomingGroupCall(", to: "if handledGroupCallIds.contains(invite.callId) {")
+        let present = try slice(app, from: "func presentIncomingGroupCall(", to: "if isGroupCallHandled(invite.callId) {")
         XCTAssertTrue(present.contains("if !groupCallRingsForCreator(invite.creatorId) {"))
         XCTAssertTrue(present.contains("block drop=1 kind=grpcall"))
         XCTAssertTrue(present.contains("return false"))

@@ -195,7 +195,7 @@ struct GroupCallView: View {
                         participant: speaker,
                         isPinned: true,
                         isSelf: speaker.id == viewModel.selfUserId,
-                        localMuted: viewModel.isMuted,
+                        localMuted: viewModel.isMicrophoneOff,
                         reactionEmoji: viewModel.latestReactionEmoji(for: speaker.id),
                         onRequestMute: { viewModel.requestMute(participantId: speaker.id) },
                         showsUnverifiedBadge: viewModel.verification.isUnverified(speaker.id)
@@ -258,7 +258,7 @@ struct GroupCallView: View {
                                             ParticipantTile(
                                                 participant: participant,
                                                 isSelf: participant.id == viewModel.selfUserId,
-                                                localMuted: viewModel.isMuted,
+                                                localMuted: viewModel.isMicrophoneOff,
                                                 reactionEmoji: viewModel.latestReactionEmoji(for: participant.id),
                                                 onRequestMute: { viewModel.requestMute(participantId: participant.id) },
                                                 tileSize: CGSize(width: layout.tileW, height: layout.tileH),
@@ -441,6 +441,20 @@ struct GroupCallView: View {
             : GroupMessageStore.shared.unreadCount(forGroupHex: viewModel.activeGroupHex)
     }
 
+    private var muteButtonBackground: Color {
+        if viewModel.isMicrophoneHeld { return Color.orange.opacity(0.35) }
+        return viewModel.isMuted ? Color.red.opacity(0.3) : Color.white.opacity(0.15)
+    }
+
+    private var muteButtonAccessibilityLabel: String {
+        if viewModel.isMicrophoneHeld {
+            return String(localized: "group_call.mic_held",
+                          defaultValue: "Microfono in attesa",
+                          comment: "Group call mute button — accessibility label while the microphone is held off after the app joined the call by itself")
+        }
+        return viewModel.isMuted ? "Riattiva microfono" : "Disattiva microfono"
+    }
+
     /// The control-row buttons, extracted from `body` verbatim (2026-07-20
     /// responsive-control-bar fix — see the call site's comment): every
     /// button used to hard-code `.frame(width: 56, height: 56)` inside an
@@ -450,17 +464,20 @@ struct GroupCallView: View {
     private func controlBar(buttonSize: CGFloat, spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
             // Mute button
+            // While the microphone is held (an automatic join that has not seen a roster it can trust) the button shows it
+            // off, in its own colour, and does nothing: nobody hears this device whatever it is set to.
             Button {
                 viewModel.toggleMute()
             } label: {
-                Image(systemName: viewModel.isMuted ? "mic.slash.fill" : "mic.fill")
+                Image(systemName: viewModel.isMicrophoneOff ? "mic.slash.fill" : "mic.fill")
                     .font(.title2)
                     .foregroundColor(.white)
                     .frame(width: buttonSize, height: buttonSize)
-                    .background(viewModel.isMuted ? Color.red.opacity(0.3) : Color.white.opacity(0.15))
+                    .background(muteButtonBackground)
                     .clipShape(Circle())
             }
-            .accessibilityLabel(viewModel.isMuted ? "Riattiva microfono" : "Disattiva microfono")
+            .disabled(viewModel.isMicrophoneHeld)
+            .accessibilityLabel(muteButtonAccessibilityLabel)
 
             // W-GRPVIDEO: camera on/off. Shown once the call has a media
             // link (`isMediaReady`) — before that there is no publisher to
@@ -595,7 +612,7 @@ struct GroupCallView: View {
                 resting.append(participant)
             }
         }
-        return speaking + resting
+        return speaking + resting + viewModel.ringingTiles
     }
 
     /// 2026-07-17 — splits the (already speaker-sorted) `gridParticipants`
@@ -989,6 +1006,15 @@ struct ParticipantTile: View {
                 .font(isPinned ? .body : .caption).foregroundColor(.white)
                 .lineLimit(1)
 
+            if participant.isRinging {
+                Text(String(localized: "group_call.ringing_badge",
+                            defaultValue: "Squilla…",
+                            comment: "Group call participant tile — state of an invited person whose phone is still ringing"))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Color.white.opacity(0.7))
+                    .lineLimit(1)
+            }
+
             if showsUnverifiedBadge {
                 HStack(spacing: 3) {
                     Image(systemName: "exclamationmark.shield.fill")
@@ -1017,13 +1043,14 @@ struct ParticipantTile: View {
         .padding(.vertical, isPinned ? 20 : 16)
         .background(Color.white.opacity(0.05))
         .cornerRadius(16)
+        .opacity(participant.isRinging ? 0.6 : 1)
         // Item 2: mute-others UI — long-press context menu on any OTHER
         // participant's tile (never shown on the local user's own tile).
         // Flat/non-admin-gated per the wire contract: no client-side
         // permission check beyond "not self" — the server enforces the
         // only real gate (both must be current participants).
         .contextMenu {
-            if !isSelf, let onRequestMute {
+            if !isSelf, !participant.isRinging, let onRequestMute {
                 Button {
                     onRequestMute()
                 } label: {
@@ -1137,9 +1164,25 @@ class GroupCallViewModel: ObservableObject {
         /// participant who joins/reconnects mid-call won't see who
         /// currently has a hand raised.
         var handRaised: Bool = false
+        /// An invited person whose phone is still ringing (the server's ringing list, spec 31):
+        /// shown as a tile in the "ringing" state until they join or the ring ends. Never part
+        /// of `participants`, which is the roster of people in the call.
+        var isRinging: Bool = false
     }
 
     @Published var participants: [ParticipantUI] = []
+    /// User ids still ringing, as the server reports them (`GroupCallController.onRingingChanged`).
+    @Published private(set) var ringingIds: [String] = []
+    /// The ringing tiles: the invitees still ringing that are not in the call (a join removes the
+    /// tile the moment the roster shows the person).
+    var ringingTiles: [ParticipantUI] {
+        var tiles: [ParticipantUI] = []
+        for id in ringingIds where !GroupCallIds.ieq(id, selfUserId)
+            && !participants.contains(where: { GroupCallIds.ieq($0.id, id) }) {
+            tiles.append(ParticipantUI(id: id, displayName: manager.resolvedName(for: id), isRinging: true))
+        }
+        return tiles
+    }
     /// M3 — who in this call is not verified (drives the tile badges and the banner). Recomputed when the
     /// roster's membership changes, when the contacts change, and on `refreshVerification(force: true)`.
     @Published private(set) var verification = GroupVerificationState()
@@ -1150,6 +1193,11 @@ class GroupCallViewModel: ObservableObject {
     private var contactsObserver: NSObjectProtocol?
     @Published var callState: BCryptoGroupCallManager.State = .idle
     @Published var isMuted = false
+    /// The microphone of a call this device joined by itself (the peer of a promoted 1:1 call) is held off until the first
+    /// roster has been checked, whatever `isMuted` says (`GroupCallController.onMicrophoneHeldChanged`).
+    @Published private(set) var isMicrophoneHeld = false
+    /// Nobody hears this device: it is muted, or its microphone is held.
+    var isMicrophoneOff: Bool { isMuted || isMicrophoneHeld }
     @Published var elapsedTime = "0:00"
     /// W-GRPVIDEO: our own camera preview (type-erased WebRTC video track),
     /// nil when off. W-GRPSELFGRID (2026-07-20): `GroupCallView.body` no
@@ -1507,6 +1555,9 @@ class GroupCallViewModel: ObservableObject {
             controller.onReactionEventsChanged = { [weak self] events in
                 DispatchQueue.main.async { self?.reactionEvents = events }
             }
+            controller.onRingingChanged = { [weak self] ids in
+                DispatchQueue.main.async { self?.ringingIds = ids }
+            }
             controller.onRaisedHandsChanged = { [weak self] raised in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
@@ -1532,6 +1583,9 @@ class GroupCallViewModel: ObservableObject {
                     guard let self = self else { return }
                     self.isMuted = self.manager.setLocalMuted(muted)
                 }
+            }
+            controller.onMicrophoneHeldChanged = { [weak self] held in
+                DispatchQueue.main.async { self?.isMicrophoneHeld = held }
             }
             controller.onMuteRequested = { [weak self] requesterId in
                 DispatchQueue.main.async {
@@ -1603,6 +1657,7 @@ class GroupCallViewModel: ObservableObject {
         // rebind(manager:)`) would otherwise not show the camera button
         // until the next event.
         isMediaReady = controller?.hasMediaLink ?? false
+        isMicrophoneHeld = controller?.isMicrophoneHeld ?? false
         // M3 — a verification written elsewhere in the app (a contact verified, a pairing completed) is
         // reflected on the tiles and the banner without waiting for the next roster change.
         contactsObserver = NotificationCenter.default.addObserver(
@@ -1802,10 +1857,12 @@ class GroupCallViewModel: ObservableObject {
         // group_call_end. Hang-up now LEAVES (server also gates end on the
         // creator since the same incident, downgrading a non-creator's end
         // to leave — this client fix makes the intent explicit rather than
-        // relying on the server downgrade). endCallForAll() remains
-        // available for a future explicit creator-only "end for all" UI.
+        // relying on the server downgrade). The one exception is the creator
+        // that is the last one in the call: nobody is left to keep it up for,
+        // so it ends it (`GroupExitPolicy`, the same exit as the system's End
+        // and the lone-call backstop).
         if let controller = controller {
-            controller.leave()
+            controller.leaveOrEnd()
         } else {
             manager.leaveGroupCall()
         }

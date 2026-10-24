@@ -821,7 +821,23 @@ APP_VOCAB = frozenset("""
 
     audiowire win pkts hdr retx codec maxavg stereo alevel tcc cap prio
     shown
+
+    alone promo
 """.split())
+# GROUP CALL PROMOTION AND ADMISSION (2026-10-23) -- "alone" (the line right above) is for the lone-call timer of a group call:
+#   grp alone phase=<1-4> ms=<n>        (1 armed, 2 cancelled, 3 left, 4 ended; ms = the timer's length)
+# Every other new group line uses words that were already vocabulary and only numbers:
+#   grp ring phase=<1-7> code=<n>       grp ringing n=<n> roster=<n>       grp busy why=<1-6> roster=<n>
+#   grp end why=<1-8> role=<0|1>        grp audio phase=<1-4> shared=<0|1>  grp swap phase=<6|7|10|11> ms=<n>
+# and, tag "call": "admgate audit=1 held=1 grp=1" and "audioIO skip=1 gate=1 nat=<0|1> en=<0|1>". Pinned by
+# test_ship_ios_grppromo_vocab.py, which also reads the lines GroupPromotionDiagnosticsTests.swift pins.
+# GROUP PROMOTION TOKEN (2026-10-23) -- "promo" (also in the list above) is the one more word, for the lines of the signed
+# promotion token of a 1:1 call that is promoted to a group (docs/GROUP_CALLS_V2_SPEC.md item 32); every value is a number, never an id,
+# a key or a signature:
+#   grp promo tx=<0|1|2> n=<invitees>   (0 no token sent, 1 sent, 2 sent again once)
+#   grp promo rx=1 ok=<0|1> code=<n>    (a token arrived: 0 stored, 1-15 the drop code, 16 stored and the oldest evicted)
+#   grp promo dec=<1-5> why=<1-10>      (the auto-join decision: 1 join, 2 hold, 3 ring, 4 convert a ring, 5 fallback)
+#   grp promo roster=0 n=<n>            (the roster of the joined group left what the token listed)
 # IN-CALL NARROWBAND BLUETOOTH NOTICE (2026-10-22) -- "shown" (the line right above) and the two whole tokens "nb_banner" /
 # "nb_switch" (TELEMETRY_VOCAB) are for the new "call"-tagged RTLog lines of the notice that offers the phone when the call
 # audio runs on an 8 kHz hands-free link:

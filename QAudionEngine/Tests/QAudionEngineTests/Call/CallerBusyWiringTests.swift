@@ -165,7 +165,7 @@ final class CallerBusyWiringTests: XCTestCase {
     /// A redial clears the outcome screen and the busy tone before it admits anything.
     func testStartCallDismissesTheOutcomeBeforeAdmittingTheCall() throws {
         let body = try slice(
-            try appCode(), from: "func startCall(contactId: String, video: Bool = false) async {",
+            try appCode(), from: "func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {",
             to: "var sharedOutgoingCallId: String = \"\"")
         assertOrder(
             body, "acceptLatch.beginOutgoing(callId: nativeSrtpOutgoingCallId)", before: "dismissCallerOutcome()",
@@ -180,7 +180,7 @@ final class CallerBusyWiringTests: XCTestCase {
     /// starting it (the incident: busy at +577 ms, CallKit start fulfilled at ~+691 ms).
     func testTheCallKitStartResultGoesThroughTheLateStartSettle() throws {
         let body = try slice(
-            try appCode(), from: "func startCall(contactId: String, video: Bool = false) async {",
+            try appCode(), from: "func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {",
             to: "var sharedOutgoingCallId: String = \"\"")
         XCTAssertTrue(body.contains("callKit?.startOutgoingCall(handle: peerDisplayName, hasVideo: hasVideo)"))
         XCTAssertTrue(
@@ -286,7 +286,7 @@ final class CallerBusyWiringTests: XCTestCase {
 
     func testStartCallAdmitsTheNewCallToTheLatchBeforeItsStateMoves() throws {
         let body = try slice(
-            try appCode(), from: "func startCall(contactId: String, video: Bool = false) async {",
+            try appCode(), from: "func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {",
             to: "var sharedOutgoingCallId: String = \"\"")
         assertOrder(
             body, "acceptLatch.beginOutgoing(callId: nativeSrtpOutgoingCallId)", before: "teardownLatch.newCallAdmitted()",
@@ -314,7 +314,7 @@ final class CallerBusyWiringTests: XCTestCase {
         XCTAssertTrue(helper.contains("let current: Bool = isCurrentOutgoingCall(wireCallId: wireCallId)"))
 
         let body = try slice(
-            code, from: "func startCall(contactId: String, video: Bool = false) async {",
+            code, from: "func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {",
             to: "var sharedOutgoingCallId: String = \"\"")
         let marker = "callService.handleAudioSessionActivated()"
         let segments = body.components(separatedBy: marker)

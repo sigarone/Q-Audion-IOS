@@ -50823,6 +50823,342 @@
           }
         }
       }
+    },
+    "group_call.leave_prompt_title": {
+      "extractionState": "manual",
+      "comment": "Group call alert — title of the question asked before a 1:1 call is placed or answered while a group call is live",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vuoi uscire dal gruppo?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave the group?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppe verlassen?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Salir del grupo?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quitter le groupe ?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sair do grupo?"
+          }
+        }
+      }
+    },
+    "group_call.leave_prompt_message_dial": {
+      "extractionState": "manual",
+      "comment": "Group call alert — message when the user is about to place a 1:1 call while in a group call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per fare questa chiamata devi prima uscire dalla chiamata di gruppo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To place this call you first need to leave the group call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um diesen Anruf zu tätigen, musst du zuerst den Gruppenanruf verlassen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para hacer esta llamada primero tienes que salir de la llamada de grupo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pour passer cet appel, vous devez d'abord quitter l'appel de groupe."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para fazer esta chamada, você precisa sair primeiro da chamada em grupo."
+          }
+        }
+      }
+    },
+    "group_call.leave_prompt_message_answer": {
+      "extractionState": "manual",
+      "comment": "Group call alert — message when the user is about to answer a 1:1 call while in a group call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per rispondere devi prima uscire dalla chiamata di gruppo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To answer you first need to leave the group call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um den Anruf anzunehmen, musst du zuerst den Gruppenanruf verlassen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para responder primero tienes que salir de la llamada de grupo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pour répondre, vous devez d'abord quitter l'appel de groupe."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para atender, você precisa sair primeiro da chamada em grupo."
+          }
+        }
+      }
+    },
+    "group_call.leave_prompt_confirm": {
+      "extractionState": "manual",
+      "comment": "Group call alert — button: leave the group call and carry on with the 1:1 call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esci dal gruppo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave group"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppe verlassen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salir del grupo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quitter le groupe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sair do grupo"
+          }
+        }
+      }
+    },
+    "group_call.leave_prompt_stay": {
+      "extractionState": "manual",
+      "comment": "Group call alert — button: stay in the group call (an incoming 1:1 call is declined as busy)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resta nel gruppo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stay in the group"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In der Gruppe bleiben"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quedarme en el grupo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rester dans le groupe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ficar no grupo"
+          }
+        }
+      }
+    },
+    "group_call.mic_held": {
+      "extractionState": "manual",
+      "comment": "Group call mute button — accessibility label while the microphone is held off after the app joined the call by itself",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microfono in attesa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone on hold"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon wartet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Micrófono en espera"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Micro en attente"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microfone em espera"
+          }
+        }
+      }
+    },
+    "group_call.ringing_badge": {
+      "extractionState": "manual",
+      "comment": "Group call participant tile — state of an invited person whose phone is still ringing",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Squilla…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ringing…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es klingelt…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ça sonne…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chamando…"
+          }
+        }
+      }
+    },
+    "group_call.promotion_mismatch_notice": {
+      "extractionState": "manual",
+      "comment": "Notice after the app left a group call by itself: the group did not match what the person on the 1:1 call had proposed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiamata di gruppo non corrispondeva a quella proposta dal tuo interlocutore: sei uscito dal gruppo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The group call did not match what the person on your call proposed, so you left the group."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Gruppenanruf entsprach nicht dem Vorschlag deines Gesprächspartners, daher hast du die Gruppe verlassen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La llamada de grupo no coincidía con la que propuso tu interlocutor, así que saliste del grupo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'appel de groupe ne correspondait pas à celui proposé par votre interlocuteur : vous avez quitté le groupe."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chamada em grupo não correspondia à proposta pela pessoa com quem você falava, então você saiu do grupo."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

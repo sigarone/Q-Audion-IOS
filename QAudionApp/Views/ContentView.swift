@@ -199,6 +199,11 @@ struct ContentView: View {
                 // used a few lines up for `GroupInviteSheet`.
                 GroupCallView(viewModel: vm)
                     .environmentObject(appState)
+                    .leaveGroupAlert(
+                        isPresented: appState.leaveGroupPrompt != nil,
+                        isAnswer: appState.leaveGroupPrompt?.isAnswer ?? false,
+                        onConfirm: { appState.confirmLeaveGroupPrompt() },
+                        onStay: { appState.cancelLeaveGroupPrompt() })
             } else if appState.incomingCallRingVisible {
                 incoming1to1CallScreen()
             }
@@ -321,6 +326,13 @@ struct ContentView: View {
             guard let text else { return }
             snackbarHost.show(.init(text: text, severity: .error))
             appState.groupMembersNotAddedToastText = nil
+        }
+        // GROUP_CALLS_V2 2.7, Consent — the app left a group it joined by itself because its roster went outside what the
+        // promotion token listed; the 1:1 call stays. Wired here so the notice shows after the group cover is gone.
+        .onChange(of: appState.groupPromotionMismatchToastText) { text in
+            guard let text else { return }
+            snackbarHost.show(.init(text: text, severity: .warning, durationSeconds: 8))
+            appState.groupPromotionMismatchToastText = nil
         }
     }
 
