@@ -569,7 +569,7 @@ final class AppState: ObservableObject {
     /// Numeric diagnostics of a call: one line ("[Call] cpu=42 st=0 lock=0 therm=0 low=0") when a call becomes
     /// active, every 15 s while it lasts and when it ends. It reads and logs, nothing more. Driven from
     /// `callState`'s didSet below, the one place every call path passes through.
-    private let callResourceLogger = CallResourceLogger(readDevice: AppState.readCallResourceDevice)
+    private let callResourceLogger = CallResourceLogger(readDevice: { deliver in AppState.readCallResourceDevice(deliver) })
 
     /// The device values for `callResourceLogger`. `applicationState` and `isProtectedDataAvailable` are read on
     /// the main actor; the hop is asynchronous on purpose (a synchronous one deadlocks when already on main) and
@@ -4255,7 +4255,7 @@ final class AppState: ObservableObject {
             forName: AppState.apnsTokenReceived,
             object: nil,
             queue: .main
-        ) { note in
+        ) { [weak self] note in
             guard let hex = note.object as? String else { return }
             Task { @MainActor [weak self] in
                 self?.handleApnsDeviceToken(hex: hex)
@@ -4296,7 +4296,7 @@ final class AppState: ObservableObject {
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
-        ) { _ in
+        ) { [weak self] _ in
             // Background flag read by display-only call work on any queue.
             let flagChanged = AppBackgroundFlag.shared.set(isInBackground: false)
             Task { @MainActor [weak self] in
@@ -4307,10 +4307,8 @@ final class AppState: ObservableObject {
             }
             // The notification closure is `@Sendable` per the iOS 18+
             // signature; mutating main-actor-isolated state must hop
-            // back through `Task { @MainActor in ... }`. We only capture
-            // `self` once inside the Task to avoid the
-            // "'self' defined but never used" warning that Xcode 26 emits
-            // when the outer closure binds `[weak self]` and forwards.
+            // back through `Task { @MainActor in ... }`. The outer closure
+            // and each Task capture `self` weakly, so ownership agrees.
             Task { @MainActor [weak self] in
                 guard let self = self, self.isAuthenticated else { return }
                 // G4 — the other event-driven sweep hook (see
@@ -4391,7 +4389,7 @@ final class AppState: ObservableObject {
             forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
             queue: .main
-        ) { _ in
+        ) { [weak self] _ in
             let flagChanged = AppBackgroundFlag.shared.set(isInBackground: true)
             Task { @MainActor [weak self] in
                 self?.noteDisplayWorkTransition(changed: flagChanged, background: true)

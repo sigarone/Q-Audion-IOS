@@ -98,14 +98,14 @@ jobs:
   build-wda:
     needs: register-device
     if: always() && (needs.register-device.result == 'success' || needs.register-device.result == 'skipped')
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 45
     # Reads the repository for the Xcode selector script only (a sparse checkout without
     # stored credentials); the signing material still comes from the secrets below.
     permissions:
       contents: read
     env:
-      XCODE_VERSION: '26'
+      XCODE_VERSION: '27'
       WDA_BUNDLE_ID: com.facebook.WebDriverAgentRunner.xctrunner
     steps:
       - name: Fetch the Xcode selector

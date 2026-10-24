@@ -96,7 +96,7 @@ final class FakeMediaBackend: GroupMediaBackend, @unchecked Sendable {
         let link = FakeMediaLink()
         link.startError = startError
         link.beforeMicrophone = microphoneHook
-        lock.lock(); _links.append(link); lock.unlock()
+        lock.withLock { _links.append(link) }
         return link
     }
 
@@ -202,27 +202,27 @@ final class ControllerHarness: @unchecked Sendable {
                                          tokenRetryBackoffSeconds: tokenRetryBackoffSeconds,
                                          aloneScheduler: alone.scheduler)
         controller.onRingingChanged = { [weak self] list in
-            self?.lock.lock(); self?._ringing.append(list); self?.lock.unlock()
+            self?.lock.withLock { self?._ringing.append(list) }
         }
         controller.diagLog = { [weak self] line in
-            self?.lock.lock(); self?._diag.append(line); self?.lock.unlock()
+            self?.lock.withLock { self?._diag.append(line) }
         }
         manager.sendOverride = { [weak self] type, data in
-            self?.lock.lock(); self?._sent.append((type, data)); self?.lock.unlock()
+            self?.lock.withLock { self?._sent.append((type, data)) }
         }
         controller.onSendControlEnvelope = { [weak self] peer, _, json in
             guard let self = self else { return false }
-            self.lock.lock(); self._control.append((peer, json)); self.lock.unlock()
+            self.lock.withLock { self._control.append((peer, json)) }
             return self.controlSendResult
         }
         controller.groupTelemetry = { [weak self] kind, _, _ in
-            self?.lock.lock(); self?._telemetry.append(kind); self?.lock.unlock()
+            self?.lock.withLock { self?._telemetry.append(kind) }
         }
         controller.onMediaError = { [weak self] error in
-            self?.lock.lock(); self?._errors.append(error); self?.lock.unlock()
+            self?.lock.withLock { self?._errors.append(error) }
         }
         controller.onStateChange = { [weak self] state in
-            self?.lock.lock(); self?._states.append(state); self?.lock.unlock()
+            self?.lock.withLock { self?._states.append(state) }
         }
     }
 

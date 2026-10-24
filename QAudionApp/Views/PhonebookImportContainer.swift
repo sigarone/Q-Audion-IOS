@@ -25,7 +25,7 @@ final class PhonebookImportContainer: ObservableObject {
 
     /// Called by the View's "Start" button.  Drives the full pipeline.
     func startImport() {
-        Task {
+        Task { [self] in
             do {
                 // 1. Request Contacts permission.
                 viewModel.transition(to: .requestingPermission)

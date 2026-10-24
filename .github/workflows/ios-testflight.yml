@@ -10,7 +10,7 @@
 # This workflow uses the `codemagic-cli-tools` Python package (a CLI
 # library for App Store Connect API + keychain helpers) inside the
 # macOS runner. That is NOT the Codemagic hosted-build service -- the
-# build itself runs on GitHub Actions' macos-latest runner.
+# build itself runs on a GitHub-hosted runner with Xcode 27 (label xcode-27).
 #
 # Bash steps are intentionally close to the old codemagic.yaml so the
 # Hard-won lessons in CLAUDE.md (sec 1-15) stay directly applicable.
@@ -173,24 +173,22 @@ concurrency:
 
 jobs:
   build:
-    # Apple requires Xcode 26 / iOS 26 SDK for App Store submissions
-    # since 2026-04-28 (CLAUDE.md sec 12). Codemagic uses Xcode 26.4.
-    # GH Actions: macos-26 runner ships Xcode 26.x by default; macos-15
-    # often has 26.x as a non-default install path. Use macos-latest so
-    # GitHub auto-bumps as new images roll out, and pin XCODE_VERSION
-    # explicitly. Discovery step below fails fast if Xcode 26 missing.
-    runs-on: macos-latest
+    # The release is built with Xcode 27 (iOS 27 SDK) on the runner image that
+    # carries it (label xcode-27); the minimum deployment target stays 16.0.
+    # XCODE_VERSION below pins the family and the "Select Xcode" step fails
+    # fast when no Xcode 27 release is installed.
+    runs-on: xcode-27
     timeout-minutes: 150
 
     env:
       BUNDLE_ID: com.qaudion.app
       APP_APPLE_ID: '6762266299'
       XCODE_PROJECT: QAudionApp.xcodeproj
-      # Pin to Xcode 26.x family -- accept ANY 26.x minor version
+      # Pin to Xcode 27.x family -- accept ANY 27.x minor version
       # available on the runner (the discovery step picks the latest
-      # 26.x found in /Applications). Hard-pin to e.g. "26.4" if you
+      # 27.x found in /Applications). Hard-pin to e.g. "27.1" if you
       # need deterministic builds across runner image rotations.
-      XCODE_VERSION: '26'
+      XCODE_VERSION: '27'
       # Opt into Node.js 24 for JavaScript actions (setup-go etc.) to
       # silence the Node.js 20 deprecation warning. Node.js 20 support
       # on GH Actions runners ends 2026-09-16. Once upstream actions
@@ -264,8 +262,8 @@ jobs:
       # ----------------------------------------------------------
       # 2) Pin Xcode version. Adjust XCODE_VERSION env above.
       #    scripts/ci/select-xcode.sh picks the newest installed RELEASE of
-      #    that family (XCODE_VERSION="26" -> the highest 26.x; "26.6" would
-      #    be exactly 26.6). A beta or release candidate is never chosen,
+      #    that family (XCODE_VERSION="27" -> the highest 27.x; "27.1" would
+      #    be exactly 27.1). A beta or release candidate is never chosen,
       #    the job fails when nothing matches, and the exact path, build and
       #    SDK list are printed.
       # ----------------------------------------------------------
@@ -955,6 +953,15 @@ jobs:
             --project "$XCODE_PROJECT" \
             --scheme QAudionApp 2>&1 | tee build.log \
           || (echo ""; echo "=== BUILD FAILED -- full build.log ==="; cat build.log; exit 1)
+
+      # Report only: the distinct compiler warnings of the Release archive build, in the job
+      # summary and the job log (nothing is uploaded: the repository is public).
+      - name: Compiler warnings of the Release build
+        if: always()
+        continue-on-error: true
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-release.txt
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "Release build (Xcode 27)" QAudionApp/build.log
 
       # ----------------------------------------------------------
       # 7a-2) I5 (MASVS assessment) -- publish the real Package.resolved

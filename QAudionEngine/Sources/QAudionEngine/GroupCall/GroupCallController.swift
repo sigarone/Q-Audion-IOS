@@ -489,9 +489,7 @@ public final class GroupCallController: @unchecked Sendable {
     @discardableResult
     public func setMicrophoneEnabled(_ enabled: Bool) async -> Bool {
         setMuted(!enabled)
-        lock.lock()
-        let current = link
-        lock.unlock()
+        let current = lock.withLock { link }
         return current != nil
     }
 
@@ -504,9 +502,7 @@ public final class GroupCallController: @unchecked Sendable {
     @discardableResult
     public func setVideoEnabled(_ enabled: Bool) async -> Bool {
         diagVideo(camera: enabled, phase: .requested, ok: true)
-        lock.lock()
-        let current = link
-        lock.unlock()
+        let current = lock.withLock { link }
         guard let current = current else {
             print("[GroupCallController] setVideoEnabled(\(enabled)) — no media link")
             diagVideo(camera: enabled, phase: .noLink, ok: false)
@@ -516,10 +512,10 @@ public final class GroupCallController: @unchecked Sendable {
             let stopped = await current.setCameraEnabled(false)
             diagVideo(camera: false, phase: .camera, ok: stopped == .stopped, code: GroupDiagnostics.cameraCode(stopped))
             await current.setPublishVideo(false)
-            lock.lock()
-            cameraOn = false
-            videoStoppedByPolicy = false
-            lock.unlock()
+            lock.withLock {
+                cameraOn = false
+                videoStoppedByPolicy = false
+            }
             return true
         }
         let startedAtMs = nowMs()
@@ -528,10 +524,10 @@ public final class GroupCallController: @unchecked Sendable {
                   code: GroupDiagnostics.cameraCode(result), ms: Int(nowMs() - startedAtMs))
         switch result {
         case .started:
-            lock.lock()
-            cameraOn = true
-            videoStoppedByPolicy = false
-            lock.unlock()
+            lock.withLock {
+                cameraOn = true
+                videoStoppedByPolicy = false
+            }
             await current.setPublishVideo(true)
             applyPublishPolicy()
             return true
@@ -1168,10 +1164,11 @@ public final class GroupCallController: @unchecked Sendable {
                     newLink.close()
                     return
                 }
-                self.lock.lock()
-                let stillCurrent = generation == self.linkGeneration && GroupCallIds.ieq(ready.callId, self.activeCallId)
-                if stillCurrent { self.link = newLink }
-                self.lock.unlock()
+                let stillCurrent = self.lock.withLock { () -> Bool in
+                    let current = generation == self.linkGeneration && GroupCallIds.ieq(ready.callId, self.activeCallId)
+                    if current { self.link = newLink }
+                    return current
+                }
                 guard stillCurrent else {
                     newLink.close()
                     return
