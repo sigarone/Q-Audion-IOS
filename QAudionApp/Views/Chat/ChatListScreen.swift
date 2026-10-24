@@ -46,6 +46,21 @@ struct ChatListScreen: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
+    /// The chat that is open (see `ChatSelectionModel`) and whether the list sits next to it. Next to it a row selects the chat
+    /// instead of pushing it.
+    @ObservedObject private var selection: ChatSelectionModel
+    private let twoPane: Bool
+    /// The list has been on screen once in a stack: the next time it appears the user came back from a chat.
+    @State private var stackListAppeared = false
+    /// A group chat to open again when the list first appears in a stack (the layout changed while it was open).
+    @State private var restoreGroupRow: GroupRowUi? = nil
+    @State private var restoreGroupActive: Bool = false
+
+    init(selection: ChatSelectionModel = .detached, twoPane: Bool = false) {
+        _selection = ObservedObject(wrappedValue: selection)
+        self.twoPane = twoPane
+    }
+
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
     @State private var showingNewGroup = false
@@ -565,12 +580,19 @@ struct ChatListScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
             container.loadFromStore()
         }
-        .onAppear { updateGroupRows() }
+        .onAppear {
+            updateGroupRows()
+            handleListAppear()
+        }
+        .onChange(of: container.viewModel.items.count) { _ in dropSelectionIfGone() }
         // A live location share of a previous run was ended at launch (it is never resumed): the user is told once.
         .locationInterruptedAlert()
         .onChange(of: searchText) { _ in updateGroupRows() }
         .onChange(of: groupRefreshToken) { _ in updateGroupRows() }
-        .onChange(of: groupRegistry.entries) { _ in updateGroupRows() }
+        .onChange(of: groupRegistry.entries) { _ in
+            updateGroupRows()
+            dropSelectionIfGone()
+        }
         // W94: navigationDestination triggered by the deep-link state.
         // When a notification tap publishes appState.pendingDeepLinkConversationId,
         // the onChange below captures the matching item and flips the
@@ -582,14 +604,25 @@ struct ChatListScreen: View {
                 EmptyView()
             }
         }
+        .navigationDestination(isPresented: $restoreGroupActive) {
+            if let row = restoreGroupRow {
+                groupDestination(for: row)
+            } else {
+                EmptyView()
+            }
+        }
         .onChange(of: appState.pendingDeepLinkConversationId) { newId in
             guard let id = newId else { return }
             // Reload before lookup so a freshly-created conversation
             // (from a contact you've never messaged) is in the list.
             container.loadFromStore()
             if let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
-                deepLinkItem = item
-                deepLinkActive = true
+                if twoPane {
+                    selection.selected = chatTarget(for: item)
+                } else {
+                    deepLinkItem = item
+                    deepLinkActive = true
+                }
             } else {
                 // The "Share location" app intent asked for a chat that is not there: its request must not wait for another.
                 appState.pendingLocationShareRequest = nil
@@ -1015,13 +1048,9 @@ struct ChatListScreen: View {
     /// pushes GroupChatScreen (the old horizontal card routed to the 1:1
     /// ChatDetailScreen, which was wrong for a group).
     private func groupRow(_ row: GroupRowUi) -> some View {
-        NavigationLink {
-            GroupChatScreen(
-                groupId: row.id,
-                initial: GroupChatUiState(
-                    name: row.name,
-                    memberCount: row.memberCount,
-                    messages: []))
+        let target = QAudionChatTarget.group(id: row.id, name: row.name, memberCount: row.memberCount)
+        return ChatRowLink(target: target, twoPane: twoPane, selection: selection) {
+            groupDestination(for: row)
         } label: {
             HStack(spacing: 12) {
                 QAudionAvatar(displayName: row.name, imageURL: row.avatarUrl,
@@ -1179,7 +1208,10 @@ struct ChatListScreen: View {
 
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
         let rowTitle = resolvedRowTitle(item)
-        return NavigationLink(destination: chatDestination(for: item)) {
+        let target = chatTarget(for: item)
+        return ChatRowLink(target: target, twoPane: twoPane, selection: selection) {
+            chatDestination(for: item)
+        } label: {
             HStack(spacing: 12) {
                 // W120: presence dot on the avatar — green when peer
                 // online via PresenceService, gray when offline. Group
@@ -1488,6 +1520,74 @@ struct ChatListScreen: View {
             peerUserId: item.peerUserId,
             peerDisplayName: item.peerDisplayName
         )
+        // In a stack the chat reports itself, so a change of layout (unfolding) can open the same chat next to the list.
+        .onAppear { if !twoPane { selection.selected = chatTarget(for: item) } }
+    }
+
+    private func chatTarget(for item: ConversationListViewModel.Item) -> QAudionChatTarget {
+        .conversation(id: item.conversationId, peerUserId: item.peerUserId, peerDisplayName: item.peerDisplayName)
+    }
+
+    private func hasConversation(_ id: UUID) -> Bool {
+        container.viewModel.items.contains(where: { $0.conversationId == id })
+    }
+
+    /// Whether the group is still joined (the registry, not the rows: a search hides rows without leaving the group).
+    private func hasGroup(_ id: UUID) -> Bool {
+        groupRegistry.entries.contains(where: { Self.hexToUUID($0.id) == id })
+    }
+
+    /// The screen of a group chat, as pushed from a row or opened again after a change of layout.
+    private func groupDestination(for row: GroupRowUi) -> some View {
+        let target = QAudionChatTarget.group(id: row.id, name: row.name, memberCount: row.memberCount)
+        return GroupChatScreen(
+            groupId: row.id,
+            initial: GroupChatUiState(
+                name: row.name,
+                memberCount: row.memberCount,
+                messages: []))
+            .onAppear { if !twoPane { selection.selected = target } }
+    }
+
+    /// The list came on screen. In a stack: the first time, a chat that was open in another layout is opened again
+    /// (folding) if it still exists; any later time the user came back from a chat, so none is open. Next to the chat
+    /// nothing is closed here.
+    private func handleListAppear() {
+        guard !twoPane else { return }
+        guard !stackListAppeared else {
+            selection.clear()
+            return
+        }
+        stackListAppeared = true
+        container.loadFromStore()
+        switch QAudionChatSelectionRules.restore(
+            selected: selection.selected, hasConversation: hasConversation, hasGroup: hasGroup) {
+        case .pushConversation:
+            if case .conversation(let id, _, _)? = selection.selected,
+               let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
+                deepLinkItem = item
+                deepLinkActive = true
+            }
+        case .pushGroup:
+            if case .group(let id, _, _)? = selection.selected,
+               let row = groupRows.first(where: { $0.id == id }) {
+                restoreGroupRow = row
+                restoreGroupActive = true
+            } else {
+                selection.clear()
+            }
+        case .clear:
+            selection.clear()
+        }
+    }
+
+    /// A chat that was deleted or left no longer has a place in the detail column.
+    private func dropSelectionIfGone() {
+        guard twoPane else { return }
+        if !QAudionChatSelectionRules.isStillAvailable(
+            selected: selection.selected, hasConversation: hasConversation, hasGroup: hasGroup) {
+            selection.clear()
+        }
     }
 
     // MARK: - New conversation by number/extension (2026-07-29)

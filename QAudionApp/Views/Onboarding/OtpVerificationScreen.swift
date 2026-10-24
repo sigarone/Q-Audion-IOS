@@ -51,6 +51,7 @@ struct OtpVerificationScreen: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     Button(action: onBack) {
@@ -129,6 +130,8 @@ struct OtpVerificationScreen: View {
                 .padding(.horizontal, 24)
 
                 Spacer()
+            }
+            .qaudionReadableWidth()
             }
         }
         .task {

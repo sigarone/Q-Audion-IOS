@@ -78,6 +78,8 @@ struct ChatDetailScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
+    /// False when the chat is the detail column next to the list: there is no list to go back to.
+    @Environment(\.qaudionChatShowsBack) private var showsBack
     @Environment(\.qaudionSnackbar) private var snackbar
 
     // MARK: - Local UI state (until engine exposes these fields)
@@ -636,13 +638,15 @@ struct ChatDetailScreen: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            Button(action: { dismiss() }) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(scheme.onSurface)
-                    .frame(width: 32, height: 32)
+            if showsBack {
+                Button(action: { dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(scheme.onSurface)
+                        .frame(width: 32, height: 32)
+                }
+                .accessibilityLabel("Indietro")
             }
-            .accessibilityLabel("Indietro")
 
             QAudionAvatar(
                 displayName: resolvedPeerTitle,

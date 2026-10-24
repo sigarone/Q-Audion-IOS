@@ -277,6 +277,7 @@ jobs:
             -derivedDataPath /tmp/dd-ios-app \
             -parallel-testing-enabled NO \
             -only-testing:QAudionAppTests/AbuseReportCategoryTests \
+            -only-testing:QAudionAppTests/AdaptiveLayoutPolicyTests \
             -only-testing:QAudionAppTests/AgeDeclarationTests \
             -only-testing:QAudionAppTests/AppLockServiceTests \
             -only-testing:QAudionAppTests/AppUpdateLinkTests \

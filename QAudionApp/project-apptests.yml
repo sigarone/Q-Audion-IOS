@@ -32,6 +32,7 @@ targets:
       - path: ../QAudionAppTests
         includes:
           - AbuseReportCategoryTests.swift
+          - AdaptiveLayoutPolicyTests.swift
           - AgeDeclarationTests.swift
           - AppLockServiceTests.swift
           - AppUpdateLinkTests.swift
