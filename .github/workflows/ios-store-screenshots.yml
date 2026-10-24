@@ -1,0 +1,186 @@
+# GitHub Actions -- raw screenshots for the store listing (simulator, demo scenes).
+#
+# Manual-only (workflow_dispatch). It builds QAudionApp for the iOS Simulator with -DSCREENSHOT_DEMO, which
+# compiles the demo scenes of QAudionApp/Views/ScreenshotDemo (neutral data, no account, no network; never part
+# of a release build, no project spec sets the flag), then runs scripts/ci/store-screenshots.sh once per
+# device: every language, every scene, clean status bar (9:41, full battery and signal). The PNG files go up
+# as an artifact; the framing and the captions are done outside of CI.
+
+name: iOS Store Screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      locales:
+        description: 'Languages to capture, name:AppleLanguages:AppleLocale separated by spaces.'
+        required: false
+        default: 'it:it:it_IT en-US:en:en_US fr-FR:fr:fr_FR de-DE:de:de_DE es-ES:es:es_ES pt-BR:pt-BR:pt_BR'
+      phone_name:
+        description: 'Simulator for the phone set (6.9-inch).'
+        required: false
+        default: 'iPhone 18 Pro Max'
+      duo:
+        description: 'Also capture the iPhone Duo simulator (needs the iOS 27.1 runtime).'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-store-screenshots
+  cancel-in-progress: false
+
+jobs:
+  screenshots:
+    runs-on: xcode-27
+    timeout-minutes: 150
+
+    env:
+      BUNDLE_ID: com.qaudion.app
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '27'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      DEFAULT_LOCALES: 'it:it:it_IT en-US:en:en_US fr-FR:fr:fr_FR de-DE:de:de_DE es-ES:es:es_ES pt-BR:pt-BR:pt_BR'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      - name: Cache SPM packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project
+        working-directory: QAudionApp
+        run: xcodegen generate
+
+      - name: Pick the phone simulator
+        id: phone
+        env:
+          SIM_NAME: ${{ github.event.inputs.phone_name || 'iPhone 18 Pro Max' }}
+        run: |
+          xcrun simctl list devices available
+          python3 -I scripts/ci/resolve_simulator.py "$SIM_NAME" --min-ios 26
+
+      - name: Build the demo app for the simulator
+        working-directory: QAudionApp
+        env:
+          SIM_UDID: ${{ steps.phone.outputs.udid }}
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath /tmp/dd-store-shots \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            OTHER_SWIFT_FLAGS='$(inherited) -DSCREENSHOT_DEMO' \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee build-sim.log \
+          || (echo ""; echo "=== BUILD FAILED, errors ==="; grep -E "error:" build-sim.log | head -60; exit 1)
+
+      - name: Capture the phone screenshots
+        env:
+          SIM_UDID: ${{ steps.phone.outputs.udid }}
+          LOCALES_INPUT: ${{ github.event.inputs.locales }}
+        run: |
+          LOCALES="${LOCALES_INPUT:-$DEFAULT_LOCALES}"
+          APP_PATH=$(find /tmp/dd-store-shots -name "QAudionApp.app" -path "*iphonesimulator*" | head -1)
+          echo "App: $APP_PATH"
+          sh scripts/ci/store-screenshots.sh "$SIM_UDID" "$APP_PATH" "$BUNDLE_ID" "$RUNNER_TEMP/shots/phone" "$LOCALES" "-"
+
+      - name: Upload the phone screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-screenshots-phone-${{ github.run_number }}
+          path: ${{ runner.temp }}/shots/phone
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Pick the iPhone Duo simulator
+        id: duo
+        if: always() && github.event.inputs.duo != 'false'
+        continue-on-error: true
+        run: python3 -I scripts/ci/resolve_simulator.py "iPhone Duo" --min-ios 27
+
+      - name: Capture the iPhone Duo screenshots
+        if: always() && steps.duo.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 100
+        env:
+          DUO_UDID: ${{ steps.duo.outputs.udid }}
+          PHONE_UDID: ${{ steps.phone.outputs.udid }}
+          LOCALES_INPUT: ${{ github.event.inputs.locales }}
+        run: |
+          LOCALES="${LOCALES_INPUT:-$DEFAULT_LOCALES}"
+          APP_PATH=$(find /tmp/dd-store-shots -name "QAudionApp.app" -path "*iphonesimulator*" | head -1)
+          xcrun simctl shutdown "$PHONE_UDID" || true
+          # The simulator has two displays and simctl needs one of them named; only display 1 is captured, because
+          # asking for the second one costs a minute of timeout per scene.
+          sh scripts/ci/store-screenshots.sh "$DUO_UDID" "$APP_PATH" "$BUNDLE_ID" "$RUNNER_TEMP/shots/duo" "$LOCALES" "1"
+
+      - name: Device list for the record
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/shots"
+          xcrun simctl list devicetypes | grep -i "iphone" | tail -20 > "$RUNNER_TEMP/shots/devicetypes.txt" || true
+          xcrun simctl list devices available > "$RUNNER_TEMP/shots/devices.txt" || true
+
+      - name: Upload the device lists
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-screenshots-devices-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/shots/devicetypes.txt
+            ${{ runner.temp }}/shots/devices.txt
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload the iPhone Duo screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-screenshots-duo-${{ github.run_number }}
+          path: ${{ runner.temp }}/shots/duo
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload the build log
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-screenshots-build-log-${{ github.run_number }}
+          path: QAudionApp/build-sim.log
+          retention-days: 7
+          if-no-files-found: warn
