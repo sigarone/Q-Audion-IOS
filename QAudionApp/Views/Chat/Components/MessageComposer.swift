@@ -367,7 +367,7 @@ struct MessageComposer: View {
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(scheme.onPrimary)
                 .frame(width: 40, height: 40)
-                .background(Circle().fill(scheme.primary))
+                .qaudionGlassSurface(in: Circle(), tint: scheme.primary, interactive: true, fallback: scheme.primary)
         }
         .accessibilityLabel("Invia messaggio")
     }
@@ -402,7 +402,10 @@ struct MessageComposer: View {
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(isRecording ? scheme.onError : scheme.onSurface)
             .frame(width: 40, height: 40)
-            .background(Circle().fill(isRecording ? scheme.error : scheme.surfaceVariant.opacity(0.5)))
+            // Glass while idle; while recording the solid red stays: it is the state the user must see. Not interactive
+            // glass: the press-and-hold gesture below owns the touch.
+            .qaudionGlassSurface(in: Circle(), glassAllowed: !isRecording,
+                                 fallback: isRecording ? scheme.error : scheme.surfaceVariant.opacity(0.5))
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in

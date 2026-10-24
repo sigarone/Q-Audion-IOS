@@ -288,6 +288,7 @@ jobs:
             -only-testing:QAudionAppTests/FeatureFlagKillSwitchTests \
             -only-testing:QAudionAppTests/FeatureFlagsTests \
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
+            -only-testing:QAudionAppTests/GlassPolicyTests \
             -only-testing:QAudionAppTests/IntentHandlerTests \
             -only-testing:QAudionAppTests/KmsSweepStatusTests \
             -only-testing:QAudionAppTests/LegalLinksTests \

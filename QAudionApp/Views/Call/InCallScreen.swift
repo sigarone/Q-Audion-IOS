@@ -2587,14 +2587,11 @@ struct InCallScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(scheme.surface.opacity(0.92))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
-        )
+        // The dock floats over the call: one Liquid Glass surface for the whole group (its buttons keep their own
+        // solid state colours on top of it), the opaque card with its outline where glass is not available.
+        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 20),
+                             fallback: scheme.surface.opacity(0.92),
+                             fallbackStroke: scheme.outline.opacity(0.4))
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
     }
