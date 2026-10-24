@@ -16,7 +16,7 @@ final class MessageRatchetWireFuzzTests: XCTestCase {
     private let epoch = "epoch-fuzz"
 
     private func makeSession() throws -> (MessageRatchet, RatchetSession) {
-        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        let ratchet = MessageRatchet(vault: TestRatchetVault())
         let sess = try ratchet.ensureSession(
             epochId: epoch, selfId: "alice", peerId: "bob", pskRoot: psk)
         return (ratchet, sess)
@@ -115,7 +115,7 @@ final class MessageRatchetWireFuzzTests: XCTestCase {
             session: sendSess, plaintext: Data("hello".utf8),
             aad: aad, clientMsgId: "m1")
 
-        let rxRatchet = MessageRatchet(vault: InMemoryRatchetVault())
+        let rxRatchet = MessageRatchet(vault: TestRatchetVault())
         let rxSess = try rxRatchet.ensureSession(
             epochId: epoch, selfId: "bob", peerId: "alice", pskRoot: psk)
 

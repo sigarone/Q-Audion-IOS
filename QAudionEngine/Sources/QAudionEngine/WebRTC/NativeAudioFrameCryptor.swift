@@ -445,6 +445,8 @@ extension NativeAudioFrameCryptor: RTCFrameCryptorDelegate {
         case .decryptionFailed: return "decfail"
         case .missingKey: return "misskey"
         case .internalError: return "interr"
+        // Not a failure and not given its own code: it keeps the generic label.
+        case .keyRatcheted: return "unk\(state.rawValue)"
         @unknown default: return "unk\(state.rawValue)"
         }
     }

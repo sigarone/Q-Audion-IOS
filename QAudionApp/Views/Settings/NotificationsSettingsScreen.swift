@@ -139,7 +139,7 @@ struct NotificationsSettingsScreen: View {
                     SettingsSectionHeader("SUONI")
                     VStack(spacing: 8) {
                         NavigationLink {
-                            LazyView { CallSoundsSettingsScreen(inCall: { [weak state] in state?.callSoundsInCall ?? false }) }
+                            LazyView { [weak state] in CallSoundsSettingsScreen(inCall: { [weak state] in state?.callSoundsInCall ?? false }) }
                         } label: {
                             HStack(spacing: 14) {
                                 Image(systemName: "bell.and.waves.left.and.right")

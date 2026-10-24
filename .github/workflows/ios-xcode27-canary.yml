@@ -1,8 +1,10 @@
 # GitHub Actions -- Xcode 27 canary (report only).
 #
-# Builds and tests the app with the iOS 27 SDK on the runner image that carries Xcode 27, next
-# to the pipeline that ships with Xcode 26 (ios-testflight.yml and the PR workflows stay on
-# Xcode 26). Nothing here is signed, uploaded or required: the jobs are `continue-on-error`, the
+# Builds and tests the app with the iOS 27 SDK on the runner image that carries Xcode 27. The
+# shipping pipeline (ios-testflight.yml and the PR workflows) builds with Xcode 27 too; the one
+# job kept on Xcode 26 is the SDK 26 row of carplay-compile, a backward check that the sources
+# still compile with the previous SDK, which App Store Connect accepts until April 2027.
+# Nothing here is signed, uploaded or required: the jobs are `continue-on-error`, the
 # workflow is not a required check, and no secret is used.
 #
 # Jobs

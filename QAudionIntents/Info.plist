@@ -22,7 +22,7 @@
 	     disagree. Placeholder in git: ios-testflight.yml's version-bump
 	     step plutil-replaces it on every tag build (INTENTS_PLIST block). -->
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.1089</string>
+	<string>1.0.1223</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<!-- SiriKit Intents Extension descriptor — see IntentHandler.swift.

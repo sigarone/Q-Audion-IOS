@@ -201,10 +201,11 @@ final class IntentHandlerTests: XCTestCase {
     }
 
     func test_resolveContactsAnswersOnceForEachPerson() {
-        var answered: [Int] = []
+        // The completion is @Sendable; the handler answers on the calling thread, so the capture is safe.
+        nonisolated(unsafe) var answered: [Int] = []
         makeHandler().resolveContacts(for: callIntent([person("Anna", phone: "+1"), person("Luca")])) { answered.append($0.count) }
         XCTAssertEqual(answered, [2])
-        var empty: [Int] = []
+        nonisolated(unsafe) var empty: [Int] = []
         makeHandler().resolveContacts(for: callIntent([])) { empty.append($0.count) }
         XCTAssertEqual(empty, [1])
     }

@@ -57,8 +57,8 @@ final class ChatOutboxDrain {
     /// `chatRefreshNotification` userInfo keys the drainer adds when it
     /// gives up on a row, so the open `ChatContainer` can raise its
     /// existing "Riprova" snackbar for a row it did not fail itself.
-    static let failedMessageIdKey = "outboxFailedMessageId"
-    static let failureReasonKey = "outboxFailureReason"
+    nonisolated static let failedMessageIdKey = "outboxFailedMessageId"
+    nonisolated static let failureReasonKey = "outboxFailureReason"
     /// `ChatContainer.SendFailureReason.networkError.rawValue` — the reason
     /// a row exhausted on transport failures reports.
     static let transportFailureReasonCode = "network_error"

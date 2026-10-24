@@ -759,9 +759,8 @@ public final class GroupSubscriberPeer: GroupPeerBase, GroupSubscriberLink, @unc
         // Spec §12.8: an offer with a video stream that is not VP8 is refused, not decoded.
         guard GroupSdpRules.activeVideoSectionsWithoutVp8(in: sdp).isEmpty else { throw GroupPeerError.sdpFailed("video_codec") }
         try await setRemote(RTCSessionDescription(type: .offer, sdp: GroupSdpRules.mungeRemote(sdp)))
-        stateLock.lock()
-        streamsByMid = Dictionary(streams.filter { $0.feedId != nil }.map { ($0.mid, $0) }, uniquingKeysWith: { _, new in new })
-        stateLock.unlock()
+        let mapped = Dictionary(streams.filter { $0.feedId != nil }.map { ($0.mid, $0) }, uniquingKeysWith: { _, new in new })
+        stateLock.withLock { streamsByMid = mapped }
         try prepareTransceivers(of: pc)
         let answer = try await createAnswer(RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
         let munged = GroupSdpRules.mungeLocal(answer.sdp, role: .subscriberAnswer)

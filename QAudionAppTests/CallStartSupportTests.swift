@@ -205,7 +205,7 @@ final class CallStartSupportTests: XCTestCase {
     func test_lifecycle_teardownDropsItsOwnReference() {
         let rig = Rig()
         _ = rig.lifecycle.ensure()
-        weak var weakOld = rig.lifecycle.engine
+        weak let weakOld = rig.lifecycle.engine
         _ = rig.lifecycle.teardown()
         rig.made.removeAll()
         rig.released.removeAll()

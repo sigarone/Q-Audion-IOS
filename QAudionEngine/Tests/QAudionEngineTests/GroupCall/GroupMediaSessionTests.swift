@@ -82,7 +82,7 @@ final class FakeSubscriberLink: GroupSubscriberLink, @unchecked Sendable {
 
     func acceptOffer(_ sdp: String, streams: [VideoRoomStream]) async throws -> String {
         record("offer")
-        lock.lock(); _offers.append(streams); lock.unlock()
+        lock.withLock { _offers.append(streams) }
         return answerSdp
     }
 

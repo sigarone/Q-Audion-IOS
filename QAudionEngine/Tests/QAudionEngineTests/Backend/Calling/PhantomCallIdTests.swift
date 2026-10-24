@@ -48,7 +48,7 @@ final class PhantomCallIdTests: XCTestCase {
     /// path, which is every call that works.
     func testABoundIdIsReturnedUnchanged() {
         let bound = "7fbb9921-c8a2-43d8-9753-55235533c1c6"
-        var store: String? = bound
+        let store: String? = bound
         func reading() -> String? { store }
         XCTAssertEqual(reading(), bound)
         XCTAssertEqual(store, bound)

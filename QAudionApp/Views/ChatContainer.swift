@@ -245,7 +245,7 @@ final class ChatContainer: ObservableObject {
         // `Task { @MainActor in ... }`. Same fix as W74c on AppState's
         // willEnterForeground observer.
         center.addObserver(forName: AppState.chatRefreshNotification,
-                           object: nil, queue: .main) { note in
+                           object: nil, queue: .main) { [weak self] note in
             // Capture only Sendable values out of the note so we don't
             // close over the non-Sendable `Notification` itself.
             let peerMatch: Bool = {
@@ -289,7 +289,7 @@ final class ChatContainer: ObservableObject {
             }
         }
         center.addObserver(forName: AppState.screenshotRequestNotification,
-                           object: nil, queue: .main) { note in
+                           object: nil, queue: .main) { [weak self] note in
             guard let info = note.userInfo as? [String: Any],
                   let from = info["peerUserId"] as? String,
                   from == peerId else { return }
@@ -298,7 +298,7 @@ final class ChatContainer: ObservableObject {
             }
         }
         center.addObserver(forName: AppState.chatTypingNotification,
-                           object: nil, queue: .main) { note in
+                           object: nil, queue: .main) { [weak self] note in
             guard let info = note.userInfo as? [String: Any],
                   let from = info["senderId"] as? String,
                   from == peerId,
@@ -322,7 +322,7 @@ final class ChatContainer: ObservableObject {
         // navigation-away case; this covers the user dragging the app
         // off-screen WHILE the detail view is still on top.
         center.addObserver(forName: UIApplication.willResignActiveNotification,
-                           object: nil, queue: .main) { _ in
+                           object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.flushDraftNow()
             }

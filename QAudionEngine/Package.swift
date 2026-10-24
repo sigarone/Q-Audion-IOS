@@ -154,6 +154,8 @@ let package = Package(
                 .headerSearchPath("src/dnn"),
                 .define("HAVE_CONFIG_H"),
                 .define("OPUS_BUILD"),
+                // Debug builds are not optimized; only the Opus speed notice is silenced.
+                .define("OPUS_WILL_BE_SLOW", .when(configuration: .debug)),
             ]
         ),
         // WebRTC with H265/HEVC + AES-256-GCM FrameCryptor — patched build of

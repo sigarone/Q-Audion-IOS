@@ -172,7 +172,7 @@ public final class AppLanguageManager {
 /// that point on — zero call-site changes anywhere else in the app. This
 /// is the standard decade-old Obj-C runtime technique for an in-app
 /// language switch, not a novel API.
-private final class QAudionLocalizedBundle: Bundle {
+private final class QAudionLocalizedBundle: Bundle, @unchecked Sendable {
     override func localizedString(forKey key: String, value: String?, table tableName: String?) -> String {
         guard let path = Bundle.main.path(forResource: AppLanguageManager.effectiveLanguageCode, ofType: "lproj"),
               let bundle = Bundle(path: path) else {

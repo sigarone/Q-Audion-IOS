@@ -14,7 +14,7 @@ import XCTest
 ///     test` against the FAIL-CLOSED placeholder stub (``RatchetNative/available``
 ///     == false), so the round-trip body is gated behind `XCTSkipUnless(available)`
 ///     — identical to ``RatchetNativeRoundTripTests`` / ``RatchetNativeV4Tests``.
-///   - The vault is ``InMemoryRatchetVault`` (Keychain has no entitlement under
+///   - The vault is ``TestRatchetVault`` (Keychain has no entitlement under
 ///     `swift test`), exercising the SAME v4 routed methods + v4 keyspace the
 ///     production ``KeychainRatchetVault`` implements, keyed by peerId under
 ///     ``MessageRatchet/v4RoutingEpoch``.
@@ -64,11 +64,11 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         // is linked; under the stub `isV4Enabled()` is false and these assertions are
         // meaningful. When the real core IS linked the dedicated round-trip test
         // below covers the live behaviour, so self-skip here.
-        guard !MessageRatchet(vault: InMemoryRatchetVault()).isV4Enabled() else {
+        guard !MessageRatchet(vault: TestRatchetVault()).isV4Enabled() else {
             // v4 actually enabled (real core + flag on) — inert assertions N/A.
             return
         }
-        let vault = InMemoryRatchetVault()
+        let vault = TestRatchetVault()
         let ratchet = MessageRatchet(vault: vault)
 
         XCTAssertFalse(
@@ -87,7 +87,7 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
     /// the v3.1 snapshot keyspace for the same (epochId, peerId). Independent of
     /// the native core — pure storage contract.
     func testVaultV4KeyspaceIsSeparateAndVerbatim() throws {
-        let vault = InMemoryRatchetVault()
+        let vault = TestRatchetVault()
         let blob = Data([0xE5, 0x01, 0x02, 0x03, 0xAB, 0xCD])
         XCTAssertNil(vault.loadV4(epochId: "v4", peerId: "B"))
         try vault.saveV4(epochId: "v4", peerId: "B", blob: blob)
@@ -132,7 +132,7 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
             RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
             "v4 routed round-trip needs the real native core linked AND the flag ON")
 
-        let vault = InMemoryRatchetVault()
+        let vault = TestRatchetVault()
         let ratchet = MessageRatchet(vault: vault)
 
         // A bootstraps toward peer "B" (A = lex-min from idA<idB); B toward "A".
@@ -186,7 +186,7 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
             RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
             "v4 dispatch seam needs the real native core linked AND the flag ON")
 
-        let vault = InMemoryRatchetVault()
+        let vault = TestRatchetVault()
         let ratchet = MessageRatchet(vault: vault)
         XCTAssertTrue(ratchet.bootstrapV4AndPersist(
             peerId: "B", effectiveSecret: secret, selfEpochId: zero, peerEpochId: zero,
@@ -235,7 +235,7 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         try XCTSkipUnless(
             RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
             "CHAT replace needs the real native core linked AND the flag ON")
-        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        let ratchet = MessageRatchet(vault: TestRatchetVault())
         XCTAssertTrue(installAlice(ratchet, secret1))
         XCTAssertTrue(installBob(ratchet, secret0))
         let diverged = ratchet.encryptV4Routed(peerId: "B", plaintext: Data("while-diverged".utf8))
@@ -256,7 +256,7 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         try XCTSkipUnless(
             RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
             "CHAT replace needs the real native core linked AND the flag ON")
-        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        let ratchet = MessageRatchet(vault: TestRatchetVault())
         XCTAssertTrue(installAlice(ratchet, secret1))
         XCTAssertTrue(installBob(ratchet, secret1))
 
@@ -278,7 +278,7 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         try XCTSkipUnless(
             RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
             "CHAT replace needs the real native core linked AND the flag ON")
-        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        let ratchet = MessageRatchet(vault: TestRatchetVault())
         XCTAssertTrue(installAlice(ratchet, secret2))
         XCTAssertTrue(installBob(ratchet, secret2))
         for word in ["one", "two"] {

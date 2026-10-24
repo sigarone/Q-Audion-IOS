@@ -30,8 +30,8 @@ final class EarbudCompileConditionTests: XCTestCase {
     }
 
     func testTheEarbudGattClientIsPresentExactlyWhenTheConditionIsSet() {
-        let proxy = NSClassFromString("\(moduleName).IOSEarbudGattProxy")
-        let relay = NSClassFromString("\(moduleName).CoreBluetoothSovereignRelay")
+        let proxy: AnyClass? = NSClassFromString("\(moduleName).IOSEarbudGattProxy")
+        let relay: AnyClass? = NSClassFromString("\(moduleName).CoreBluetoothSovereignRelay")
         #if QAUDION_EARBUD
         XCTAssertNotNil(proxy, "QAUDION_EARBUD is set but IOSEarbudGattProxy is not in the app")
         XCTAssertNotNil(relay, "QAUDION_EARBUD is set but CoreBluetoothSovereignRelay is not in the app")

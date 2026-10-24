@@ -32,7 +32,7 @@ final class RatchetNativeV4Tests: XCTestCase {
     /// == false), `isV4Enabled()` is false even with the flag ON — so the CI messaging path is the
     /// v3.1 engine. With the real core linked this returns true (covered by the device round-trip).
     func testIsV4EnabledFalseUnderStub() {
-        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        let ratchet = MessageRatchet(vault: TestRatchetVault())
         // The assertion is only meaningful when the stub is linked (CI reality); when the real core
         // IS linked the live path is covered elsewhere, so don't assert false in that case.
         if !RatchetNative.available {
@@ -48,7 +48,7 @@ final class RatchetNativeV4Tests: XCTestCase {
         // linked these ops succeed (covered by the device round-trip), so skip the inert assertions
         // in that case.
         try XCTSkipIf(RatchetNative.available, "real core linked — inert assertions N/A (round-trip covers live)")
-        let ratchet = MessageRatchet(vault: InMemoryRatchetVault())
+        let ratchet = MessageRatchet(vault: TestRatchetVault())
 
         let handle = ratchet.ensureSessionV4(root: root, sessionEpochId: Data(repeating: 0x20, count: 16), transcriptHash: th, isLexMin: true)
         XCTAssertEqual(handle, 0, "ensureSessionV4 must return 0 (no session) while the v4 path is inert")

@@ -11,8 +11,8 @@ final class MessageRatchetTests: XCTestCase {
     // MARK: - Round trip
 
     func testRoundTripAliceToBob() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
 
@@ -29,8 +29,8 @@ final class MessageRatchetTests: XCTestCase {
     }
 
     func testRoundTripBidirectional() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
 
@@ -51,7 +51,7 @@ final class MessageRatchetTests: XCTestCase {
     // MARK: - Forward secrecy: chain advances
 
     func testChainAdvancesEachSend() throws {
-        let vaultA = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let sessA = try ratchetA.ensureSession(epochId: epoch, selfId: alice, peerId: bob, pskRoot: psk)
         XCTAssertEqual(sessA.nextSendIdx, 0)
@@ -66,8 +66,8 @@ final class MessageRatchetTests: XCTestCase {
     // MARK: - Out of order delivery
 
     func testOutOfOrderArrivalUsesSkippedKeyCache() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
         let sessA = try ratchetA.ensureSession(epochId: epoch, selfId: alice, peerId: bob, pskRoot: psk)
@@ -89,8 +89,8 @@ final class MessageRatchetTests: XCTestCase {
     }
 
     func testReplayRejected() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
         let sessA = try ratchetA.ensureSession(epochId: epoch, selfId: alice, peerId: bob, pskRoot: psk)
@@ -107,8 +107,8 @@ final class MessageRatchetTests: XCTestCase {
     }
 
     func testSkipAheadOverflowRejected() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
         let sessA = try ratchetA.ensureSession(epochId: epoch, selfId: alice, peerId: bob, pskRoot: psk)
@@ -134,7 +134,7 @@ final class MessageRatchetTests: XCTestCase {
     // MARK: - Wire format
 
     func testWireMagicByte() throws {
-        let vaultA = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let sessA = try ratchetA.ensureSession(epochId: epoch, selfId: alice, peerId: bob, pskRoot: psk)
         let aad = MessageRatchet.buildMessageAD(senderId: alice, recipientId: bob, clientMsgId: "m1")
@@ -145,8 +145,8 @@ final class MessageRatchetTests: XCTestCase {
     }
 
     func testEpochMismatchRejected() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
         let sessA = try ratchetA.ensureSession(epochId: "epoch-A", selfId: alice, peerId: bob, pskRoot: psk)
@@ -161,8 +161,8 @@ final class MessageRatchetTests: XCTestCase {
     }
 
     func testAadMismatchFailsAead() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
         let sessA = try ratchetA.ensureSession(epochId: epoch, selfId: alice, peerId: bob, pskRoot: psk)
@@ -180,7 +180,7 @@ final class MessageRatchetTests: XCTestCase {
     // MARK: - Persistence (vault)
 
     func testPersistenceRecoversSessionAcrossInstances() throws {
-        let vault = InMemoryRatchetVault()
+        let vault = TestRatchetVault()
         let firstRatchet = MessageRatchet(vault: vault)
         let firstSession = try firstRatchet.ensureSession(epochId: epoch, selfId: alice, peerId: bob, pskRoot: psk)
         let aad = MessageRatchet.buildMessageAD(senderId: alice, recipientId: bob, clientMsgId: "m1")
@@ -195,7 +195,7 @@ final class MessageRatchetTests: XCTestCase {
         let wire2 = try secondRatchet.encrypt(session: recovered, plaintext: Data("b".utf8), aad: aad, clientMsgId: "m2")
 
         // Bob (fresh) should be able to decrypt both in order.
-        let vaultB = InMemoryRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetB = MessageRatchet(vault: vaultB)
         let sessB = try ratchetB.ensureSession(epochId: epoch, selfId: bob, peerId: alice, pskRoot: psk)
         XCTAssertEqual(try ratchetB.decryptOrThrow(session: sessB, wire: wire1, aad: aad), Data("a".utf8))
