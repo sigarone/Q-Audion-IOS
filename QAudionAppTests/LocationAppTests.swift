@@ -176,6 +176,7 @@ final class LocationAppTests: XCTestCase {
 
     func test_theFeatureShipsOff() {
         XCTAssertEqual(LocationShareCenter.flagKey, "location_share.enabled")
+        FeatureFlags.shared.resetForTests()
         XCTAssertFalse(FeatureFlags.bool(LocationShareCenter.flagKey, false), "a build without the flag in the file has the feature off")
     }
 
