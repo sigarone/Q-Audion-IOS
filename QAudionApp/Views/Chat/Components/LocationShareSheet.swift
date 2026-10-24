@@ -23,6 +23,8 @@ struct LocationShareSheet: View {
     let peerName: String
     /// A live share is offered in a 1:1 chat only.
     let allowsLive: Bool
+    /// The duration to point out (asked for through Siri or Shortcuts); the user still taps it, or another one, to confirm.
+    var suggestedLiveSeconds: Int64? = nil
     /// Sends the position as a pin; `nil` on success, otherwise the sentence that says why not.
     let onSendPin: (LocationReading) -> String?
     /// Starts a live share of this many seconds; `nil` on success, otherwise the sentence that says why not.
@@ -139,6 +141,10 @@ struct LocationShareSheet: View {
             .foregroundStyle(scheme.onSurface)
             .padding(.horizontal, 14).padding(.vertical, 11)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(scheme.surfaceVariant.opacity(0.6)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(scheme.primary, lineWidth: suggestedLiveSeconds == seconds ? 2 : 0)
+            )
         }
         .buttonStyle(.plain)
         .disabled(working)
