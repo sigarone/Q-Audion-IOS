@@ -590,6 +590,9 @@ struct ChatListScreen: View {
             if let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
                 deepLinkItem = item
                 deepLinkActive = true
+            } else {
+                // The "Share location" app intent asked for a chat that is not there: its request must not wait for another.
+                appState.pendingLocationShareRequest = nil
             }
             // Consume the deep link so a stale value doesn't re-fire
             // on the next view re-render.
