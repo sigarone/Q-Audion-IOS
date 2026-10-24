@@ -122,16 +122,16 @@ struct MessageComposer: View {
             if text.count >= 1000 {
                 charCountFooter
             }
-            inputRow
+            // The attachment buttons, the field and the send / microphone button are one glass group, so the last two
+            // can morph into each other.
+            QAudionGlassGroup(spacing: 8) {
+                inputRow
+            }
+            .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(scheme.surface)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(scheme.outline.opacity(0.35))
-                .frame(height: 0.5)
-        }
+        .qaudionBarSurface(fill: scheme.surface, hairline: scheme.outline.opacity(0.35), hairlineAtTop: true)
     }
 
     // MARK: - Banners
@@ -295,6 +295,7 @@ struct MessageComposer: View {
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
+                    .qaudionBarControl()
             }
             .accessibilityLabel("Allega foto o video")
             // W445: generic file attachment button. Only rendered when
@@ -310,6 +311,7 @@ struct MessageComposer: View {
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .frame(width: 30, height: 36)
+                        .qaudionBarControl()
                 }
                 .accessibilityLabel("Allega file")
             }
@@ -319,6 +321,7 @@ struct MessageComposer: View {
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .frame(width: 30, height: 36)
+                        .qaudionBarControl()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(LocationCardStrings.attachAccessibility)
@@ -334,15 +337,10 @@ struct MessageComposer: View {
                 .tint(scheme.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(scheme.surfaceVariant.opacity(0.45))
-                )
+                .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 22),
+                                     fallback: scheme.surfaceVariant.opacity(0.45))
 
-            QAudionGlassGroup(spacing: 8) {
-                sendOrMicButton
-            }
-            .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            sendOrMicButton
         }
     }
 

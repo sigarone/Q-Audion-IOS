@@ -170,3 +170,81 @@ extension View {
         }
     }
 }
+
+private struct QAudionBarSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    let fill: Color
+    let hairline: Color
+    let hairlineAtTop: Bool
+
+    private var style: QAudionGlassStyle {
+        QAudionGlassStyle.resolve(
+            osSupportsGlass: QAudionGlassStyle.osSupportsGlass,
+            reduceTransparency: reduceTransparency,
+            increaseContrast: contrast == .increased)
+    }
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if style == .glass {
+            // No opaque bar: the controls on it are glass and float over the background of the screen itself. The bar
+            // keeps its hairline, so the header and the composer stay separated from the list (the list does not scroll
+            // under them).
+            content
+                .overlay(alignment: hairlineAtTop ? .top : .bottom) {
+                    Rectangle()
+                        .fill(hairline)
+                        .frame(height: 0.5)
+                }
+        } else {
+            content
+                .background(fill)
+                .overlay(alignment: hairlineAtTop ? .top : .bottom) {
+                    Rectangle()
+                        .fill(hairline)
+                        .frame(height: 0.5)
+                }
+        }
+    }
+}
+
+private struct QAudionSoftScrollEdges: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if QAudionGlassStyle.resolve(
+                osSupportsGlass: true,
+                reduceTransparency: reduceTransparency,
+                increaseContrast: contrast == .increased) == .glass {
+                content.scrollEdgeEffectStyle(.soft, for: .vertical)
+            } else {
+                content
+            }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// The bar behind a row of controls (a chat header, a composer). Where the controls are glass the bar draws no fill of
+    /// its own, only its hairline; elsewhere it is the opaque `fill` with the hairline, exactly as it was.
+    func qaudionBarSurface(fill: Color, hairline: Color, hairlineAtTop: Bool) -> some View {
+        modifier(QAudionBarSurface(fill: fill, hairline: hairline, hairlineAtTop: hairlineAtTop))
+    }
+
+    /// A control on such a bar: a glass disc where glass is used, nothing added elsewhere.
+    func qaudionBarControl() -> some View {
+        qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.clear)
+    }
+
+    /// Softens the top and bottom edge of a scroll view where it meets a glass bar (iOS 26 and later, glass only).
+    func qaudionSoftScrollEdges() -> some View {
+        modifier(QAudionSoftScrollEdges())
+    }
+}
