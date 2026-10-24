@@ -50,12 +50,12 @@ env:
   # kept in lockstep 2026-07-28 so this workflow tests against the same
   # Xcode major version that actually ships to TestFlight, instead of
   # drifting behind on an old runner default (was hard-pinned to 15.4).
-  XCODE_VERSION: '26'
+  XCODE_VERSION: '27'
 
 jobs:
   ios-kat:
     name: iOS Swift KAT
-    runs-on: macos-latest
+    runs-on: xcode-27
     steps:
       - name: Checkout
         uses: actions/checkout@v6

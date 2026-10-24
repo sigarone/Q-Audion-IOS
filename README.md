@@ -44,8 +44,8 @@ open QAudionApp.xcodeproj
 ## CI/CD
 
 - **GitHub Actions** (`.github/workflows/ios-testflight.yml`): full Xcode
-  build + TestFlight upload on tag push `v*`. Runs on `macos-latest` with
-  Xcode 26.x and uploads directly to TestFlight Internal group
+  build + TestFlight upload on tag push `v*`. Runs on the `xcode-27` runner with
+  Xcode 27.x and uploads directly to TestFlight Internal group
   `Q-Audion testers` via `xcrun altool`. **This is the only active iOS
   build pipeline.**
 - ~~Codemagic~~ — decommissioned 2026-05-06; `codemagic.yaml` was removed

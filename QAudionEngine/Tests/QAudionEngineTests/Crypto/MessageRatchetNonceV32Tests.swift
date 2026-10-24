@@ -96,8 +96,8 @@ final class MessageRatchetNonceV32Tests: XCTestCase {
     /// which is untouched by this fix) so both sides start from identical
     /// chain state and the ONLY variable is the nonce formula.
     func test_endToEnd_bothSidesWidened_roundTrips() throws {
-        let vaultA = InMemoryRatchetVault()
-        let vaultB = InMemoryRatchetVault()
+        let vaultA = TestRatchetVault()
+        let vaultB = TestRatchetVault()
         let ratchetA = MessageRatchet(vault: vaultA)
         let ratchetB = MessageRatchet(vault: vaultB)
 

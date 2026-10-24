@@ -74,13 +74,13 @@ permissions:
 
 jobs:
   ui-smoke:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
 
     env:
       BUNDLE_ID: com.qaudion.app
       XCODE_PROJECT: QAudionApp.xcodeproj
-      XCODE_VERSION: '26'
+      XCODE_VERSION: '27'
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       MAESTRO_CLI_NO_ANALYTICS: '1'
       MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: 'true'
@@ -91,7 +91,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Same selector as ios-testflight.yml -- the newest installed 26.x Xcode
+      # Same selector as ios-testflight.yml -- the newest installed 27.x Xcode
       # release on the runner image.
       - name: Select Xcode
         run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
@@ -135,19 +135,26 @@ jobs:
       # affected). Ad-hoc signing still needs no Apple Developer account/
       # cert/profile on Simulator, but DOES let Xcode embed the entitlements
       # plist into the signature, same as a real device build would.
+      # The simulator is picked by UDID (the highest iOS 26+ runtime that has the device), since the
+      # newest runtime does not carry every device. SEC (same rule as FLOW_INPUT above): the name goes
+      # through an env var, never spliced via ${{ }} straight into the script.
+      - name: Pick the simulator
+        id: sim
+        env:
+          SIM_NAME: ${{ github.event.inputs.simulator_name || 'iPhone 17' }}
+        run: python3 -I scripts/ci/resolve_simulator.py "$SIM_NAME" --min-ios 26
+
       - name: Build QAudionApp for Simulator
         working-directory: QAudionApp
         env:
-          # SEC (same rule as FLOW_INPUT above): env var, never spliced
-          # via ${{ }} straight into the script.
-          SIM_NAME: ${{ github.event.inputs.simulator_name || 'iPhone 17' }}
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
         run: |
           set -o pipefail
           xcodebuild build \
             -project "$XCODE_PROJECT" \
             -scheme QAudionApp \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=$SIM_NAME,OS=latest" \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath /tmp/dd-ios-ui \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGN_STYLE=Manual \
@@ -169,6 +176,8 @@ jobs:
           if-no-files-found: warn
 
       - name: Boot simulator + install + launch app
+        env:
+          RESOLVED_UDID: ${{ steps.sim.outputs.udid }}
         run: |
           set -e
           APP_PATH=$(find /tmp/dd-ios-ui -name "QAudionApp.app" -path "*iphonesimulator*" | head -1)
@@ -177,12 +186,7 @@ jobs:
           fi
           echo "App: $APP_PATH"
 
-          UDID=$(xcrun simctl list devices available | grep "iPhone 17 (" | head -1 | grep -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
-          if [ -z "$UDID" ]; then
-            echo "No 'iPhone 17' simulator preinstalled -- creating one"
-            RUNTIME=$(xcrun simctl list runtimes | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+' | tail -1)
-            UDID=$(xcrun simctl create "iPhone 17" "com.apple.CoreSimulator.SimDeviceType.iPhone-17" "$RUNTIME")
-          fi
+          UDID="$RESOLVED_UDID"
           echo "UDID=$UDID"
           echo "SIM_UDID=$UDID" >> "$GITHUB_ENV"
 

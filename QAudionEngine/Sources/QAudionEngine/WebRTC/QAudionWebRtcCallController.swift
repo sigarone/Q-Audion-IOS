@@ -346,9 +346,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // on the NEXT iteration reflects this poll.
             pollMediaRttOnce()
             if CaptureLiveDecisions.packetsProveLive(packetsAtArm: ptxAtArm, packetsNow: audioRtpPacketsSent) {
-                captureLiveLock.lock()
-                hasConfirmedNativeAudioCaptureLive = true
-                captureLiveLock.unlock()
+                captureLiveLock.withLock { hasConfirmedNativeAudioCaptureLive = true }
                 log?("audiosrtp caplive=1 via=\(via) wait=\(gateWaits)")
                 return true
             }
@@ -4356,7 +4354,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // W-AUDIOSENDDIAG — route the engine's decision line to the
             // remote log; the engine itself can only print().
             diag: { [weak self] line in self?.log?(line) }
-        ) ?? false
+        )
         let attachMs = Self.nowMs() - attachStartedMs
         if installed {
             print("[WebRtcCallController] IOS-C4b: native audio-srtp TX activated")

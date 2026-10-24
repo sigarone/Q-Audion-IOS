@@ -32,6 +32,9 @@
 #     ios-testflight.yml are tested with throwaway keys, and scripts/test_symbolicate_decrypt.py tests
 #     the decrypting side of scripts/symbolicate.py.
 #
+#   * the app-level rules of the iOS 27 SDK (scripts/ci/check_sdk27_requirements.py): the app stays
+#     scene based with a launch screen, no Liquid Glass or full-screen opt-out key in any Info.plist, no
+#     use of the deprecated window lists.
 #   * the Xcode selector used by every macOS workflow (scripts/ci/select-xcode.sh) is run against
 #     fake /Applications trees shaped like the runner images: only release installs are chosen,
 #     an alias of a release candidate is not, and nothing matching is a failure.
@@ -136,6 +139,14 @@ jobs:
       - name: Simulator picker, tests
         run: python3 -I scripts/ci/test_resolve_simulator.py
 
+      - name: iOS 27 SDK app-level rules
+        run: |
+          python3 -I scripts/ci/test_check_sdk27_requirements.py
+          python3 -I scripts/ci/check_sdk27_requirements.py .
+
+      - name: Warning baseline check, self-test
+        run: sh scripts/ci/test-check-warning-baseline.sh
+
       - name: Signing key check, self-test
         run: sh scripts/ci/test-check-signing-key.sh
 
@@ -148,7 +159,7 @@ jobs:
   # the default from November 2026); the default one has to pass, the others are reported.
   signing-key-macos:
     name: Signing key check (macOS OpenSSL)
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6

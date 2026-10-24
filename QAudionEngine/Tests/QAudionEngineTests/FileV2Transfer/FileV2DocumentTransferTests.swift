@@ -235,7 +235,7 @@ private final class TamperingServer: FileV2Server, @unchecked Sendable {
                     waitSeconds: Int) async throws -> FileV2RangeResult {
         let result = try await base.fetchRange(obj: obj, from: from, toInclusive: toInclusive, token: token, waitSeconds: waitSeconds)
         guard from >= Int64(FileV2.headerLength), !result.body.isEmpty else { return result }
-        lock.lock(); fetches += 1; lock.unlock()
+        lock.withLock { fetches += 1 }
         var bytes = result.body
         bytes[bytes.startIndex] ^= 0x01
         return FileV2RangeResult(body: bytes, totalLength: result.totalLength)

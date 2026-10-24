@@ -133,7 +133,7 @@ final class NativeSenderMuteDecisionsTests: XCTestCase {
     /// intent — not silently revert to muted — and, because its own
     /// cryptor has not attached yet, must not touch a track until it does.
     func testPeerConnectionReplacedMidCallInheritsLastValue() {
-        var oldPcLatch = Latch(wantMuted: false, senderCryptorAttached: true)   // unmuted, mid-call
+        let oldPcLatch = Latch(wantMuted: false, senderCryptorAttached: true)   // unmuted, mid-call
         XCTAssertFalse(oldPcLatch.wantMuted)
 
         var newPcLatch = Latch(wantMuted: oldPcLatch.valueForNewPeerConnection, senderCryptorAttached: false)

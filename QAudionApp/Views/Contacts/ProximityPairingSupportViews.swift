@@ -33,14 +33,22 @@ enum ProximityPairingTelemetry {
     static func emit(_ event: ProximityPairingTelemetryEvent) {
         switch event {
         case .started(let role):
-            TelemetryService.shared.emit(kind: startedKind, attrs: ["role": role.rawValue])
+            forward(kind: startedKind, attrs: ["role": role.rawValue])
         case .failed(let cause, let stage):
-            TelemetryService.shared.emit(kind: failedKind, attrs: [
+            forward(kind: failedKind, attrs: [
                 "cause": cause.rawValue,
                 "stage": stage.rawValue
             ])
         case .cancelled(let stage):
-            TelemetryService.shared.emit(kind: cancelledKind, attrs: ["stage": stage.rawValue])
+            forward(kind: cancelledKind, attrs: ["stage": stage.rawValue])
+        }
+    }
+
+    /// `TelemetryService.shared` is main-actor isolated; the emit itself is safe from any thread,
+    /// so the (string-only) event is handed to the main actor here.
+    private static func forward(kind: String, attrs: [String: String]) {
+        Task { @MainActor in
+            TelemetryService.shared.emit(kind: kind, attrs: attrs)
         }
     }
 
@@ -50,7 +58,7 @@ enum ProximityPairingTelemetry {
     /// kinds of rejection; `reason` (a `ProximityQrRejection` token) tells
     /// them apart. No part of the scanned text is ever attached.
     static func emitScanRejected(reason: ProximityQrRejection) {
-        TelemetryService.shared.emit(kind: failedKind, attrs: [
+        forward(kind: failedKind, attrs: [
             "cause": ProximityPairingTelemetryEvent.FailureCause.invalidQrCode.rawValue,
             "stage": ProximityPairingTelemetryEvent.Stage.scanning.rawValue,
             "reason": reason.rawValue
@@ -63,11 +71,15 @@ enum ProximityPairingTelemetry {
     static func emitCompleted(outcome: ContactsListContainer.ProximityOutcome.Kind,
                               serverCheck: ProximityServerCheckOutcome,
                               elapsedMs: Int) {
-        TelemetryService.shared.emit(kind: completedKind, attrs: [
-            "outcome": outcome.rawValue,
-            "server_check": serverCheck.rawValue,
-            "ms": elapsedMs
-        ])
+        let outcomeRaw: String = outcome.rawValue
+        let serverCheckRaw: String = serverCheck.rawValue
+        Task { @MainActor in
+            TelemetryService.shared.emit(kind: completedKind, attrs: [
+                "outcome": outcomeRaw,
+                "server_check": serverCheckRaw,
+                "ms": elapsedMs
+            ])
+        }
     }
 }
 

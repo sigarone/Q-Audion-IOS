@@ -20,7 +20,7 @@ import AVFoundation
 /// - Single audio track, optional single video track
 /// - Stable track ids: `audio0` / `video0` (used by Android too)
 /// - Trickle ICE — no pre-gather wait
-public final class QAudionPeerConnection: NSObject {
+public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
 
     /// Receives outbound ICE candidates and connection state changes.
     public protocol Delegate: AnyObject {

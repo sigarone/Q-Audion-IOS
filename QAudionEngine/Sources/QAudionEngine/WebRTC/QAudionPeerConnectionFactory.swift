@@ -428,15 +428,15 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// FrameCryptor, not codec-layer sealing, so the codec factories are never wrapped.
     public func sharedFactory() async
         -> (factory: RTCPeerConnectionFactory, audioProcessingModule: RTCDefaultAudioProcessingModule) {
-        lock.lock()
-        defer { lock.unlock() }
-        if let f = _factory, let apm = _audioProcessingModule {
-            return (f, apm)
+        return lock.withLock {
+            if let f = _factory, let apm = _audioProcessingModule {
+                return (f, apm)
+            }
+            let built = buildFactory()
+            _factory = built.factory
+            _audioProcessingModule = built.audioProcessingModule
+            return built
         }
-        let built = buildFactory()
-        _factory = built.factory
-        _audioProcessingModule = built.audioProcessingModule
-        return built
     }
 
     /// Tear down — only call from app-shutdown hooks. Also calls

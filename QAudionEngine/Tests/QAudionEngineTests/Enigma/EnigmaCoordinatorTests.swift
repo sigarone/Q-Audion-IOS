@@ -29,7 +29,7 @@ final class EnigmaCoordinatorTests: XCTestCase {
     private func event(
         _ id: String, _ dir: EnigmaDirection, conversation: String = "conv-1", bytes: Int = 90
     ) -> EnigmaWireEvent {
-        let wire = Data((0..<min(bytes, EnigmaBus.prefixBytes)).map { UInt8(truncatingIfNeeded: $0 &* 7) })
+        let wire = Data((0..<min(bytes, 180)).map { UInt8(truncatingIfNeeded: $0 &* 7) })
         return EnigmaWireEvent(
             rowId: id, conversationKey: conversation, direction: dir, packetBytes: bytes,
             wirePrefixBase64: wire.base64EncodedString())
