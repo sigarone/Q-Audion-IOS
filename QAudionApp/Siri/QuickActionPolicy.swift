@@ -81,3 +81,44 @@ enum QuickActionPolicy {
         }
     }
 }
+
+/// What a sheet of the chat list asked for (a picked contact, a chat to open), kept until the sheet is gone. Foundation only.
+enum QuickActionHandoff {
+    /// Takes the pick out of the slot, once, and answers it while the app is active. While it is not (the app is leaving the
+    /// foreground) the pick stays in the slot, to be taken at the next `.active` scene phase.
+    static func take<T>(_ slot: inout T?, appActive: Bool) -> T? {
+        guard appActive, let pick = slot else { return nil }
+        slot = nil
+        return pick
+    }
+
+    /// How long a pick waits for the app to be active again.
+    static let pickLifetime: TimeInterval = 30
+
+    enum PickOutcome: Equatable {
+        case none
+        case waiting
+        case expired
+        case run(String)
+    }
+
+    /// Takes the contact picked in the location sheet: runs it while the app is active and the pick is young enough, keeps it
+    /// (`.waiting`) while the app is not active, and drops it (`.expired`) once it is older than `pickLifetime`.
+    static func takePick(_ slot: inout QuickActionPick?, appActive: Bool, now: Date) -> PickOutcome {
+        guard let pick = slot else { return .none }
+        let age = now.timeIntervalSince(pick.at)
+        guard age >= 0, age <= pickLifetime else {
+            slot = nil
+            return .expired
+        }
+        guard appActive else { return .waiting }
+        slot = nil
+        return .run(pick.contactId)
+    }
+}
+
+/// A contact picked in the location sheet and when.
+struct QuickActionPick: Equatable {
+    var contactId: String
+    var at: Date
+}
