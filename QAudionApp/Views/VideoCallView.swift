@@ -383,7 +383,7 @@ struct VideoCallView: View {
                     .font(.system(size: 15))
                     .foregroundColor(.white.opacity(0.7))
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.white.opacity(0.12)))
+                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
             }
             .padding(.trailing, 4)
             .accessibilityLabel("Diagnostica")

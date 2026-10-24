@@ -38,7 +38,12 @@ struct LocationLiveStrip: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background(extras.success.opacity(0.12))
+        // Floats above the composer: Liquid Glass (untinted, so the green text keeps its contrast), the same tinted
+        // band as before where glass is not available.
+        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 16),
+                             fallback: extras.success.opacity(0.12))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
     }
 }

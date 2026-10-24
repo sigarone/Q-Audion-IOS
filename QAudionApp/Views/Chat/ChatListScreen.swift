@@ -1667,8 +1667,10 @@ struct ChatListScreen: View {
             .foregroundStyle(scheme.onPrimary)
             .padding(.horizontal, 20)
             .frame(height: 56)
-            .background(Capsule().fill(scheme.primary))
-            .shadow(color: .black.opacity(0.30), radius: 8, y: 4)
+            // The one floating control of this screen: tinted Liquid Glass in the brand colour, the solid capsule
+            // (with its shadow) where glass is not available or the user asked for less transparency.
+            .qaudionGlassSurface(in: Capsule(), tint: scheme.primary, interactive: true,
+                                 fallback: scheme.primary, fallbackShadow: true)
         }
         .buttonStyle(.plain)
     }

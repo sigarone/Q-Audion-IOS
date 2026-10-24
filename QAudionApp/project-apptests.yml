@@ -55,6 +55,7 @@ targets:
           - FeatureFlagKillSwitchTests.swift
           - FeatureFlagsTests.swift
           - FileV2ImageCleanerTests.swift
+          - GlassPolicyTests.swift
           - IntentHandlerTests.swift
           - KmsSweepStatusTests.swift
           - LegalLinksTests.swift
