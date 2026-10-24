@@ -1,12 +1,14 @@
 import SwiftUI
 
 /// The sheet of the "Condividi posizione" quick action of the icon: one contact to pick, then the chat of that contact opens with
-/// the share sheet of location (the request goes through `LocationShareIntentRouter.handle`, the same path as the app intent).
-/// Nothing is sent from here: the user confirms in the share sheet.
+/// the share sheet of location. The pick is reported to the list (`onPick`), which closes this sheet first and hands the request
+/// to the chat (`LocationShareIntentRouter.handle`, the same path as the app intent) once the sheet is gone, so the dismissal and
+/// the push of the chat never run together. Nothing is sent from here: the user confirms in the share sheet.
 ///
 /// The list is the one the app intent lists: no blocked contact, nothing while signed out or behind the app lock. No name, id or
 /// position is logged.
 struct QuickActionLocationPicker: View {
+    let onPick: (String) -> Void
     let onDone: () -> Void
 
     @State private var searchText: String = ""
@@ -19,7 +21,7 @@ struct QuickActionLocationPicker: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
                 if contacts.isEmpty {
                     Text("Nessun contatto disponibile")
                         .foregroundStyle(.secondary)
@@ -27,6 +29,13 @@ struct QuickActionLocationPicker: View {
                         .padding(24)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    // A plain field, not `.searchable`: the search controller of a sheet is torn down while the chat is pushed
+                    // underneath, and its bar views then belong to two hierarchies.
+                    TextField("Cerca contatti", text: $searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     List(shown, id: \.userId) { contact in
                         Button {
                             pick(contact)
@@ -41,7 +50,6 @@ struct QuickActionLocationPicker: View {
                             }
                         }
                     }
-                    .searchable(text: $searchText)
                 }
             }
             .navigationTitle(Text("Condividi posizione"))
@@ -56,7 +64,6 @@ struct QuickActionLocationPicker: View {
     }
 
     private func pick(_ contact: LocationShareContactFacts) {
-        _ = LocationShareIntentRouter.handle(contactId: contact.userId, mode: .instant)
-        onDone()
+        onPick(contact.userId)
     }
 }

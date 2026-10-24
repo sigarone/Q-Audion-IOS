@@ -180,4 +180,42 @@ final class QuickActionTests: XCTestCase {
         var slot: QuickActionRequest?
         XCTAssertNil(take(&slot))
     }
+
+    // MARK: Hand-off after the picker
+
+    func testPickIsTakenOnce() {
+        var slot: String? = "peer"
+        XCTAssertEqual(QuickActionHandoff.take(&slot, appActive: true), "peer")
+        XCTAssertNil(slot)
+        XCTAssertNil(QuickActionHandoff.take(&slot, appActive: true))
+    }
+
+    func testPickWaitsWhileTheAppIsNotActiveAndRunsOnceWhenItIs() {
+        var slot: QuickActionPick? = QuickActionPick(contactId: "peer", at: t0)
+        XCTAssertEqual(QuickActionHandoff.takePick(&slot, appActive: false, now: t0.addingTimeInterval(1)), .waiting)
+        XCTAssertNotNil(slot)
+        XCTAssertEqual(QuickActionHandoff.takePick(&slot, appActive: true, now: t0.addingTimeInterval(5)), .run("peer"))
+        XCTAssertNil(slot)
+        XCTAssertEqual(QuickActionHandoff.takePick(&slot, appActive: true, now: t0.addingTimeInterval(6)), .none)
+    }
+
+    func testPickExpiresAfterThirtySeconds() {
+        var slot: QuickActionPick? = QuickActionPick(contactId: "peer", at: t0)
+        XCTAssertEqual(QuickActionHandoff.takePick(&slot, appActive: false, now: t0.addingTimeInterval(30)), .waiting)
+        XCTAssertEqual(QuickActionHandoff.takePick(&slot, appActive: true, now: t0.addingTimeInterval(31)), .expired)
+        XCTAssertNil(slot)
+    }
+
+    func testPickFromTheFutureIsDropped() {
+        var slot: QuickActionPick? = QuickActionPick(contactId: "peer", at: t0)
+        XCTAssertEqual(QuickActionHandoff.takePick(&slot, appActive: true, now: t0.addingTimeInterval(-1)), .expired)
+        XCTAssertNil(slot)
+    }
+
+    func testDeferredChatIsTakenOnceAfterTheSheet() {
+        let id = UUID()
+        var slot: UUID? = id
+        XCTAssertEqual(QuickActionHandoff.take(&slot, appActive: true), id)
+        XCTAssertNil(QuickActionHandoff.take(&slot, appActive: true))
+    }
 }

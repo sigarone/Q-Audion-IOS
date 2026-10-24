@@ -63,8 +63,14 @@ struct ChatListScreen: View {
 
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
+    /// True from the appearance of the new-conversation sheet until its dismissal completed, and the chat asked for meanwhile.
+    @State private var newConversationOnScreen = false
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var deferredDeepLinkId: UUID?
     /// The contact picker of the "Condividi posizione" quick action.
     @State private var showingQuickLocationPicker = false
+    /// The contact picked in the quick-action sheet, handed to the chat once the sheet is gone (`QuickActionHandoff`).
+    @State private var quickLocationPick: QuickActionPick?
     @State private var showingNewGroup = false
     /// 2026-07-29 — "start a chat by typed number/extension" fields, shown
     /// above the contact picker inside the "new conversation" sheet. Ports
@@ -207,7 +213,7 @@ struct ChatListScreen: View {
             // sheet is also the app's only mount for the dial-by-number
             // row, the contact picker, QR scan and NFC pairing, which is
             // why the glyph stays a compose pencil rather than a dialpad.
-            Button { showingNewConversation = true } label: {
+            Button { openNewConversation() } label: {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(scheme.onSurface)
@@ -615,32 +621,31 @@ struct ChatListScreen: View {
         }
         .onChange(of: appState.pendingDeepLinkConversationId) { newId in
             guard let id = newId else { return }
-            // Reload before lookup so a freshly-created conversation
-            // (from a contact you've never messaged) is in the list.
-            container.loadFromStore()
-            if let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
-                if twoPane {
-                    selection.selected = chatTarget(for: item)
-                } else {
-                    deepLinkItem = item
-                    deepLinkActive = true
-                }
-            } else {
-                // The "Share location" app intent asked for a chat that is not there: its request must not wait for another.
-                appState.pendingLocationShareRequest = nil
+            // A chat asked for from the new-conversation sheet opens once the sheet has gone, never during its dismissal.
+            if newConversationOnScreen {
+                deferredDeepLinkId = id
+                showingNewConversation = false
+                return
             }
-            // Consume the deep link so a stale value doesn't re-fire
-            // on the next view re-render.
-            appState.pendingDeepLinkConversationId = nil
+            openDeepLink(id)
         }
         // Home Screen quick actions and the "Nuovo messaggio" intent. The request waits behind the app lock; `onReceive` also covers
         // a list that appears after the request was made (a cold launch). The task lets the lock settle before it is read.
         .onChange(of: appState.pendingQuickAction) { _ in takeQuickAction() }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { deliverQuickLocationPick() }
+            if phase == .background { quickLocationPick = nil }
+        }
         .onReceive(AppLockService.shared.$isLocked) { _ in
             Task { @MainActor in takeQuickAction() }
         }
-        .sheet(isPresented: $showingQuickLocationPicker) {
-            QuickActionLocationPicker(onDone: { showingQuickLocationPicker = false })
+        .sheet(isPresented: $showingQuickLocationPicker, onDismiss: { handOffQuickLocationPick() }) {
+            QuickActionLocationPicker(
+                onPick: { contactId in
+                    quickLocationPick = QuickActionPick(contactId: contactId, at: Date())
+                    showingQuickLocationPicker = false
+                },
+                onDone: { showingQuickLocationPicker = false })
         }
         // `onDismiss` runs for EVERY way the sheet goes away — the Done and
         // Annulla buttons, but also a swipe down — so the banner follows the
@@ -662,7 +667,15 @@ struct ChatListScreen: View {
                 }
             }
         }
-        .sheet(isPresented: $showingNewConversation) {
+        .sheet(isPresented: $showingNewConversation, onDismiss: {
+            newConversationOnScreen = false
+            // The next turn: the chat is pushed once the dismissal has fully settled.
+            DispatchQueue.main.async {
+                var slot = deferredDeepLinkId
+                if let id = QuickActionHandoff.take(&slot, appActive: true) { openDeepLink(id) }
+                deferredDeepLinkId = slot
+            }
+        }) {
             NavigationStack {
                 VStack(spacing: 0) {
                     dialByNumberRow
@@ -681,6 +694,7 @@ struct ChatListScreen: View {
                     }
                 }
             }
+            .onAppear { newConversationOnScreen = true }
         }
         // W139: present the export share sheet when a transcript file
         // has been written. Single activityItem = the on-disk URL so
@@ -1704,6 +1718,54 @@ struct ChatListScreen: View {
         appState.pendingDeepLinkConversationId = convId
     }
 
+    /// Opens the chat `id`: pushes it (or selects it in the two-pane layout) and consumes the deep link.
+    private func openDeepLink(_ id: UUID) {
+        // Reload before lookup so a freshly-created conversation
+        // (from a contact you've never messaged) is in the list.
+        container.loadFromStore()
+        if let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
+            if twoPane {
+                selection.selected = chatTarget(for: item)
+            } else {
+                deepLinkItem = item
+                deepLinkActive = true
+            }
+        } else {
+            // The "Share location" app intent asked for a chat that is not there: its request must not wait for another.
+            appState.pendingLocationShareRequest = nil
+        }
+        // Consume the deep link so a stale value doesn't re-fire
+        // on the next view re-render.
+        appState.pendingDeepLinkConversationId = nil
+    }
+
+    /// Runs after the picker sheet has gone: opens the chat of the picked contact and raises its share sheet. Done here, not in the
+    /// picker, so the push of the chat never overlaps the dismissal of the sheet.
+    private func handOffQuickLocationPick() {
+        // The next turn, not inside `onDismiss`: the sheet is fully gone before the chat is pushed.
+        DispatchQueue.main.async { deliverQuickLocationPick() }
+    }
+
+    /// Hands the picked contact to the chat if the app is active; otherwise the pick waits for the next `.active` scene phase.
+    private func deliverQuickLocationPick() {
+        guard quickLocationPick != nil else { return }
+        var slot = quickLocationPick
+        let outcome = QuickActionHandoff.takePick(
+            &slot, appActive: UIApplication.shared.applicationState == .active, now: Date())
+        quickLocationPick = slot
+        switch outcome {
+        case .none: return
+        case .waiting: RTLog.info("chat", "quick action handoff deferred")
+        case .expired: RTLog.info("chat", "quick action handoff expired")
+        case .run(let contactId): _ = LocationShareIntentRouter.handle(contactId: contactId, mode: .instant)
+        }
+    }
+
+    /// Opens the new-conversation sheet. `newConversationOnScreen` follows the sheet itself (its appearance and its dismissal).
+    private func openNewConversation() {
+        showingNewConversation = true
+    }
+
     /// Takes the pending quick action, once, if the session, the lock and the remote switch allow it.
     private func takeQuickAction() {
         var slot: QuickActionRequest? = appState.pendingQuickAction
@@ -1715,7 +1777,7 @@ struct ChatListScreen: View {
         guard let presentation else { return }
         deepLinkActive = false
         switch presentation {
-        case .newMessage: showingNewConversation = true
+        case .newMessage: openNewConversation()
         case .locationPicker: showingQuickLocationPicker = true
         }
     }
@@ -1751,7 +1813,7 @@ struct ChatListScreen: View {
             // instead of asking the user to find the FAB. Clearer
             // affordance for first-time users with no chats yet.
             Button {
-                showingNewConversation = true
+                openNewConversation()
             } label: {
                 Label("Nuova conversazione", systemImage: "plus.bubble.fill")
                     .padding(.horizontal, 16)
