@@ -103,10 +103,16 @@ struct GroupChatScreen: View {
         ZStack {
             scheme.background.ignoresSafeArea()
             VStack(spacing: 0) {
-                topBar
+                // The header buttons float together as Liquid Glass; the list softens its edges against the bars.
+                QAudionGlassGroup(spacing: 8) {
+                    topBar
+                }
                 messageList
-                composer
-                    .reportsComposerHeight($composerHeight)
+                    .qaudionSoftScrollEdges()
+                QAudionGlassGroup(spacing: 8) {
+                    composer
+                }
+                .reportsComposerHeight($composerHeight)
             }
         }
         .navigationBarBackButtonHidden(true)
@@ -296,6 +302,7 @@ struct GroupChatScreen: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(scheme.onSurface)
                         .frame(width: 32, height: 32)
+                        .qaudionBarControl()
                 }
                 .accessibilityLabel("Indietro")
             }
@@ -357,6 +364,7 @@ struct GroupChatScreen: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
+                    .qaudionBarControl()
             }
             .disabled(!canStartGroupCall)
             .accessibilityLabel("Chiama il gruppo (audio)")
@@ -379,16 +387,14 @@ struct GroupChatScreen: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(canStartGroupCall ? scheme.primary : scheme.onSurfaceVariant)
                     .frame(width: 36, height: 36)
+                    .qaudionBarControl()
             }
             .disabled(!canStartGroupCall)
             .accessibilityLabel("Videochiama il gruppo")
         }
         .padding(.horizontal, 8)
         .frame(height: 56)
-        .background(scheme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(scheme.outline.opacity(0.3)).frame(height: 0.5)
-        }
+        .qaudionBarSurface(fill: scheme.surface, hairline: scheme.outline.opacity(0.3), hairlineAtTop: false)
     }
 
     // MARK: - Message list
@@ -510,6 +516,7 @@ struct GroupChatScreen: View {
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 32, height: 32)
+                    .qaudionBarControl()
             }
             .accessibilityLabel("Aggiungi allegato")
 
@@ -521,6 +528,7 @@ struct GroupChatScreen: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .frame(width: 32, height: 32)
+                        .qaudionBarControl()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(LocationCardStrings.attachAccessibility)
@@ -537,30 +545,23 @@ struct GroupChatScreen: View {
                 .foregroundColor(scheme.onSurface)
                 .tint(scheme.primary)
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(scheme.surfaceVariant.opacity(0.45))
-                )
+                .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 22),
+                                     fallback: scheme.surfaceVariant.opacity(0.45))
 
             Button(action: handleSend) {
                 Image(systemName: "paperplane.fill")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(scheme.onPrimary)
                     .frame(width: 40, height: 40)
-                    .background(
-                        Circle().fill(canSend
-                                      ? scheme.primary
-                                      : scheme.surfaceVariant)
-                    )
+                    .qaudionGlassSurface(in: Circle(), tint: canSend ? scheme.primary : nil, interactive: canSend,
+                                         fallback: canSend ? scheme.primary : scheme.surfaceVariant)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(scheme.surface)
-        .overlay(alignment: .top) {
-            Rectangle().fill(scheme.outline.opacity(0.3)).frame(height: 0.5)
-        }
+        .qaudionBarSurface(fill: scheme.surface, hairline: scheme.outline.opacity(0.3), hairlineAtTop: true)
         .sheet(isPresented: $showingLocationSheet) { groupLocationSheet }
     }
 

@@ -268,8 +268,12 @@ struct ChatDetailScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
+            // The header buttons float together as Liquid Glass; the list fades softly under it and under the composer.
+            QAudionGlassGroup(spacing: 8) {
+                topBar
+            }
             messageList
+                .qaudionSoftScrollEdges()
             // W261: extract the MessageComposer construction itself into
             // a separate computed property. Even with all closures
             // extracted to methods, the 14-argument struct construction
@@ -644,6 +648,7 @@ struct ChatDetailScreen: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(scheme.onSurface)
                         .frame(width: 32, height: 32)
+                        .qaudionBarControl()
                 }
                 .accessibilityLabel("Indietro")
             }
@@ -694,6 +699,7 @@ struct ChatDetailScreen: View {
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(timerActive ? extras.warning : scheme.onSurface.opacity(0.6))
                     .frame(width: 30, height: 36)
+                    .qaudionBarControl()
             }
             .accessibilityLabel("Imposta timer efimero")
 
@@ -702,6 +708,7 @@ struct ChatDetailScreen: View {
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(scheme.onSurface)
                     .frame(width: 36, height: 36)
+                    .qaudionBarControl()
             }
             .disabled(container.viewModel.conversation.kind == .group || appState.isInCall)
             .accessibilityLabel("Chiamata audio")
@@ -722,6 +729,7 @@ struct ChatDetailScreen: View {
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(scheme.onSurface)
                     .frame(width: 36, height: 36)
+                    .qaudionBarControl()
             }
             .disabled(container.viewModel.conversation.kind == .group || appState.isInCall)
             .accessibilityLabel("Chiamata video")
@@ -757,6 +765,7 @@ struct ChatDetailScreen: View {
                         .font(.system(size: 18, weight: .regular))
                         .foregroundStyle(armed || peerNearby ? extras.pqcAccent : scheme.onSurface)
                         .frame(width: 30, height: 36)
+                        .qaudionBarControl()
                 }
                 .accessibilityLabel(
                     armed ? "Mesh Bluetooth, invio via mesh attivo"
@@ -810,17 +819,13 @@ struct ChatDetailScreen: View {
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(scheme.onSurface)
                     .frame(width: 32, height: 36)
+                    .qaudionBarControl()
             }
             .accessibilityLabel("Altro")
         }
         .padding(.horizontal, 8)
         .frame(height: 52)
-        .background(scheme.surface)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(scheme.outline.opacity(0.3))
-                .frame(height: 0.5)
-        }
+        .qaudionBarSurface(fill: scheme.surface, hairline: scheme.outline.opacity(0.3), hairlineAtTop: false)
     }
 
     /// BLOCK — the overflow menu's block / unblock entry: asks for the opposite of the state in force, through
