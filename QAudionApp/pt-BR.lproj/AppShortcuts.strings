@@ -1,0 +1,4 @@
+/* App shortcut phrases of the Share location intent (pt-BR). Every phrase names the app. */
+"Condividi la posizione con ${contact} su ${applicationName}" = "Compartilhe minha localização com ${contact} no ${applicationName}";
+"Manda la mia posizione a ${contact} su ${applicationName}" = "Envie minha localização para ${contact} no ${applicationName}";
+"Condividi la mia posizione su ${applicationName}" = "Compartilhe minha localização no ${applicationName}";

@@ -84,7 +84,10 @@ final class AppState: ObservableObject {
                 ensureCallEngine(reason: "login")
                 requestSiriAuthorizationIfNeeded()
             }
-            if isAuthenticated != oldValue { CarPlayBridge.shared.signInDidChange() }
+            if isAuthenticated != oldValue {
+                CarPlayBridge.shared.signInDidChange()
+                LocationShareIntentRouter.shortcutParametersChanged()
+            }
         }
     }
     /// Entitlements Task 3 (2026-08-17) — `didSet` fires on EVERY
@@ -352,6 +355,17 @@ final class AppState: ObservableObject {
     /// this and pushes the matching chat detail onto the nav stack;
     /// once consumed it's reset to nil.
     @Published var pendingDeepLinkConversationId: UUID?
+
+    /// The "Share location" app intent (Siri, Shortcuts, Action button) asked for the share sheet of a chat. The chat screen of
+    /// that peer shows the sheet and clears this; a request nobody picked up expires (`LocationShareIntentPolicy.isFresh`).
+    @Published var pendingLocationShareRequest: LocationShareRequest?
+
+    /// Opens the chat of `request.peerUserId` with the same deep link a notification tap uses, and leaves the request for it.
+    func requestLocationShare(_ request: LocationShareRequest) {
+        let conversationId = resolveOrCreateConversationId(forPeerUserId: request.peerUserId)
+        pendingLocationShareRequest = request
+        pendingDeepLinkConversationId = conversationId
+    }
 
     /// W77: pairwise PSK first-contact handshake. Built in
     /// `connectPersistentSocket()` once the WS is up so `sendOpaque`
@@ -3863,6 +3877,7 @@ final class AppState: ObservableObject {
         // message-receive paths have fresh data without a synchronous disk
         // decode. The notification observer keeps it current across the session.
         refreshContactsCache()
+        LocationShareIntentRouter.installObservers()
         contactsCacheObserver = NotificationCenter.default.addObserver(
             forName: .contactsDidChange,
             object: nil,
@@ -18164,6 +18179,7 @@ final class AppState: ObservableObject {
         }
         if migrated { store.save(contacts) }
         cachedContacts = contacts
+        LocationShareIntentRouter.shortcutParametersChanged()
     }
 
     /// Fail over off a dead node (driven by the WS client's onNodeStalled signal):
@@ -18211,6 +18227,10 @@ final class AppState: ObservableObject {
         // after the wipe, so the cache is emptied here, in the one function every
         // wipe path (logout, remote wipe, account deletion) already calls.
         cachedContacts = []
+        // The "Share location" app intent: a request left for the account that is leaving dies with it, and Siri and Shortcuts
+        // forget the contact names they were given (the list is empty now).
+        pendingLocationShareRequest = nil
+        LocationShareIntentRouter.shortcutParametersChanged()
         // The mesh radio and the identity it runs under belong to the account that left: stop it, drop the
         // transport built for that node id, and clear what the account had queued.
         MeshRuntime.shared.accountLeft()

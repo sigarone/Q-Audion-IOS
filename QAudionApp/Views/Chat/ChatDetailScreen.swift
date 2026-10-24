@@ -200,6 +200,8 @@ struct ChatDetailScreen: View {
     @State private var showingDocPicker: Bool = false
     /// Location sharing (WIRE_SPEC 14): the share sheet, reachable only while the remote switch is on.
     @State private var showingLocationSheet: Bool = false
+    /// The duration the "Share location" app intent asked for, highlighted in the sheet; the user still taps to confirm.
+    @State private var suggestedLiveSeconds: Int64? = nil
     /// W447: gate for the pre-send per-attachment timer picker. Non-nil
     /// → the confirmationDialog is up and holds the payload that will
     /// be sent once the user picks a timer (or discarded on cancel).
@@ -1671,18 +1673,44 @@ struct ChatDetailScreen: View {
         )
         }
         .sheet(isPresented: $showingLocationSheet) { locationShareSheetView }
+        .onAppear { presentRequestedLocationSheet() }
+        .onChange(of: appState.pendingLocationShareRequest) { _ in presentRequestedLocationSheet() }
+    }
+
+    /// The "Share location" app intent opened this chat: shows the share sheet, where the user confirms with a tap. Nothing is
+    /// sent from here. A request for another chat is left alone until it expires; one that cannot be shown is dropped.
+    private func presentRequestedLocationSheet() {
+        var slot: LocationShareRequest? = appState.pendingLocationShareRequest
+        let taken = LocationShareIntentPolicy.take(
+            &slot, peerUserId: container.viewModel.conversation.peerUserId,
+            accountId: appState.currentUserId ?? "", now: Date())
+        if slot != appState.pendingLocationShareRequest { appState.pendingLocationShareRequest = slot }
+        guard let request = taken else { return }
+        guard LocationShareCenter.isFeatureEnabled, container.viewModel.conversation.kind == .oneToOne else { return }
+        suggestedLiveSeconds = request.mode.suggestedLiveSeconds
+        // A beat after the chat appeared: a sheet raised during the push transition can be swallowed. Everything is checked
+        // again then: the app may have gone to the background, the switch off, or the account left.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard UIApplication.shared.applicationState == .active,
+                  LocationShareCenter.isFeatureEnabled,
+                  appState.isAuthenticated,
+                  appState.currentUserId == request.accountId,
+                  !showingLocationSheet else { return }
+            showingLocationSheet = true
+        }
     }
 
     /// The composer's location entry: present only while location sharing is enabled.
     private var locationAttachAction: (() -> Void)? {
         guard LocationShareCenter.isFeatureEnabled else { return nil }
-        return { showingLocationSheet = true }
+        return { suggestedLiveSeconds = nil; showingLocationSheet = true }
     }
 
     private var locationShareSheetView: some View {
         LocationShareSheet(
             peerName: resolvedPeerTitle,
             allowsLive: container.viewModel.conversation.kind == .oneToOne,
+            suggestedLiveSeconds: suggestedLiveSeconds,
             onSendPin: { reading in container.sendLocationPin(reading) },
             onStartLive: { reading, duration in container.startLiveLocation(reading, duration: duration) })
         .presentationDetents([.medium, .large])
