@@ -26,7 +26,8 @@ targets:
   QAudionAppTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "16.0"
+    # The test bundle links the XCTest of the SDK, which is built for iOS 17; the app itself stays on 16.0.
+    deploymentTarget: "17.0"
     sources:
       - path: ../QAudionAppTests
         includes:

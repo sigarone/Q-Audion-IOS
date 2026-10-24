@@ -321,9 +321,9 @@ public final class GroupMediaSession: @unchecked Sendable {
         do {
             _ = try await janus.connect()
             let handle = try await janus.attach()
-            lock.lock(); pubHandle = handle; lock.unlock()
+            lock.withLock { pubHandle = handle }
             let joined = try await withTimeoutRetry { try await self.room.joinPublisher(handle: handle) }
-            lock.lock(); privateId = joined.privateId; lock.unlock()
+            lock.withLock { privateId = joined.privateId }
 
             publisher.onCandidate = { [weak self] candidate in self?.forwardCandidate(handle: handle, candidate) }
             try await publisher.start()
@@ -399,13 +399,9 @@ public final class GroupMediaSession: @unchecked Sendable {
         emitVideoDiag(camera: on, phase: .configureAnswered, ok: answered, ms: Int(nowMs() - sentAtMs))
         if on {
             let framesNow = await publisher.outboundStats()?.framesEncoded
-            lock.lock()
-            firstFrameWatch = (sinceMs: sentAtMs, framesAtStart: framesNow, fellBack: false)
-            lock.unlock()
+            lock.withLock { firstFrameWatch = (sinceMs: sentAtMs, framesAtStart: framesNow, fellBack: false) }
         } else {
-            lock.lock()
-            firstFrameWatch = nil
-            lock.unlock()
+            lock.withLock { firstFrameWatch = nil }
         }
     }
 
@@ -558,7 +554,7 @@ public final class GroupMediaSession: @unchecked Sendable {
     }
 
     private func scheduleReconcile() {
-        Task { [subQueue] in
+        Task { [weak self, subQueue] in
             await subQueue.debounce(key: "reconcile") { [weak self] in
                 await self?.reconcileSubscriptions()
             }
@@ -567,12 +563,10 @@ public final class GroupMediaSession: @unchecked Sendable {
 
     private func reconcileSubscriptions() async {
         if isClosed { return }
-        lock.lock()
-        let desired = desiredTargetsLocked()
-        let toAdd = desired.subtracting(subscribed)
-        let toRemove = subscribed.subtracting(desired)
-        let privateIdValue = privateId
-        lock.unlock()
+        let (toAdd, toRemove, privateIdValue) = lock.withLock { () -> (Set<String>, Set<String>, Int64?) in
+            let desired = desiredTargetsLocked()
+            return (desired.subtracting(subscribed), subscribed.subtracting(desired), privateId)
+        }
         guard !toAdd.isEmpty || !toRemove.isEmpty, let privateIdValue = privateIdValue else {
             await applyDesiredLayers()
             return
@@ -591,9 +585,7 @@ public final class GroupMediaSession: @unchecked Sendable {
             // `publishers` event instead of tearing the whole media path down.
             let feeds = Set(toAdd.map { Self.target(from: $0).feed })
             if feeds.count <= 1 {
-                lock.lock()
-                for feed in feeds { unavailableFeeds.insert(feed) }
-                lock.unlock()
+                lock.withLock { for feed in feeds { unavailableFeeds.insert(feed) } }
             } else {
                 await subscribeFeedByFeed(toAdd, privateId: privateIdValue)
             }
@@ -617,9 +609,7 @@ public final class GroupMediaSession: @unchecked Sendable {
             do {
                 try await subscribe(targets: feedKeys, privateId: privateId)
             } catch JanusClientError.plugin(let code, _) where code == 428 {
-                lock.lock()
-                unavailableFeeds.insert(feed)
-                lock.unlock()
+                lock.withLock { _ = unavailableFeeds.insert(feed) }
             } catch {
                 handleRequestError(error, context: "subscribe")
                 return
@@ -642,19 +632,20 @@ public final class GroupMediaSession: @unchecked Sendable {
             let link = makeSubscriber()
             link.onState = { [weak self] pcState in self?.pcStateChanged(.sub, pcState) }
             link.onCandidate = { [weak self] candidate in self?.forwardCandidate(handle: newHandle, candidate) }
-            lock.lock()
             // The session may have been closed while `attach` was in flight: a
             // PeerConnection created now would never be closed by anyone.
-            if closed {
-                lock.unlock()
+            let wasClosed = lock.withLock { () -> Bool in
+                if closed { return true }
+                subHandle = newHandle
+                subscriber = link
+                return false
+            }
+            if wasClosed {
                 link.onState = nil
                 link.onCandidate = nil
                 link.close()
                 throw JanusClientError.closed
             }
-            subHandle = newHandle
-            subscriber = link
-            lock.unlock()
             try await link.start()
             handle = newHandle
             do {
@@ -662,12 +653,13 @@ public final class GroupMediaSession: @unchecked Sendable {
             } catch {
                 // A refused join leaves the handle unusable: drop the just-built
                 // subscriber (PC and handle) so the next attempt starts clean.
-                lock.lock()
-                let stale = subscriber
-                subscriber = nil
-                subHandle = nil
-                pcStates[.sub] = nil
-                lock.unlock()
+                let stale: GroupSubscriberLink? = lock.withLock {
+                    let previous = subscriber
+                    subscriber = nil
+                    subHandle = nil
+                    pcStates[.sub] = nil
+                    return previous
+                }
                 stale?.onState = nil
                 stale?.onCandidate = nil
                 stale?.close()
@@ -677,9 +669,7 @@ public final class GroupMediaSession: @unchecked Sendable {
         } else {
             reply = try await withTimeoutRetry { try await self.room.subscribe(handle: handle!, targets: list) }
         }
-        lock.lock()
-        subscribed.formUnion(targets)
-        lock.unlock()
+        lock.withLock { subscribed.formUnion(targets) }
         try await processSubscriberReply(reply, handle: handle!)
     }
 
@@ -691,21 +681,19 @@ public final class GroupMediaSession: @unchecked Sendable {
             reply = try await withTimeoutRetry { try await self.room.unsubscribe(handle: handle, targets: list) }
         } catch JanusClientError.plugin(let code, _) where code == 428 {
             // The feed is already gone on the node: only our bookkeeping is left.
-            lock.lock()
-            subscribed.subtract(targets)
-            lock.unlock()
+            lock.withLock { subscribed.subtract(targets) }
             return
         }
-        lock.lock()
-        subscribed.subtract(targets)
-        for (mid, stream) in subscriberStreams {
-            if let feed = stream.feedId, let feedMid = stream.feedMid,
-               targets.contains(Self.key(feed: feed, mid: feedMid)) {
-                subscriberStreams[mid] = nil
-                appliedLayers[Self.key(feed: feed, mid: feedMid)] = nil
+        lock.withLock {
+            subscribed.subtract(targets)
+            for (mid, stream) in subscriberStreams {
+                if let feed = stream.feedId, let feedMid = stream.feedMid,
+                   targets.contains(Self.key(feed: feed, mid: feedMid)) {
+                    subscriberStreams[mid] = nil
+                    appliedLayers[Self.key(feed: feed, mid: feedMid)] = nil
+                }
             }
         }
-        lock.unlock()
         try await processSubscriberReply(reply, handle: handle)
     }
 
@@ -716,30 +704,28 @@ public final class GroupMediaSession: @unchecked Sendable {
         let event = VideoRoomEvent.parse(message.pluginData ?? [:])
         switch event {
         case .attached(let streams), .updated(let streams):
-            lock.lock()
-            for stream in streams {
-                if stream.disabled {
-                    // A removed stream stays in Janus' SDP as `active:false` (often without
-                    // its feed): forget the mapping so the receiver is reported as gone.
-                    if let old = subscriberStreams.removeValue(forKey: stream.mid),
-                       let feed = old.feedId, let feedMid = old.feedMid {
-                        appliedLayers[Self.key(feed: feed, mid: feedMid)] = nil
+            lock.withLock {
+                for stream in streams {
+                    if stream.disabled {
+                        // A removed stream stays in Janus' SDP as `active:false` (often without
+                        // its feed): forget the mapping so the receiver is reported as gone.
+                        if let old = subscriberStreams.removeValue(forKey: stream.mid),
+                           let feed = old.feedId, let feedMid = old.feedMid {
+                            appliedLayers[Self.key(feed: feed, mid: feedMid)] = nil
+                        }
+                        lastStats[stream.mid] = nil
+                    } else if stream.feedId != nil {
+                        subscriberStreams[stream.mid] = stream
                     }
-                    lastStats[stream.mid] = nil
-                } else if stream.feedId != nil {
-                    subscriberStreams[stream.mid] = stream
                 }
             }
-            lock.unlock()
         default:
             break
         }
         guard let jsep = message.jsep, jsep.type == "offer" else { return }
         try checkPin(jsep.sdp, pc: .sub)
         guard let link = currentSubscriber() else { throw Failure.protocolViolation("no_subscriber") }
-        lock.lock()
-        let streams = Array(subscriberStreams.values)
-        lock.unlock()
+        let streams = lock.withLock { Array(subscriberStreams.values) }
         let answer = try await link.acceptOffer(jsep.sdp, streams: streams)
         try await withTimeoutRetry { try await self.room.start(handle: handle, answer: answer) }
     }
@@ -790,7 +776,7 @@ public final class GroupMediaSession: @unchecked Sendable {
     }
 
     private func scheduleLayerApply() {
-        Task { [subQueue] in
+        Task { [weak self, subQueue] in
             await subQueue.debounce(key: "layers") { [weak self] in
                 await self?.applyDesiredLayers()
             }
@@ -799,30 +785,32 @@ public final class GroupMediaSession: @unchecked Sendable {
 
     private func applyDesiredLayers() async {
         guard let handle = currentSubHandle() else { return }
-        lock.lock()
-        var pendingKeys: [String] = []
-        // What is actually put on the wire: a layer change that lands while this request
-        // is in flight must not be recorded as applied (it would never be sent).
-        var sent: [String: (substream: Int, temporal: Int)] = [:]
-        var configs: [VideoRoomLayerConfig] = []
-        for (key, layer) in desiredLayers {
-            if let applied = appliedLayers[key], applied.substream == layer.substream, applied.temporal == layer.temporal { continue }
-            // Find the subscriber-side mid of this (feed, feed mid).
-            guard let entry = subscriberStreams.first(where: { item in
-                guard let feed = item.value.feedId, let feedMid = item.value.feedMid else { return false }
-                return Self.key(feed: feed, mid: feedMid) == key
-            }) else { continue }
-            configs.append(VideoRoomLayerConfig(mid: entry.key, substream: layer.substream, temporal: layer.temporal))
-            pendingKeys.append(key)
-            sent[key] = layer
+        let (pendingKeys, sent, configs) = lock.withLock {
+            () -> ([String], [String: (substream: Int, temporal: Int)], [VideoRoomLayerConfig]) in
+            var pendingKeys: [String] = []
+            // What is actually put on the wire: a layer change that lands while this request
+            // is in flight must not be recorded as applied (it would never be sent).
+            var sent: [String: (substream: Int, temporal: Int)] = [:]
+            var configs: [VideoRoomLayerConfig] = []
+            for (key, layer) in desiredLayers {
+                if let applied = appliedLayers[key], applied.substream == layer.substream, applied.temporal == layer.temporal { continue }
+                // Find the subscriber-side mid of this (feed, feed mid).
+                guard let entry = subscriberStreams.first(where: { item in
+                    guard let feed = item.value.feedId, let feedMid = item.value.feedMid else { return false }
+                    return Self.key(feed: feed, mid: feedMid) == key
+                }) else { continue }
+                configs.append(VideoRoomLayerConfig(mid: entry.key, substream: layer.substream, temporal: layer.temporal))
+                pendingKeys.append(key)
+                sent[key] = layer
+            }
+            return (pendingKeys, sent, configs)
         }
-        lock.unlock()
         guard !configs.isEmpty else { return }
         do {
             _ = try await withTimeoutRetry { try await self.room.configureSubscriber(handle: handle, layers: configs) }
-            lock.lock()
-            for key in pendingKeys { appliedLayers[key] = sent[key] }
-            lock.unlock()
+            lock.withLock {
+                for key in pendingKeys { appliedLayers[key] = sent[key] }
+            }
         } catch JanusClientError.plugin(let code, _) where code == 428 {
             // The stream vanished under the request: the roster events tidy up.
         } catch {
@@ -895,28 +883,29 @@ public final class GroupMediaSession: @unchecked Sendable {
             return
         }
         let now = nowMs()
-        lock.lock()
-        for video in stats.videos {
-            guard let stream = subscriberStreams[video.mid], let feed = stream.feedId, let feedMid = stream.feedMid else { continue }
-            let key = Self.key(feed: feed, mid: feedMid)
-            // The size of what is decoded tells which layer is really flowing.
-            if video.frameWidth > 0, video.frameHeight > 0 {
-                policy.onFrameSize(key: key, width: video.frameWidth, height: video.frameHeight)
+        let levelsByFeed = lock.withLock { () -> [String: Double] in
+            for video in stats.videos {
+                guard let stream = subscriberStreams[video.mid], let feed = stream.feedId, let feedMid = stream.feedMid else { continue }
+                let key = Self.key(feed: feed, mid: feedMid)
+                // The size of what is decoded tells which layer is really flowing.
+                if video.frameWidth > 0, video.frameHeight > 0 {
+                    policy.onFrameSize(key: key, width: video.frameWidth, height: video.frameHeight)
+                }
+                if let previous = lastStats[video.mid] {
+                    policy.onLossSample(key: key,
+                                        packetsLostDelta: video.packetsLost - previous.packetsLost,
+                                        packetsReceivedDelta: video.packetsReceived - previous.packetsReceived,
+                                        nowMs: now)
+                }
+                lastStats[video.mid] = video
             }
-            if let previous = lastStats[video.mid] {
-                policy.onLossSample(key: key,
-                                    packetsLostDelta: video.packetsLost - previous.packetsLost,
-                                    packetsReceivedDelta: video.packetsReceived - previous.packetsReceived,
-                                    nowMs: now)
+            if let bps = stats.availableIncomingBps { policy.onBandwidthSample(availableBps: bps, nowMs: now) }
+            var levelsByFeed: [String: Double] = [:]
+            for (mid, level) in stats.audioLevels {
+                if let feed = subscriberStreams[mid]?.feedId { levelsByFeed[feed] = max(levelsByFeed[feed] ?? 0, level) }
             }
-            lastStats[video.mid] = video
+            return levelsByFeed
         }
-        if let bps = stats.availableIncomingBps { policy.onBandwidthSample(availableBps: bps, nowMs: now) }
-        var levelsByFeed: [String: Double] = [:]
-        for (mid, level) in stats.audioLevels {
-            if let feed = subscriberStreams[mid]?.feedId { levelsByFeed[feed] = max(levelsByFeed[feed] ?? 0, level) }
-        }
-        lock.unlock()
         if !levelsByFeed.isEmpty { emit(.audioLevels(levelsByFeed)) }
         await heartbeatIfDue(stats: stats)
         evaluatePolicy()
@@ -946,10 +935,9 @@ public final class GroupMediaSession: @unchecked Sendable {
     /// The camera publish asked for by `setPublishVideo(true)`: reports its first encoded
     /// frame (or that none came within `firstFrameTimeoutSeconds`), once.
     private func watchFirstFrame() async {
-        lock.lock()
-        let watch = firstFrameWatch
-        let publisherConnected = pcStates[.pub] == .connected
-        lock.unlock()
+        let (watch, publisherConnected) = lock.withLock {
+            (firstFrameWatch, pcStates[.pub] == .connected)
+        }
         guard let watch = watch else { return }
         let frames = await publisher.outboundStats()?.framesEncoded
         let elapsedMs = nowMs() - watch.sinceMs
@@ -960,10 +948,11 @@ public final class GroupMediaSession: @unchecked Sendable {
             framesAtStart: watch.framesAtStart, framesNow: frames, elapsedMs: elapsedMs,
             thresholdMs: Int64(config.encoderFallbackSeconds * 1000), publisherConnected: publisherConnected,
             alreadyFellBack: watch.fellBack) {
-            lock.lock()
-            let sameWatch = firstFrameWatch?.sinceMs == watch.sinceMs
-            if sameWatch { firstFrameWatch?.fellBack = true }
-            lock.unlock()
+            let sameWatch = lock.withLock { () -> Bool in
+                let same = firstFrameWatch?.sinceMs == watch.sinceMs
+                if same { firstFrameWatch?.fellBack = true }
+                return same
+            }
             if sameWatch {
                 publisher.fallBackToSingleLayer()
                 emitVideoDiag(camera: true, phase: .singleLayerFallback, ok: true, ms: Int(elapsedMs))
@@ -971,11 +960,12 @@ public final class GroupMediaSession: @unchecked Sendable {
         }
         let timedOut = Double(elapsedMs) >= config.firstFrameTimeoutSeconds * 1000
         guard produced || timedOut else { return }
-        lock.lock()
         // Still the same watch (the camera was not switched again meanwhile)?
-        let current = firstFrameWatch?.sinceMs == watch.sinceMs
-        if current { firstFrameWatch = nil }
-        lock.unlock()
+        let current = lock.withLock { () -> Bool in
+            let same = firstFrameWatch?.sinceMs == watch.sinceMs
+            if same { firstFrameWatch = nil }
+            return same
+        }
         guard current else { return }
         emitVideoDiag(camera: true, phase: .firstFrame, ok: produced, ms: Int(elapsedMs))
     }
@@ -985,18 +975,20 @@ public final class GroupMediaSession: @unchecked Sendable {
     /// call only starts the clock.
     private func heartbeatIfDue(stats: GroupSubscriberStats?) async {
         let now = nowMs()
-        lock.lock()
-        if lastHeartbeatMs == 0 {
+        let beat = lock.withLock { () -> (publisherState: GroupPcState?, subscriberState: GroupPcState?)? in
+            if lastHeartbeatMs == 0 {
+                lastHeartbeatMs = now
+                return nil
+            }
+            let due = Double(now - lastHeartbeatMs) >= config.heartbeatSeconds * 1000
+            if !due { return nil }
             lastHeartbeatMs = now
-            lock.unlock()
-            return
+            let subscriberState: GroupPcState? = subscriber == nil ? nil : pcStates[.sub]
+            return (pcStates[.pub], subscriberState)
         }
-        let due = Double(now - lastHeartbeatMs) >= config.heartbeatSeconds * 1000
-        if due { lastHeartbeatMs = now }
-        let publisherState = pcStates[.pub]
-        let subscriberState: GroupPcState? = subscriber == nil ? nil : pcStates[.sub]
-        lock.unlock()
-        guard due else { return }
+        guard let beat = beat else { return }
+        let publisherState = beat.publisherState
+        let subscriberState = beat.subscriberState
 
         emitDiag(GroupDiagnostics.iceLine(publisher: publisherState, subscriber: subscriberState),
                  slot: "ice",
@@ -1004,10 +996,11 @@ public final class GroupMediaSession: @unchecked Sendable {
                           "recv": GroupDiagnostics.pcStateCode(subscriberState)])
 
         if let outbound = await publisher.outboundStats() {
-            lock.lock()
-            let previous = heartbeatOutbound
-            heartbeatOutbound = outbound
-            lock.unlock()
+            let previous: GroupPublisherStats? = lock.withLock {
+                let last = heartbeatOutbound
+                heartbeatOutbound = outbound
+                return last
+            }
             emitDiag(GroupDiagnostics.txLine(audioBytes: outbound.audioBytesSent - (previous?.audioBytesSent ?? 0),
                                              videoBytes: outbound.videoBytesSent - (previous?.videoBytesSent ?? 0),
                                              framesEncoded: outbound.framesEncoded - (previous?.framesEncoded ?? 0)),
@@ -1018,21 +1011,22 @@ public final class GroupMediaSession: @unchecked Sendable {
         }
 
         guard let stats = stats else { return }
-        var lines: [(line: String, values: [String: Int])] = []
-        lock.lock()
-        for (index, audio) in stats.audios.sorted(by: { $0.mid < $1.mid }).enumerated() {
-            let previous = heartbeatAudio[audio.mid]
-            heartbeatAudio[audio.mid] = audio
-            let line = GroupDiagnostics.rxAudioLine(
-                mid: audio.mid, index: index,
-                bytes: audio.bytesReceived - (previous?.bytesReceived ?? 0),
-                lost: audio.packetsLost - (previous?.packetsLost ?? 0),
-                level: stats.audioLevels[audio.mid] ?? 0)
-            lines.append((line: line, values: ["mid": GroupDiagnostics.midNumber(audio.mid, index: index),
-                                               "bytes_total": audio.bytesReceived,
-                                               "lost_total": audio.packetsLost]))
+        let lines = lock.withLock { () -> [(line: String, values: [String: Int])] in
+            var lines: [(line: String, values: [String: Int])] = []
+            for (index, audio) in stats.audios.sorted(by: { $0.mid < $1.mid }).enumerated() {
+                let previous = heartbeatAudio[audio.mid]
+                heartbeatAudio[audio.mid] = audio
+                let line = GroupDiagnostics.rxAudioLine(
+                    mid: audio.mid, index: index,
+                    bytes: audio.bytesReceived - (previous?.bytesReceived ?? 0),
+                    lost: audio.packetsLost - (previous?.packetsLost ?? 0),
+                    level: stats.audioLevels[audio.mid] ?? 0)
+                lines.append((line: line, values: ["mid": GroupDiagnostics.midNumber(audio.mid, index: index),
+                                                   "bytes_total": audio.bytesReceived,
+                                                   "lost_total": audio.packetsLost]))
+            }
+            return lines
         }
-        lock.unlock()
         for item in lines { emitDiag(item.line, slot: "rx", values: item.values) }
     }
 
@@ -1177,10 +1171,10 @@ public final class GroupMediaSession: @unchecked Sendable {
             guard let self = self else { return }
             // A restart that completes without the PeerConnection ever leaving
             // `connected` raises no new state event: look at the states now.
-            self.lock.lock()
-            let connected = self.pcStates[.pub] == .connected
-                && (self.subscriber == nil || self.pcStates[.sub] == .connected)
-            self.lock.unlock()
+            let connected = self.lock.withLock {
+                self.pcStates[.pub] == .connected
+                    && (self.subscriber == nil || self.pcStates[.sub] == .connected)
+            }
             if !connected { self.emit(.needsRejoin("ice_restart_timeout")) }
         }
         lock.lock()
@@ -1284,9 +1278,7 @@ public final class GroupMediaSession: @unchecked Sendable {
                 guard let self = self, !Task.isCancelled, !self.isClosed else { return }
                 do {
                     try await self.janus.reclaim()
-                    self.lock.lock()
-                    self.reconnectTask = nil
-                    self.lock.unlock()
+                    self.lock.withLock { self.reconnectTask = nil }
                     self.setState(.active)
                     self.evaluatePolicy()
                     self.scheduleReconcile()

@@ -271,8 +271,10 @@ extension MetricKitDiagnostics {
             print("[MetricKit] crash telemetry=0 dedup=1")
             return
         }
-        TelemetryService.shared.emit(kind: MetricKitCrashTelemetry.kind,
-                                     attrs: MetricKitCrashTelemetry.attributes(for: input))
+        let telemetryAttrs: [String: Any] = MetricKitCrashTelemetry.attributes(for: input)
+        Task { @MainActor in
+            TelemetryService.shared.emit(kind: MetricKitCrashTelemetry.kind, attrs: telemetryAttrs)
+        }
         print("[MetricKit] crash telemetry=1 dedup=0")
     }
 
@@ -373,8 +375,10 @@ extension MetricKitDiagnostics {
             print("[MetricKit] hang telemetry=0 dedup=1")
             return
         }
-        TelemetryService.shared.emit(kind: MetricKitCrashTelemetry.kind,
-                                     attrs: MetricKitCrashTelemetry.attributes(for: input))
+        let telemetryAttrs: [String: Any] = MetricKitCrashTelemetry.attributes(for: input)
+        Task { @MainActor in
+            TelemetryService.shared.emit(kind: MetricKitCrashTelemetry.kind, attrs: telemetryAttrs)
+        }
         print("[MetricKit] hang telemetry=1 dedup=0")
     }
 

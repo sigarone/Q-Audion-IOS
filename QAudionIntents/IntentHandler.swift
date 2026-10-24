@@ -112,7 +112,7 @@ final class IntentHandler: INExtension, INStartCallIntentHandling {
 
     func resolveCallCapability(
         for intent: INStartCallIntent,
-        with completion: @escaping (INStartCallCallCapabilityResolutionResult) -> Void
+        with completion: @escaping @Sendable (INStartCallCallCapabilityResolutionResult) -> Void
     ) {
         let capability: INCallCapability = intent.callCapability == .unknown ? .audioCall : intent.callCapability
         completion(INStartCallCallCapabilityResolutionResult(
@@ -136,7 +136,7 @@ final class IntentHandler: INExtension, INStartCallIntentHandling {
 
     func resolveContacts(
         for intent: INStartCallIntent,
-        with completion: @escaping ([INStartCallContactResolutionResult]) -> Void
+        with completion: @escaping @Sendable ([INStartCallContactResolutionResult]) -> Void
     ) {
         completion(Self.contactOutcomes(for: intent).map { outcome -> INStartCallContactResolutionResult in
             switch outcome {

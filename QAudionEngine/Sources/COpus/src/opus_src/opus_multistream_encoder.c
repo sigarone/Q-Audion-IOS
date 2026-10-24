@@ -755,7 +755,7 @@ static void surround_rate_allocation(
    total = (nb_uncoupled<<8)         /* mono */
          + coupled_ratio*nb_coupled /* stereo */
          + nb_lfe*lfe_ratio;
-   channel_rate = 256*(opus_int64)(bitrate - lfe_offset*nb_lfe - stream_offset*(nb_coupled+nb_uncoupled) - channel_offset*nb_normal)/total;
+   channel_rate = (opus_int32)(256*(opus_int64)(bitrate - lfe_offset*nb_lfe - stream_offset*(nb_coupled+nb_uncoupled) - channel_offset*nb_normal)/total);
 
    for (i=0;i<st->layout.nb_streams;i++)
    {

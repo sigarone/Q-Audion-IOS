@@ -392,7 +392,7 @@ public final class VideoCallPipeline: NSObject {
         ) { [weak self] note in
             let reasonValue = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
             RTLog.warn("call", "vcap session_interrupted reason=\(reasonValue)")
-            self?.onCaptureInterruptionChanged?(true)
+            Task { @MainActor [weak self] in self?.onCaptureInterruptionChanged?(true) }
         }
 
         captureInterruptionEndedObserver = center.addObserver(
@@ -402,7 +402,7 @@ public final class VideoCallPipeline: NSObject {
         ) { [weak self] _ in
             RTLog.info("call", "vcap session_interruption_ended")
             self?.restartSessionIfNeeded(reason: "interruption_ended")
-            self?.onCaptureInterruptionChanged?(false)
+            Task { @MainActor [weak self] in self?.onCaptureInterruptionChanged?(false) }
         }
 
         captureRuntimeErrorObserver = center.addObserver(

@@ -1817,12 +1817,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     public func onCapabilityMessageReceived(data: Data, fromSenderId: String = "", sendOpaqueMessage: @escaping (Data) async throws -> Void) throws {
         guard let message = QAudionCapabilityExchange.parse(data) else { return }
-        // W-STALESEALER — this function is not `async` (no `await` is possible
-        // anywhere below), so reading the generation here is equivalent to
-        // reading it at the exact instant `onRelaySessionReady` fires further
-        // down — see `provideCallGeneration`'s doc for why that distinction
-        // matters on the `async` paths (`onAndroidBundleReceived`).
-        let entryGeneration = provideCallGeneration?() ?? -1
 
         switch message {
         case .offer, .accept:

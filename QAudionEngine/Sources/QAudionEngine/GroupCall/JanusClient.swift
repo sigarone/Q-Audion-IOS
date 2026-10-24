@@ -132,9 +132,7 @@ public final class JanusClient: @unchecked Sendable {
         try await openSocket()
         let reply = try await request(JanusWire.create(token: tokenProvider()), completion: .success)
         guard let id = reply.dataId else { throw JanusClientError.malformed }
-        lock.lock()
-        session = id
-        lock.unlock()
+        lock.withLock { session = id }
         startKeepalive()
         return id
     }
@@ -212,13 +210,14 @@ public final class JanusClient: @unchecked Sendable {
 
     private func openSocket() async throws {
         let fresh = makeSocket()
-        lock.lock()
-        socketGeneration += 1
-        let generation = socketGeneration
-        let old = socket
-        socket = fresh
-        closing = false
-        lock.unlock()
+        let (generation, old) = lock.withLock { () -> (Int, JanusSocket?) in
+            socketGeneration += 1
+            let generation = socketGeneration
+            let old = socket
+            socket = fresh
+            closing = false
+            return (generation, old)
+        }
         old?.onText = nil
         old?.onClosed = nil
         old?.close()

@@ -195,7 +195,7 @@ static int opus_extension_iterator_next_repeat(OpusExtensionIterator *iter,
             ext->id = repeat_id_byte >> 1;
             ext->frame = iter->repeat_frame;
             ext->data = curr_data0 + header_size;
-            ext->len = iter->curr_data - curr_data0 - header_size;
+            ext->len = (opus_int32)(iter->curr_data - curr_data0 - header_size);
          }
          return 1;
       }
@@ -279,7 +279,7 @@ int opus_extension_iterator_next(OpusExtensionIterator *iter,
          int ret;
          iter->repeat_l = L;
          iter->repeat_frame = iter->curr_frame + 1;
-         iter->repeat_len = curr_data0 - iter->repeat_data;
+         iter->repeat_len = (opus_int32)(curr_data0 - iter->repeat_data);
          iter->src_data = iter->repeat_data;
          iter->src_len = iter->repeat_len;
          ret = opus_extension_iterator_next_repeat(iter, ext);
@@ -300,7 +300,7 @@ int opus_extension_iterator_next(OpusExtensionIterator *iter,
             ext->id = id;
             ext->frame = iter->curr_frame;
             ext->data = curr_data0 + header_size;
-            ext->len = iter->curr_data - curr_data0 - header_size;
+            ext->len = (opus_int32)(iter->curr_data - curr_data0 - header_size);
          }
          return 1;
       }

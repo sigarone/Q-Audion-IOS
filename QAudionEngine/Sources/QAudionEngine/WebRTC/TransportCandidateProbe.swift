@@ -1,6 +1,6 @@
 import Foundation
 #if canImport(WebRTC)
-import WebRTC
+@preconcurrency import WebRTC
 
 /// The check behind "Verifica la modalità scelta" in Settings > Trasporto: it gathers ICE candidates with the
 /// configuration a call in the selected mode would use, counts their types and gives a verdict. No call is started.

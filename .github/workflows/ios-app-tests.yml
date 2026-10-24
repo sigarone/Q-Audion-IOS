@@ -98,21 +98,27 @@ concurrency:
 
 jobs:
   app-build-and-tests:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
 
     env:
       XCODE_PROJECT: QAudionApp.xcodeproj
-      XCODE_VERSION: '26'
+      XCODE_VERSION: '27'
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Same selector as ios-testflight.yml / ios-ui-smoke.yml (newest installed Xcode 26 release).
+      # Same selector as ios-testflight.yml / ios-ui-smoke.yml (newest installed Xcode 27 release).
       - name: Select Xcode
         run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # The newest iOS runtime does not carry every device, so the simulator is picked by UDID
+      # (the highest iOS 26+ runtime that has it) instead of OS=latest.
+      - name: Pick the simulator
+        id: sim
+        run: python3 -I scripts/ci/resolve_simulator.py "iPhone 17" --min-ios 26
 
       - name: Restore SPM packages
         id: cache-spm
@@ -143,13 +149,15 @@ jobs:
       # the app crashes on Siri authorization at launch).
       - name: Build QAudionApp for Simulator (compile check)
         working-directory: QAudionApp
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
         run: |
           set -o pipefail
           xcodebuild build \
             -project "$XCODE_PROJECT" \
             -scheme QAudionApp \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath /tmp/dd-ios-app \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGN_IDENTITY="-" \
@@ -160,6 +168,18 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             2>&1 | tee build-sim.log \
           || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-sim.log ==="; tail -300 build-sim.log; exit 1)
+
+      # The warnings of the build are listed in the job summary, and the job fails when the
+      # project's own sources (app, extensions, engine) hold more than the counted baseline in
+      # scripts/ci/warning-baseline.txt (zero).
+      - name: Compiler warnings of the build
+        if: always()
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-app-build.txt
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "App build (Debug, simulator)" QAudionApp/build-sim.log
+
+      - name: Warning baseline
+        run: sh scripts/ci/check-warning-baseline.sh QAudionApp/build-sim.log
 
       # Only main writes the entry, and only when the exact key was not found;
       # pull requests read it and never save. The package cache is filled by
@@ -241,6 +261,8 @@ jobs:
       # purpose: a class that is added there but forgotten here (or the other
       # way round) should fail loudly instead of silently not running.
       - name: Run app-target unit tests
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
         # A run that stalls here (the 2026-10-04 stdout-tee feedback loop did, for the whole job cap) is cut after
         # 25 minutes instead of 60: a healthy run takes about a minute.
         timeout-minutes: 25
@@ -251,7 +273,7 @@ jobs:
             -project "$XCODE_PROJECT" \
             -scheme QAudionAppTests \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath /tmp/dd-ios-app \
             -parallel-testing-enabled NO \
             -only-testing:QAudionAppTests/AbuseReportCategoryTests \
@@ -366,12 +388,12 @@ jobs:
     # Not on push to main: that run exists to write the SPM cache (the other
     # job does it) and this variant was already built on the pull request.
     if: github.event_name != 'push'
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
 
     env:
       XCODE_PROJECT: QAudionApp.xcodeproj
-      XCODE_VERSION: '26'
+      XCODE_VERSION: '27'
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     steps:
@@ -473,12 +495,12 @@ jobs:
     # Not on push to main: that run exists to write the SPM cache (the first job does it) and
     # this variant was already built on the pull request.
     if: github.event_name != 'push'
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
 
     env:
       XCODE_PROJECT: QAudionApp.xcodeproj
-      XCODE_VERSION: '26'
+      XCODE_VERSION: '27'
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     steps:
@@ -618,12 +640,12 @@ jobs:
     # Not on push to main: that run exists to write the SPM cache (the first job does it) and this variant was
     # already built on the pull request.
     if: github.event_name != 'push'
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
 
     env:
       XCODE_PROJECT: QAudionApp.xcodeproj
-      XCODE_VERSION: '26'
+      XCODE_VERSION: '27'
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     steps:
@@ -721,3 +743,69 @@ jobs:
           path: QAudionApp/build-carplay.log
           retention-days: 7
           if-no-files-found: ignore
+
+  # The Release configuration of the default build, the one the TestFlight archive uses
+  # (optimised, whole-module): it reports warnings that a Debug build does not. Device
+  # destination, unsigned. Held to the same counted baseline as the Debug build.
+  release-config-build:
+    if: github.event_name != 'push'
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    env:
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '27'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # Read only: the entry is written by the other job, on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project (default spec)
+        working-directory: QAudionApp
+        run: xcodegen generate
+
+      - name: Build QAudionApp, Release (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-release \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-release.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-release.log ==="; tail -300 build-release.log; exit 1)
+
+      - name: Compiler warnings of the Release build
+        if: always()
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-release-build.txt
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "App build (Release, device)" QAudionApp/build-release.log
+
+      - name: Warning baseline
+        run: sh scripts/ci/check-warning-baseline.sh QAudionApp/build-release.log

@@ -24,9 +24,9 @@ env:
   # (scripts/ci/select-xcode.sh) — kept in lockstep 2026-07-28 so
   # ios-simulator-tests below builds/tests against the same Xcode major
   # version that actually ships to TestFlight, instead of silently running
-  # on macos-14's old Xcode 15.4 default while production ships on Xcode 26.x.
-  # ios-xcode27-canary.yml runs the iOS 27 SDK next to it, report only.
-  XCODE_VERSION: '26'
+  # on macos-14's old Xcode 15.4 default while production ships on Xcode 27.x.
+  # ios-xcode27-canary.yml still compiles the CarPlay variant with Xcode 26, report only.
+  XCODE_VERSION: '27'
 
 jobs:
   # NOTE 2026-07-28: the old macOS "test" job (swift build/swift test on
@@ -49,12 +49,12 @@ jobs:
   # run fully (not skipped). WebRTC's iOS-simulator slice is present, so this
   # job does NOT share the macOS-slice-missing issue.
   ios-simulator-tests:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      # Newest installed Xcode 26 RELEASE (a beta or release candidate is never chosen); the exact
+      # Newest installed Xcode 27 RELEASE (a beta or release candidate is never chosen); the exact
       # path, build and SDK list are printed. The explicit-module cache below is keyed on the
       # exact toolchain build number (output `build`), not just the ${XCODE_VERSION} major pin,
       # because a .pcm built by one Xcode build is not guaranteed compatible with another (same
@@ -164,7 +164,15 @@ jobs:
           cd QAudionEngine
           xcodebuild -list 2>&1 || true
 
+      # The newest iOS runtime does not carry every device, so the simulator is picked by UDID
+      # (the highest iOS 26+ runtime that has it) instead of OS=latest.
+      - name: Pick the simulator
+        id: sim
+        run: python3 -I scripts/ci/resolve_simulator.py "iPhone 17" --min-ios 26
+
       - name: Run Tests (iOS Simulator)
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
         run: |
           cd QAudionEngine
           # 2026-07-08: this job was hanging and getting force-cancelled by
@@ -324,7 +332,7 @@ jobs:
               SWIFT_ENABLE_TESTABILITY=YES \
               COMPILER_INDEX_STORE_ENABLE=NO \
               SWIFT_ENABLE_EXPLICIT_MODULES=NO \
-              -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+              -destination "platform=iOS Simulator,id=$SIM_UDID" \
               -derivedDataPath /tmp/dd-ios-sim \
               -resultBundlePath "/tmp/ios-sim-results-attempt${ATTEMPT}.xcresult" &
             XCODEBUILD_PID=$!

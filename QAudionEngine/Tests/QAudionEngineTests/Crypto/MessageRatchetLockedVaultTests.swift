@@ -51,7 +51,7 @@ final class MessageRatchetLockedVaultTests: XCTestCase {
     /// cannot be locked (in-memory, test doubles) keeps bootstrapping on nil
     /// exactly as before — the happy path is untouched.
     func testDefaultLoadCheckedForwardsToLoadAndBootstrapsAsBefore() throws {
-        let vault = InMemoryRatchetVault()
+        let vault = TestRatchetVault()
         let ratchet = MessageRatchet(vault: vault)
         XCTAssertNil(try vault.loadChecked(epochId: "epoch-1", peerId: "bob"))
         _ = try ratchet.ensureSession(epochId: "epoch-1", selfId: "alice", peerId: "bob", pskRoot: psk)
