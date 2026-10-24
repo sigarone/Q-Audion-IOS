@@ -168,7 +168,7 @@ public final class FeatureFlags {
                 RTLog.warn("featureflags", line)
                 return
             }
-            let parsed: [String: Any] = FeatureFlags.parse(data)
+            let parsed: [String: Any] = FeatureFlags.parseOverlayResponse(data)
             // An empty overlay is a legitimate answer — this user has no
             // override — so it is applied rather than treated as a failure.
             // Only a transport or parse error keeps the previous one.
@@ -185,6 +185,16 @@ public final class FeatureFlags {
             RTLog.warn("featureflags", line)
         }
     }
+
+    #if DEBUG
+    /// Test-only: empty the in-memory public map and overlay, so a lookup
+    /// resolves to the compiled default whatever the network or the cache did.
+    /// Does not touch the persisted copies.
+    func resetForTests() {
+        cache = [:]
+        overlay = [:]
+    }
+    #endif
 
     /// Drop the per-user overlay — call on sign-out, or the next account on
     /// this device inherits the previous one's flags.
@@ -392,6 +402,18 @@ public final class FeatureFlags {
         let obj = try? JSONSerialization.jsonObject(with: data, options: [])
         guard let dict = obj as? [String: Any] else { return [:] }
         return filterScalar(dict)
+    }
+
+    /// Decode the body of the authenticated flags endpoint. The flag map is the
+    /// top-level "flags" object (the other top-level members are not flags);
+    /// only its Bool / String scalars are kept. A missing or non-object "flags"
+    /// gives an empty overlay. The persisted overlay stores this already
+    /// unwrapped flat map, which `loadOverlay` reads back with `parse`.
+    static func parseOverlayResponse(_ data: Data) -> [String: Any] {
+        let obj = try? JSONSerialization.jsonObject(with: data, options: [])
+        guard let top = obj as? [String: Any],
+              let flags = top["flags"] as? [String: Any] else { return [:] }
+        return filterScalar(flags)
     }
 
     /// Keep only Bool / String entries. NSNumber bridging note: JSON `true`

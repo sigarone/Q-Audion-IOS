@@ -147,6 +147,7 @@ final class LocationShareCenterTests: XCTestCase {
     }
 
     func test_theFlagShipsOffWithNoSeam() {
+        FeatureFlags.shared.resetForTests()
         LocationShareCenter.featureOverride = nil
         XCTAssertFalse(LocationShareCenter.isFeatureEnabled)
         LocationShareCenter.featureOverride = true

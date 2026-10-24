@@ -65,4 +65,33 @@ final class FeatureFlagsTests: XCTestCase {
         FeatureFlags.shared.clearOverlay()
         XCTAssertNil(UserDefaults.standard.object(forKey: "qaudion.featureflags.overlay.v1"))
     }
+
+    // MARK: - Overlay response shape
+
+    func test_parseOverlayResponse_readsFlagsObject() {
+        let body = Data(#"{"flags":{"location_share.enabled":true,"LOG_OTLP_EXPORT_ENABLED":false,"mode":"x","n":1,"nested":{"a":true}},"entitlement_pubkey":{"kid":"k","alg":"ed25519"}}"#.utf8)
+        let map = FeatureFlags.parseOverlayResponse(body)
+        XCTAssertEqual(map["location_share.enabled"] as? Bool, true)
+        XCTAssertEqual(map["LOG_OTLP_EXPORT_ENABLED"] as? Bool, false)
+        XCTAssertEqual(map["mode"] as? String, "x")
+        XCTAssertNil(map["entitlement_pubkey"])
+        XCTAssertNil(map["nested"])
+        XCTAssertEqual(map.count, 3)
+    }
+
+    func test_parseOverlayResponse_numericOneIsNotBool() {
+        let body = Data(#"{"flags":{"location_share.enabled":1}}"#.utf8)
+        XCTAssertNil(FeatureFlags.parseOverlayResponse(body)["location_share.enabled"])
+    }
+
+    func test_parseOverlayResponse_missingFlags_isEmpty() {
+        let body = Data(#"{"location_share.enabled":true,"entitlement_pubkey":{}}"#.utf8)
+        XCTAssertTrue(FeatureFlags.parseOverlayResponse(body).isEmpty)
+    }
+
+    func test_parseOverlayResponse_flagsNotObject_isEmpty() {
+        XCTAssertTrue(FeatureFlags.parseOverlayResponse(Data(#"{"flags":[true]}"#.utf8)).isEmpty)
+        XCTAssertTrue(FeatureFlags.parseOverlayResponse(Data(#"{"flags":"x"}"#.utf8)).isEmpty)
+        XCTAssertTrue(FeatureFlags.parseOverlayResponse(Data("not json".utf8)).isEmpty)
+    }
 }

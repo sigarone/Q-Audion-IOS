@@ -53,6 +53,7 @@ targets:
           - DeviceSymbolTests.swift
           - EarbudCompileConditionTests.swift
           - FeatureFlagKillSwitchTests.swift
+          - FeatureFlagsTests.swift
           - FileV2ImageCleanerTests.swift
           - IntentHandlerTests.swift
           - KmsSweepStatusTests.swift
