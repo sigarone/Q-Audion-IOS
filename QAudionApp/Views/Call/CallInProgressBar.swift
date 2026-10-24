@@ -129,7 +129,8 @@ struct MinimizeCallButton: View {
                 .font(.body.weight(.semibold))
                 .foregroundStyle(scheme.onSurface)
                 .frame(width: 44, height: 44)
-                .background(Circle().fill(scheme.surface.opacity(reduceTransparency ? 1 : 0.85)))
+                .qaudionGlassSurface(in: Circle(), interactive: true,
+                                     fallback: scheme.surface.opacity(reduceTransparency ? 1 : 0.85))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)

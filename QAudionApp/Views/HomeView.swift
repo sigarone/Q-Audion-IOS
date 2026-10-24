@@ -201,6 +201,8 @@ struct HomeView: View {
                 .tabItem { Label(Tab.settings.label, systemImage: Tab.settings.systemImage) }
                 .tag(Tab.settings)
         }
+        // The floating tab bar shrinks while a list scrolls down (iOS 26 and later).
+        .qaudionTabBarMinimizesOnScroll()
         // W-BRAND (2026-08-15): the wordmark banner does NOT live here.
         // First attempt used `.safeAreaInset(edge: .top)` on this TabView,
         // reasoning that a layout primitive (unlike `.toolbar`) could not be

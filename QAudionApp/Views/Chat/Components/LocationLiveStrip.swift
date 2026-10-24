@@ -7,6 +7,8 @@ struct LocationLiveStrip: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     @ObservedObject private var center: LocationShareCenter = LocationShareCenter.shared
 
     let peerUserId: String
@@ -15,6 +17,13 @@ struct LocationLiveStrip: View {
         if let share = center.activeShare(forPeer: peerUserId) {
             strip(share)
         }
+    }
+
+    private var floatsAsGlass: Bool {
+        QAudionGlassStyle.resolve(
+            osSupportsGlass: QAudionGlassStyle.osSupportsGlass,
+            reduceTransparency: reduceTransparency,
+            increaseContrast: contrast == .increased) == .glass
     }
 
     private func strip(_ share: LocationShareCenter.ActiveShare) -> some View {
@@ -38,7 +47,12 @@ struct LocationLiveStrip: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background(extras.success.opacity(0.12))
+        // Floats above the composer as a rounded Liquid Glass card (untinted, so the green text keeps its contrast);
+        // where glass is not used it stays the full-width tinted band it was.
+        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: floatsAsGlass ? 16 : 0),
+                             fallback: extras.success.opacity(0.12))
+        .padding(.horizontal, floatsAsGlass ? 12 : 0)
+        .padding(.vertical, floatsAsGlass ? 4 : 0)
         .accessibilityElement(children: .combine)
     }
 }

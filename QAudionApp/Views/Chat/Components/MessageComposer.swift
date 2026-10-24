@@ -20,6 +20,8 @@ import QAudionEngine
 /// `awaitFirstDown` / `waitForUpOrCancellation` flow precisely. Cancel is
 /// reported when the touch leaves the button rect.
 struct MessageComposer: View {
+    /// Shared by the send and the microphone button, so their glass morphs when one takes the other's place.
+    @Namespace private var composerGlassNamespace
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -337,7 +339,10 @@ struct MessageComposer: View {
                         .fill(scheme.surfaceVariant.opacity(0.45))
                 )
 
-            sendOrMicButton
+            QAudionGlassGroup(spacing: 8) {
+                sendOrMicButton
+            }
+            .animation(.easeInOut(duration: 0.2), value: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
@@ -367,7 +372,10 @@ struct MessageComposer: View {
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(scheme.onPrimary)
                 .frame(width: 40, height: 40)
-                .background(Circle().fill(scheme.primary))
+                .qaudionGlassSurface(in: Circle(), tint: scheme.primary, interactive: true,
+                                     morph: QAudionGlassMorph(id: "composerAction", namespace: composerGlassNamespace),
+                                     fallback: scheme.primary)
+                .contentShape(Circle())
         }
         .accessibilityLabel("Invia messaggio")
     }
@@ -402,7 +410,14 @@ struct MessageComposer: View {
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(isRecording ? scheme.onError : scheme.onSurface)
             .frame(width: 40, height: 40)
-            .background(Circle().fill(isRecording ? scheme.error : scheme.surfaceVariant.opacity(0.5)))
+            // One view structure in every state, so the press-and-hold gesture below never sees its subtree replaced:
+            // a solid red disc that is only visible while recording, under the surface (glass, or the idle fill where
+            // there is no glass). The surface is not interactive glass: the gesture owns the touch.
+            .background(Circle().fill(isRecording ? scheme.error : Color.clear))
+            .qaudionGlassSurface(in: Circle(),
+                                 morph: QAudionGlassMorph(id: "composerAction", namespace: composerGlassNamespace),
+                                 fallback: isRecording ? Color.clear : scheme.surfaceVariant.opacity(0.5))
+            .contentShape(Circle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in

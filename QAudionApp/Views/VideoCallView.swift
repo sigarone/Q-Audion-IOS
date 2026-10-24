@@ -338,6 +338,13 @@ struct VideoCallView: View {
     // MARK: - Top bar
 
     private var topBar: some View {
+        // The diagnostics button and the security badge float next to each other: one glass group.
+        QAudionGlassGroup(spacing: 8) {
+            topBarContent
+        }
+    }
+
+    private var topBarContent: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(resolvedPeerDisplayName)
@@ -381,9 +388,9 @@ struct VideoCallView: View {
             } label: {
                 Image(systemName: "chart.bar.fill")
                     .font(.system(size: 15))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(.white)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.white.opacity(0.12)))
+                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
             }
             .padding(.trailing, 4)
             .accessibilityLabel("Diagnostica")
