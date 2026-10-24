@@ -219,6 +219,7 @@ struct OutgoingCallScreen: View {
                     Spacer().frame(height: 160) // space for pinned bottom action
                 }
                 .padding(.horizontal, 24)
+                .qaudionReadableWidth()
             }
 
             VStack(spacing: 8) {

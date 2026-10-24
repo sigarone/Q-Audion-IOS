@@ -99,115 +99,177 @@ struct IncomingCallScreen: View {
         ZStack {
             CallMeshBackground()
 
-            VStack(spacing: 0) {
-                Spacer().frame(height: 16)
-                Text("CHIAMATA IN ARRIVO")
-                    .qaudionStyle(type.labelSmall)
-                    .tracking(2.0)
-                    .foregroundStyle(extras.success)
-                    .padding(.bottom, 40)
-
-                ZStack {
-                    // Always .settled/unconfirmed — this screen is torn
-                    // down before Accept even finishes processing
-                    // (appState.incomingCallRingVisible clears BEFORE
-                    // callState leaves .ringing) and there is no
-                    // client-side timeout on a 1:1 incoming ring, so an
-                    // animating ring here would have no real progress to
-                    // show and no bound on how long it could run. See the
-                    // design doc's "What is NOT real on iOS" section.
-                    KeyExchangeRing(phase: .settled, confirmed: false, ringSize: 240)
-                    QAudionAvatar(displayName: peerDisplayName,
-                                  imageURL: avatarUrl,
-                                  size: 160,
-                                  shortNumber: peerShortNumber)
+            GeometryReader { geo in
+                switch QAudionAdaptive.callArrangement(size: geo.size) {
+                case .stacked:
+                    stackedLayout(height: geo.size.height)
+                case .sideBySide:
+                    sideBySideLayout(height: geo.size.height)
                 }
-                .frame(width: 240, height: 240)
-                .padding(.bottom, 28)
-
-                Text(peerDisplayName)
-                    .font(.system(size: 36, weight: .semibold))
-                    .italic()
-                    .foregroundStyle(scheme.onBackground)
-                    .multilineTextAlignment(.center)
-                    .padding(.bottom, 4)
-
-                if callType == .video {
-                    HStack(spacing: 6) {
-                        Image(systemName: "video.fill").font(.system(size: 13, weight: .semibold))
-                        Text(subtitleLine).qaudionStyle(type.titleMedium)
-                    }
-                    .foregroundStyle(extras.trustEnterprise)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Capsule().fill(extras.trustEnterprise.opacity(0.18)))
-                    .overlay(Capsule().stroke(extras.trustEnterprise.opacity(0.55), lineWidth: 1))
-                    .padding(.bottom, 10)
-
-                    Button { acceptWithoutVideo.toggle() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: acceptWithoutVideo ? "checkmark.square.fill" : "square")
-                                .font(.system(size: 15, weight: .semibold))
-                            Text("Rispondi senza video").qaudionStyle(type.labelSmall)
-                        }
-                        .foregroundStyle(acceptWithoutVideo ? extras.trustEnterprise : scheme.onSurfaceVariant)
-                        // HIG minimum tap target is 44x44pt; the label's own
-                        // bounding box (~16-18pt tall) is far under that.
-                        // minHeight only grows the invisible hit area — the
-                        // icon/text keep their natural size, centered inside
-                        // it — and contentShape extends hit-testing to the
-                        // full frame instead of just the drawn glyphs.
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Rispondi senza video")
-                    .accessibilityValue(acceptWithoutVideo ? "Attivo" : "Non attivo")
-                    .padding(.bottom, 24)
-                } else {
-                    Text(subtitleLine)
-                        .qaudionStyle(type.titleMedium)
-                        .foregroundStyle(scheme.onSurfaceVariant)
-                        .padding(.bottom, 24)
-                }
-
-                // No status pills and no cipher/PQC claim on a ringing call: this
-                // screen has no voice reading and no key-exchange state to show.
-                Spacer()
-
-                HStack(spacing: 36) {
-                    CircularAction(
-                        icon: "phone.down.fill",
-                        action: onReject,
-                        diameter: 72,
-                        background: extras.riskHigh,
-                        iconColor: scheme.onPrimary,
-                        caption: "Rifiuta",
-                        captionColor: extras.riskHigh
-                    )
-                    if showReplyAction {
-                        CircularAction(
-                            icon: "message.fill",
-                            action: onReplyWithMessage,
-                            diameter: 56,
-                            background: scheme.surfaceVariant,
-                            iconColor: scheme.onSurface,
-                            caption: "Rispondi",
-                            captionColor: scheme.onSurfaceVariant
-                        )
-                    }
-                    CircularAction(
-                        icon: "phone.fill",
-                        action: { onAccept(callType == .video && acceptWithoutVideo) },
-                        diameter: 72,
-                        background: extras.success,
-                        iconColor: extras.onSuccess,
-                        caption: (callType == .video && acceptWithoutVideo) ? "Senza video" : "Accetta",
-                        captionColor: extras.success
-                    )
-                }
-                .padding(.bottom, 32)
             }
-            .padding(.horizontal, 24)
+        }
+    }
+
+    // MARK: - Layouts
+
+    /// Height the texts and the buttons of the stacked layout take around the ring.
+    private var stackedReservedHeight: CGFloat { callType == .video ? 450 : 390 }
+
+    /// One column: who is calling, then the buttons at the bottom. The ring takes the room that is left (down to a floor),
+    /// so a short window does not push the buttons off the screen.
+    private func stackedLayout(height: CGFloat) -> some View {
+        let ring = QAudionAdaptive.callRing(verticalRoom: height - stackedReservedHeight)
+        return VStack(spacing: 0) {
+            Spacer().frame(height: 16)
+            headerLabel
+                .padding(.bottom, 40)
+            identity(ring: ring)
+            // No status pills and no cipher/PQC claim on a ringing call: this
+            // screen has no voice reading and no key-exchange state to show.
+            Spacer()
+            actionsRow
+                .padding(.bottom, 32)
+        }
+        .padding(.horizontal, 24)
+        .qaudionReadableWidth()
+    }
+
+    /// Two columns, for a wide or a short window (the unfolded foldable iPhone propped up, a phone on its side): who is
+    /// calling on one side, the buttons on the other. The identity scrolls if the window is too short even for that.
+    private func sideBySideLayout(height: CGFloat) -> some View {
+        let ring = QAudionAdaptive.callRing(verticalRoom: height - 230)
+        return HStack(spacing: 24) {
+            ScrollView {
+                VStack(spacing: 0) {
+                    headerLabel
+                        .padding(.top, 16)
+                        .padding(.bottom, 16)
+                    identity(ring: ring)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            VStack {
+                Spacer()
+                actionsRow
+                Spacer()
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 24)
+    }
+
+    private var headerLabel: some View {
+        Text("CHIAMATA IN ARRIVO")
+            .qaudionStyle(type.labelSmall)
+            .tracking(2.0)
+            .foregroundStyle(extras.success)
+    }
+
+    /// Ring with the avatar, the name and the line under it (and, on a video call, the choice to answer without video).
+    private func identity(ring: QAudionAdaptive.CallRingMetrics) -> some View {
+        VStack(spacing: 0) {
+            ZStack {
+                // Always .settled/unconfirmed — this screen is torn
+                // down before Accept even finishes processing
+                // (appState.incomingCallRingVisible clears BEFORE
+                // callState leaves .ringing) and there is no
+                // client-side timeout on a 1:1 incoming ring, so an
+                // animating ring here would have no real progress to
+                // show and no bound on how long it could run. See the
+                // design doc's "What is NOT real on iOS" section.
+                KeyExchangeRing(phase: .settled, confirmed: false, ringSize: ring.ring)
+                QAudionAvatar(displayName: peerDisplayName,
+                              imageURL: avatarUrl,
+                              size: ring.avatar,
+                              shortNumber: peerShortNumber)
+            }
+            .frame(width: ring.ring, height: ring.ring)
+            .padding(.bottom, 28)
+
+            Text(peerDisplayName)
+                .font(.system(size: 36, weight: .semibold))
+                .italic()
+                .foregroundStyle(scheme.onBackground)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.6)
+                .padding(.bottom, 4)
+
+            subtitleBlock
+        }
+    }
+
+    @ViewBuilder
+    private var subtitleBlock: some View {
+        if callType == .video {
+            HStack(spacing: 6) {
+                Image(systemName: "video.fill").font(.system(size: 13, weight: .semibold))
+                Text(subtitleLine).qaudionStyle(type.titleMedium)
+            }
+            .foregroundStyle(extras.trustEnterprise)
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(Capsule().fill(extras.trustEnterprise.opacity(0.18)))
+            .overlay(Capsule().stroke(extras.trustEnterprise.opacity(0.55), lineWidth: 1))
+            .padding(.bottom, 10)
+
+            Button { acceptWithoutVideo.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: acceptWithoutVideo ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Rispondi senza video").qaudionStyle(type.labelSmall)
+                }
+                .foregroundStyle(acceptWithoutVideo ? extras.trustEnterprise : scheme.onSurfaceVariant)
+                // HIG minimum tap target is 44x44pt; the label's own
+                // bounding box (~16-18pt tall) is far under that.
+                // minHeight only grows the invisible hit area — the
+                // icon/text keep their natural size, centered inside
+                // it — and contentShape extends hit-testing to the
+                // full frame instead of just the drawn glyphs.
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Rispondi senza video")
+            .accessibilityValue(acceptWithoutVideo ? "Attivo" : "Non attivo")
+            .padding(.bottom, 24)
+        } else {
+            Text(subtitleLine)
+                .qaudionStyle(type.titleMedium)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .padding(.bottom, 24)
+        }
+    }
+
+    private var actionsRow: some View {
+        HStack(spacing: 36) {
+            CircularAction(
+                icon: "phone.down.fill",
+                action: onReject,
+                diameter: 72,
+                background: extras.riskHigh,
+                iconColor: scheme.onPrimary,
+                caption: "Rifiuta",
+                captionColor: extras.riskHigh
+            )
+            if showReplyAction {
+                CircularAction(
+                    icon: "message.fill",
+                    action: onReplyWithMessage,
+                    diameter: 56,
+                    background: scheme.surfaceVariant,
+                    iconColor: scheme.onSurface,
+                    caption: "Rispondi",
+                    captionColor: scheme.onSurfaceVariant
+                )
+            }
+            CircularAction(
+                icon: "phone.fill",
+                action: { onAccept(callType == .video && acceptWithoutVideo) },
+                diameter: 72,
+                background: extras.success,
+                iconColor: extras.onSuccess,
+                caption: (callType == .video && acceptWithoutVideo) ? "Senza video" : "Accetta",
+                captionColor: extras.success
+            )
         }
     }
 }

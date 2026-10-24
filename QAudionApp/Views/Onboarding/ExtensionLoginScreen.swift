@@ -123,6 +123,7 @@ struct ExtensionLoginScreen: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, 32)
                 }
+                .qaudionReadableWidth()
             }
         }
     }

@@ -72,6 +72,7 @@ struct WelcomeScreen: View {
                         .qaudionStyle(type.labelSmall)
                         .tracking(2.5)
                         .foregroundStyle(scheme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 8)
 
                     Spacer().frame(height: 56)
@@ -80,12 +81,17 @@ struct WelcomeScreen: View {
                         .font(.system(size: 42, weight: .semibold))
                         .foregroundStyle(scheme.onBackground)
                         .lineLimit(2)
+                        // A word never runs past the edge: on a narrow cover display or at a large text size the
+                        // headline shrinks (down to half) and wraps instead.
+                        .minimumScaleFactor(0.5)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Spacer().frame(height: 12)
 
                     Text("La voce è la tua chiave.")
                         .qaudionStyle(type.titleMedium)
                         .foregroundStyle(scheme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Spacer().frame(height: 32)
 
@@ -184,12 +190,16 @@ struct WelcomeScreen: View {
                         .qaudionStyle(type.labelSmall)
                         .tracking(1.5)
                         .foregroundStyle(scheme.onSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     Spacer().frame(height: 8)
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 32)
+                // The column keeps a readable width on the large inner display of a foldable iPhone and on tablets, and
+                // takes exactly the width it is given on a phone: the content never has a width of its own.
+                .qaudionReadableWidth()
             }
         }
     }

@@ -46,6 +46,18 @@ struct ChatListScreen: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
+    /// The chat that is open (see `ChatSelectionModel`) and whether the list sits next to it. Next to it a row selects the chat
+    /// instead of pushing it.
+    @ObservedObject private var selection: ChatSelectionModel
+    private let twoPane: Bool
+    /// The list has been on screen once in a stack: the next time it appears the user came back from a chat.
+    @State private var stackListAppeared = false
+
+    init(selection: ChatSelectionModel = .detached, twoPane: Bool = false) {
+        _selection = ObservedObject(wrappedValue: selection)
+        self.twoPane = twoPane
+    }
+
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
     @State private var showingNewGroup = false
@@ -565,7 +577,11 @@ struct ChatListScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
             container.loadFromStore()
         }
-        .onAppear { updateGroupRows() }
+        .onAppear {
+            updateGroupRows()
+            handleListAppear()
+        }
+        .onChange(of: container.viewModel.items.count) { _ in dropSelectionIfGone() }
         // A live location share of a previous run was ended at launch (it is never resumed): the user is told once.
         .locationInterruptedAlert()
         .onChange(of: searchText) { _ in updateGroupRows() }
@@ -588,8 +604,12 @@ struct ChatListScreen: View {
             // (from a contact you've never messaged) is in the list.
             container.loadFromStore()
             if let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
-                deepLinkItem = item
-                deepLinkActive = true
+                if twoPane {
+                    selection.selected = chatTarget(for: item)
+                } else {
+                    deepLinkItem = item
+                    deepLinkActive = true
+                }
             }
             // Consume the deep link so a stale value doesn't re-fire
             // on the next view re-render.
@@ -1012,13 +1032,15 @@ struct ChatListScreen: View {
     /// pushes GroupChatScreen (the old horizontal card routed to the 1:1
     /// ChatDetailScreen, which was wrong for a group).
     private func groupRow(_ row: GroupRowUi) -> some View {
-        NavigationLink {
+        let target = QAudionChatTarget.group(id: row.id, name: row.name, memberCount: row.memberCount)
+        return ChatRowLink(target: target, twoPane: twoPane, selection: selection) {
             GroupChatScreen(
                 groupId: row.id,
                 initial: GroupChatUiState(
                     name: row.name,
                     memberCount: row.memberCount,
                     messages: []))
+                .onAppear { if !twoPane { selection.selected = target } }
         } label: {
             HStack(spacing: 12) {
                 QAudionAvatar(displayName: row.name, imageURL: row.avatarUrl,
@@ -1176,7 +1198,10 @@ struct ChatListScreen: View {
 
     private func conversationRow(_ item: ConversationListViewModel.Item) -> some View {
         let rowTitle = resolvedRowTitle(item)
-        return NavigationLink(destination: chatDestination(for: item)) {
+        let target = chatTarget(for: item)
+        return ChatRowLink(target: target, twoPane: twoPane, selection: selection) {
+            chatDestination(for: item)
+        } label: {
             HStack(spacing: 12) {
                 // W120: presence dot on the avatar — green when peer
                 // online via PresenceService, gray when offline. Group
@@ -1485,6 +1510,49 @@ struct ChatListScreen: View {
             peerUserId: item.peerUserId,
             peerDisplayName: item.peerDisplayName
         )
+        // In a stack the chat reports itself, so a change of layout (unfolding) can open the same chat next to the list.
+        .onAppear { if !twoPane { selection.selected = chatTarget(for: item) } }
+    }
+
+    private func chatTarget(for item: ConversationListViewModel.Item) -> QAudionChatTarget {
+        .conversation(id: item.conversationId, peerUserId: item.peerUserId, peerDisplayName: item.peerDisplayName)
+    }
+
+    /// The list came on screen. In a stack: the first time, a chat that was open in another layout is opened again
+    /// (folding); any later time the user came back from a chat, so none is open. Next to the chat nothing is closed here.
+    private func handleListAppear() {
+        guard !twoPane else { return }
+        if !stackListAppeared {
+            stackListAppeared = true
+            guard case .conversation(let id, _, _)? = selection.selected else {
+                selection.clear()
+                return
+            }
+            container.loadFromStore()
+            if let item = container.viewModel.items.first(where: { $0.conversationId == id }) {
+                deepLinkItem = item
+                deepLinkActive = true
+            } else {
+                selection.clear()
+            }
+        } else {
+            selection.clear()
+        }
+    }
+
+    /// A chat that was deleted or left no longer has a place in the detail column.
+    private func dropSelectionIfGone() {
+        guard twoPane, let current = selection.selected else { return }
+        switch current {
+        case .conversation(let id, _, _):
+            if !container.viewModel.items.contains(where: { $0.conversationId == id }) {
+                selection.clear()
+            }
+        case .group(let id, _, _):
+            if !groupRows.contains(where: { $0.id == id }) {
+                selection.clear()
+            }
+        }
     }
 
     // MARK: - New conversation by number/extension (2026-07-29)
