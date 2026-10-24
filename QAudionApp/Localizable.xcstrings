@@ -54183,6 +54183,90 @@
           }
         }
       }
+    },
+    "Nuovo messaggio": {
+      "extractionState": "manual",
+      "comment": "Home Screen quick action, name of the New message app intent and of its shortcut.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuovo messaggio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuevo mensaje"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nouveau message"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neue Nachricht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nova mensagem"
+          }
+        }
+      }
+    },
+    "Apre Q-Audion sulla scelta del contatto a cui scrivere.": {
+      "extractionState": "manual",
+      "comment": "Description of the New message app intent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apre Q-Audion sulla scelta del contatto a cui scrivere."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens Q-Audion where you pick the contact to write to."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre Q-Audion para elegir el contacto al que escribir."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre Q-Audion pour choisir le contact à qui écrire."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet Q-Audion zur Auswahl des Kontakts, dem du schreiben möchtest."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre o Q-Audion para escolher o contato para quem escrever."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

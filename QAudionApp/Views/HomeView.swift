@@ -141,6 +141,13 @@ struct HomeView: View {
                 selectedTab = .chats
             }
         }
+        // A Home Screen quick action or the "Nuovo messaggio" intent: the Chats tab at its root, where the list shows what was asked.
+        .onChange(of: appState.pendingQuickAction) { request in
+            if request != nil {
+                selectedTab = .chats
+                chatsPath = NavigationPath()
+            }
+        }
         // A tap on the notice of a pending phone-number transfer: the Chat tab at its root, where the
         // transfer banner is.
         .onChange(of: appState.chatListOpenRequest) { _ in

@@ -87,6 +87,7 @@ final class AppState: ObservableObject {
             if isAuthenticated != oldValue {
                 CarPlayBridge.shared.signInDidChange()
                 LocationShareIntentRouter.shortcutParametersChanged()
+                QuickActions.refresh()
             }
         }
     }
@@ -359,6 +360,10 @@ final class AppState: ObservableObject {
     /// The "Share location" app intent (Siri, Shortcuts, Action button) asked for the share sheet of a chat. The chat screen of
     /// that peer shows the sheet and clears this; a request nobody picked up expires (`LocationShareIntentPolicy.isFresh`).
     @Published var pendingLocationShareRequest: LocationShareRequest?
+
+    /// A Home Screen quick action (long press on the icon) or the "Nuovo messaggio" app intent asked for the new-conversation sheet or
+    /// for the contact picker of location sharing. The chat list takes it once (`QuickActionPolicy.take`); a request nobody picked up expires.
+    @Published var pendingQuickAction: QuickActionRequest?
 
     /// Opens the chat of `request.peerUserId` with the same deep link a notification tap uses, and leaves the request for it.
     func requestLocationShare(_ request: LocationShareRequest) {
@@ -18230,7 +18235,9 @@ final class AppState: ObservableObject {
         // The "Share location" app intent: a request left for the account that is leaving dies with it, and Siri and Shortcuts
         // forget the contact names they were given (the list is empty now).
         pendingLocationShareRequest = nil
+        pendingQuickAction = nil
         LocationShareIntentRouter.shortcutParametersChanged()
+        QuickActions.refresh()
         // The mesh radio and the identity it runs under belong to the account that left: stop it, drop the
         // transport built for that node id, and clear what the account had queued.
         MeshRuntime.shared.accountLeft()

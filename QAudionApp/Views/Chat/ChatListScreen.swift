@@ -63,6 +63,8 @@ struct ChatListScreen: View {
 
     @State private var searchText: String = ""
     @State private var showingNewConversation = false
+    /// The contact picker of the "Condividi posizione" quick action.
+    @State private var showingQuickLocationPicker = false
     @State private var showingNewGroup = false
     /// 2026-07-29 — "start a chat by typed number/extension" fields, shown
     /// above the contact picker inside the "new conversation" sheet. Ports
@@ -630,6 +632,15 @@ struct ChatListScreen: View {
             // Consume the deep link so a stale value doesn't re-fire
             // on the next view re-render.
             appState.pendingDeepLinkConversationId = nil
+        }
+        // Home Screen quick actions and the "Nuovo messaggio" intent. The request waits behind the app lock; `onReceive` also covers
+        // a list that appears after the request was made (a cold launch). The task lets the lock settle before it is read.
+        .onChange(of: appState.pendingQuickAction) { _ in takeQuickAction() }
+        .onReceive(AppLockService.shared.$isLocked) { _ in
+            Task { @MainActor in takeQuickAction() }
+        }
+        .sheet(isPresented: $showingQuickLocationPicker) {
+            QuickActionLocationPicker(onDone: { showingQuickLocationPicker = false })
         }
         // `onDismiss` runs for EVERY way the sheet goes away — the Done and
         // Annulla buttons, but also a swipe down — so the banner follows the
@@ -1691,6 +1702,22 @@ struct ChatListScreen: View {
         dialInput = ""
         showingNewConversation = false
         appState.pendingDeepLinkConversationId = convId
+    }
+
+    /// Takes the pending quick action, once, if the session, the lock and the remote switch allow it.
+    private func takeQuickAction() {
+        var slot: QuickActionRequest? = appState.pendingQuickAction
+        guard slot != nil else { return }
+        let presentation = QuickActionPolicy.take(
+            &slot, accountId: appState.currentUserId, signedIn: appState.isAuthenticated,
+            locationEnabled: LocationShareCenter.isFeatureEnabled, appLocked: LocationShareIntentRouter.appLocked(), now: Date())
+        if slot != appState.pendingQuickAction { appState.pendingQuickAction = slot }
+        guard let presentation else { return }
+        deepLinkActive = false
+        switch presentation {
+        case .newMessage: showingNewConversation = true
+        case .locationPicker: showingQuickLocationPicker = true
+        }
     }
 
     // MARK: - Empty state

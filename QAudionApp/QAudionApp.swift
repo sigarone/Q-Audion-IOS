@@ -25,8 +25,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             // unless a CarPlay scene exists, which needs the QAUDION_CARPLAY build and the CarPlay entitlement.
             CarPlayBridge.shared.bootApp = { QAudionApp.startForCarPlayLaunch() }
             CarPlayBridge.shared.continueStartCall = { activity in AppState.shared.handleSiriStartCall(activity) }
+            // The icon menu follows the remote switch of location sharing.
+            QuickActions.installObservers()
         }
         return true
+    }
+
+    /// Home Screen quick actions. A tap that launches the app is in the connection options here; one that arrives while the app is
+    /// running or suspended goes to `QuickActionSceneDelegate`. The scene delegate is set for the phone window only: any other scene
+    /// (CarPlay) keeps the configuration of its own.
+    func application(_ application: UIApplication,
+                     configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        guard connectingSceneSession.role == .windowApplication else { return connectingSceneSession.configuration }
+        if let item = options.shortcutItem {
+            let type: String = item.type
+            MainActor.assumeIsolated { _ = QuickActions.handle(type: type) }
+        }
+        let configuration = UISceneConfiguration(name: connectingSceneSession.configuration.name, sessionRole: .windowApplication)
+        configuration.delegateClass = QuickActionSceneDelegate.self
+        return configuration
     }
 
     func application(_ application: UIApplication,
