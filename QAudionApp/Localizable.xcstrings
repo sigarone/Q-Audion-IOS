@@ -8959,19 +8959,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "PATH"
+            "value": "ROUTE"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "CHEMIN"
+            "value": "TRAJET"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "PFAD"
+            "value": "ROUTE"
           }
         },
         "es": {
@@ -8983,7 +8983,7 @@
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "CAMINHO"
+            "value": "ROTA"
           }
         }
       }
@@ -93359,13 +93359,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "CHIFFRE"
+            "value": "CHIFFREMENT"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "CIPHER"
+            "value": "VERSCHLÜSSELUNG"
           }
         },
         "es": {
@@ -93377,7 +93377,7 @@
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "CIFRA"
+            "value": "CRIPTOGRAFIA"
           }
         }
       }
