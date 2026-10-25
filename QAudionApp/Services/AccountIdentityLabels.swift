@@ -62,7 +62,7 @@ enum AccountIdentityLabels {
             extLabel = nil
         }
 
-        let primary = nameLabel ?? extLabel ?? phoneLabel ?? "Profilo da completare"
+        let primary = nameLabel ?? extLabel ?? phoneLabel ?? String(localized: "contact.account_label.incomplete", defaultValue: "Profilo da completare", comment: "Placeholder name for the signed-in user's own account when no display name, extension or phone number is available yet")
         let secondary = [extLabel, phoneLabel]
             .compactMap { $0 }
             .filter { $0 != primary }

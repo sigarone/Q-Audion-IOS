@@ -13,7 +13,7 @@ public enum BCryptoCallingError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .wsUnavailable:
-            return "Connessione al server persa. Verifica la rete e riprova."
+            return String(localized: "security.error.server_connection_lost", defaultValue: "Connessione al server persa. Verifica la rete e riprova.", comment: "Error when starting a call: the connection to the server was lost; check the network and try again")
         }
     }
 }

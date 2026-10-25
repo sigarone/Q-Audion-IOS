@@ -197,7 +197,7 @@ public struct ContactDetailView: View {
             Button(role: viewModel.isBlocked ? .none : .destructive,
                    action: { onBlock?() },
                    label: {
-                Label(viewModel.isBlocked ? "Sblocca" : "Blocca",
+                Label(viewModel.isBlocked ? LocalizedStringKey("contacts.unblock") : LocalizedStringKey("contacts.block"),
                       systemImage: viewModel.isBlocked ? "lock.open" : "hand.raised.fill")
             })
             Button(role: .destructive, action: { confirmingDelete = true }, label: {

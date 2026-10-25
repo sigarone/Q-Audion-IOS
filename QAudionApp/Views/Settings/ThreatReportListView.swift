@@ -174,12 +174,18 @@ struct ThreatReportListView: View {
     /// Mirrors the strings displayed by `ThreatReportView`'s picker.
     private func humanCategory(_ raw: String) -> String {
         switch raw {
-        case "deepfake_detected": return "Deepfake rilevato"
-        case "voice_mismatch": return "Voce non corrispondente"
-        case "key_tampering": return "Manomissione chiavi"
-        case "suspicious_network": return "Rete sospetta"
-        case "panic_wipe_triggered": return "Wipe di emergenza attivato"
-        case "other": return "Altro"
+        case "deepfake_detected":
+            return String(localized: "security.threat_category.deepfake", defaultValue: "Deepfake rilevato", comment: "Threat report category: a deepfake (synthetic voice or video) was detected")
+        case "voice_mismatch":
+            return String(localized: "security.threat_category.voice_mismatch", defaultValue: "Voce non corrispondente", comment: "Threat report category: the voice did not match the saved voice of the contact")
+        case "key_tampering":
+            return String(localized: "security.threat_category.key_tampering", defaultValue: "Manomissione chiavi", comment: "Threat report category: signs that encryption keys were tampered with")
+        case "suspicious_network":
+            return String(localized: "security.threat_category.suspicious_network", defaultValue: "Rete sospetta", comment: "Threat report category: suspicious network behavior")
+        case "panic_wipe_triggered":
+            return String(localized: "security.threat_category.panic_wipe", defaultValue: "Wipe di emergenza attivato", comment: "Threat report category: the emergency wipe (erasing all data) was triggered")
+        case "other":
+            return String(localized: "Altro")
         default:
             // Forward-compat: capitalise unknown raw values so future
             // server-side categories still render readably.
@@ -193,10 +199,10 @@ struct ThreatReportListView: View {
 /// `entry.severity` string stays untranslated for icon-switch matching.
 private func humanSeverity(_ raw: String) -> String {
     switch raw {
-    case "critical": return "Critica"
-    case "high": return "Alta"
-    case "medium": return "Media"
-    case "low": return "Bassa"
+    case "critical": return String(localized: "security.severity.critical", defaultValue: "Critica", comment: "Threat report severity (feminine, agrees with 'gravity'): critical")
+    case "high": return String(localized: "security.severity.high", defaultValue: "Alta", comment: "Threat report severity (feminine, agrees with 'gravity'): high")
+    case "medium": return String(localized: "security.severity.medium", defaultValue: "Media", comment: "Threat report severity (feminine, agrees with 'gravity'): medium")
+    case "low": return String(localized: "security.severity.low", defaultValue: "Bassa", comment: "Threat report severity (feminine, agrees with 'gravity'): low")
     default: return raw.capitalized
     }
 }

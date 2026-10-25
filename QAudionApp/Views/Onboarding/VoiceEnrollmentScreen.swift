@@ -133,7 +133,7 @@ struct VoiceEnrollmentScreen: View {
             heroBadge(
                 icon: "checkmark.seal.fill",
                 title: "Voice-as-Key attivo",
-                description: "Il tuo voiceprint è registrato (id=\(id.suffix(8))). Da ora le chiamate saranno verificate per voce.",
+                description: "Il tuo voiceprint è registrato (id=\(String(id.suffix(8)))). Da ora le chiamate saranno verificate per voce.",
                 tint: extras.success
             )
         case .error(let msg):
@@ -142,8 +142,8 @@ struct VoiceEnrollmentScreen: View {
     }
 
     private func heroBadge(icon: String,
-                           title: String,
-                           description: String,
+                           title: LocalizedStringKey,
+                           description: LocalizedStringKey,
                            tint: Color,
                            showsSpinner: Bool = false) -> some View {
         VStack(spacing: 16) {
@@ -277,7 +277,7 @@ struct VoiceEnrollmentScreen: View {
         }
     }
 
-    private func primaryButton(label: String,
+    private func primaryButton(label: LocalizedStringKey,
                                disabled: Bool = false,
                                action: @escaping () -> Void) -> some View {
         Button(action: action) {

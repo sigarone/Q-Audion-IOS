@@ -156,7 +156,7 @@ struct PhoneContactImportView: View {
 
                 Spacer()
 
-                Text(candidates.isEmpty ? "AVVIA" : "RISCANSIONA")
+                Text(candidates.isEmpty ? LocalizedStringKey("AVVIA") : LocalizedStringKey("RISCANSIONA"))
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.2)
                     .foregroundStyle(scheme.onPrimary)
@@ -180,28 +180,34 @@ struct PhoneContactImportView: View {
     private var importCardSubtitle: String {
         if isAccessGranted {
             if candidates.isEmpty {
-                return "Carica i tuoi contatti per scoprire chi usa Q-Audion"
+                return Self.loadPrompt
             }
-            return "\(candidates.count) contatti trovati in rubrica"
+            return foundText
         }
         switch permission {
         case .notDetermined:
-            return "Tocca per autorizzare l'accesso ai contatti"
+            return String(localized: "contact.import.card.tap_to_authorize", defaultValue: "Tocca per autorizzare l'accesso ai contatti", comment: "Subtitle of the address-book import card before the user was asked for Contacts access")
         case .denied, .restricted:
-            return "Accesso ai contatti negato · apri Impostazioni iOS"
+            return String(localized: "contact.import.card.access_denied", defaultValue: "Accesso ai contatti negato · apri Impostazioni iOS", comment: "Subtitle of the address-book import card when Contacts access was denied; points to the iOS Settings app")
         case .authorized:
             // Handled above by isAccessGranted.
-            return candidates.isEmpty
-                ? "Carica i tuoi contatti per scoprire chi usa Q-Audion"
-                : "\(candidates.count) contatti trovati in rubrica"
+            return candidates.isEmpty ? Self.loadPrompt : foundText
         case .limited:
             // iOS 18+: limited access — show available contacts.
             return candidates.isEmpty
-                ? "Accesso parziale ai contatti autorizzato"
-                : "\(candidates.count) contatti trovati in rubrica"
+                ? String(localized: "contact.import.card.limited_access", defaultValue: "Accesso parziale ai contatti autorizzato", comment: "Subtitle of the address-book import card when the user granted access to only some contacts (iOS limited access)")
+                : foundText
         @unknown default:
-            return "Tocca per importare i contatti"
+            return String(localized: "contact.import.card.tap_to_import", defaultValue: "Tocca per importare i contatti", comment: "Subtitle of the address-book import card, fallback for an unknown permission state")
         }
+    }
+
+    private static var loadPrompt: String {
+        String(localized: "contact.import.card.load_prompt", defaultValue: "Carica i tuoi contatti per scoprire chi usa Q-Audion", comment: "Subtitle of the address-book import card: invites the user to load their contacts to find who already uses Q-Audion")
+    }
+
+    private var foundText: String {
+        String(localized: "contact.import.card.found_count", defaultValue: "\(candidates.count) contatti trovati in rubrica", comment: "Subtitle of the address-book import card. %lld is the number of contacts found in the address book")
     }
 
     // MARK: - Candidate list
@@ -276,7 +282,7 @@ struct PhoneContactImportView: View {
         .padding(.top, 40)
     }
 
-    private func sectionHeader(_ text: String) -> some View {
+    private func sectionHeader(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .qaudionStyle(type.labelSmall)
             .tracking(1.5)
@@ -500,14 +506,14 @@ private struct ImportContactSheet: View {
         onConfirm(stored)
     }
 
-    private func fieldLabel(_ text: String) -> some View {
+    private func fieldLabel(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .font(.system(.caption, design: .monospaced).weight(.semibold))
             .tracking(1.2)
             .foregroundStyle(scheme.onSurfaceVariant)
     }
 
-    private func textField(text: Binding<String>, placeholder: String) -> some View {
+    private func textField(text: Binding<String>, placeholder: LocalizedStringKey) -> some View {
         TextField(placeholder, text: text)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.words)
