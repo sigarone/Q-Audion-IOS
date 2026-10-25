@@ -177,7 +177,7 @@ struct AboutSettingsScreen: View {
                         // device-id (those are server-issued).
                         // W298: tap-to-copy for the truncated UUID
                         // prefix (lets QA include it in bug reports).
-                        tapCopyRow("ID dispositivo (vendor)", Self.vendorIdLabel())
+                        tapCopyRow(String(localized: "about.label.vendor_id", defaultValue: "ID dispositivo (vendor)", comment: "About screen, DATI LOCALI row label: the identifierForVendor of this device; (vendor) stays untranslated"), Self.vendorIdLabel())
                     }
                     // W311: STATISTICHE section celebrating v1.0.300
                     // milestone. Surfaces meta-data about the app's
@@ -215,7 +215,9 @@ struct AboutSettingsScreen: View {
                               appState.wsConnectionState.rawValue,
                               mono: true)
                         kvRow("Autenticato",
-                              appState.isAuthenticated ? "sì" : "no",
+                              appState.isAuthenticated
+                                ? String(localized: "about.value.yes", defaultValue: "sì", comment: "About screen, CONNESSIONE section: authenticated = yes")
+                                : String(localized: "about.value.no", defaultValue: "no", comment: "About screen, CONNESSIONE section: authenticated = no"),
                               mono: false)
                     }
                     section("AGGIORNAMENTI") {
@@ -395,7 +397,7 @@ struct AboutSettingsScreen: View {
     // MARK: - Section wrapper
 
     @ViewBuilder
-    private func section<Content: View>(_ title: String,
+    private func section<Content: View>(_ title: LocalizedStringKey,
                                         @ViewBuilder content: () -> Content) -> some View {
         SettingsSectionHeader(title)
         VStack(spacing: 8) {
@@ -460,7 +462,7 @@ struct AboutSettingsScreen: View {
     /// W311: count of release entries in the in-app changelog. Reads
     /// from ReleaseNote.releaseNotes.count — the data file (W302).
     private static func changelogReleaseCountLabel() -> String {
-        return String(ReleaseNote.releaseNotes.count) + " entries"
+        return String(localized: "about.changelog.count", defaultValue: "\(ReleaseNote.releaseNotes.count) voci", comment: "About screen, STATISTICHE row value: number of release entries in the changelog")
     }
 
     /// W311: days since first launch on this device. Reuses the
@@ -473,9 +475,9 @@ struct AboutSettingsScreen: View {
         let firstSeen: Date = (store.object(forKey: key) as? Date) ?? Date()
         let elapsed: TimeInterval = Date().timeIntervalSince(firstSeen)
         let days: Int = Int(elapsed / 86400.0)
-        if days == 0 { return "Oggi" }
-        if days == 1 { return "1 giorno" }
-        return String(days) + " giorni"
+        if days == 0 { return String(localized: "about.days.today", defaultValue: "Oggi", comment: "About screen, STATISTICHE row value: app first launched today") }
+        if days == 1 { return String(localized: "about.days.one", defaultValue: "1 giorno", comment: "About screen, STATISTICHE row value: exactly 1 day since install") }
+        return String(localized: "about.days.many", defaultValue: "\(days) giorni", comment: "About screen, STATISTICHE row value: N days since install")
     }
 
     /// W311: count of distinct build numbers that have been launched
@@ -517,7 +519,7 @@ struct AboutSettingsScreen: View {
         case .tv:           return "Apple TV"
         case .carPlay:      return "CarPlay"
         case .unspecified:  return "?"
-        default:            return "Altro"
+        default:            return String(localized: "about.idiom.other", defaultValue: "Altro", comment: "About screen, PIATTAFORMA Idiom row: any other device type")
         }
         #else
         return "?"
@@ -559,11 +561,11 @@ struct AboutSettingsScreen: View {
     /// quality after a few minutes — could be thermal-related.
     private static func thermalStateLabel() -> String {
         switch ProcessInfo.processInfo.thermalState {
-        case .nominal:  return "Normale"
-        case .fair:     return "Tiepido"
-        case .serious:  return "Caldo"
-        case .critical: return "Critico"
-        @unknown default: return "Sconosciuto"
+        case .nominal:  return String(localized: "about.thermal.nominal", defaultValue: "Normale", comment: "About screen, thermal state: nominal (device temperature normal)")
+        case .fair:     return String(localized: "about.thermal.fair", defaultValue: "Tiepido", comment: "About screen, thermal state: fair (device slightly warm)")
+        case .serious:  return String(localized: "about.thermal.serious", defaultValue: "Caldo", comment: "About screen, thermal state: serious (device hot)")
+        case .critical: return String(localized: "about.thermal.critical", defaultValue: "Critico", comment: "About screen, thermal state: critical (device overheating)")
+        @unknown default: return String(localized: "Sconosciuto")
         }
     }
 
@@ -611,9 +613,9 @@ struct AboutSettingsScreen: View {
     /// which can spike PQC keygen latency by 30-60%.
     private static func lowPowerLabel() -> String {
         if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            return "Attivo (CPU ridotta)"
+            return String(localized: "about.lowpower.on", defaultValue: "Attivo (CPU ridotta)", comment: "About screen, Low Power Mode row value when iOS Low Power Mode is on")
         } else {
-            return "Disattivato"
+            return String(localized: "settings.common.disabled", defaultValue: "Disattivato", comment: "Generic status value: feature or mode is turned off")
         }
     }
 
@@ -636,10 +638,10 @@ struct AboutSettingsScreen: View {
         }
         let stateText: String
         switch dev.batteryState {
-        case .charging:   stateText = "In carica"
-        case .full:       stateText = "Piena"
-        case .unplugged:  stateText = "Scarica"
-        case .unknown:    stateText = "Sconosciuto"
+        case .charging:   stateText = String(localized: "about.battery.charging", defaultValue: "In carica", comment: "About screen, battery state: plugged in and charging")
+        case .full:       stateText = String(localized: "about.battery.full", defaultValue: "Piena", comment: "About screen, battery state: fully charged")
+        case .unplugged:  stateText = String(localized: "about.battery.unplugged", defaultValue: "Scarica", comment: "About screen, battery state: unplugged and discharging (running on battery), not empty")
+        case .unknown:    stateText = String(localized: "Sconosciuto")
         @unknown default: stateText = "?"
         }
         return pct + " · " + stateText
@@ -713,23 +715,23 @@ struct AboutSettingsScreen: View {
         // like .dangi). Use a regular default to make it exhaustive.
         let id = Calendar.current.identifier
         switch id {
-        case .gregorian:        return "Gregoriano"
-        case .buddhist:         return "Buddista"
-        case .chinese:          return "Cinese"
-        case .coptic:           return "Copto"
-        case .ethiopicAmeteAlem: return "Etiope (Amete Alem)"
-        case .ethiopicAmeteMihret: return "Etiope (Amete Mihret)"
-        case .hebrew:           return "Ebraico"
+        case .gregorian:        return String(localized: "about.calendar.gregorian", defaultValue: "Gregoriano", comment: "About screen, Calendario row: calendar system name")
+        case .buddhist:         return String(localized: "about.calendar.buddhist", defaultValue: "Buddista", comment: "About screen, Calendario row: calendar system name")
+        case .chinese:          return String(localized: "about.calendar.chinese", defaultValue: "Cinese", comment: "About screen, Calendario row: calendar system name")
+        case .coptic:           return String(localized: "about.calendar.coptic", defaultValue: "Copto", comment: "About screen, Calendario row: calendar system name")
+        case .ethiopicAmeteAlem: return String(localized: "about.calendar.ethiopic_amete_alem", defaultValue: "Etiope (Amete Alem)", comment: "About screen, Calendario row: calendar system name")
+        case .ethiopicAmeteMihret: return String(localized: "about.calendar.ethiopic_amete_mihret", defaultValue: "Etiope (Amete Mihret)", comment: "About screen, Calendario row: calendar system name")
+        case .hebrew:           return String(localized: "about.calendar.hebrew", defaultValue: "Ebraico", comment: "About screen, Calendario row: calendar system name")
         case .iso8601:          return "ISO 8601"
-        case .indian:           return "Indiano"
-        case .islamic:          return "Islamico"
-        case .islamicCivil:     return "Islamico civile"
-        case .japanese:         return "Giapponese"
-        case .persian:          return "Persiano"
-        case .republicOfChina:  return "Repubblica di Cina"
-        case .islamicTabular:   return "Islamico tabulare"
-        case .islamicUmmAlQura: return "Islamico (Umm al-Qura)"
-        default:                return "Sconosciuto"
+        case .indian:           return String(localized: "about.calendar.indian", defaultValue: "Indiano", comment: "About screen, Calendario row: calendar system name")
+        case .islamic:          return String(localized: "about.calendar.islamic", defaultValue: "Islamico", comment: "About screen, Calendario row: calendar system name")
+        case .islamicCivil:     return String(localized: "about.calendar.islamic_civil", defaultValue: "Islamico civile", comment: "About screen, Calendario row: calendar system name")
+        case .japanese:         return String(localized: "about.calendar.japanese", defaultValue: "Giapponese", comment: "About screen, Calendario row: calendar system name")
+        case .persian:          return String(localized: "about.calendar.persian", defaultValue: "Persiano", comment: "About screen, Calendario row: calendar system name")
+        case .republicOfChina:  return String(localized: "about.calendar.republic_of_china", defaultValue: "Repubblica di Cina", comment: "About screen, Calendario row: calendar system name (Minguo calendar)")
+        case .islamicTabular:   return String(localized: "about.calendar.islamic_tabular", defaultValue: "Islamico tabulare", comment: "About screen, Calendario row: calendar system name")
+        case .islamicUmmAlQura: return String(localized: "about.calendar.islamic_umm_al_qura", defaultValue: "Islamico (Umm al-Qura)", comment: "About screen, Calendario row: calendar system name")
+        default:                return String(localized: "Sconosciuto")
         }
     }
 
@@ -740,10 +742,10 @@ struct AboutSettingsScreen: View {
     private static func userInterfaceStyleLabel() -> String {
         #if canImport(UIKit)
         switch UIScreen.main.traitCollection.userInterfaceStyle {
-        case .light:    return "Chiaro"
-        case .dark:     return "Scuro"
-        case .unspecified: return "Non specificato"
-        @unknown default: return "Sconosciuto"
+        case .light:    return String(localized: "about.appearance.light", defaultValue: "Chiaro", comment: "About screen, Aspetto row: light appearance")
+        case .dark:     return String(localized: "about.appearance.dark", defaultValue: "Scuro", comment: "About screen, Aspetto row: dark appearance")
+        case .unspecified: return String(localized: "about.appearance.unspecified", defaultValue: "Non specificato", comment: "About screen, Aspetto row: appearance not specified")
+        @unknown default: return String(localized: "Sconosciuto")
         }
         #else
         return "?"
@@ -756,10 +758,10 @@ struct AboutSettingsScreen: View {
     private static func microphonePermissionLabel() -> String {
         #if canImport(AVFAudio)
         switch AVAudioSession.sharedInstance().recordPermission {
-        case .granted:    return "Concesso"
-        case .denied:     return "Negato"
-        case .undetermined: return "Non richiesto"
-        @unknown default: return "Sconosciuto"
+        case .granted:    return String(localized: "settings.permission.granted", defaultValue: "Concesso", comment: "Permission status value: granted")
+        case .denied:     return String(localized: "settings.permission.denied", defaultValue: "Negato", comment: "Permission status value: denied")
+        case .undetermined: return String(localized: "settings.permission.not_requested", defaultValue: "Non richiesto", comment: "Permission status value: the app has not asked for the permission yet")
+        @unknown default: return String(localized: "Sconosciuto")
         }
         #else
         return "?"
@@ -844,7 +846,7 @@ struct AboutSettingsScreen: View {
         // Foundation — it derives formatting from the system locale
         // automatically. Removed the bogus assignment.
         let formatted: String = formatter.string(fromByteCount: Int64(bytes))
-        return formatted + " liberi"
+        return String(localized: "about.disk.free", defaultValue: "\(formatted) liberi", comment: "About screen, Spazio libero row value: free disk space, e.g. 12 GB free")
     }
 
     /// W162: stamp the first-launch timestamp for THIS build number
@@ -915,7 +917,7 @@ struct AboutSettingsScreen: View {
 
     // MARK: - Rows
 
-    private func kvRow(_ label: String, _ value: String, mono: Bool) -> some View {
+    private func kvRow(_ label: LocalizedStringKey, _ value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
@@ -954,7 +956,9 @@ struct AboutSettingsScreen: View {
                 Circle()
                     .fill(enabled ? extras.success : extras.riskHigh)
                     .frame(width: 8, height: 8)
-                Text(enabled ? "Attivo" : "Disattivo")
+                Text(enabled
+                     ? String(localized: "settings.common.active", defaultValue: "Attivo", comment: "Generic status value: feature is active")
+                     : String(localized: "settings.common.inactive", defaultValue: "Disattivo", comment: "Generic status value: feature is inactive"))
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(enabled ? extras.success : extras.riskHigh)
             }
@@ -977,13 +981,13 @@ struct AboutSettingsScreen: View {
                 case .noUpdate:
                     iconRow(icon: "checkmark.circle.fill",
                             tint: extras.success,
-                            title: "Sei aggiornato all'ultima versione",
+                            title: String(localized: "about.update.up_to_date", defaultValue: "Sei aggiornato all'ultima versione", comment: "About screen, AGGIORNAMENTI: the installed app is the latest version"),
                             subtitle: nil)
                 case .updateAvailable(let info):
                     VStack(alignment: .leading, spacing: 8) {
                         iconRow(icon: "arrow.down.circle.fill",
                                 tint: scheme.primary,
-                                title: "Aggiornamento disponibile: v\(info.availableVersion)",
+                                title: String(localized: "about.update.available", defaultValue: "Aggiornamento disponibile: v\(info.availableVersion)", comment: "About screen, AGGIORNAMENTI: a newer app version is available; placeholder is the version number"),
                                 subtitle: info.releaseNotes.isEmpty ? nil : info.releaseNotes)
                         if info.downloadUrl != nil {
                             Button { updateChecker.openAppStoreLink(for: info) } label: {

@@ -52,7 +52,7 @@ struct EmailVerifyConfirmView: View {
         .task { await confirm() }
     }
 
-    private func doneButton(label: String) -> some View {
+    private func doneButton(label: LocalizedStringKey) -> some View {
         Button(action: onDone) {
             Text(label)
                 .font(.body.weight(.semibold))
@@ -67,18 +67,18 @@ struct EmailVerifyConfirmView: View {
 
     private func confirm() async {
         guard token.isEmpty == false else {
-            state = .failed("Link non valido.")
+            state = .failed(String(localized: "settings.email_verify.invalid_link", defaultValue: "Link non valido.", comment: "Email verification screen, error: the verification link has no valid token"))
             return
         }
         guard let provider = appState.liveProvider else {
-            state = .failed("Accedi all'app con l'account che ha richiesto la verifica, poi riapri il link.")
+            state = .failed(String(localized: "settings.email_verify.sign_in_required", defaultValue: "Accedi all'app con l'account che ha richiesto la verifica, poi riapri il link.", comment: "Email verification screen, error: the app is not signed in to the account that requested the verification"))
             return
         }
         do {
             let result = try await provider.accountApi.confirmEmailVerification(token: token)
-            state = result.verified ? .success : .failed("Verifica non riuscita.")
+            state = result.verified ? .success : .failed(String(localized: "settings.email_verify.failed", defaultValue: "Verifica non riuscita.", comment: "Email verification screen, error: the server did not confirm the email"))
         } catch {
-            state = .failed("Link scaduto o già usato.")
+            state = .failed(String(localized: "settings.email_verify.expired_link", defaultValue: "Link scaduto o già usato.", comment: "Email verification screen, error: the verification link expired or was already used"))
         }
     }
 }

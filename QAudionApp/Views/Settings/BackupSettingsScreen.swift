@@ -57,9 +57,9 @@ private struct PasswordSheet: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
 
-    let title: String
-    let subtitle: String
-    let actionLabel: String
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey
+    let actionLabel: LocalizedStringKey
     let isConfirmMode: Bool
     let onCommit: (String) -> Void
     let onCancel: () -> Void
@@ -126,7 +126,7 @@ private struct PasswordSheet: View {
         }
     }
 
-    private func secureField(label: String,
+    private func secureField(label: LocalizedStringKey,
                              text: Binding<String>,
                              contentType: UITextContentType) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -168,7 +168,9 @@ struct BackupSettingsScreen: View {
     }
 
     private var lastBackupText: String {
-        guard let date = container.viewModel.lastBackupAt else { return "Mai" }
+        guard let date = container.viewModel.lastBackupAt else {
+            return String(localized: "backup.last_backup.never", defaultValue: "Mai", comment: "Backup screen, Data row value when no backup has ever been made")
+        }
         let formatter = RelativeDateTimeFormatter()
         formatter.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         formatter.unitsStyle = .abbreviated
@@ -195,8 +197,8 @@ struct BackupSettingsScreen: View {
                         // W308: 'Cifratura' becomes tap-to-copy. The
                         // algorithm string is the most-pasted value in
                         // security questions / audit responses.
-                        tapCopyRow(label: "Cifratura",
-                                   value: "Locale (QAUD/AES-256-GCM)")
+                        tapCopyRow(label: String(localized: "backup.row.encryption", defaultValue: "Cifratura", comment: "Backup screen, row label: encryption scheme of the backup"),
+                                   value: String(localized: "backup.row.encryption_value", defaultValue: "Locale (QAUD/AES-256-GCM)", comment: "Backup screen, encryption row value: local backup container format; keep QAUD/AES-256-GCM unchanged"))
                         // W306: estimate of current data that WOULD
                         // go into the next backup. Walks UserDefaults
                         // for the conversation/message keys and sums
@@ -344,7 +346,7 @@ struct BackupSettingsScreen: View {
         TapCopyRow(label: label, value: value)
     }
 
-    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+    private func kvRow(label: LocalizedStringKey, value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
@@ -364,8 +366,8 @@ struct BackupSettingsScreen: View {
     }
 
     private func actionButton(icon: String,
-                              title: String,
-                              subtitle: String,
+                              title: LocalizedStringKey,
+                              subtitle: LocalizedStringKey,
                               tint: Color,
                               enabled: Bool,
                               action: @escaping () -> Void) -> some View {
