@@ -201,7 +201,7 @@ struct ChatDetailScreen: View {
     @State private var forwardingMessage: Message? = nil
     /// W445: Document picker state.
     @State private var showingDocPicker: Bool = false
-    /// Location sharing (WIRE_SPEC 14): the share sheet, reachable only while the remote switch is on.
+    /// Location sharing (WIRE_SPEC 14): the share sheet, hidden when the remote kill switch is off.
     @State private var showingLocationSheet: Bool = false
     /// The duration the "Share location" app intent asked for, highlighted in the sheet; the user still taps to confirm.
     @State private var suggestedLiveSeconds: Int64? = nil

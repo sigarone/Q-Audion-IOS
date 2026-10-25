@@ -339,8 +339,8 @@ struct PrivacySettingsScreen: View {
                     // changed here. Appears unless the remote kill switch `mesh_ble.enabled` has been set to false.
                     MeshSettingsSection()
 
-                    // Location sharing: the live shares this device is running, with "Interrompi tutte". Appears only while the remote
-                    // switch `location_share.enabled` is on.
+                    // Location sharing: the live shares this device is running, with "Interrompi tutte". Appears unless the remote
+                    // kill switch `location_share.enabled` is off.
                     LocationSharesSettingsSection()
 
                     // 2026-08-10: the "MESSAGGI A SCADENZA" picker and the
