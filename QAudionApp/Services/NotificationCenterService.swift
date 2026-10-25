@@ -120,12 +120,12 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     private func registerCategories() {
         let viewAction = UNNotificationAction(
             identifier: "VIEW",
-            title: "View",
+            title: String(localized: "push.action.view", defaultValue: "Visualizza", comment: "Button on a notification: open the related item in the app."),
             options: [.foreground]
         )
         let dismissAction = UNNotificationAction(
             identifier: "DISMISS",
-            title: "Dismiss",
+            title: String(localized: "push.action.dismiss", defaultValue: "Ignora", comment: "Button on a notification: dismiss it without opening the app."),
             options: [.destructive]
         )
 
@@ -165,12 +165,12 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         // caller name visible even when previews are hidden on the lock screen.
         let answerCallAction = UNNotificationAction(
             identifier: CallAction.answer.rawValue,
-            title: "Rispondi",
+            title: String(localized: "push.action.answer", defaultValue: "Rispondi", comment: "Button on the incoming-call notification: answer the call (opens the app)."),
             options: [.foreground]
         )
         let declineCallAction = UNNotificationAction(
             identifier: CallAction.decline.rawValue,
-            title: "Rifiuta",
+            title: String(localized: "Rifiuta"),
             options: [.destructive]
         )
         let incomingCallCategory = UNNotificationCategory(

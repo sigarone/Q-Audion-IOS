@@ -126,7 +126,7 @@ struct ContentView: View {
         // W559 — show a non-intrusive snackbar when an auto report fires.
         .onReceive(NotificationCenter.default.publisher(for: BugReporter.autoReportNotification)) { note in
             let tag = note.userInfo?["tag"] as? String ?? "unknown"
-            let msg = "Report automatico inviato (tag: " + tag + ")"
+            let msg = String(localized: "app.report.auto_sent", defaultValue: "Report automatico inviato (tag: \(tag))", comment: "Snackbar after an automatic problem report was sent; %@ is a short technical tag.")
             snackbarHost.show(.init(text: msg, severity: .info, durationSeconds: 2))
         }
         // W400: subscribe to inbound group invites so the user gets a
@@ -223,7 +223,7 @@ struct ContentView: View {
             let fromName = DisplayName.forUser(from)
             let groupLabel = DisplayName.forGroup(id: gid)
             snackbarHost.show(.init(
-                text: "Aggiunto al gruppo \(groupLabel) da \(fromName)",
+                text: String(localized: "app.group.auto_joined", defaultValue: "Aggiunto al gruppo \(groupLabel) da \(fromName)", comment: "Snackbar when the user was added to a group by someone else; first %@ is the group name, second %@ the name of the person who added them."),
                 severity: .info,
                 durationSeconds: 5
             ))
@@ -383,7 +383,7 @@ struct ContentView: View {
             resolvedName: outgoingDisplayName, resolvedFor: outgoingResolvedFor,
             callContactId: appState.callContactId, wireName: appState.incomingCallerName) ?? ""
         return IncomingCallScreen(
-            peerDisplayName: name.isEmpty ? "Sconosciuto" : name,
+            peerDisplayName: name.isEmpty ? String(localized: "Sconosciuto") : name,
             avatarUrl: resolvedIsThisCallers ? outgoingAvatarUrl : nil,
             callType: appState.isVideoCall ? .video : .audio,
             peerShortNumber: resolvedIsThisCallers ? outgoingShortNumber : nil,
@@ -437,7 +437,9 @@ struct ContentView: View {
     private static func groupCallSubtitle(
         _ invite: AppState.IncomingGroupCallInvite
     ) -> String {
-        let kind = invite.hasVideo ? "Videochiamata di gruppo" : "Chiamata di gruppo"
+        let kind = invite.hasVideo
+            ? String(localized: "app.call.group_video_subtitle", defaultValue: "Videochiamata di gruppo", comment: "Subtitle of the incoming group call screen for a group video call (before the creator's name).")
+            : String(localized: "Chiamata di gruppo")
         var creator = invite.creatorName.trimmingCharacters(in: .whitespaces)
         if creator.isEmpty || DisplayName.looksLikeUUID(creator) {
             creator = DisplayName.forUser(invite.creatorId)

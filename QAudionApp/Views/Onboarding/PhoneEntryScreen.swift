@@ -20,15 +20,15 @@ struct PhoneEntryScreen: View {
 
         var title: String {
             switch self {
-            case .register: return "Crea un account"
-            case .login: return "Accedi"
+            case .register: return String(localized: "onboarding.phone.title_register", defaultValue: "Crea un account", comment: "Title of the phone number screen when the user is creating a new account.")
+            case .login: return String(localized: "onboarding.action.login", defaultValue: "Accedi", comment: "Sign-in button / screen title in onboarding.")
             }
         }
 
         var ctaLabel: String {
             switch self {
-            case .register: return "Continua con la registrazione"
-            case .login: return "Continua con l'accesso"
+            case .register: return String(localized: "onboarding.phone.cta_register", defaultValue: "Continua con la registrazione", comment: "Main button of the phone number screen in registration mode.")
+            case .login: return String(localized: "onboarding.phone.cta_login", defaultValue: "Continua con l'accesso", comment: "Main button of the phone number screen in sign-in mode.")
             }
         }
     }
@@ -62,7 +62,7 @@ struct PhoneEntryScreen: View {
 
     private static func formatLastAttempt(_ date: Date) -> String {
         let stamp: String = attemptFormatter.string(from: date)
-        return "Ultimo tentativo: " + stamp
+        return String(localized: "onboarding.phone.last_attempt", defaultValue: "Ultimo tentativo: \(stamp)", comment: "Small caption on the phone number screen after an attempt; %@ is the time of day (HH:mm:ss).")
     }
 
     /// Registration needs a complete invite code whose format and checksum pass

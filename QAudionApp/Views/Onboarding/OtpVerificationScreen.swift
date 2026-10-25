@@ -119,7 +119,9 @@ struct OtpVerificationScreen: View {
                 Button {
                     Task { await verify() }
                 } label: {
-                    Text(isVerifying ? "Verifica in corso…" : "Verifica")
+                    Text(isVerifying
+                            ? String(localized: "onboarding.otp.verifying", defaultValue: "Verifica in corso…", comment: "Label of the verify button while the SMS code is being checked.")
+                            : String(localized: "onboarding.action.verify", defaultValue: "Verifica", comment: "Button that submits the SMS verification code during onboarding."))
                         .font(.body.weight(.semibold))
                         .frame(maxWidth: .infinity, minHeight: 56)
                         .foregroundStyle(canVerify ? .black : .white.opacity(0.4))
@@ -249,18 +251,18 @@ struct OtpVerificationScreen: View {
             switch statusCode {
             case 404:
                 return mode == .login
-                    ? "Nessun account trovato per questo numero. Prova a registrarti."
-                    : "Richiesta non valida."
+                    ? String(localized: "onboarding.otp.error.no_account", defaultValue: "Nessun account trovato per questo numero. Prova a registrarti.", comment: "Sign-in error (HTTP 404): no account exists for the phone number.")
+                    : String(localized: "onboarding.otp.error.invalid_request", defaultValue: "Richiesta non valida.", comment: "Registration error (HTTP 404 in registration mode): the request is not valid.")
             case 409:
                 return mode == .register
-                    ? "Questo numero risulta già registrato. Prova ad accedere invece."
-                    : "Codice non valido o scaduto."
+                    ? String(localized: "onboarding.otp.error.already_registered", defaultValue: "Questo numero risulta già registrato. Prova ad accedere invece.", comment: "Registration error (HTTP 409): the phone number already has an account.")
+                    : String(localized: "onboarding.otp.error.code_invalid", defaultValue: "Codice non valido o scaduto.", comment: "Sign-in error (HTTP 409): the SMS code is wrong or expired.")
             case 429:
-                return "Troppi tentativi. Riprova tra qualche minuto."
+                return String(localized: "onboarding.error.too_many_attempts", defaultValue: "Troppi tentativi. Riprova tra qualche minuto.", comment: "Onboarding error (HTTP 429): rate limit reached.")
             case 503:
-                return "Servizio SMS temporaneamente non disponibile. Riprova più tardi."
+                return String(localized: "onboarding.otp.error.sms_unavailable", defaultValue: "Servizio SMS temporaneamente non disponibile. Riprova più tardi.", comment: "Error (HTTP 503): the SMS provider is temporarily unavailable.")
             default:
-                return "Errore del server (\(statusCode))."
+                return String(localized: "onboarding.error.server", defaultValue: "Errore del server (\(statusCode)).", comment: "Onboarding error for any other server answer; %lld is the HTTP status code.")
             }
         }
         return error.localizedDescription

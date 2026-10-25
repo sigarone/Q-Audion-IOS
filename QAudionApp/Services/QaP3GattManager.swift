@@ -60,7 +60,7 @@ public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency 
     
     public func startScan() {
         guard centralManager.state == .poweredOn else {
-            connState = .error("Bluetooth non attivo o non pronto")
+            connState = .error(String(localized: "app.p3.bluetooth_not_ready", defaultValue: "Bluetooth non attivo o non pronto", comment: "Status of the Bluetooth bench-board screen when a scan is started while Bluetooth is off or not ready."))
             return
         }
         scanned = []
@@ -129,13 +129,13 @@ public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency 
         case .poweredOn:
             break
         case .poweredOff:
-            connState = .error("Bluetooth disattivato")
+            connState = .error(String(localized: "app.p3.bluetooth_off", defaultValue: "Bluetooth disattivato", comment: "Status of the Bluetooth bench-board screen when Bluetooth is switched off."))
         case .unauthorized:
-            connState = .error("Bluetooth non autorizzato")
+            connState = .error(String(localized: "app.p3.bluetooth_unauthorized", defaultValue: "Bluetooth non autorizzato", comment: "Status of the Bluetooth bench-board screen when the app is not allowed to use Bluetooth."))
         case .unsupported:
-            connState = .error("Bluetooth non supportato su questo dispositivo")
+            connState = .error(String(localized: "app.p3.bluetooth_unsupported", defaultValue: "Bluetooth non supportato su questo dispositivo", comment: "Status of the Bluetooth bench-board screen when the device has no usable Bluetooth LE."))
         default:
-            connState = .error("Stato Bluetooth non disponibile")
+            connState = .error(String(localized: "app.p3.bluetooth_unavailable", defaultValue: "Stato Bluetooth non disponibile", comment: "Status of the Bluetooth bench-board screen when the Bluetooth state is unknown or unavailable."))
         }
     }
     
@@ -158,7 +158,7 @@ public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency 
     }
     
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        let msg = error?.localizedDescription ?? "Connessione fallita"
+        let msg = error?.localizedDescription ?? String(localized: "app.p3.connection_failed", defaultValue: "Connessione fallita", comment: "Status of the Bluetooth bench-board screen when connecting to the board failed and the system gave no detail.")
         connState = .error(msg)
         cleanup()
     }
@@ -166,7 +166,7 @@ public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         cleanup()
         if let error = error {
-            connState = .error("Disconnesso: \(error.localizedDescription)")
+            connState = .error(String(localized: "app.p3.disconnected_error", defaultValue: "Disconnesso: \(error.localizedDescription)", comment: "Status of the Bluetooth bench-board screen when the board disconnected with an error; %@ is the system error text."))
         } else {
             connState = .idle
         }
@@ -176,7 +176,7 @@ public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency 
     
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error = error {
-            connState = .error("Errore scoperta servizi: \(error.localizedDescription)")
+            connState = .error(String(localized: "app.p3.services_discovery_failed", defaultValue: "Errore scoperta servizi: \(error.localizedDescription)", comment: "Status of the Bluetooth bench-board screen when discovering the GATT services of the board failed; %@ is the system error text."))
             centralManager.cancelPeripheralConnection(peripheral)
             return
         }
@@ -191,7 +191,7 @@ public final class QaP3GattManager: NSObject, ObservableObject, @preconcurrency 
     
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error = error {
-            connState = .error("Errore scoperta caratteristiche: \(error.localizedDescription)")
+            connState = .error(String(localized: "app.p3.characteristics_discovery_failed", defaultValue: "Errore scoperta caratteristiche: \(error.localizedDescription)", comment: "Status of the Bluetooth bench-board screen when discovering the GATT characteristics of the board failed; %@ is the system error text."))
             centralManager.cancelPeripheralConnection(peripheral)
             return
         }

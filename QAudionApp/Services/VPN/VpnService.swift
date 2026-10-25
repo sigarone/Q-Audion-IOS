@@ -290,7 +290,7 @@ final class VpnService: ObservableObject {
         case .connecting, .reasserting:
             break // already set to .connecting in connect()
         case .invalid:
-            state = .error(message: "Configurazione VPN non valida")
+            state = .error(message: String(localized: "vpn.error.invalid_configuration", defaultValue: "Configurazione VPN non valida", comment: "VPN error shown when the system reports the VPN configuration as invalid."))
         @unknown default:
             break
         }
@@ -362,9 +362,9 @@ enum VpnError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .pqcStateMismatch:
-            return "VPN PQC: ciphertext senza chiave ML-KEM locale"
+            return String(localized: "vpn.error.pqc_state_mismatch", defaultValue: "VPN PQC: ciphertext senza chiave ML-KEM locale", comment: "VPN error: the server answered with a post-quantum (ML-KEM) ciphertext but the app has no matching local key. Technical message.")
         case .invalidMlkemCiphertext:
-            return "VPN PQC: ciphertext ML-KEM non valido"
+            return String(localized: "vpn.error.invalid_mlkem_ciphertext", defaultValue: "VPN PQC: ciphertext ML-KEM non valido", comment: "VPN error: the post-quantum (ML-KEM) ciphertext sent by the server is malformed. Technical message.")
         }
     }
 }
