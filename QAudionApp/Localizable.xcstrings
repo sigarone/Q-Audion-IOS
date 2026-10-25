@@ -8959,19 +8959,19 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "ROUTE"
+            "value": "PATH"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "TRAJET"
+            "value": "CHEMIN"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "ROUTE"
+            "value": "PFAD"
           }
         },
         "es": {
@@ -8983,7 +8983,7 @@
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "ROTA"
+            "value": "CAMINHO"
           }
         }
       }
@@ -86331,7 +86331,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stimmprofil aufnehmen · 5 Proben"
+            "value": "Stimmprofil aufnehmen · 5 Sprachproben"
           }
         },
         "es": {
@@ -86460,7 +86460,7 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Desactiva el vídeo cifrado en el teléfono"
+            "value": "Desactiva el video cifrado en el teléfono"
           }
         },
         "pt-BR": {
@@ -87631,7 +87631,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Authentication cancelled. Protection stays on."
+            "value": "Authentication canceled. Protection stays on."
           }
         },
         "fr": {
@@ -87725,7 +87725,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "GESPERRTE NUTZER"
+            "value": "BLOCKIERTE NUTZER"
           }
         },
         "es": {
@@ -87766,7 +87766,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gesperrt"
+            "value": "Blockiert"
           }
         },
         "es": {
@@ -87779,6 +87779,3114 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bloqueados"
+          }
+        }
+      }
+    },
+    "La chiave del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono con quelle del contatto, tocca CONFERMA per accettarla.": {
+      "extractionState": "manual",
+      "comment": "Call screen, banner text when the contact identity key changed and the server publishes it; CONFERMA is the SAS confirm button",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiave del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono con quelle del contatto, tocca CONFERMA per accettarla."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contact's key has changed and is published by the server. If the SAS words match the contact's, tap CONFIRM to accept it."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clave del contacto ha cambiado y está publicada por el servidor. Si las palabras SAS coinciden con las del contacto, toca CONFIRMAR para aceptarla."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clé du contact a changé et est publiée par le serveur. Si les mots SAS correspondent à ceux du contact, touche CONFIRMER pour l'accepter."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Schlüssel des Kontakts hat sich geändert und ist vom Server veröffentlicht. Stimmen die SAS-Wörter mit denen des Kontakts überein, tippen Sie auf BESTÄTIGEN, um ihn zu akzeptieren."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chave do contato mudou e está publicada no servidor. Se as palavras SAS coincidirem com as do contato, toque em CONFIRMAR para aceitá-la."
+          }
+        }
+      }
+    },
+    "Avviso di sicurezza: la chiave identità del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono, conferma per accettarla.": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the identity key changed banner when the server publishes the new key",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avviso di sicurezza: la chiave identità del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono, conferma per accettarla."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Security warning: the contact's identity key has changed and is published by the server. If the SAS words match, confirm to accept it."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aviso de seguridad: la clave de identidad del contacto ha cambiado y está publicada por el servidor. Si las palabras SAS coinciden, confirma para aceptarla."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avertissement de sécurité : la clé d'identité du contact a changé et est publiée par le serveur. Si les mots SAS correspondent, confirme pour l'accepter."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sicherheitshinweis: Der Identitätsschlüssel des Kontakts hat sich geändert und ist vom Server veröffentlicht. Stimmen die SAS-Wörter überein, bestätigen Sie, um ihn zu akzeptieren."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aviso de segurança: a chave de identidade do contato mudou e está publicada no servidor. Se as palavras SAS coincidirem, confirme para aceitá-la."
+          }
+        }
+      }
+    },
+    "Riattiva microfono": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the microphone button while muted",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riattiva microfono"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unmute microphone"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reactivar micrófono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réactiver le micro"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon einschalten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reativar microfone"
+          }
+        }
+      }
+    },
+    "Disattiva microfono": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the microphone button while live",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disattiva microfono"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mute microphone"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Silenciar micrófono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couper le micro"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon stummschalten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Silenciar microfone"
+          }
+        }
+      }
+    },
+    "Disattiva altoparlante": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the speaker button while the speaker is on",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disattiva altoparlante"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn off speaker"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desactivar altavoz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactiver le haut-parleur"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lautsprecher deaktivieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desativar alto-falante"
+          }
+        }
+      }
+    },
+    "Attiva altoparlante": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the speaker button while the speaker is off",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva altoparlante"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on speaker"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activar altavoz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer le haut-parleur"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lautsprecher aktivieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativar alto-falante"
+          }
+        }
+      }
+    },
+    "Disattiva video": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the camera button while the camera is on",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disattiva video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn off video"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desactivar video"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactiver la vidéo"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video deaktivieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desativar vídeo"
+          }
+        }
+      }
+    },
+    "Interrompi condivisione schermo": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the screen share button while sharing",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrompi condivisione schermo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop screen sharing"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dejar de compartir pantalla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arrêter le partage d'écran"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirmfreigabe beenden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parar compartilhamento de tela"
+          }
+        }
+      }
+    },
+    "Condividi schermo": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the screen share button while not sharing",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi schermo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share screen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir pantalla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partager l'écran"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirm teilen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhar tela"
+          }
+        }
+      }
+    },
+    "Disattiva miglioramento voce": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the voice enhancement button while it is on",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disattiva miglioramento voce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn off voice enhancement"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desactivar mejora de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactiver l'amélioration de la voix"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprachverbesserung deaktivieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desativar melhoria de voz"
+          }
+        }
+      }
+    },
+    "Attiva miglioramento voce": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the voice enhancement button while it is off",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva miglioramento voce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on voice enhancement"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activar mejora de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer l'amélioration de la voix"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprachverbesserung aktivieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativar melhoria de voz"
+          }
+        }
+      }
+    },
+    "Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti.": {
+      "extractionState": "manual",
+      "comment": "Chat screen, alert text after sending a report, offering to block the reported contact",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vuoi anche bloccare questo contatto? Non potrà più chiamarti né scriverti."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Do you also want to block this contact? They will no longer be able to call or message you."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Quieres bloquear también a este contacto? Ya no podrá llamarte ni escribirte."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Veux-tu aussi bloquer ce contact ? Il ne pourra plus t'appeler ni t'écrire."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Möchten Sie diesen Kontakt auch blockieren? Er kann Sie dann weder anrufen noch Ihnen schreiben."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você também quer bloquear este contato? Ele não poderá mais ligar nem escrever para você."
+          }
+        }
+      }
+    },
+    "Mesh Bluetooth, invio via mesh attivo": {
+      "extractionState": "manual",
+      "comment": "Chat top bar, VoiceOver label of the Bluetooth mesh button while sending over mesh is on",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, invio via mesh attivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth mesh, sending over mesh is on"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, envío por mesh activado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, envoi via mesh activé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Mesh, Senden über Mesh aktiv"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, envio via mesh ativado"
+          }
+        }
+      }
+    },
+    "Mesh Bluetooth, questo contatto è raggiungibile qui vicino": {
+      "extractionState": "manual",
+      "comment": "Chat top bar, VoiceOver label of the Bluetooth mesh button when the contact is within mesh range",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, questo contatto è raggiungibile qui vicino"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth mesh, this contact is reachable nearby"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, este contacto está cerca y al alcance"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, ce contact est joignable à proximité"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Mesh, dieser Kontakt ist in der Nähe erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth, este contato está ao alcance aqui perto"
+          }
+        }
+      }
+    },
+    "Azzera il numero rosso sull'icona dell'app": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the clear notification badge row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Azzera il numero rosso sull'icona dell'app"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resets the red number on the app icon"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pone a cero el número rojo del icono de la app"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remet à zéro le numéro rouge sur l'icône de l'app"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setzt die rote Zahl auf dem App-Symbol zurück"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zera o número vermelho no ícone do app"
+          }
+        }
+      }
+    },
+    "Svuota cache allegati": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, title of the clear attachment cache row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Svuota cache allegati"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear attachment cache"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vaciar la caché de adjuntos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vider le cache des pièces jointes"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anhang-Cache leeren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esvaziar o cache de anexos"
+          }
+        }
+      }
+    },
+    "Cancella abbozzi": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, title of the delete composer drafts row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancella abbozzi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete drafts"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eliminar borradores"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supprimer les brouillons"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entwürfe löschen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Excluir rascunhos"
+          }
+        }
+      }
+    },
+    "Reset metadati locali": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, title of the reset local metadata row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset metadati locali"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset local metadata"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restablecer metadatos locales"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réinitialiser les métadonnées locales"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lokale Metadaten zurücksetzen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset de metadados locais"
+          }
+        }
+      }
+    },
+    "Abbozzi · ultimo accesso · primo lancio · build seen": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the reset local metadata row (what is reset)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abbozzi · ultimo accesso · primo lancio · build seen"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drafts · last seen · first launch · build seen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Borradores · última conexión · primer inicio · build seen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brouillons · dernière connexion · premier lancement · build seen"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entwürfe · zuletzt online · Erststart · build seen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rascunhos · visto por último · primeiro início · build seen"
+          }
+        }
+      }
+    },
+    "Pulisci badge notifiche": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, title of the clear notification badge row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pulisci badge notifiche"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear notification badge"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Borrar el badge de notificaciones"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effacer le badge de notifications"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benachrichtigungs-Badge zurücksetzen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Limpar badge de notificações"
+          }
+        }
+      }
+    },
+    "Cancella timestamp ultimo accesso": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, title of the delete last seen timestamps row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancella timestamp ultimo accesso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete last seen timestamps"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eliminar marcas de tiempo de última conexión"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supprimer les horodatages de dernière connexion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeitstempel für „zuletzt online“ löschen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Excluir registros de visto por último"
+          }
+        }
+      }
+    },
+    "Self-test crittografia": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, title of the post-quantum encryption self-test row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Self-test crittografia"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encryption self-test"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autotest de cifrado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto-test du chiffrement"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verschlüsselungs-Selbsttest"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autoteste de criptografia"
+          }
+        }
+      }
+    },
+    "Svuota URLCache": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, title of the clear URL cache row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Svuota URLCache"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear URLCache"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vaciar URLCache"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vider l'URLCache"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLCache leeren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esvaziar URLCache"
+          }
+        }
+      }
+    },
+    "Forza re-fetch per OTA / avatar": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the clear URL cache row",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Forza re-fetch per OTA / avatar"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Forces a re-fetch for OTA / avatars"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fuerza una nueva descarga para OTA / avatares"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Force un nouveau téléchargement pour l'OTA / les avatars"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erzwingt erneutes Laden für OTA / Avatare"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Força nova busca para OTA / avatares"
+          }
+        }
+      }
+    },
+    "incall.shield.voice_key_mismatch": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the voice-as-key shield when the contact voice no longer matches the declared voice profile",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attenzione: la voce del contatto non corrisponde più al suo profilo vocale dichiarato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning: the contact's voice no longer matches their declared voice profile"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atención: la voz del contacto ya no coincide con su perfil de voz declarado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attention : la voix du contact ne correspond plus à son profil vocal déclaré"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Achtung: Die Stimme des Kontakts stimmt nicht mehr mit dem angegebenen Stimmprofil überein"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atenção: a voz do contato não corresponde mais ao perfil de voz declarado por ele"
+          }
+        }
+      }
+    },
+    "incall.shield.voice_key_enabled": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the voice-as-key shield when the contact turned voice-as-key on",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contact turned on Voice-as-Key on their own device"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El contacto ha activado Voice-as-Key en su propio dispositivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le contact a activé Voice-as-Key sur son propre appareil"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Kontakt hat Voice-as-Key auf seinem eigenen Gerät aktiviert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O contato ativou o Voice-as-Key no próprio dispositivo"
+          }
+        }
+      }
+    },
+    "incall.shield.contact_voice_verified": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the remote-voice shield when the voice matches the known one",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voce del contatto corrisponde a quella già conosciuta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contact's voice matches the one already known"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz del contacto coincide con la ya conocida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix du contact correspond à celle déjà connue"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme des Kontakts stimmt mit der bereits bekannten überein"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz do contato corresponde à já conhecida"
+          }
+        }
+      }
+    },
+    "incall.shield.contact_voice_mismatch": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the remote-voice shield when the voice does not match the known one",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attenzione: la voce del contatto non corrisponde a quella già conosciuta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning: the contact's voice doesn't match the one already known"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atención: la voz del contacto no coincide con la ya conocida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attention : la voix du contact ne correspond pas à celle déjà connue"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Achtung: Die Stimme des Kontakts stimmt nicht mit der bereits bekannten überein"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atenção: a voz do contato não corresponde à já conhecida"
+          }
+        }
+      }
+    },
+    "incall.shield.contact_voice_checking": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the remote-voice shield while the check is running",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica della voce del contatto in corso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking the contact's voice"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando la voz del contacto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification de la voix du contact en cours"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme des Kontakts wird überprüft"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando a voz do contato"
+          }
+        }
+      }
+    },
+    "incall.shield.nfc_common": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the shield shown when a key exchanged in person is shared with the contact",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave di persona in comune con il contatto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key exchanged in person and shared with the contact"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave intercambiada en persona y compartida con el contacto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé échangée en personne et partagée avec le contact"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persönlich ausgetauschter Schlüssel, den Sie mit dem Kontakt teilen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave trocada pessoalmente e compartilhada com o contato"
+          }
+        }
+      }
+    },
+    "incall.shield.psk_mixed": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the PSK shield: a pre-shared key is mixed into this call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave pre-condivisa mescolata in questa chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pre-shared key mixed into this call"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave precompartida mezclada en esta llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé pré-partagée mélangée à cet appel"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vorab geteilter Schlüssel in diesen Anruf eingemischt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave pré-compartilhada misturada nesta chamada"
+          }
+        }
+      }
+    },
+    "incall.shield.pqc_on": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the post-quantum shield while the exchange is active",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scambio post-quantistico attivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum exchange active"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Intercambio poscuántico activo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échange post-quantique actif"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten-Austausch aktiv"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troca pós-quântica ativa"
+          }
+        }
+      }
+    },
+    "incall.shield.pqc_off": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the post-quantum shield while the exchange is not active",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scambio post-quantistico non attivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum exchange not active"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Intercambio poscuántico no activo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échange post-quantique non actif"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten-Austausch nicht aktiv"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troca pós-quântica não ativa"
+          }
+        }
+      }
+    },
+    "incall.shield.transport": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the network path shield, %@ is the path (P2P SRTP, TURN, RELAY)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percorso di rete: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network path: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ruta de red: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chemin réseau : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Netzwerkpfad: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Caminho de rede: %@"
+          }
+        }
+      }
+    },
+    "incall.trust_title.voice_key": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the popup that explains a trust-bar shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce come chiave"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        }
+      }
+    },
+    "incall.trust_title.contact_voice": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the popup that explains a trust-bar shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce remota"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote voice"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz remota"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voix distante"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme des Gegenübers"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voz remota"
+          }
+        }
+      }
+    },
+    "incall.trust_title.nfc": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the popup that explains a trust-bar shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave di persona in comune"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key shared in person"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave compartida en persona"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé partagée en personne"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persönlich geteilter Schlüssel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave compartilhada pessoalmente"
+          }
+        }
+      }
+    },
+    "incall.trust_title.psk": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the popup that explains a trust-bar shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave pre-condivisa (PSK)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pre-shared key (PSK)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave precompartida (PSK)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé pré-partagée (PSK)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vorab geteilter Schlüssel (PSK)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave pré-compartilhada (PSK)"
+          }
+        }
+      }
+    },
+    "incall.trust_title.sas": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the popup that explains a trust-bar shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica identità (SAS)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity verification (SAS)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación de identidad (SAS)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification d'identité (SAS)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identitätsprüfung (SAS)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação de identidade (SAS)"
+          }
+        }
+      }
+    },
+    "incall.trust_title.pqc": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the popup that explains a trust-bar shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantistico (PQC)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum (PQC)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Poscuántico (PQC)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantique (PQC)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten (PQC)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pós-quântico (PQC)"
+          }
+        }
+      }
+    },
+    "incall.trust_title.transport": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the popup that explains a trust-bar shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percorso di rete"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network path"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ruta de red"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chemin réseau"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Netzwerkpfad"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Caminho de rede"
+          }
+        }
+      }
+    },
+    "incall.trust_body.voice_key": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the voice-as-key shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contact has turned on voice unlock on their own device. When their phone detects a live transition (for example, the person being swapped mid-call), the color of this shield changes to flag it — otherwise it simply shows the static fact that they turned it on. This is not cryptographic proof: it is information that the contact's device declares about itself."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El contacto ha activado el desbloqueo por voz en su propio dispositivo. Cuando su teléfono detecta una transición en vivo (por ejemplo, un cambio de persona a mitad de la llamada), el color de este escudo cambia para avisarlo — si no, simplemente muestra el hecho estático de que lo activó. No es una prueba criptográfica: es una información que el dispositivo del contacto declara sobre sí mismo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le contact a activé le déverrouillage vocal sur son propre appareil. Quand son téléphone détecte une transition en direct (par exemple un changement de personne en cours d'appel), la couleur de ce bouclier change pour le signaler — sinon il indique simplement le fait statique qu'il l'a activé. Ce n'est pas une preuve cryptographique : c'est une information que l'appareil du contact déclare sur lui-même."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Kontakt hat die Entsperrung per Stimme auf seinem eigenen Gerät aktiviert. Erkennt sein Telefon einen Live-Übergang (zum Beispiel einen Personenwechsel mitten im Anruf), ändert dieses Schutzschild seine Farbe, um darauf hinzuweisen — andernfalls zeigt es nur die statische Tatsache an, dass die Funktion aktiviert wurde. Das ist kein kryptografischer Beweis: Es ist eine Angabe, die das Gerät des Kontakts über sich selbst macht."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O contato ativou o desbloqueio por voz no próprio dispositivo. Quando o telefone dele detecta uma transição ao vivo (por exemplo, uma troca de pessoa no meio da chamada), a cor deste escudo muda para sinalizar isso — caso contrário, mostra apenas o fato estático de que ele o ativou. Não é uma prova criptográfica: é uma informação que o dispositivo do contato declara sobre si mesmo."
+          }
+        }
+      }
+    },
+    "incall.trust_body.contact_voice": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the remote-voice shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confronta la voce che stai ascoltando con quella salvata per questo contatto nelle chiamate precedenti. È un indizio, non una prova d'identità."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compares the voice you are hearing with the one saved for this contact in previous calls. It is a hint, not proof of identity."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compara la voz que estás escuchando con la guardada para este contacto en llamadas anteriores. Es un indicio, no una prueba de identidad."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compare la voix que tu entends avec celle enregistrée pour ce contact lors des appels précédents. C'est un indice, pas une preuve d'identité."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vergleicht die Stimme, die Sie gerade hören, mit der Stimme, die in früheren Anrufen für diesen Kontakt gespeichert wurde. Das ist ein Hinweis, kein Identitätsnachweis."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compara a voz que você está ouvindo com a salva para este contato em chamadas anteriores. É um indício, não uma prova de identidade."
+          }
+        }
+      }
+    },
+    "incall.trust_body.nfc": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the in-person shared key shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu e il contatto avete in comune un segreto scambiato di persona, avvicinando i telefoni (NFC) o inquadrando il codice QR con il Bluetooth attivo. Indipendente da quale chiave stia effettivamente usando questa specifica chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You and the contact share a secret exchanged in person, by holding the phones together (NFC) or scanning the QR code with Bluetooth on. This is independent of which key this specific call is actually using."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tienes un secreto en común con el contacto, intercambiado en persona acercando los teléfonos (NFC) o escaneando el código QR con el Bluetooth activado. Es independiente de la clave que esté usando realmente esta llamada concreta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toi et le contact avez en commun un secret échangé en personne, en rapprochant les téléphones (NFC) ou en scannant le code QR avec le Bluetooth activé. Cela ne dépend pas de la clé que cet appel utilise réellement."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie und der Kontakt teilen ein Geheimnis, das persönlich ausgetauscht wurde, indem Sie die Telefone aneinanderhalten (NFC) oder den QR-Code bei aktiviertem Bluetooth scannen. Das ist unabhängig davon, welchen Schlüssel dieser konkrete Anruf tatsächlich verwendet."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você e o contato têm em comum um segredo trocado pessoalmente, aproximando os telefones (NFC) ou escaneando o código QR com o Bluetooth ativado. É independente de qual chave esta chamada específica está realmente usando."
+          }
+        }
+      }
+    },
+    "incall.trust_body.psk": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the PSK shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In questa chiamata è stata mescolata una chiave pre-condivisa — di qualunque origine: NFC, QR, KMS o inserita a mano — nella chiave di sessione. Aggiunge protezione oltre al solo scambio post-quantistico."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A pre-shared key — from any source: NFC, QR, KMS or entered by hand — was mixed into the session key for this call. It adds protection on top of the post-quantum exchange alone."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En esta llamada se ha mezclado una clave precompartida — de cualquier origen: NFC, QR, KMS o introducida a mano — en la clave de sesión. Añade protección además del intercambio poscuántico por sí solo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une clé pré-partagée — de n'importe quelle origine : NFC, QR, KMS ou saisie à la main — a été mélangée à la clé de session de cet appel. Elle ajoute de la protection en plus de l'échange post-quantique seul."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In diesem Anruf wurde ein vorab geteilter Schlüssel — gleich welcher Herkunft: NFC, QR, KMS oder von Hand eingegeben — in den Sitzungsschlüssel eingemischt. Er bietet zusätzlichen Schutz über den Post-Quanten-Austausch allein hinaus."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nesta chamada, uma chave pré-compartilhada — de qualquer origem: NFC, QR, KMS ou inserida manualmente — foi misturada à chave de sessão. Ela acrescenta proteção além da troca pós-quântica sozinha."
+          }
+        }
+      }
+    },
+    "incall.trust_body.sas": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the SAS shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La cerimonia di verifica dell'identità per questa chiamata: tu e il contatto confrontate a voce le stesse parole. Il colore indica se è già stata confermata da entrambi o è ancora in sospeso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The identity verification ceremony for this call: you and the contact compare the same words out loud. The color shows whether both of you have already confirmed it or it is still pending."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La ceremonia de verificación de identidad de esta llamada: tú y el contacto comparáis de viva voz las mismas palabras. El color indica si ya la habéis confirmado los dos o sigue pendiente."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La cérémonie de vérification d'identité pour cet appel : tu compares à voix haute les mêmes mots que le contact. La couleur indique si elle a déjà été confirmée des deux côtés ou si elle est encore en attente."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Verfahren zur Identitätsprüfung für diesen Anruf: Sie und der Kontakt vergleichen mündlich dieselben Wörter. Die Farbe zeigt an, ob beide es bereits bestätigt haben oder ob es noch aussteht."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A cerimônia de verificação de identidade desta chamada: você e o contato comparam as mesmas palavras em voz alta. A cor indica se os dois já a confirmaram ou se ainda está pendente."
+          }
+        }
+      }
+    },
+    "incall.trust_body.transport": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the network path shield",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Come viaggia l'audio: direttamente tra i due telefoni (P2P), tramite un server di attraversamento NAT (TURN), oppure tramite il relay del server Q-Audion (RELAY) quando non c'è una via diretta. Il contenuto resta cifrato end-to-end su qualunque percorso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How the audio travels: directly between the two phones (P2P), through a NAT traversal server (TURN), or through the Q-Audion server relay (RELAY) when there is no direct route. The content stays end-to-end encrypted on any path."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cómo viaja el audio: directamente entre los dos teléfonos (P2P), a través de un servidor de traversal NAT (TURN) o a través del relay del servidor de Q-Audion (RELAY) cuando no hay una vía directa. El contenido permanece cifrado de extremo a extremo por cualquier ruta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment voyage l'audio : directement entre les deux téléphones (P2P), via un serveur de traversée NAT (TURN), ou via le relais du serveur Q-Audion (RELAY) quand il n'y a pas de voie directe. Le contenu reste chiffré de bout en bout, quel que soit le chemin."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "So wird das Audio übertragen: direkt zwischen den beiden Telefonen (P2P), über einen NAT-Traversal-Server (TURN) oder über das Relay des Q-Audion-Servers (RELAY), wenn es keine direkte Verbindung gibt. Der Inhalt bleibt auf jedem Pfad Ende-zu-Ende-verschlüsselt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Como o áudio trafega: diretamente entre os dois telefones (P2P), por um servidor de travessia de NAT (TURN) ou pelo relay do servidor Q-Audion (RELAY) quando não há via direta. O conteúdo permanece criptografado de ponta a ponta em qualquer caminho."
+          }
+        }
+      }
+    },
+    "chat_detail.ephemeral.off": {
+      "extractionState": "manual",
+      "comment": "Disappearing messages timer option: timer off",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spento"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desactivado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactivé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aus"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desativado"
+          }
+        }
+      }
+    },
+    "chat_detail.ephemeral.view_once": {
+      "extractionState": "manual",
+      "comment": "Disappearing messages timer option: the message is deleted as soon as it has been opened once",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visualizza una volta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View once"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ver una vez"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voir une seule fois"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einmal ansehen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visualizar uma vez"
+          }
+        }
+      }
+    },
+    "chat_detail.ephemeral.30s": {
+      "extractionState": "manual",
+      "comment": "Disappearing messages timer option: 30 seconds",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 secondi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 seconds"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 segundos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 secondes"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 Sekunden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "30 segundos"
+          }
+        }
+      }
+    },
+    "chat_detail.ephemeral.1h": {
+      "extractionState": "manual",
+      "comment": "Disappearing messages timer option: 1 hour",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 ora"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 hour"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 hora"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 heure"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Stunde"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 hora"
+          }
+        }
+      }
+    },
+    "chat_detail.ephemeral.1d": {
+      "extractionState": "manual",
+      "comment": "Disappearing messages timer option: 1 day",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 giorno"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 day"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 día"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 jour"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Tag"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 dia"
+          }
+        }
+      }
+    },
+    "chat_detail.ephemeral.1w": {
+      "extractionState": "manual",
+      "comment": "Disappearing messages timer option: 1 week",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 settimana"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 week"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 semana"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 semaine"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Woche"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 semana"
+          }
+        }
+      }
+    },
+    "chat_detail.peer_typing": {
+      "extractionState": "manual",
+      "comment": "Chat top bar, presence line while the other person is typing (follows their name above, lower case)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sta scrivendo…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "typing…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "escribiendo…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "écrit…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "schreibt…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "digitando…"
+          }
+        }
+      }
+    },
+    "chat_detail.peer_typing_named": {
+      "extractionState": "manual",
+      "comment": "Typing indicator row under the messages, %@ is the name of the person who is typing",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ sta scrivendo…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is typing…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ está escribiendo…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ écrit…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ schreibt…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ está digitando…"
+          }
+        }
+      }
+    },
+    "settings.cache.empty": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the clear attachment cache row when the cache is empty",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vuota — nessun allegato in cache"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empty — no attachments in cache"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vacía — ningún adjunto en caché"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vide — aucune pièce jointe en cache"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leer — keine Anhänge im Cache"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vazio — nenhum anexo no cache"
+          }
+        }
+      }
+    },
+    "settings.cache.usage": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the clear attachment cache row: number and size of voice notes, then number and size of images; sizes are numbers with one decimal",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld voice (%@ MB) · %lld immagini (%@ MB)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld voice notes (%@ MB) · %lld images (%@ MB)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld audios (%@ MB) · %lld imágenes (%@ MB)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld notes vocales (%@ Mo) · %lld images (%@ Mo)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Sprachnotizen (%@ MB) · %lld Bilder (%@ MB)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld áudios (%@ MB) · %lld imagens (%@ MB)"
+          }
+        }
+      }
+    },
+    "settings.cache.freed": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text after clearing the attachment cache, %@ is the freed size in MB",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache liberata: %@ MB"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache cleared: %@ MB freed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Caché vaciada: %@ MB liberados"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache vidé : %@ Mo libérés"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache geleert: %@ MB frei"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache esvaziado: %@ MB liberados"
+          }
+        }
+      }
+    },
+    "settings.cache.drafts_deleted": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text after deleting composer drafts, %lld is how many were deleted",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eliminati %lld abbozzi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drafts deleted: %lld."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Borradores eliminados: %lld."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brouillons supprimés : %lld."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gelöschte Entwürfe: %lld."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rascunhos excluídos: %lld."
+          }
+        }
+      }
+    },
+    "settings.cache.drafts_none": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text when there were no composer drafts to delete",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun abbozzo da eliminare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No drafts to delete."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay borradores que eliminar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun brouillon à supprimer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Entwürfe zum Löschen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum rascunho para excluir."
+          }
+        }
+      }
+    },
+    "settings.cache.metadata_deleted": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text after resetting local metadata, %lld is how many entries were deleted",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eliminate %lld chiavi di metadati locali."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local metadata entries deleted: %lld."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entradas de metadatos locales eliminadas: %lld."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrées de métadonnées locales supprimées : %lld."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gelöschte lokale Metadaten-Einträge: %lld."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entradas de metadados locais excluídas: %lld."
+          }
+        }
+      }
+    },
+    "settings.cache.metadata_none": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text when there was no local metadata to delete",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun metadato da eliminare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No metadata to delete."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay metadatos que eliminar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune métadonnée à supprimer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Metadaten zum Löschen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum metadado para excluir."
+          }
+        }
+      }
+    },
+    "settings.cache.badge_cleared": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text after resetting the app icon badge number",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Badge notifiche azzerato."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification badge cleared."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Badge de notificaciones puesto a cero."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Badge de notifications remis à zéro."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benachrichtigungs-Badge zurückgesetzt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Badge de notificações zerado."
+          }
+        }
+      }
+    },
+    "settings.cache.lastseen_deleted": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text after deleting the last seen timestamps, %lld is how many were deleted",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eliminati %lld timestamp di ultimo accesso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last seen timestamps deleted: %lld."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marcas de tiempo de última conexión eliminadas: %lld."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Horodatages de dernière connexion supprimés : %lld."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gelöschte „Zuletzt online“-Zeitstempel: %lld."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registros de visto por último excluídos: %lld."
+          }
+        }
+      }
+    },
+    "settings.cache.lastseen_none": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text when there were no last seen timestamps to delete",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun timestamp da eliminare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No timestamps to delete."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay marcas de tiempo que eliminar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun horodatage à supprimer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Zeitstempel zum Löschen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum registro para excluir."
+          }
+        }
+      }
+    },
+    "settings.cache.urlcache_cleared": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, alert text after clearing the URL cache of the app",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLCache svuotata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLCache cleared."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLCache vaciada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLCache vidé."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLCache geleert."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLCache esvaziado."
+          }
+        }
+      }
+    },
+    "settings.cache.drafts_saved_none": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the delete drafts row: no draft saved",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun abbozzo salvato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No drafts saved"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ningún borrador guardado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun brouillon enregistré"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Entwürfe gespeichert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum rascunho salvo"
+          }
+        }
+      }
+    },
+    "settings.cache.drafts_saved_one": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the delete drafts row: exactly one draft saved",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 abbozzo salvato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 draft saved"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 borrador guardado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 brouillon enregistré"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Entwurf gespeichert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 rascunho salvo"
+          }
+        }
+      }
+    },
+    "settings.cache.drafts_saved_many": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the delete drafts row, %lld is the number of drafts saved (2 or more)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld abbozzi salvati"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld drafts saved"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld borradores guardados"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld brouillons enregistrés"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Entwürfe gespeichert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld rascunhos salvos"
+          }
+        }
+      }
+    },
+    "settings.cache.lastseen_stored_none": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the delete last seen row: nothing stored",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun timestamp da dimenticare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No timestamps to forget"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ninguna marca de tiempo que olvidar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun horodatage à oublier"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Zeitstempel zu löschen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum registro para esquecer"
+          }
+        }
+      }
+    },
+    "settings.cache.lastseen_stored_one": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the delete last seen row: last seen stored for exactly one contact",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 contatto memorizzato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 contact stored"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 contacto guardado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 contact mémorisé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Kontakt gespeichert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 contato armazenado"
+          }
+        }
+      }
+    },
+    "Handshake · post-quantum": {
+      "extractionState": "manual",
+      "comment": "Title of a section of the call security details: the key exchange is post-quantum",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handshake · post-quantum"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handshake · post-quantum"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handshake · poscuántico"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handshake · post-quantique"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handshake · Post-Quantum"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handshake · pós-quântico"
+          }
+        }
+      }
+    },
+    "settings.cache.lastseen_stored_many": {
+      "extractionState": "manual",
+      "comment": "Settings, developer section, subtitle of the delete last seen row, %lld is the number of contacts with a stored last seen (2 or more)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld contatti memorizzati"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld contacts stored"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld contactos guardados"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld contacts mémorisés"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Kontakte gespeichert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld contatos armazenados"
+          }
+        }
+      }
+    },
+    "settings.cache.copied": {
+      "extractionState": "manual",
+      "comment": "Settings, alert text after copying the app version and build to the clipboard, %@ is the copied text",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copiato: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copiado: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copié : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopiert: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copiado: %@"
           }
         }
       }
@@ -90251,13 +93359,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "CHIFFREMENT"
+            "value": "CHIFFRE"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "VERSCHLÜSSELUNG"
+            "value": "CIPHER"
           }
         },
         "es": {
@@ -90269,7 +93377,7 @@
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "CRIPTOGRAFIA"
+            "value": "CIFRA"
           }
         }
       }

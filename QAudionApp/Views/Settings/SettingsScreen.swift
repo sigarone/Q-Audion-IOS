@@ -143,15 +143,16 @@ struct SettingsScreen: View {
         let s = AttachmentCacheCleaner.cacheSizes()
         let totalMb = Double(s.voiceNotes &+ s.images) / (1024.0 * 1024.0)
         if totalMb < 0.1 {
-            return "Vuota — nessun allegato in cache"
+            return String(localized: "settings.cache.empty", defaultValue: "Vuota — nessun allegato in cache", comment: "Settings, developer section, subtitle of the clear attachment cache row when the cache is empty")
         }
         let c = AttachmentCacheCleaner.cacheCounts()
         let voiceMb = Double(s.voiceNotes) / (1024.0 * 1024.0)
         let imgMb = Double(s.images) / (1024.0 * 1024.0)
         // W128: include item counts so the user knows whether the disk
         // usage comes from many small notes vs. a few big images.
-        return String(format: "%d voice (%.1f MB) · %d immagini (%.1f MB)",
-                      c.voiceNotes, voiceMb, c.images, imgMb)
+        let voiceText: String = String(format: "%.1f", voiceMb)
+        let imgText: String = String(format: "%.1f", imgMb)
+        return String(localized: "settings.cache.usage", defaultValue: "\(c.voiceNotes) voice (\(voiceText) MB) · \(c.images) immagini (\(imgText) MB)", comment: "Settings, developer section, subtitle of the clear attachment cache row: number and size of voice notes, then number and size of images; sizes are numbers with one decimal")
     }
 
     var body: some View {
@@ -894,7 +895,8 @@ struct SettingsScreen: View {
                 Button("Svuota", role: .destructive) {
                     let bytesFreed = AttachmentCacheCleaner.clearAllCaches()
                     let mb = Double(bytesFreed) / (1024.0 * 1024.0)
-                    cacheClearedMessage = String(format: "Cache liberata: %.1f MB", mb)
+                    let mbText: String = String(format: "%.1f", mb)
+                    cacheClearedMessage = String(localized: "settings.cache.freed", defaultValue: "Cache liberata: \(mbText) MB", comment: "Settings, developer section, alert text after clearing the attachment cache, %@ is the freed size in MB")
                     cacheClearedAlertVisible = true
                     cacheUsageRefreshTrigger += 1
                 }
@@ -909,8 +911,8 @@ struct SettingsScreen: View {
             Button {
                 let cleared = Self.clearAllDrafts()
                 cacheClearedMessage = cleared > 0
-                    ? "Eliminati \(cleared) abbozzi."
-                    : "Nessun abbozzo da eliminare."
+                    ? String(localized: "settings.cache.drafts_deleted", defaultValue: "Eliminati \(cleared) abbozzi.", comment: "Settings, developer section, alert text after deleting composer drafts, %lld is how many were deleted")
+                    : String(localized: "settings.cache.drafts_none", defaultValue: "Nessun abbozzo da eliminare.", comment: "Settings, developer section, alert text when there were no composer drafts to delete")
                 cacheClearedAlertVisible = true
                 cacheUsageRefreshTrigger += 1
             } label: {
@@ -930,8 +932,8 @@ struct SettingsScreen: View {
             Button {
                 let n = Self.resetAllLocalMetadata()
                 cacheClearedMessage = n > 0
-                    ? "Eliminate \(n) chiavi di metadati locali."
-                    : "Nessun metadato da eliminare."
+                    ? String(localized: "settings.cache.metadata_deleted", defaultValue: "Eliminate \(n) chiavi di metadati locali.", comment: "Settings, developer section, alert text after resetting local metadata, %lld is how many entries were deleted")
+                    : String(localized: "settings.cache.metadata_none", defaultValue: "Nessun metadato da eliminare.", comment: "Settings, developer section, alert text when there was no local metadata to delete")
                 cacheClearedAlertVisible = true
                 cacheUsageRefreshTrigger += 1
             } label: {
@@ -947,7 +949,7 @@ struct SettingsScreen: View {
             // testers who got the badge stuck during a CI session.
             Button {
                 NotificationCenterService.shared.clearBadge()
-                cacheClearedMessage = "Badge notifiche azzerato."
+                cacheClearedMessage = String(localized: "settings.cache.badge_cleared", defaultValue: "Badge notifiche azzerato.", comment: "Settings, developer section, alert text after resetting the app icon badge number")
                 cacheClearedAlertVisible = true
             } label: {
                 SettingsRow(icon: "app.badge",
@@ -964,8 +966,8 @@ struct SettingsScreen: View {
             Button {
                 let cleared = Self.clearAllLastSeen()
                 cacheClearedMessage = cleared > 0
-                    ? "Eliminati \(cleared) timestamp di ultimo accesso."
-                    : "Nessun timestamp da eliminare."
+                    ? String(localized: "settings.cache.lastseen_deleted", defaultValue: "Eliminati \(cleared) timestamp di ultimo accesso.", comment: "Settings, developer section, alert text after deleting the last seen timestamps, %lld is how many were deleted")
+                    : String(localized: "settings.cache.lastseen_none", defaultValue: "Nessun timestamp da eliminare.", comment: "Settings, developer section, alert text when there were no last seen timestamps to delete")
                 cacheClearedAlertVisible = true
                 cacheUsageRefreshTrigger += 1
             } label: {
@@ -1002,7 +1004,7 @@ struct SettingsScreen: View {
             // server is serving fresh metadata without rebooting.
             Button {
                 URLCache.shared.removeAllCachedResponses()
-                cacheClearedMessage = "URLCache svuotata."
+                cacheClearedMessage = String(localized: "settings.cache.urlcache_cleared", defaultValue: "URLCache svuotata.", comment: "Settings, developer section, alert text after clearing the URL cache of the app")
                 cacheClearedAlertVisible = true
             } label: {
                 SettingsRow(icon: "network.slash",
@@ -1095,24 +1097,24 @@ struct SettingsScreen: View {
     private static func draftsSubtitle() -> String {
         let n = countKeys(prefix: "qa.composer.draft.")
         if n == 0 {
-            return "Nessun abbozzo salvato"
+            return String(localized: "settings.cache.drafts_saved_none", defaultValue: "Nessun abbozzo salvato", comment: "Settings, developer section, subtitle of the delete drafts row: no draft saved")
         }
         if n == 1 {
-            return "1 abbozzo salvato"
+            return String(localized: "settings.cache.drafts_saved_one", defaultValue: "1 abbozzo salvato", comment: "Settings, developer section, subtitle of the delete drafts row: exactly one draft saved")
         }
-        return "\(n) abbozzi salvati"
+        return String(localized: "settings.cache.drafts_saved_many", defaultValue: "\(n) abbozzi salvati", comment: "Settings, developer section, subtitle of the delete drafts row, %lld is the number of drafts saved (2 or more)")
     }
 
     /// W154: dynamic subtitle for the "Cancella timestamp" row.
     private static func lastSeenSubtitle() -> String {
         let n = countKeys(prefix: "qa.lastSeenAt.")
         if n == 0 {
-            return "Nessun timestamp da dimenticare"
+            return String(localized: "settings.cache.lastseen_stored_none", defaultValue: "Nessun timestamp da dimenticare", comment: "Settings, developer section, subtitle of the delete last seen row: nothing stored")
         }
         if n == 1 {
-            return "1 contatto memorizzato"
+            return String(localized: "settings.cache.lastseen_stored_one", defaultValue: "1 contatto memorizzato", comment: "Settings, developer section, subtitle of the delete last seen row: last seen stored for exactly one contact")
         }
-        return "\(n) contatti memorizzati"
+        return String(localized: "settings.cache.lastseen_stored_many", defaultValue: "\(n) contatti memorizzati", comment: "Settings, developer section, subtitle of the delete last seen row, %lld is the number of contacts with a stored last seen (2 or more)")
     }
 
     // MARK: - Top-bar Menu actions (W292)
@@ -1126,7 +1128,7 @@ struct SettingsScreen: View {
         let b = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "?"
         let line: String = "Q-Audion v" + v + " (build " + b + ")"
         UIPasteboard.general.string = line
-        cacheClearedMessage = "Copiato: " + line
+        cacheClearedMessage = String(localized: "settings.cache.copied", defaultValue: "Copiato: \(line)", comment: "Settings, alert text after copying the app version and build to the clipboard, %@ is the copied text")
         cacheClearedAlertVisible = true
         #endif
     }
