@@ -8,14 +8,16 @@ import Contacts
 /// Lifecycle:
 ///   introduction → requestingPermission → scanning → discovering → results
 ///                                        ↘ error (at any step)
+/// When the Contacts permission is not decided yet, the introduction only leads to the system request
+/// (`requestPermissionOnly`); the scan starts with "Importa" (`startImport`).
 @MainActor
 final class PhonebookImportContainer: ObservableObject {
 
     @Published private(set) var viewModel: PhonebookImportViewModel
     @Published private(set) var progress: PhonebookSyncCoordinator.ScanProgress?
-    /// Whether the system has not asked for Contacts access yet: the first screen is then the one that leads to the request.
     /// True while the system Contacts request is on screen: the button that opened it is disabled meanwhile.
     @Published private(set) var requestingSystemPermission: Bool = false
+    /// Whether the system has not asked for Contacts access yet: the first screen is then the one that leads to the request.
     @Published private(set) var permissionNotDetermined: Bool = CNContactStore.authorizationStatus(for: .contacts) == .notDetermined
 
     private let coordinator: PhonebookSyncCoordinator
@@ -95,6 +97,8 @@ final class PhonebookImportContainer: ObservableObject {
                 } else {
                     unmatchedCount = 0
                 }
+                // An import the user started and that ran to its end: later refreshes may reuse the permission.
+                PhonebookImportGate().markImportCompleted()
                 viewModel.transition(to: .results(
                     matched: vmMatches,
                     unmatched: unmatchedCount

@@ -74,6 +74,7 @@ targets:
           - MissedCallsBadgeTests.swift
           - NoticeServiceTests.swift
           - PersistentCallRecordStoreTests.swift
+          - PhonebookImportGateTests.swift
           - PhoneEntryScreenInviteTests.swift
           - ProximityPairingTelemetryRedactionTests.swift
           - QuickActionTests.swift
