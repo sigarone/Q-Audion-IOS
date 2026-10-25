@@ -13,15 +13,16 @@ struct EphemeralTimerOption: Identifiable {
     let label: String
     let seconds: Int?
 
-    static let all: [EphemeralTimerOption] = [
-        EphemeralTimerOption(id: "off", label: "Spento", seconds: nil),
-        EphemeralTimerOption(id: "view_once", label: "Visualizza una volta", seconds: -1),
-        EphemeralTimerOption(id: "30s", label: "30 secondi", seconds: 30),
-        EphemeralTimerOption(id: "5m", label: "5 minuti", seconds: 5 * 60),
-        EphemeralTimerOption(id: "1h", label: "1 ora", seconds: 60 * 60),
-        EphemeralTimerOption(id: "1d", label: "1 giorno", seconds: 24 * 60 * 60),
-        EphemeralTimerOption(id: "1w", label: "1 settimana", seconds: 7 * 24 * 60 * 60),
-    ]
+    /// Computed (not a stored `let`) so the labels follow the language of the app when it changes.
+    static var all: [EphemeralTimerOption] { [
+        EphemeralTimerOption(id: "off", label: String(localized: "chat_detail.ephemeral.off", defaultValue: "Spento", comment: "Disappearing messages timer option: timer off"), seconds: nil),
+        EphemeralTimerOption(id: "view_once", label: String(localized: "chat_detail.ephemeral.view_once", defaultValue: "Visualizza una volta", comment: "Disappearing messages timer option: the message is deleted as soon as it has been opened once"), seconds: -1),
+        EphemeralTimerOption(id: "30s", label: String(localized: "chat_detail.ephemeral.30s", defaultValue: "30 secondi", comment: "Disappearing messages timer option: 30 seconds"), seconds: 30),
+        EphemeralTimerOption(id: "5m", label: String(localized: "5 minuti"), seconds: 5 * 60),
+        EphemeralTimerOption(id: "1h", label: String(localized: "chat_detail.ephemeral.1h", defaultValue: "1 ora", comment: "Disappearing messages timer option: 1 hour"), seconds: 60 * 60),
+        EphemeralTimerOption(id: "1d", label: String(localized: "chat_detail.ephemeral.1d", defaultValue: "1 giorno", comment: "Disappearing messages timer option: 1 day"), seconds: 24 * 60 * 60),
+        EphemeralTimerOption(id: "1w", label: String(localized: "chat_detail.ephemeral.1w", defaultValue: "1 settimana", comment: "Disappearing messages timer option: 1 week"), seconds: 7 * 24 * 60 * 60),
+    ] }
 }
 
 /// W447: a not-yet-sent attachment payload, captured at the moment the
@@ -855,7 +856,7 @@ struct ChatDetailScreen: View {
         // is true (set by ChatContainer's chatTypingNotification
         // observer + auto-cleared 5s after the last is_typing=true).
         if container.viewModel.isPeerTyping {
-            return "sta scrivendo…"
+            return String(localized: "chat_detail.peer_typing", defaultValue: "sta scrivendo…", comment: "Chat top bar, presence line while the other person is typing (follows their name above, lower case)")
         }
         let peerId = container.viewModel.conversation.peerUserId
         if container.viewModel.isPeerOnline ||
@@ -1288,7 +1289,7 @@ struct ChatDetailScreen: View {
         // W251: pre-bind the deep property chain to dodge type-checker timeouts.
         // See CLAUDE.md §13.
         let peerName: String = resolvedPeerTitle
-        let typingText: String = peerName + " sta scrivendo…"
+        let typingText: String = String(localized: "chat_detail.peer_typing_named", defaultValue: "\(peerName) sta scrivendo…", comment: "Typing indicator row under the messages, %@ is the name of the person who is typing")
         return HStack(spacing: 8) {
             TypingIndicator()
             Text(typingText)
