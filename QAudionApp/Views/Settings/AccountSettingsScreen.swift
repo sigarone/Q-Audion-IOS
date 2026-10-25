@@ -523,11 +523,11 @@ struct AccountSettingsScreen: View {
                     VStack(spacing: 12) {
                         textField(label: "Nome visualizzato",
                                   value: $container.draftDisplayName,
-                                  placeholder: "es. Mario Rossi",
+                                  placeholder: String(localized: "settings.account.placeholder.display_name", defaultValue: "es. Mario Rossi", comment: "Profile screen, placeholder example in the display name field"),
                                   capitalization: .words)
                         textField(label: "Stato / nota",
                                   value: $container.draftStatusMessage,
-                                  placeholder: "es. Disponibile dalle 9 alle 18",
+                                  placeholder: String(localized: "settings.account.placeholder.status", defaultValue: "es. Disponibile dalle 9 alle 18", comment: "Profile screen, placeholder example in the status/note field (office hours example)"),
                                   capitalization: .sentences)
                     }
 
@@ -814,7 +814,7 @@ struct AccountSettingsScreen: View {
         return "\(h.prefix(12))…"
     }
 
-    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+    private func kvRow(label: LocalizedStringKey, value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
@@ -884,9 +884,9 @@ struct AccountSettingsScreen: View {
     /// LOCAL user's own extension exactly like every peer-facing site.
     private var extensionOptionLabel: String {
         if let ext = container.viewModel.dialExtension, !ext.isEmpty {
-            return "La mia estensione (\(DisplayName.formatExtension(ext)))"
+            return String(localized: "settings.account.caller_id.my_extension_with", defaultValue: "La mia estensione (\(DisplayName.formatExtension(ext)))", comment: "Profile screen, caller-id picker option: use my extension; placeholder is the extension number")
         }
-        return "La mia estensione"
+        return String(localized: "settings.account.caller_id.my_extension", defaultValue: "La mia estensione", comment: "Profile screen, caller-id picker option: use my extension (extension unknown)")
     }
 
     /// Picker options: `container.publicPhones` plus — defensively — the
@@ -904,7 +904,7 @@ struct AccountSettingsScreen: View {
         return opts
     }
 
-    private func textField(label: String,
+    private func textField(label: LocalizedStringKey,
                            value: Binding<String>,
                            placeholder: String,
                            capitalization: TextInputAutocapitalization) -> some View {

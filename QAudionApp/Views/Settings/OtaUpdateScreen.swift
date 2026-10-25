@@ -328,8 +328,8 @@ struct OtaUpdateScreen: View {
                         .foregroundStyle(container.betaOptIn ? extras.warning
                                                               : extras.success)
                     Text(container.betaOptIn
-                         ? "Ricevi build pre-rilascio firmate. Possono contenere bug — rientri in stable disattivando l'opzione."
-                         : "Ricevi solo build stabili. Attiva per testare versioni in anteprima.")
+                         ? String(localized: "ota.channel.beta_desc", defaultValue: "Ricevi build pre-rilascio firmate. Possono contenere bug — rientri in stable disattivando l'opzione.", comment: "OTA update screen, release channel card: description when the beta channel is on")
+                         : String(localized: "ota.channel.stable_desc", defaultValue: "Ricevi solo build stabili. Attiva per testare versioni in anteprima.", comment: "OTA update screen, release channel card: description when only stable builds are offered"))
                         .qaudionStyle(type.bodySmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                 }
@@ -365,7 +365,7 @@ struct OtaUpdateScreen: View {
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
-            Text(container.pubkeyFingerprint ?? "Non disponibile")
+            Text(container.pubkeyFingerprint ?? String(localized: "ota.fingerprint_unavailable", defaultValue: "Non disponibile", comment: "OTA update screen, trust card: the signing key fingerprint is not available"))
                 .font(.system(size: 13, weight: .medium, design: .monospaced))
                 .foregroundStyle(container.pubkeyFingerprint == nil ? scheme.onSurfaceVariant : scheme.onSurface)
                 .lineLimit(1)
@@ -449,7 +449,9 @@ struct OtaUpdateScreen: View {
                         .font(.system(size: 14, weight: .semibold))
                 }
                 HStack(spacing: 6) {
-                    Text(release.signatureValid ? "FIRMA OK" : "FIRMA INVALIDA")
+                    Text(release.signatureValid
+                         ? String(localized: "ota.signature.ok", defaultValue: "FIRMA OK", comment: "OTA update screen, release row badge: the release signature is valid")
+                         : String(localized: "ota.signature.invalid", defaultValue: "FIRMA INVALIDA", comment: "OTA update screen, release row badge: the release signature is NOT valid"))
                         .qaudionStyle(type.labelSmall)
                         .tracking(1.0)
                         .foregroundStyle(release.signatureValid ? extras.success : extras.riskHigh)
@@ -516,7 +518,9 @@ struct OtaUpdateScreen: View {
                                      severity: .info,
                                      durationSeconds: 2))
             } label: {
-                Text(container.checking ? "Verifica…" : "Verifica")
+                Text(container.checking
+                     ? String(localized: "ota.check.checking", defaultValue: "Verifica…", comment: "OTA update screen, check button label while the catalog is being queried")
+                     : String(localized: "ota.check.idle", defaultValue: "Verifica", comment: "OTA update screen, button that checks the server for new releases"))
                     .qaudionStyle(type.labelLarge)
                     .foregroundStyle(scheme.onPrimary)
                     .frame(maxWidth: .infinity)
@@ -563,8 +567,10 @@ struct OtaUpdateScreen: View {
     // MARK: - Alert plumbing
 
     private var installConfirmTitle: String {
-        guard let release = showingInstallConfirm else { return "Installa aggiornamento" }
-        return "Installa \(release.versionName)?"
+        guard let release = showingInstallConfirm else {
+            return String(localized: "ota.install.title_generic", defaultValue: "Installa aggiornamento", comment: "OTA update screen, install confirmation dialog title when no release is selected")
+        }
+        return String(localized: "ota.install.title_version", defaultValue: "Installa \(release.versionName)?", comment: "OTA update screen, install confirmation dialog title; placeholder is the version name")
     }
 
     /// Two-way binding that mirrors `showingInstallConfirm != nil` for the
@@ -623,7 +629,7 @@ struct OtaUpdateScreen: View {
         f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
-        return "Ultimo controllo " + rel
+        return String(localized: "Ultimo controllo \(rel)")
     }
 }
 

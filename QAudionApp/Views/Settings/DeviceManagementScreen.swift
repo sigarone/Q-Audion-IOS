@@ -170,7 +170,9 @@ final class DeviceManagementContainer: ObservableObject {
     /// primitive value they need before calling in.
     private static func currentDeviceOnly(deviceId: String?) -> DeviceManagementViewModel {
         let deviceId = deviceId ?? "local-device"
-        let name = UIDevice.current.name.isEmpty ? "Questo dispositivo" : UIDevice.current.name
+        let name = UIDevice.current.name.isEmpty
+            ? String(localized: "settings.devices.this_device_name", defaultValue: "Questo dispositivo", comment: "Devices screen, fallback name of the current device when iOS gives no device name")
+            : UIDevice.current.name
         let now = Date()
         let device = DeviceManagementViewModel.Device(
             deviceId: deviceId,
@@ -217,7 +219,7 @@ final class DeviceManagementContainer: ObservableObject {
                 await MainActor.run {
                     guard let self = self else { return }
                     if let r = removed { self.enhanced.append(r) }
-                    self.errorMessage = "Revoca fallita: \(error.localizedDescription)"
+                    self.errorMessage = String(localized: "settings.devices.revoke_failed", defaultValue: "Revoca fallita: \(error.localizedDescription)", comment: "Devices screen, error banner when revoking a linked device failed; placeholder is the system error description")
                 }
             }
         }
@@ -407,7 +409,7 @@ struct DeviceManagementScreen: View {
         f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
-        return "Aggiornato " + rel
+        return String(localized: "settings.devices.updated_relative", defaultValue: "Aggiornato \(rel)", comment: "Devices screen footer: when the list was last refreshed; placeholder is a relative time such as 5 minutes ago")
     }
 }
 

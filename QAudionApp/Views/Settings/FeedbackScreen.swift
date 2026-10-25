@@ -89,7 +89,7 @@ struct FeedbackScreen: View {
             inbox = []
             error = nil
         } catch {
-            self.error = "Impossibile caricare i messaggi (\(error))"
+            self.error = String(localized: "feedback.error.load_failed", defaultValue: "Impossibile caricare i messaggi (\(String(describing: error)))", comment: "Feedback screen, error: loading the team messages failed; placeholder is the error description")
         }
         await FeedbackService.shared.refreshUnreadCount()
     }
@@ -190,7 +190,7 @@ private struct FeedbackComposeSheet: View {
             onSubmitted(item)
             dismiss()
         } catch {
-            self.error = "Invio fallito: \(error)"
+            self.error = String(localized: "feedback.error.send_failed", defaultValue: "Invio fallito: \(String(describing: error))", comment: "Feedback screen, error: sending the feedback or reply failed; placeholder is the error description")
         }
     }
 }
@@ -272,7 +272,7 @@ private struct FeedbackThreadSheet: View {
             replyText = ""
             onChange()
         } catch {
-            self.error = "Invio fallito: \(error)"
+            self.error = String(localized: "feedback.error.send_failed", defaultValue: "Invio fallito: \(String(describing: error))", comment: "Feedback screen, error: sending the feedback or reply failed; placeholder is the error description")
         }
     }
 }
@@ -284,7 +284,9 @@ private struct ReplyBubble: View {
         HStack {
             if isUser { Spacer(minLength: 40) }
             VStack(alignment: .leading, spacing: 4) {
-                Text(isUser ? "Tu" : "Il team")
+                Text(isUser
+                     ? String(localized: "feedback.reply.author_you", defaultValue: "Tu", comment: "Feedback thread, author label of the user's own message")
+                     : String(localized: "feedback.reply.author_team", defaultValue: "Il team", comment: "Feedback thread, author label of the support team's message"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(reply.body)
@@ -309,11 +311,18 @@ private struct ReplyBubble: View {
 struct FeedbackSettingsLink: View {
     @ObservedObject private var feedback = FeedbackService.shared
 
+    private var subtitle: String {
+        let n = feedback.unreadCount
+        if n == 1 {
+            return String(localized: "feedback.settings.one_new_reply", defaultValue: "\(n) nuova risposta dal team", comment: "Settings list, Feedback row subtitle: exactly one unread reply from the team; placeholder is the count (1)")
+        } else if n > 1 {
+            return String(localized: "feedback.settings.new_replies", defaultValue: "\(n) nuove risposte dal team", comment: "Settings list, Feedback row subtitle: several unread replies from the team; placeholder is the count")
+        }
+        return String(localized: "feedback.settings.idle", defaultValue: "Invia un messaggio · leggi le risposte del team", comment: "Settings list, Feedback row subtitle when there are no unread replies")
+    }
+
     var body: some View {
         let n = feedback.unreadCount
-        let subtitle: String = n > 0
-            ? "\(n) " + (n == 1 ? "nuova risposta" : "nuove risposte") + " dal team"
-            : "Invia un messaggio · leggi le risposte del team"
         NavigationLink {
             LazyView { FeedbackScreen() }
         } label: {
@@ -336,8 +345,8 @@ struct FeedbackSettingsLink: View {
 
 private func relativeAge(ms: Int64) -> String {
     let dt = Date().timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(ms) / 1000))
-    if dt < 90 { return "\(Int(dt))s fa" }
-    if dt < 90 * 60 { return "\(Int(dt / 60))m fa" }
-    if dt < 36 * 3600 { return "\(Int(dt / 3600))h fa" }
-    return "\(Int(dt / 86400))g fa"
+    if dt < 90 { return String(localized: "feedback.age.seconds", defaultValue: "\(Int(dt))s fa", comment: "Feedback thread, message age: N seconds ago; placeholder is the number") }
+    if dt < 90 * 60 { return String(localized: "feedback.age.minutes", defaultValue: "\(Int(dt / 60))m fa", comment: "Feedback thread, message age: N minutes ago; placeholder is the number") }
+    if dt < 36 * 3600 { return String(localized: "feedback.age.hours", defaultValue: "\(Int(dt / 3600))h fa", comment: "Feedback thread, message age: N hours ago; placeholder is the number") }
+    return String(localized: "feedback.age.days", defaultValue: "\(Int(dt / 86400))g fa", comment: "Feedback thread, message age: N days ago (g = giorni); placeholder is the number")
 }
