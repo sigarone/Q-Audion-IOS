@@ -332,7 +332,7 @@ struct VideoCallView: View {
     /// already computed inline; factored out so `PeerVideoInviteBanner`
     /// can reuse it instead of duplicating the fallback chain.
     private var resolvedPeerDisplayName: String {
-        peerDisplayName.isEmpty ? (appState.callContactId ?? "Videochiamata") : peerDisplayName
+        peerDisplayName.isEmpty ? (appState.callContactId ?? String(localized: "Videochiamata")) : peerDisplayName
     }
 
     // MARK: - Top bar
@@ -356,7 +356,7 @@ struct VideoCallView: View {
                         .font(.system(size: 9))
                         .foregroundColor(.green)
 
-                    Text("Cifrato · " + appState.videoCodecLabel)
+                    Text(String(localized: "Cifrato · ") + appState.videoCodecLabel)
                         .font(.caption2)
                         .foregroundColor(.gray)
                 }
@@ -569,14 +569,14 @@ struct VideoCallView: View {
         HStack(spacing: 0) {
             videoButton(
                 icon: isMuted ? "mic.slash.fill" : "mic.fill",
-                label: isMuted ? "Riattiva" : "Muto",
+                label: isMuted ? String(localized: "video.control.unmute", defaultValue: "Riattiva", comment: "Label under the microphone button of the video call controls while muted (tapping unmutes).") : String(localized: "video.control.mute", defaultValue: "Muto", comment: "Label under the microphone button of the video call controls while live (tapping mutes)."),
                 isActive: isMuted
             ) {
                 appState.setMuted(!isMuted)
             }
             videoButton(
                 icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
-                label: "Altoparlante",
+                label: String(localized: "video.control.speaker", defaultValue: "Altoparlante", comment: "Label under the speaker button of the video call controls."),
                 isActive: isSpeaker
             ) {
                 isSpeaker.toggle()
@@ -584,7 +584,7 @@ struct VideoCallView: View {
             }
             videoButton(
                 icon: isCameraOn ? "video.fill" : "video.slash.fill",
-                label: isCameraOn ? "Video attivo" : "Video spento",
+                label: isCameraOn ? String(localized: "video.control.camera_on", defaultValue: "Video attivo", comment: "Label under the camera button of the video call controls while the camera is on.") : String(localized: "video.control.camera_off", defaultValue: "Video spento", comment: "Label under the camera button of the video call controls while the camera is off."),
                 isActive: !isCameraOn
             ) {
                 // Entitlements Task 5 parity — Android gates this manual
@@ -601,13 +601,13 @@ struct VideoCallView: View {
                 // to the right mechanism for however the call got here.
                 appState.setLocalCameraEnabled(!isCameraOn)
             }
-            videoButton(icon: "camera.rotate.fill", label: "Inverti") {
+            videoButton(icon: "camera.rotate.fill", label: String(localized: "video.control.flip", defaultValue: "Inverti", comment: "Label under the button of the video call controls that switches between front and back camera.")) {
                 appState.videoFlipCamera()
             }
             if let chat = inCallChat {
                 chatButton(chat)
             }
-            videoButton(icon: "phone.down.fill", label: "Termina", isEndCall: true) {
+            videoButton(icon: "phone.down.fill", label: String(localized: "Termina"), isEndCall: true) {
                 appState.endCall()
             }
         }
@@ -761,7 +761,7 @@ struct VideoCallView: View {
     private var videoDiagTransport: some View {
         let codec = appState.videoCodecLabel
         let path = codec + " · AES-256-GCM"
-        videoDiagRow("CODEC / CIFRA", path)
+        videoDiagRow(String(localized: "video.diag.codec_cipher", defaultValue: "CODEC / CIFRA", comment: "Row label in the video call diagnostics panel: video codec and encryption cipher (capitals)."), path)
         // W-SRTPCOUNTERS (2026-08-29) — effective counters: RTP packets on a
         // native-SRTP call, sealed frames on the DataChannel path. The raw
         // frame counters read 0 for the whole of an `audio-srtp-v1` call.
@@ -772,28 +772,28 @@ struct VideoCallView: View {
     // Helpers — build strings outside @ViewBuilder to avoid String(Int)
     // overload timeout on Xcode 26.4 (CLAUDE.md §13 v1.0.255).
     private static func videoLatencyString(_ ms: Int) -> String {
-        guard ms > 0 else { return "n/d" }
+        guard ms > 0 else { return String(localized: "video.diag.not_available", defaultValue: "n/d", comment: "Value in the video call diagnostics panel when a measurement is not available (abbreviation).") }
         return ms.description + " ms"
     }
 
     @ViewBuilder
     private var videoDiagFrameCounters: some View {
         let hasPipeline = appState.videoPipeline != nil
-        let pipelineState = hasPipeline ? "attiva" : "inattiva"
+        let pipelineState = hasPipeline ? String(localized: "video.diag.pipeline_active", defaultValue: "attiva", comment: "Value in the video call diagnostics panel: the video pipeline is running.") : String(localized: "video.diag.pipeline_inactive", defaultValue: "inattiva", comment: "Value in the video call diagnostics panel: the video pipeline is not running.")
         let rekeyVal = "—" // no live re-key counter is published yet
         let latencyVal = Self.videoLatencyString(appState.latencyMs)
-        videoDiagRow("PIPELINE VIDEO", pipelineState)
+        videoDiagRow(String(localized: "video.diag.pipeline", defaultValue: "PIPELINE VIDEO", comment: "Row label in the video call diagnostics panel: state of the video pipeline (capitals)."), pipelineState)
         videoDiagRow("REKEY",          rekeyVal)
-        videoDiagRow("LATENZA RELAY",  latencyVal)
+        videoDiagRow(String(localized: "video.diag.relay_latency", defaultValue: "LATENZA RELAY", comment: "Row label in the video call diagnostics panel: round-trip time to the relay server (capitals)."),  latencyVal)
     }
 
     @ViewBuilder
     private var videoDiagSessionKey: some View {
         if let key = realSessionKey {
             let fp = Self.sessionFingerprintForDiag(key)
-            videoDiagRow("SESSIONE ML-KEM", fp)
+            videoDiagRow(String(localized: "video.diag.session_mlkem", defaultValue: "SESSIONE ML-KEM", comment: "Row label in the video call diagnostics panel: fingerprint of the ML-KEM session key (capitals)."), fp)
         } else {
-            videoDiagRow("SESSIONE ML-KEM", "handshake in corso…")
+            videoDiagRow(String(localized: "video.diag.session_mlkem", defaultValue: "SESSIONE ML-KEM", comment: "Row label in the video call diagnostics panel: fingerprint of the ML-KEM session key (capitals)."), String(localized: "video.diag.handshake_in_progress", defaultValue: "handshake in corso…", comment: "Value in the video call diagnostics panel while the key exchange of the call is still running."))
         }
     }
 

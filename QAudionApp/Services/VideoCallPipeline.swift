@@ -963,9 +963,9 @@ public final class VideoCallPipeline: NSObject {
 
         public var errorDescription: String? {
             switch self {
-            case .permissionDenied:    return "Permesso fotocamera negato"
-            case .cameraUnavailable:   return "Fotocamera non disponibile"
-            case .outputAttachFailed:  return "Impossibile collegare l'output video"
+            case .permissionDenied:    return String(localized: "video.error.permission_denied", defaultValue: "Permesso fotocamera negato", comment: "Error description when the camera permission is denied for the video call.")
+            case .cameraUnavailable:   return String(localized: "Fotocamera non disponibile")
+            case .outputAttachFailed:  return String(localized: "video.error.output_attach_failed", defaultValue: "Impossibile collegare l'output video", comment: "Error description when the video output of the call could not be connected.")
             }
         }
     }

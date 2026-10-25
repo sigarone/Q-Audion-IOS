@@ -170,15 +170,19 @@ final class DesignSystemAccessibilityTests: XCTestCase {
     func testTheSecurityBadgeSaysNothingOfSecurityWithoutAScore() {
         let noData = CallSecurityBadge.statusWord(level: "green", score: -1)
         XCTAssertFalse(noData.isEmpty)
-        for word in ["Sicuro", "Attenzione", "Allarme"] {
+        // The three words are localized: compare with the same catalog entries the badge reads.
+        let safe = String(localized: "call.security.status_safe", defaultValue: "Sicuro")
+        let warning = String(localized: "call.security.status_warning", defaultValue: "Attenzione")
+        let alarm = String(localized: "call.security.status_alarm", defaultValue: "Allarme")
+        for word in [safe, warning, alarm] {
             XCTAssertNotEqual(noData, word)
         }
         XCTAssertEqual(CallSecurityBadge.statusWord(level: "green", score: .nan), noData)
         XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: -1), noData, "the level alone is not a reading")
-        XCTAssertEqual(CallSecurityBadge.statusWord(level: "green", score: 0.9), "Sicuro")
-        XCTAssertEqual(CallSecurityBadge.statusWord(level: "yellow", score: 0.4), "Attenzione")
-        XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: 0.1), "Allarme")
-        XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: 0), "Allarme", "0 is a real reading")
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "green", score: 0.9), safe)
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "yellow", score: 0.4), warning)
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: 0.1), alarm)
+        XCTAssertEqual(CallSecurityBadge.statusWord(level: "red", score: 0), alarm, "0 is a real reading")
     }
 
     /// The details panel of the badge prints only what the call reports: the transport it is really on (it used to

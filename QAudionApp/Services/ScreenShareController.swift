@@ -67,13 +67,13 @@ public final class ScreenShareController {
         public var errorDescription: String? {
             switch self {
             case .recorderUnavailable:
-                return "Cattura schermo non disponibile su questo dispositivo."
+                return String(localized: "call.screenshare.error.recorder_unavailable", defaultValue: "Cattura schermo non disponibile su questo dispositivo.", comment: "Error when the system screen recorder is not available on this device.")
             case .alreadyRunning:
-                return "La condivisione schermo è già attiva."
+                return String(localized: "call.screenshare.error.already_active", defaultValue: "La condivisione schermo è già attiva.", comment: "Error when screen sharing is started while it is already running.")
             case .captureFailed(let err):
-                return "Avvio cattura schermo fallito: \(err.localizedDescription)"
+                return String(localized: "call.screenshare.error.capture_failed", defaultValue: "Avvio cattura schermo fallito: \(err.localizedDescription)", comment: "Error when screen capture could not be started. %@ is the technical reason.")
             case .notRunning:
-                return "La condivisione schermo non è attiva."
+                return String(localized: "call.screenshare.error.not_active", defaultValue: "La condivisione schermo non è attiva.", comment: "Error when screen sharing is stopped while it is not running.")
             }
         }
     }

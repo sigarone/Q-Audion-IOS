@@ -382,7 +382,7 @@ struct CallHistoryView: View {
     @ViewBuilder
     private var content: some View {
         if store.loading && store.entries.isEmpty {
-            QAudionLoadingState(message: "Caricamento storico…")
+            QAudionLoadingState(message: String(localized: "call.history.loading", defaultValue: "Caricamento storico…", comment: "Message under the spinner while the call history is loading."))
         } else if store.entries.isEmpty {
             emptyState
         } else {

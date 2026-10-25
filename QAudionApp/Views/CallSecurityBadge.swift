@@ -91,7 +91,7 @@ struct CallSecurityBadge: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel("Sicurezza chiamata: \(statusLabel)")
-        .accessibilityHint(isExpanded ? "Nascondi i dettagli" : "Mostra i dettagli")
+        .accessibilityHint(isExpanded ? String(localized: "call.security.hide_details_a11y", defaultValue: "Nascondi i dettagli", comment: "VoiceOver hint of the call security badge while its details are shown.") : String(localized: "Mostra i dettagli"))
     }
 
     // MARK: - Expanded Details Panel
@@ -203,9 +203,9 @@ struct CallSecurityBadge: View {
                           comment: "Call security badge — status word while there is no Guardian reading yet (not enough data to say anything about the call)")
         }
         switch level {
-        case "yellow": return "Attenzione"
-        case "red":    return "Allarme"
-        default:       return "Sicuro"
+        case "yellow": return String(localized: "call.security.status_warning", defaultValue: "Attenzione", comment: "Word of the compact call security badge when the Guardian level is yellow.")
+        case "red":    return String(localized: "call.security.status_alarm", defaultValue: "Allarme", comment: "Word of the compact call security badge when the Guardian level is red.")
+        default:       return String(localized: "call.security.status_safe", defaultValue: "Sicuro", comment: "Word of the compact call security badge when the Guardian level is green and a score exists.")
         }
     }
 

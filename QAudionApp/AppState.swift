@@ -161,7 +161,7 @@ final class AppState: ObservableObject {
         if let phone = Self.locallyConfiguredPhone() {
             return phone
         }
-        return "Profilo da completare"
+        return String(localized: "call.account.profile_incomplete", defaultValue: "Profilo da completare", comment: "Label of the signed-in account when it has no display name, no extension and no phone yet.")
     }
 
     /// The account's display name and nothing else — nil when the user has
@@ -8059,7 +8059,7 @@ final class AppState: ObservableObject {
         }
         let camStatus = AVCaptureDevice.authorizationStatus(for: .video)
         if camStatus == .denied || camStatus == .restricted {
-            errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+            errorMessage = String(localized: "call.error.camera_permission_settings", defaultValue: "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion.", comment: "Error banner: the user tried to turn on video but camera access is denied in iOS Settings.")
             declinePending(pending)
             return
         }
@@ -8679,7 +8679,7 @@ final class AppState: ObservableObject {
                 self.setCamera(false)
                 self.videoPipeline?.stop()
                 self.videoPipeline = nil
-                self.errorMessage = "Il peer non ha attivato il video — la chiamata continua in voce."
+                self.errorMessage = String(localized: "call.error.peer_declined_video", defaultValue: "Il peer non ha attivato il video — la chiamata continua in voce.", comment: "Error banner during a call: the other person declined our request to turn on video; the call goes on as audio only.")
             }
             // Decline-poisoning fix: the UI rollback above is not enough — the
             // WebRTC controller still has videoUpgradeInProgress latched, the
@@ -8728,7 +8728,7 @@ final class AppState: ObservableObject {
             } catch {
                 let desc: String = error.localizedDescription
                 RTLog.warn("call", "upgrade answer failed ev=ansfail state=active detail=" + desc)
-                self.errorMessage = "Upgrade a video fallito: " + desc
+                self.errorMessage = String(localized: "call.error.video_upgrade_failed", defaultValue: "Upgrade a video fallito: \(desc)", comment: "Error banner: switching an audio call to video failed. %@ is the technical reason.")
             }
         }
         #endif
@@ -9366,7 +9366,7 @@ final class AppState: ObservableObject {
             .first(where: { $0.peerUserId == callerId && $0.peerExtension != nil })?
             .peerExtension.flatMap { $0 > 0 ? String($0) : nil }
         let resolvedName: String = callerId.isEmpty
-            ? "Sconosciuto"
+            ? String(localized: "Sconosciuto")
             : DisplayName.forUser(
                 callerId,
                 serverDisplay: sanitisedWireDisplay.isEmpty ? nil : sanitisedWireDisplay,
@@ -9398,8 +9398,8 @@ final class AppState: ObservableObject {
         Task { @MainActor in
             await NotificationCenterService.shared.scheduleLocal(
                 category: .missedCall,
-                title: "Chiamata persa",
-                body: "Chiamata persa da \(resolvedName)",
+                title: String(localized: "notification.call.missed.title", defaultValue: "Chiamata persa", comment: "Title of the local notification posted for a missed call."),
+                body: String(localized: "notification.call.missed.body", defaultValue: "Chiamata persa da \(resolvedName)", comment: "Body of the missed call notification. %@ is the caller's name."),
                 userInfo: [
                     "call_id": callIdStr,
                     "peer_id": callerId,
@@ -9961,7 +9961,7 @@ final class AppState: ObservableObject {
         // dropping all of these. Surface to the UI via errorMessage.
         ws.registerHandler(type: "error") { [weak self] _, data in
             let code = (data["code"] as? String) ?? "?"
-            let msg = (data["message"] as? String) ?? "Errore server"
+            let msg = (data["message"] as? String) ?? String(localized: "call.error.server_default", defaultValue: "Errore server", comment: "Fallback text of a server error banner when the server sent no message. It is shown after a [code] prefix.")
             // The refusal of a group create / join / media request arrives as this envelope
             // (single handler slot, so it is fed to the group call manager from here): while
             // a group call has no media path yet it ends the attempt at once instead of
@@ -10031,7 +10031,7 @@ final class AppState: ObservableObject {
                 self.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
                 self.resetAccountScopedRuntimeState()
-                self.errorMessage = "Account cancellato remotamente."
+                self.errorMessage = String(localized: "call.account.remote_wipe", defaultValue: "Account cancellato remotamente.", comment: "Message shown on the login screen after the account was deleted remotely by the server.")
             }
         }
 
@@ -10039,7 +10039,7 @@ final class AppState: ObservableObject {
         // locks an account. iOS must drop tokens + force back to
         // login.
         ws.registerHandler(type: "account_locked") { [weak self] _, data in
-            let reason = (data["reason"] as? String) ?? "Account bloccato"
+            let reason = (data["reason"] as? String) ?? String(localized: "call.account.locked_default", defaultValue: "Account bloccato", comment: "Fallback message shown after the server locked the account, when it gave no reason.")
             DispatchQueue.main.async {
                 self?.authService.clearToken()
                 // Whole-phase-review finding I1 (2026-08-17) — same
@@ -10094,7 +10094,7 @@ final class AppState: ObservableObject {
         ws.registerHandler(type: "kms_key_available") { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                self.errorMessage = "Nuova chiave KMS disponibile."
+                self.errorMessage = String(localized: "call.kms.new_key_available", defaultValue: "Nuova chiave KMS disponibile.", comment: "Banner shown when the server announces a new KMS key for this device.")
                 await self.runKmsSweep()
             }
         }
@@ -10106,7 +10106,7 @@ final class AppState: ObservableObject {
             let keyId = (data["key_id"] as? String) ?? ""
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                self.errorMessage = "Una chiave KMS è stata revocata."
+                self.errorMessage = String(localized: "call.kms.key_revoked", defaultValue: "Una chiave KMS è stata revocata.", comment: "Banner shown when the server revokes a KMS key of this device.")
                 guard !keyId.isEmpty else {
                     print("[AppState] kms_key_revoked: missing key_id in payload — nothing to delete")
                     return
@@ -10868,7 +10868,7 @@ final class AppState: ObservableObject {
                         serverMessageId: serverMsgId,
                         senderId: senderId,
                         mine: false,
-                        text: "[messaggio cifrato non leggibile]",
+                        text: String(localized: "call.msg.undecryptable_group", defaultValue: "[messaggio cifrato non leggibile]", comment: "Text of a group chat row for a message that could not be decrypted."),
                         ts: ts))
                 if inserted {
                     sendGroupMsgDelivered(groupId: groupIdUuid, serverMsgId: serverMsgId)
@@ -11250,7 +11250,7 @@ final class AppState: ObservableObject {
             forKey: "qaudion.notifications.banners_enabled") as? Bool) ?? true
         guard bannersGlobalEnabled, activeGroupHex != groupHex else { return }
 
-        let title = GroupRegistry.shared.entry(for: groupHex)?.name ?? "Gruppo"
+        let title = GroupRegistry.shared.entry(for: groupHex)?.name ?? String(localized: "Gruppo")
         // Sender label — same fallback chain the group bubbles use.
         // W-EXTPREFIX consolidation (2026-07-29): this had NO placeholder
         // guard at all (a stale "Phone #100" would have shown verbatim in
@@ -11262,7 +11262,7 @@ final class AppState: ObservableObject {
         let previewAllowed = PrivacyGate.messagePreviewInNotifications
         let body: String
         if hideContent || !previewAllowed {
-            body = "Nuovo messaggio di gruppo"
+            body = String(localized: "notification.call.group_message_hidden_body", defaultValue: "Nuovo messaggio di gruppo", comment: "Body of the group message notification when the user hides message content in notifications.")
         } else {
             let snippet = plaintext.count > 120 ? String(plaintext.prefix(120)) + "…" : plaintext
             body = "\(senderName): \(snippet)"
@@ -12311,7 +12311,7 @@ final class AppState: ObservableObject {
             let notificationText: String = FileV2ChatBody.classify(text: plaintext).displayText ?? MessageReplyCodec.shownText(ofBody: plaintext)
             let bodyText: String
             if hideContent || !previewAllowed {
-                bodyText = "Nuovo messaggio"
+                bodyText = String(localized: "Nuovo messaggio")
             } else if notificationText.count > 120 {
                 bodyText = String(notificationText.prefix(120)) + "…"
             } else {
@@ -12395,13 +12395,13 @@ final class AppState: ObservableObject {
                         if mime.hasPrefix("audio/") {
                             if let dur = durMs, dur > 0 {
                                 let secs = Double(dur) / 1000.0
-                                return String(format: "🎤 Nota vocale (%.1fs)", secs)
+                                return String(localized: "call.msg.preview.voice_note_duration", defaultValue: "🎤 Nota vocale (\(String(format: "%.1f", secs))s)", comment: "One-line preview of a received voice note; %@ is its length in seconds")
                             }
-                            return "🎤 Nota vocale"
+                            return String(localized: "file_v2.kind.voice", defaultValue: "🎤 Nota vocale", comment: "One-line label of a voice note")
                         }
-                        if mime.hasPrefix("image/") { return "🖼️ Immagine" }
-                        if mime.hasPrefix("video/") { return "🎬 Video" }
-                        return "📎 Allegato"
+                        if mime.hasPrefix("image/") { return String(localized: "call.msg.preview.image", defaultValue: "🖼️ Immagine", comment: "One-line preview of a received image") }
+                        if mime.hasPrefix("video/") { return String(localized: "file_v2.kind.video", defaultValue: "🎬 Video", comment: "One-line label of a video") }
+                        return String(localized: "reply.kind.file", defaultValue: "📎 Allegato", comment: "One-line label of a file attachment")
                     }()
                     await MainActor.run {
                         ConversationStore().setMediaInfo(
@@ -13741,25 +13741,26 @@ final class AppState: ObservableObject {
             if mime.hasPrefix("audio/") {
                 if let dur = env.att.durationMs, dur > 0 {
                     let secs = Double(dur) / 1000.0
-                    return String(format: "🎤 Nota vocale (%.1fs) — supporto cross-platform in arrivo", secs)
+                    let durText: String = String(format: "%.1f", secs)
+                    return String(localized: "call.msg.cross_platform.voice_note_duration", defaultValue: "🎤 Nota vocale (\(durText)s) — supporto cross-platform in arrivo", comment: "Chat placeholder for a voice note sent from another platform. %@ is the duration in seconds (e.g. 3.5).")
                 }
-                return "🎤 Nota vocale — supporto cross-platform in arrivo"
+                return String(localized: "call.msg.cross_platform.voice_note", defaultValue: "🎤 Nota vocale — supporto cross-platform in arrivo", comment: "Chat placeholder for a voice note sent from another platform, without duration.")
             }
             if mime.hasPrefix("image/") {
-                return "🖼️ Immagine — supporto cross-platform in arrivo"
+                return String(localized: "call.msg.cross_platform.image", defaultValue: "🖼️ Immagine — supporto cross-platform in arrivo", comment: "Chat placeholder for an image sent from another platform.")
             }
             if mime.hasPrefix("video/") {
-                return "🎬 Video — supporto cross-platform in arrivo"
+                return String(localized: "call.msg.cross_platform.video", defaultValue: "🎬 Video — supporto cross-platform in arrivo", comment: "Chat placeholder for a video sent from another platform.")
             }
-            return "📎 Allegato — supporto cross-platform in arrivo"
+            return String(localized: "call.msg.cross_platform.attachment", defaultValue: "📎 Allegato — supporto cross-platform in arrivo", comment: "Chat placeholder for a generic attachment sent from another platform.")
         }
         // qfile legacy marker — iOS-internal FileTransfer.
         if let marker = FileTransfer.tryParseMarker(text: raw) {
             let mime = marker.qfile.mime
             if mime.hasPrefix("audio/") {
-                return "🎤 Nota vocale (download in arrivo)"
+                return String(localized: "call.msg.legacy_download.voice_note", defaultValue: "🎤 Nota vocale (download in arrivo)", comment: "Chat placeholder for a voice note in the old internal file format that is not downloadable yet.")
             }
-            return "📎 \(marker.qfile.name) (download in arrivo)"
+            return String(localized: "call.msg.legacy_download.file", defaultValue: "📎 \(marker.qfile.name) (download in arrivo)", comment: "Chat placeholder for a file in the old internal file format that is not downloadable yet. %@ is the file name.")
         }
         return raw
     }
@@ -14253,13 +14254,13 @@ final class AppState: ObservableObject {
         let mime = result.mime.lowercased()
         let friendly: String
         if mime.hasPrefix("audio/") {
-            friendly = "🎤 Nota vocale"
+            friendly = String(localized: "file_v2.kind.voice", defaultValue: "🎤 Nota vocale", comment: "One-line label of a voice note")
         } else if mime.hasPrefix("image/") {
-            friendly = "🖼️ Immagine"
+            friendly = String(localized: "call.msg.preview.image", defaultValue: "🖼️ Immagine", comment: "One-line preview of a received image")
         } else if mime.hasPrefix("video/") {
-            friendly = "🎬 Video"
+            friendly = String(localized: "file_v2.kind.video", defaultValue: "🎬 Video", comment: "One-line label of a video")
         } else {
-            friendly = "📎 Allegato"
+            friendly = String(localized: "reply.kind.file", defaultValue: "📎 Allegato", comment: "One-line label of a file attachment")
         }
 
         let msg = Message(
@@ -14475,7 +14476,7 @@ final class AppState: ObservableObject {
         func persistFileAttachmentFailurePlaceholder(senderId: String) {
             let store = ConversationStore()
             let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
-            let label = "[allegato non ricevuto]"
+            let label = String(localized: "call.msg.attachment_not_received", defaultValue: "[allegato non ricevuto]", comment: "Text of a chat row shown when an incoming file attachment could not be received.")
             let conv: Conversation
             if let e = existing {
                 conv = e
@@ -18369,12 +18370,12 @@ final class AppState: ObservableObject {
         let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
         RTLog.info("dial", "dialAndCall raw='\(trimmed)' video=\(video)")
         guard !trimmed.isEmpty else {
-            errorMessage = "Numero vuoto."
+            errorMessage = String(localized: "call.dial.empty_number", defaultValue: "Numero vuoto.", comment: "Error banner when the user dials with an empty field.")
             RTLog.warn("dial", "input vuoto, abort")
             return
         }
         guard let token = authService.loadToken(), !token.isEmpty else {
-            errorMessage = "Sessione non autenticata."
+            errorMessage = String(localized: "call.dial.not_authenticated", defaultValue: "Sessione non autenticata.", comment: "Error banner when dialing without a signed-in session.")
             return
         }
         let backendConfig = pinnedConfig(token: token)
@@ -18390,7 +18391,7 @@ final class AppState: ObservableObject {
             RTLog.info("dial", "branch=extension ext=\(ext)")
             do {
                 guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
-                    errorMessage = "Interno \(ext) non assegnato — verifica il numero e riprova."
+                    errorMessage = String(localized: "call.dial.extension_not_assigned", defaultValue: "Interno \(ext) non assegnato — verifica il numero e riprova.", comment: "Error banner when the dialed short extension (internal number) belongs to nobody. %lld is the extension.")
                     RTLog.warn("dial", "ext=\(ext) → 404 not assigned")
                     return
                 }
@@ -18412,7 +18413,7 @@ final class AppState: ObservableObject {
                 await startCall(contactId: profile.userId, video: video)
                 return
             } catch {
-                errorMessage = "Risoluzione interno \(ext) fallita: \(error.localizedDescription)"
+                errorMessage = String(localized: "call.dial.extension_lookup_failed", defaultValue: "Risoluzione interno \(ext) fallita: \(error.localizedDescription)", comment: "Error banner when looking up a dialed extension failed. %lld is the extension, %@ the technical reason.")
                 RTLog.error("dial", "ext=\(ext) lookup error: \(error.localizedDescription)")
                 return
             }
@@ -18432,7 +18433,7 @@ final class AppState: ObservableObject {
                 // input. Guard it like every other failure branch in this
                 // same function instead of trapping the process.
                 guard let discoverBaseUrl = URL(string: serverUrl) else {
-                    errorMessage = "Configurazione server non valida."
+                    errorMessage = String(localized: "call.dial.server_config_invalid", defaultValue: "Configurazione server non valida.", comment: "Error banner when the server address of the app is not valid.")
                     RTLog.error("dial", "serverUrl non è un URL valido: \(serverUrl)")
                     return
                 }
@@ -18450,7 +18451,7 @@ final class AppState: ObservableObject {
                 let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
                 let entries = try await v2.discover(alg: pepper.alg, hashes: [hash])
                 guard let entry = entries.first else {
-                    errorMessage = "Numero \(normalized) non risulta tra gli utenti registrati."
+                    errorMessage = String(localized: "call.dial.number_not_registered", defaultValue: "Numero \(normalized) non risulta tra gli utenti registrati.", comment: "Error banner when the dialed phone number has no Q-Audion account. %@ is the number.")
                     return
                 }
                 let userId = entry.userId
@@ -18462,7 +18463,7 @@ final class AppState: ObservableObject {
                 await startCall(contactId: userId, video: video)
                 return
             } catch {
-                errorMessage = "Risoluzione \(trimmed) fallita: \(error.localizedDescription)"
+                errorMessage = String(localized: "call.dial.resolve_failed", defaultValue: "Risoluzione \(trimmed) fallita: \(error.localizedDescription)", comment: "Error banner when looking up the dialed number failed. First %@ is the number, second %@ the technical reason.")
                 return
             }
         }
@@ -18506,11 +18507,11 @@ final class AppState: ObservableObject {
     func resolveDialInput(_ rawInput: String) async -> ResolvedDialTarget? {
         let trimmed = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            errorMessage = "Numero vuoto."
+            errorMessage = String(localized: "call.dial.empty_number", defaultValue: "Numero vuoto.", comment: "Error banner when the user dials with an empty field.")
             return nil
         }
         guard let token = authService.loadToken(), !token.isEmpty else {
-            errorMessage = "Sessione non autenticata."
+            errorMessage = String(localized: "call.dial.not_authenticated", defaultValue: "Sessione non autenticata.", comment: "Error banner when dialing without a signed-in session.")
             return nil
         }
         let backendConfig = pinnedConfig(token: token)
@@ -18524,7 +18525,7 @@ final class AppState: ObservableObject {
         if digitsOnly, trimmed.count <= 7, let ext = Int64(trimmed) {
             do {
                 guard let profile = try await provider.accountApi.lookupByExtension(ext) else {
-                    errorMessage = "Interno \(ext) non assegnato — verifica il numero e riprova."
+                    errorMessage = String(localized: "call.dial.extension_not_assigned", defaultValue: "Interno \(ext) non assegnato — verifica il numero e riprova.", comment: "Error banner when the dialed short extension (internal number) belongs to nobody. %lld is the extension.")
                     return nil
                 }
                 let label = DisplayName.forUser(
@@ -18532,7 +18533,7 @@ final class AppState: ObservableObject {
                     knownExtension: String(ext))
                 return ResolvedDialTarget(userId: profile.userId, displayLabel: label)
             } catch {
-                errorMessage = "Risoluzione interno \(ext) fallita: \(error.localizedDescription)"
+                errorMessage = String(localized: "call.dial.extension_lookup_failed", defaultValue: "Risoluzione interno \(ext) fallita: \(error.localizedDescription)", comment: "Error banner when looking up a dialed extension failed. %lld is the extension, %@ the technical reason.")
                 return nil
             }
         }
@@ -18546,7 +18547,7 @@ final class AppState: ObservableObject {
                 // is always valid today, but this guards the `@Published var`
                 // instead of trapping the process if that ever changes.
                 guard let discoverBaseUrl = URL(string: serverUrl) else {
-                    errorMessage = "Configurazione server non valida."
+                    errorMessage = String(localized: "call.dial.server_config_invalid", defaultValue: "Configurazione server non valida.", comment: "Error banner when the server address of the app is not valid.")
                     RTLog.error("dial", "serverUrl non è un URL valido: \(serverUrl)")
                     return nil
                 }
@@ -18560,7 +18561,7 @@ final class AppState: ObservableObject {
                 let hash = try PepperedPhoneHash.hash(phone: normalized, pepperBytes: pepper.pepperBytes)
                 let entries = try await v2.discover(alg: pepper.alg, hashes: [hash])
                 guard let entry = entries.first else {
-                    errorMessage = "Numero \(normalized) non risulta tra gli utenti registrati."
+                    errorMessage = String(localized: "call.dial.number_not_registered", defaultValue: "Numero \(normalized) non risulta tra gli utenti registrati.", comment: "Error banner when the dialed phone number has no Q-Audion account. %@ is the number.")
                     return nil
                 }
                 let userId = entry.userId
@@ -18568,7 +18569,7 @@ final class AppState: ObservableObject {
                     userId, serverDisplay: entry.displayName, knownPhoneNumber: normalized)
                 return ResolvedDialTarget(userId: userId, displayLabel: label)
             } catch {
-                errorMessage = "Risoluzione \(trimmed) fallita: \(error.localizedDescription)"
+                errorMessage = String(localized: "call.dial.resolve_failed", defaultValue: "Risoluzione \(trimmed) fallita: \(error.localizedDescription)", comment: "Error banner when looking up the dialed number failed. First %@ is the number, second %@ the technical reason.")
                 return nil
             }
         }
@@ -18670,7 +18671,7 @@ final class AppState: ObservableObject {
             contacts: cachedContacts
         ) else {
             RTLog.warn("call", "Siri INStartCallIntent: no Q-Audion match for spoken name")
-            errorMessage = "Nessun contatto Q-Audion trovato per \"\(spokenName)\"."
+            errorMessage = String(localized: "call.dial.siri_contact_not_found", defaultValue: "Nessun contatto Q-Audion trovato per \"\(spokenName)\".", comment: "Error banner when a Siri or phone-app call request names a person who is not a Q-Audion contact. %@ is the spoken name.")
             // In the car nobody reads `errorMessage`: say it on the car screen when one is connected.
             CarPlayBridge.shared.report(.contactNotFound)
             return
@@ -19664,7 +19665,7 @@ final class AppState: ObservableObject {
                         callTornDown: callService.currentCallGeneration() != offerCallGeneration) == .leaveAlone {
                         return
                     }
-                    errorMessage = "Avvio chiamata fallito: \(error.localizedDescription)"
+                    errorMessage = String(localized: "call.error.start_failed", defaultValue: "Avvio chiamata fallito: \(error.localizedDescription)", comment: "Error banner when starting an outgoing call failed. %@ is the technical reason.")
                     callService.endCall()
                     acceptLatch.reset()  // W-STALEENVELOPE — see the cancellation branch above
                     callState = .idle
@@ -21466,7 +21467,7 @@ extension AppState {
         // own gate, same user-facing text — leaves receive-only intact.
         let camAuth = AVCaptureDevice.authorizationStatus(for: .video)
         if camAuth == .denied || camAuth == .restricted {
-            errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+            errorMessage = String(localized: "call.error.camera_permission_settings", defaultValue: "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion.", comment: "Error banner: the user tried to turn on video but camera access is denied in iOS Settings.")
             RTLog.warn("call", "vidcap promote ok=0 reason=permission_denied")
             return
         }
@@ -23470,7 +23471,7 @@ extension AppState {
         // prompt and leave the call in audio-only mode (isVideoCall stays false).
         let camAuth = AVCaptureDevice.authorizationStatus(for: .video)
         if camAuth == .denied || camAuth == .restricted {
-            errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+            errorMessage = String(localized: "call.error.camera_permission_settings", defaultValue: "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion.", comment: "Error banner: the user tried to turn on video but camera access is denied in iOS Settings.")
             return
         }
         self.isVideoCall = true
@@ -23646,7 +23647,7 @@ extension AppState {
         }
         guard let peerId = callContactId, !peerId.isEmpty else {
             RTLog.warn("call", "startScreenShare: callContactId nil — aborting")
-            errorMessage = "Impossibile avviare la condivisione: peer sconosciuto."
+            errorMessage = String(localized: "call.screenshare.peer_unknown", defaultValue: "Impossibile avviare la condivisione: peer sconosciuto.", comment: "Error banner when starting screen sharing but the other party of the call is not known.")
             return
         }
         // media-consent v1: screen share works from an AUDIO-ONLY call and
@@ -23703,7 +23704,7 @@ extension AppState {
         abrController?.isScreenSharing = true
         guard capturer != nil || videoPipeline != nil else {
             RTLog.warn("call", "startScreenShare: no transport available (WebRTC capturer nil, pipeline nil)")
-            errorMessage = "Condivisione schermo non disponibile: trasporto video non pronto."
+            errorMessage = String(localized: "call.screenshare.transport_not_ready", defaultValue: "Condivisione schermo non disponibile: trasporto video non pronto.", comment: "Error banner when screen sharing cannot start because the video connection is not ready.")
             return
         }
         // Capture (and clear) the current camera-frame closure so we can
@@ -28136,16 +28137,16 @@ extension AppState {
             // rather than failing silently.
             switch err {
             case .permissionDenied:
-                errorMessage = "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion."
+                errorMessage = String(localized: "call.error.camera_permission_settings", defaultValue: "Per attivare il video concedi l'accesso alla fotocamera in Impostazioni → Q-Audion.", comment: "Error banner: the user tried to turn on video but camera access is denied in iOS Settings.")
             case .cameraUnavailable:
-                errorMessage = "Fotocamera non disponibile su questo dispositivo."
+                errorMessage = String(localized: "video.error.camera_unavailable_device", defaultValue: "Fotocamera non disponibile su questo dispositivo.", comment: "Error banner when the video call cannot find a camera on this device.")
             case .outputAttachFailed:
-                errorMessage = "Impossibile inizializzare il flusso video."
+                errorMessage = String(localized: "video.error.pipeline_init", defaultValue: "Impossibile inizializzare il flusso video.", comment: "Error banner when the video stream of a call could not be set up.")
             }
             print("[AppState] video pipeline start failed: \(err)")
             return nil
         } catch {
-            errorMessage = "Errore avvio video: \(error.localizedDescription)"
+            errorMessage = String(localized: "video.error.start_failed", defaultValue: "Errore avvio video: \(error.localizedDescription)", comment: "Error banner when starting video failed. %@ is the technical reason.")
             print("[AppState] video pipeline start failed: \(error)")
             return nil
         }
@@ -28453,7 +28454,7 @@ extension AppState {
         Task { [weak self] in
             guard let self = self else { return }
             do {
-                if let uuid = try await self.callKit?.startOutgoingCall(handle: "Chiamata di gruppo", hasVideo: hasVideo) {
+                if let uuid = try await self.callKit?.startOutgoingCall(handle: String(localized: "Chiamata di gruppo"), hasVideo: hasVideo) {
                     await MainActor.run {
                         if case .idle = self.groupCallControllerState {
                             // The call ended while CallKit was answering.

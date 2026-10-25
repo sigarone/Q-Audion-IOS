@@ -236,7 +236,7 @@ struct OutgoingCallScreen: View {
                                   comment: "Accessibility label of the button that closes the outgoing call screen after the call ended (callee busy or unreachable)"))
                     : Text("Termina chiamata"))
                 if state != .ended {
-                    Text(String(format: "Squillo da %d:%02d", elapsedSeconds / 60, elapsedSeconds % 60))
+                    Text(String(localized: "call.outgoing.ringing_for", defaultValue: "Squillo da \(elapsedSeconds / 60):\(String(format: "%02d", elapsedSeconds % 60))", comment: "Line under the hang-up button of the outgoing call screen. %lld is the minutes, %@ the two-digit seconds of how long it has been ringing."))
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(extras.success)
                 }

@@ -112,7 +112,7 @@ final class InCallChatPolicyTests: XCTestCase {
         XCTAssertTrue(video.contains("if let chat = inCallChat { chatButton(chat) }"))
         XCTAssertTrue(video.contains("badge: chat.hasUnread"))
         let chatPos = try XCTUnwrap(video.range(of: "chatButton(chat) }"))
-        let hangupPos = try XCTUnwrap(video.range(of: "label: \"Termina\""))
+        let hangupPos = try XCTUnwrap(video.range(of: "label: String(localized: \"Termina\")"))
         XCTAssertLessThan(chatPos.lowerBound, hangupPos.lowerBound, "Chat goes before the hangup, which stays last")
     }
 
