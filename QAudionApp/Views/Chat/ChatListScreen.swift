@@ -728,7 +728,7 @@ struct ChatListScreen: View {
                     let registryEntry = GroupRegistry.shared.entry(for: hex)
                     openedGroup = OpenedGroup(
                         id: newGroupId,
-                        name: registryEntry?.name ?? "Nuovo gruppo",
+                        name: registryEntry?.name ?? String(localized: "Nuovo gruppo"),
                         memberCount: registryEntry?.members.count ?? 1
                     )
                 }

@@ -688,7 +688,7 @@ struct InCallScreen: View {
                     .tracking(0.6)
                     .foregroundStyle(extras.warning)
                 Text(identityRotationAwaitingSas
-                    ? "La chiave del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono con quelle del contatto, tocca CONFERMA COINCIDONO per accettarla."
+                    ? "La chiave del contatto è cambiata ed è pubblicata dal server. Se le parole SAS coincidono con quelle del contatto, tocca CONFERMA per accettarla."
                     : "La chiave del contatto è cambiata e non risulta pubblicata dal server. Confronta le parole SAS per verificare.")
                     .qaudionStyle(type.labelMedium)
                     .foregroundStyle(scheme.onSurfaceVariant)
@@ -1404,8 +1404,8 @@ struct InCallScreen: View {
                     icon: "mic.fill",
                     info: .voiceKey,
                     accessibilityLabel: peerOwnerContinuityLevel == .mismatch
-                        ? "Attenzione: la voce del contatto non corrisponde più al suo profilo vocale dichiarato"
-                        : "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo"
+                        ? String(localized: "incall.shield.voice_key_mismatch", defaultValue: "Attenzione: la voce del contatto non corrisponde più al suo profilo vocale dichiarato", comment: "Call screen, VoiceOver label of the voice-as-key shield when the contact voice no longer matches the declared voice profile")
+                        : String(localized: "incall.shield.voice_key_enabled", defaultValue: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo", comment: "Call screen, VoiceOver label of the voice-as-key shield when the contact turned voice-as-key on")
                 )
             }
             // Tier 2 ("voce remota") — RX-side per-contact continuity, LOCAL
@@ -1423,10 +1423,10 @@ struct InCallScreen: View {
                     icon: "ear",
                     info: .contactVoice,
                     accessibilityLabel: contactVoiceLevel == .verified
-                        ? "La voce del contatto corrisponde a quella già conosciuta"
+                        ? String(localized: "incall.shield.contact_voice_verified", defaultValue: "La voce del contatto corrisponde a quella già conosciuta", comment: "Call screen, VoiceOver label of the remote-voice shield when the voice matches the known one")
                         : (contactVoiceLevel == .mismatch
-                            ? "Attenzione: la voce del contatto non corrisponde a quella già conosciuta"
-                            : "Verifica della voce del contatto in corso")
+                            ? String(localized: "incall.shield.contact_voice_mismatch", defaultValue: "Attenzione: la voce del contatto non corrisponde a quella già conosciuta", comment: "Call screen, VoiceOver label of the remote-voice shield when the voice does not match the known one")
+                            : String(localized: "incall.shield.contact_voice_checking", defaultValue: "Verifica della voce del contatto in corso", comment: "Call screen, VoiceOver label of the remote-voice shield while the check is running"))
                 )
             }
             // Voice change during this call — shown only once there is
@@ -1458,7 +1458,7 @@ struct InCallScreen: View {
                     tint: extras.success,
                     icon: "wave.3.right.circle.fill",
                     info: .nfc,
-                    accessibilityLabel: "Chiave di persona in comune con il contatto"
+                    accessibilityLabel: String(localized: "incall.shield.nfc_common", defaultValue: "Chiave di persona in comune con il contatto", comment: "Call screen, VoiceOver label of the shield shown when a key exchanged in person is shared with the contact")
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a
@@ -1475,7 +1475,7 @@ struct InCallScreen: View {
                     tint: extras.success,
                     label: "PSK",
                     info: .psk,
-                    accessibilityLabel: "Chiave pre-condivisa mescolata in questa chiamata"
+                    accessibilityLabel: String(localized: "incall.shield.psk_mixed", defaultValue: "Chiave pre-condivisa mescolata in questa chiamata", comment: "Call screen, VoiceOver label of the PSK shield: a pre-shared key is mixed into this call")
                 )
             }
             // W-UNIFORMKEYINFO — canonical spec (2026-07-24, cross-platform audit):
@@ -1491,7 +1491,9 @@ struct InCallScreen: View {
                     tint: sasVerified ? extras.success : extras.pqcAccent,
                     label: "SAS",
                     info: .sas,
-                    accessibilityLabel: sasVerified ? "Identità verificata (SAS)" : "Verifica identità (SAS) in sospeso"
+                    accessibilityLabel: sasVerified
+                        ? String(localized: "sas.accessibility.verified", defaultValue: "Identità verificata (SAS)", comment: "Call screen, VoiceOver label of the SAS shield once the identity is verified")
+                        : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Call screen, VoiceOver label of the SAS shield while the verification is pending")
                 )
             }
             // PQC — ALWAYS rendered now (the old `if pqcActive` gate + a
@@ -1502,13 +1504,15 @@ struct InCallScreen: View {
                 tint: pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant,
                 label: "PQC",
                 info: .pqc,
-                accessibilityLabel: pqcActive ? "Scambio post-quantistico attivo" : "Scambio post-quantistico non attivo"
+                accessibilityLabel: pqcActive
+                    ? String(localized: "incall.shield.pqc_on", defaultValue: "Scambio post-quantistico attivo", comment: "Call screen, VoiceOver label of the post-quantum shield while the exchange is active")
+                    : String(localized: "incall.shield.pqc_off", defaultValue: "Scambio post-quantistico non attivo", comment: "Call screen, VoiceOver label of the post-quantum shield while the exchange is not active")
             )
             trustShield(
                 tint: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
                 label: transportMode.shortLabel,
                 info: .transport,
-                accessibilityLabel: "Percorso di rete: \(transportMode.label)"
+                accessibilityLabel: String(localized: "incall.shield.transport", defaultValue: "Percorso di rete: \(transportMode.label)", comment: "Call screen, VoiceOver label of the network path shield, %@ is the path (P2P SRTP, TURN, RELAY)")
             )
             Spacer(minLength: 0)
             Button {
@@ -1631,14 +1635,14 @@ struct InCallScreen: View {
 
         var title: String {
             switch self {
-            case .voiceKey:         return "Voce come chiave"
-            case .contactVoice:     return "Voce remota"
+            case .voiceKey:         return String(localized: "incall.trust_title.voice_key", defaultValue: "Voce come chiave", comment: "Call screen, title of the popup that explains a trust-bar shield")
+            case .contactVoice:     return String(localized: "incall.trust_title.contact_voice", defaultValue: "Voce remota", comment: "Call screen, title of the popup that explains a trust-bar shield")
             case .speakerChange:    return VoiceGuardCopy.title
-            case .nfc:              return "Chiave di persona in comune"
-            case .psk:              return "Chiave pre-condivisa (PSK)"
-            case .sas:              return "Verifica identità (SAS)"
-            case .pqc:              return "Post-quantistico (PQC)"
-            case .transport:        return "Percorso di rete"
+            case .nfc:              return String(localized: "incall.trust_title.nfc", defaultValue: "Chiave di persona in comune", comment: "Call screen, title of the popup that explains a trust-bar shield")
+            case .psk:              return String(localized: "incall.trust_title.psk", defaultValue: "Chiave pre-condivisa (PSK)", comment: "Call screen, title of the popup that explains a trust-bar shield")
+            case .sas:              return String(localized: "incall.trust_title.sas", defaultValue: "Verifica identità (SAS)", comment: "Call screen, title of the popup that explains a trust-bar shield")
+            case .pqc:              return String(localized: "incall.trust_title.pqc", defaultValue: "Post-quantistico (PQC)", comment: "Call screen, title of the popup that explains a trust-bar shield")
+            case .transport:        return String(localized: "incall.trust_title.transport", defaultValue: "Percorso di rete", comment: "Call screen, title of the popup that explains a trust-bar shield")
             }
         }
 
@@ -1651,21 +1655,31 @@ struct InCallScreen: View {
         /// key a call starts with, so "attivo" is said only when it is.
         /// The two texts of the post-quantum shield come from the catalog (the popup
         /// shows a plain `String`, which SwiftUI does not localize by itself), so they
-        /// follow the language of the phone; the other popups are still Italian only.
+        /// follow the language of the phone, and so do the titles and the other popups.
         func body(pqcActive: Bool) -> String {
             switch self {
             case .voiceKey:
-                return "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
+                return String(localized: "incall.trust_body.voice_key",
+                              defaultValue: "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso.",
+                              comment: "Call screen, popup text of the voice-as-key shield")
             case .contactVoice:
-                return "Confronta la voce che stai ascoltando con quella salvata per questo contatto nelle chiamate precedenti. È un indizio, non una prova d'identità."
+                return String(localized: "incall.trust_body.contact_voice",
+                              defaultValue: "Confronta la voce che stai ascoltando con quella salvata per questo contatto nelle chiamate precedenti. È un indizio, non una prova d'identità.",
+                              comment: "Call screen, popup text of the remote-voice shield")
             case .speakerChange:
                 return VoiceGuardCopy.infoBody
             case .nfc:
-                return "Tu e il contatto avete in comune un segreto scambiato di persona, avvicinando i telefoni (NFC) o inquadrando il codice QR con il Bluetooth attivo. Indipendente da quale chiave stia effettivamente usando questa specifica chiamata."
+                return String(localized: "incall.trust_body.nfc",
+                              defaultValue: "Tu e il contatto avete in comune un segreto scambiato di persona, avvicinando i telefoni (NFC) o inquadrando il codice QR con il Bluetooth attivo. Indipendente da quale chiave stia effettivamente usando questa specifica chiamata.",
+                              comment: "Call screen, popup text of the in-person shared key shield")
             case .psk:
-                return "In questa chiamata è stata mescolata una chiave pre-condivisa — di qualunque origine: NFC, QR, KMS o inserita a mano — nella chiave di sessione. Aggiunge protezione oltre al solo scambio post-quantistico."
+                return String(localized: "incall.trust_body.psk",
+                              defaultValue: "In questa chiamata è stata mescolata una chiave pre-condivisa — di qualunque origine: NFC, QR, KMS o inserita a mano — nella chiave di sessione. Aggiunge protezione oltre al solo scambio post-quantistico.",
+                              comment: "Call screen, popup text of the PSK shield")
             case .sas:
-                return "La cerimonia di verifica dell'identità per questa chiamata: tu e il contatto confrontate a voce le stesse parole. Il colore indica se è già stata confermata da entrambi o è ancora in sospeso."
+                return String(localized: "incall.trust_body.sas",
+                              defaultValue: "La cerimonia di verifica dell'identità per questa chiamata: tu e il contatto confrontate a voce le stesse parole. Il colore indica se è già stata confermata da entrambi o è ancora in sospeso.",
+                              comment: "Call screen, popup text of the SAS shield")
             case .pqc:
                 if pqcActive {
                     return String(localized: "in_call.trust_info.pqc",
@@ -1676,7 +1690,9 @@ struct InCallScreen: View {
                               defaultValue: "Lo scambio di chiavi post-quantistico (ML-KEM) non è attivo per questa chiamata: lo scudo resta grigio finché lo scambio di chiavi ML-KEM non è stato completato. Quando è attivo, protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato.",
                               comment: "Call screen, popup of the post-quantum shield while the ML-KEM key exchange is not active for the call: the shield is grey")
             case .transport:
-                return "Come viaggia l'audio: direttamente tra i due telefoni (P2P), tramite un server di attraversamento NAT (TURN), oppure tramite il relay del server Q-Audion (RELAY) quando non c'è una via diretta. Il contenuto resta cifrato end-to-end su qualunque percorso."
+                return String(localized: "incall.trust_body.transport",
+                              defaultValue: "Come viaggia l'audio: direttamente tra i due telefoni (P2P), tramite un server di attraversamento NAT (TURN), oppure tramite il relay del server Q-Audion (RELAY) quando non c'è una via diretta. Il contenuto resta cifrato end-to-end su qualunque percorso.",
+                              comment: "Call screen, popup text of the network path shield")
             }
         }
     }
