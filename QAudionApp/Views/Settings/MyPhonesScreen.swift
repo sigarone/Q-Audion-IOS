@@ -330,7 +330,7 @@ struct MyPhonesScreen: View {
         f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
-        return "Aggiornato " + rel
+        return String(localized: "settings.devices.updated_relative", defaultValue: "Aggiornato \(rel)", comment: "Devices screen footer: when the list was last refreshed; placeholder is a relative time such as 5 minutes ago")
     }
 
     // MARK: - Header card (extension + phones)
@@ -533,7 +533,7 @@ struct MyPhonesScreen: View {
                             }
                         }
                     } label: {
-                        Text(container.verifyingOtp ? "…" : "Verifica")
+                        Text(container.verifyingOtp ? "…" : String(localized: "settings.my_phones.verify", defaultValue: "Verifica", comment: "My numbers screen, button that checks the SMS code and adds the phone number"))
                             .qaudionStyle(type.labelLarge)
                             .foregroundStyle(scheme.onPrimary)
                             .padding(.horizontal, 16)
@@ -575,8 +575,8 @@ struct MyPhonesScreen: View {
             }
         } label: {
             Text(container.savingPhones
-                 ? "Aggiornamento numeri…"
-                 : "Salva")
+                 ? String(localized: "settings.my_phones.saving", defaultValue: "Aggiornamento numeri…", comment: "My numbers screen, save button label while the numbers are being published")
+                 : String(localized: "Salva"))
                 .qaudionStyle(type.labelLarge)
                 .foregroundStyle(scheme.onPrimary)
                 .frame(maxWidth: .infinity)

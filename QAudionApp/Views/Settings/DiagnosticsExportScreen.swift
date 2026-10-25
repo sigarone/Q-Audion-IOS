@@ -311,7 +311,9 @@ struct DiagnosticsExportScreen: View {
                         } else {
                             Image(systemName: "arrow.up.circle")
                         }
-                        Text(uploading ? "Carico…" : "Carica al server")
+                        Text(uploading
+                             ? String(localized: "settings.diagnostics.uploading", defaultValue: "Carico…", comment: "Diagnostics export screen, upload button label while the report is being uploaded")
+                             : String(localized: "settings.diagnostics.upload", defaultValue: "Carica al server", comment: "Diagnostics export screen, button that uploads the report to the server"))
                             .qaudionStyle(type.labelSmall)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 8)
@@ -489,7 +491,9 @@ struct DiagnosticsExportScreen: View {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 14, weight: .semibold))
                 }
-                Text(container.generating ? "Generazione…" : "Rigenera report")
+                Text(container.generating
+                     ? String(localized: "settings.diagnostics.generating", defaultValue: "Generazione…", comment: "Diagnostics export screen, button label while the report is being generated")
+                     : String(localized: "settings.diagnostics.regenerate", defaultValue: "Rigenera report", comment: "Diagnostics export screen, button that regenerates the diagnostics report"))
                     .qaudionStyle(type.labelMedium)
             }
             .foregroundStyle(scheme.primary)

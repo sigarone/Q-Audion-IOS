@@ -113,12 +113,12 @@ struct NoticeInboxScreen: View {
 
     private func relativeTime(_ createdMs: Int64) -> String {
         let diff = Date().timeIntervalSince1970 - Double(createdMs) / 1000
-        if diff < 60 { return "adesso" }
-        if diff < 3600 { return "\(Int(diff / 60)) min fa" }
-        if diff < 86400 { return "\(Int(diff / 3600))h fa" }
-        if diff < 2 * 86400 { return "ieri" }
+        if diff < 60 { return String(localized: "settings.notices.age.now", defaultValue: "adesso", comment: "Service messages list, age of a message: less than a minute ago") }
+        if diff < 3600 { return String(localized: "settings.notices.age.minutes", defaultValue: "\(Int(diff / 60)) min fa", comment: "Service messages list, age of a message: N minutes ago; placeholder is the number") }
+        if diff < 86400 { return String(localized: "settings.notices.age.hours", defaultValue: "\(Int(diff / 3600))h fa", comment: "Service messages list, age of a message: N hours ago; placeholder is the number") }
+        if diff < 2 * 86400 { return String(localized: "settings.notices.age.yesterday", defaultValue: "ieri", comment: "Service messages list, age of a message: yesterday") }
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "it_IT")
+        formatter.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         formatter.dateFormat = "d MMM"
         return formatter.string(from: Date(timeIntervalSince1970: Double(createdMs) / 1000))
     }

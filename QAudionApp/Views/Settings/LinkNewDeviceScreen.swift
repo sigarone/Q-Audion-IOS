@@ -39,12 +39,15 @@ struct LinkNewDeviceScreen: View {
 
     // W316 — static copy helpers (avoid multi-segment interpolation in
     // ViewBuilder closures per SWIFT6_PATTERNS.md §1).
-    private static let stubPairingHint: String =
-        "Funzione in arrivo — il pairing server-side non è ancora attivo. Per ora il QR genera solo materiale locale."
-    private static let copyHint: String =
-        "Tocca il fingerprint per copiarlo."
-    private static let copiedConfirmation: String =
-        "Fingerprint copiato negli appunti."
+    private static var stubPairingHint: String {
+        String(localized: "settings.link_device.stub_hint", defaultValue: "Funzione in arrivo — il pairing server-side non è ancora attivo. Per ora il QR genera solo materiale locale.", comment: "Link new device screen, banner: the server-side pairing is not active yet, the QR only carries local key material")
+    }
+    private static var copyHint: String {
+        String(localized: "settings.link_device.copy_hint", defaultValue: "Tocca il fingerprint per copiarlo.", comment: "Link new device screen, hint under the fingerprint: tap it to copy")
+    }
+    private static var copiedConfirmation: String {
+        String(localized: "settings.link_device.copied", defaultValue: "Fingerprint copiato negli appunti.", comment: "Link new device screen, confirmation after the fingerprint was copied to the clipboard")
+    }
 
     init(onPairingComplete: @escaping (String) -> Void = { _ in }) {
         self.onPairingComplete = onPairingComplete

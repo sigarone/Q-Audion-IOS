@@ -160,10 +160,10 @@ private extension TransportDiagnostics.ConnectionStatus {
 
     var label: String {
         switch self {
-        case .unknown:                    return "Sconosciuto"
-        case .healthy(let ms):            return "Operativo (\(ms) ms)"
-        case .degraded(let ms):           return "Degradato (\(ms) ms)"
-        case .unreachable:                return "Non raggiungibile"
+        case .unknown:                    return String(localized: "Sconosciuto")
+        case .healthy(let ms):            return String(localized: "settings.transport.status.healthy", defaultValue: "Operativo (\(ms) ms)", comment: "Transport settings, server status value: reachable; placeholder is the round-trip time in milliseconds")
+        case .degraded(let ms):           return String(localized: "settings.transport.status.degraded", defaultValue: "Degradato (\(ms) ms)", comment: "Transport settings, server status value: reachable but slow; placeholder is the round-trip time in milliseconds")
+        case .unreachable:                return String(localized: "settings.transport.status.unreachable", defaultValue: "Non raggiungibile", comment: "Transport settings, server status value: the server cannot be reached")
         }
     }
 }
@@ -300,10 +300,10 @@ struct TransportSettingsScreen: View {
     @ViewBuilder
     private var vpnNodeSection: some View {
         VStack(spacing: 8) {
-            vpnNodeRow(id: "", title: "Auto", subtitle: "Nodo migliore · latenza + carico")
+            vpnNodeRow(id: "", title: String(localized: "Auto"), subtitle: String(localized: "settings.transport.vpn.auto_subtitle", defaultValue: "Nodo migliore · latenza + carico", comment: "Transport settings, VPN exit node list: subtitle of the automatic choice"))
             ForEach(container.vpnNodes) { n in
                 let loadPct: Int = Int((n.loadPct * 100).rounded())
-                let sub: String = n.country + " · " + String(loadPct) + "% carico"
+                let sub: String = String(localized: "settings.transport.vpn.node_load", defaultValue: "\(n.country) · \(loadPct)% carico", comment: "Transport settings, VPN exit node row subtitle: country and server load percentage; placeholders are the country and the number")
                 let ttl: String = n.city.isEmpty ? n.id : n.city
                 vpnNodeRow(id: n.id, title: ttl, subtitle: sub)
             }
@@ -436,9 +436,20 @@ struct TransportSettingsScreen: View {
         )
     }
 
+    /// Literal label: looked up in the string catalog.
+    private func kvRow(label: LocalizedStringKey, value: String, mono: Bool) -> some View {
+        kvRowContent(label: Text(label), value: value, mono: mono)
+    }
+
+    /// Already-resolved label: shown as is, never parsed as a key or Markdown.
+    @_disfavoredOverload
     private func kvRow(label: String, value: String, mono: Bool) -> some View {
+        kvRowContent(label: Text(verbatim: label), value: value, mono: mono)
+    }
+
+    private func kvRowContent(label: Text, value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {
-            Text(label)
+            label
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(scheme.onSurface)
             Spacer()

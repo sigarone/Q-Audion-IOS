@@ -59,10 +59,10 @@ struct EnigmaSettingsSection: View {
         EnigmaHost.shared.configurationChanged(flagOn: EnigmaFeature.flagOn)
     }
 
-    private static let sectionTitle: String = String(localized: "enigma.settings.section", defaultValue: "MODALITÀ ENIGMA", comment: "Header of the Enigma mode section in Settings > Privacy.")
-    private static let rowTitle: String = String(localized: "enigma.settings.title", defaultValue: "Modalità Enigma", comment: "Title of the Enigma mode control (a visual effect on message bubbles).")
-    private static let optionOff: String = String(localized: "enigma.settings.off", defaultValue: "Off", comment: "Enigma mode: effect off (default).")
-    private static let optionLite: String = String(localized: "enigma.settings.lite", defaultValue: "Leggera", comment: "Enigma mode: light effect (text morphing only).")
-    private static let optionFull: String = String(localized: "enigma.settings.full", defaultValue: "Scenografica", comment: "Enigma mode: full effect (text morphing and the historical rotors).")
-    private static let caption: String = String(localized: "enigma.settings.caption", defaultValue: "Solo effetto visivo. Non cambia la sicurezza dei messaggi.", comment: "Caption under the Enigma mode control: it is only a visual effect.")
+    private static var sectionTitle: String { String(localized: "enigma.settings.section", defaultValue: "MODALITÀ ENIGMA", comment: "Header of the Enigma mode section in Settings > Privacy.") }
+    private static var rowTitle: String { String(localized: "enigma.settings.title", defaultValue: "Modalità Enigma", comment: "Title of the Enigma mode control (a visual effect on message bubbles).") }
+    private static var optionOff: String { String(localized: "enigma.settings.off", defaultValue: "Off", comment: "Enigma mode: effect off (default).") }
+    private static var optionLite: String { String(localized: "enigma.settings.lite", defaultValue: "Leggera", comment: "Enigma mode: light effect (text morphing only).") }
+    private static var optionFull: String { String(localized: "enigma.settings.full", defaultValue: "Scenografica", comment: "Enigma mode: full effect (text morphing and the historical rotors).") }
+    private static var caption: String { String(localized: "enigma.settings.caption", defaultValue: "Solo effetto visivo. Non cambia la sicurezza dei messaggi.", comment: "Caption under the Enigma mode control: it is only a visual effect.") }
 }
