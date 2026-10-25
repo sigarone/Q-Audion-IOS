@@ -45,9 +45,9 @@ public enum ExtendedPresence: Equatable, Sendable {
         switch self {
         case .online:        return "Online"
         case .offline:       return "Offline"
-        case .inCall:        return "In chiamata"
-        case .doNotDisturb:  return "Non disturbare"
-        case .invisible:     return "Non visibile"
+        case .inCall:        return String(localized: "call.presence.in_call", defaultValue: "In chiamata", comment: "Presence label of a contact who is on a call right now.")
+        case .doNotDisturb:  return String(localized: "call.presence.do_not_disturb", defaultValue: "Non disturbare", comment: "Presence label of a contact who turned on Do Not Disturb.")
+        case .invisible:     return String(localized: "call.presence.invisible", defaultValue: "Non visibile", comment: "Presence label of a contact whose presence is hidden.")
         case .unknown:       return ""
         }
     }

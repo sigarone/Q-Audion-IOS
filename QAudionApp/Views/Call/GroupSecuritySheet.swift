@@ -66,8 +66,8 @@ struct GroupSecuritySheet: View {
                 header
                 Divider().background(scheme.outline.opacity(0.35))
                 VStack(alignment: .leading, spacing: 0) {
-                    securitySection(title: "Panoramica") { overviewBody }
-                    securitySection(title: "Membri · verifica identità", isLast: true) { membersBody }
+                    securitySection(title: String(localized: "group_call.security.section.overview", defaultValue: "Panoramica", comment: "Section title (shown in capitals) of the group call security sheet: general overview.")) { overviewBody }
+                    securitySection(title: String(localized: "group_call.security.section.members", defaultValue: "Membri · verifica identità", comment: "Section title (shown in capitals) of the group call security sheet: identity check of each member."), isLast: true) { membersBody }
                 }
                 .padding(.vertical, 4)
             }
@@ -243,13 +243,13 @@ struct GroupSecuritySheet: View {
         }
         switch eval.state {
         case .userVerified:
-            return (icon: "checkmark.seal.fill", label: "Verificato", color: extras.success)
+            return (icon: "checkmark.seal.fill", label: String(localized: "trust.header.verified", defaultValue: "Verificato", comment: "Chip next to a participant in the group call security sheet: identity verified."), color: extras.success)
         case .identityPinnedTofu:
-            return (icon: "lock.fill", label: "Non verificato", color: scheme.onSurfaceVariant)
+            return (icon: "lock.fill", label: String(localized: "trust.header.unverified", defaultValue: "Non verificato", comment: "Chip next to a participant in the group call security sheet: identity not verified."), color: scheme.onSurfaceVariant)
         case .identityChanged:
-            return (icon: "exclamationmark.octagon.fill", label: "Identità cambiata", color: extras.riskHigh)
+            return (icon: "exclamationmark.octagon.fill", label: String(localized: "group_call.security.member.identity_changed", defaultValue: "Identità cambiata", comment: "Chip next to a participant in the group call security sheet: the identity key of this person changed (an alarm)."), color: extras.riskHigh)
         case .unverified:
-            return (icon: "questionmark.circle", label: "Nessuna relazione diretta", color: scheme.onSurfaceVariant)
+            return (icon: "questionmark.circle", label: String(localized: "group_call.security.member.no_relationship", defaultValue: "Nessuna relazione diretta", comment: "Chip next to a participant in the group call security sheet: no direct trust relationship exists with this person yet."), color: scheme.onSurfaceVariant)
         }
     }
 

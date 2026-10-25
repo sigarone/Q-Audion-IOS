@@ -232,7 +232,7 @@ struct IncomingCallScreen: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Rispondi senza video")
-            .accessibilityValue(acceptWithoutVideo ? "Attivo" : "Non attivo")
+            .accessibilityValue(acceptWithoutVideo ? String(localized: "call.incoming.toggle_on", defaultValue: "Attivo", comment: "VoiceOver value of the 'answer without video' switch when it is on.") : String(localized: "call.incoming.toggle_off", defaultValue: "Non attivo", comment: "VoiceOver value of the 'answer without video' switch when it is off."))
             .padding(.bottom, 24)
         } else {
             Text(subtitleLine)
@@ -250,7 +250,7 @@ struct IncomingCallScreen: View {
                 diameter: 72,
                 background: extras.riskHigh,
                 iconColor: scheme.onPrimary,
-                caption: "Rifiuta",
+                caption: String(localized: "Rifiuta"),
                 captionColor: extras.riskHigh
             )
             if showReplyAction {
@@ -260,7 +260,7 @@ struct IncomingCallScreen: View {
                     diameter: 56,
                     background: scheme.surfaceVariant,
                     iconColor: scheme.onSurface,
-                    caption: "Rispondi",
+                    caption: String(localized: "reply.action", defaultValue: "Rispondi", comment: "Label of the reply action button on the incoming call screen (reply with a message)."),
                     captionColor: scheme.onSurfaceVariant
                 )
             }
@@ -270,7 +270,7 @@ struct IncomingCallScreen: View {
                 diameter: 72,
                 background: extras.success,
                 iconColor: extras.onSuccess,
-                caption: (callType == .video && acceptWithoutVideo) ? "Senza video" : "Accetta",
+                caption: (callType == .video && acceptWithoutVideo) ? String(localized: "call.incoming.accept_without_video", defaultValue: "Senza video", comment: "Caption under the green accept button of an incoming video call when the user chose to answer without video.") : String(localized: "Accetta"),
                 captionColor: extras.success
             )
         }

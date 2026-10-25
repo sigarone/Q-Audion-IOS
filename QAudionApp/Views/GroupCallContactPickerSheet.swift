@@ -85,14 +85,16 @@ struct GroupCallContactPickerSheet: View {
                     }
                 }
             }
-            .navigationTitle(lockedVideo == nil ? "Chiamata di gruppo" : "Aggiungi partecipante")
+            .navigationTitle(lockedVideo == nil ? String(localized: "Chiamata di gruppo") : String(localized: "Aggiungi partecipante"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Annulla") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(lockedVideo == nil ? "Avvia (\(selected.count))" : "Aggiungi (\(selected.count))") {
+                    Button(lockedVideo == nil
+                           ? String(localized: "group_call.picker.start", defaultValue: "Avvia (\(selected.count))", comment: "Confirm button of the group call contact picker. %lld is how many contacts are selected.")
+                           : String(localized: "group_call.picker.add", defaultValue: "Aggiungi (\(selected.count))", comment: "Confirm button of the contact picker used to add people to a running call. %lld is how many contacts are selected.")) {
                         onStart(Array(selected), effectiveVideo)
                     }
                     .disabled(selected.isEmpty)

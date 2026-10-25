@@ -94,7 +94,7 @@ struct GroupCallChatPanel: View {
     }
 
     private var groupDisplayName: String {
-        GroupRegistry.shared.entry(for: groupHex)?.name ?? "Chat di gruppo"
+        GroupRegistry.shared.entry(for: groupHex)?.name ?? String(localized: "Chat di gruppo")
     }
 
     var body: some View {
@@ -108,7 +108,7 @@ struct GroupCallChatPanel: View {
                 }
             }
             .background(scheme.background.ignoresSafeArea())
-            .navigationTitle(groupHex.isEmpty ? "Chat" : groupDisplayName)
+            .navigationTitle(groupHex.isEmpty ? String(localized: "Chat") : groupDisplayName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -350,7 +350,7 @@ struct GroupCallChatPanel: View {
             GroupMessageRowUi(
                 id: m.id,
                 text: m.text,
-                senderLabel: m.mine ? "Tu" : resolveMemberName(m.senderId),
+                senderLabel: m.mine ? String(localized: "reply.author_me", defaultValue: "Tu", comment: "Label of your own messages in a group chat") : resolveMemberName(m.senderId),
                 timestamp: Self.timeFormatterHHmm.string(from: m.ts),
                 mine: m.mine,
                 attachmentKind: m.attachmentKind,

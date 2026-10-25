@@ -97,7 +97,7 @@ struct LiveInCallScreen: View {
     /// on every TimelineView tick (OpenRouter review on v1.0.75 flagged
     /// the disk I/O on the main thread). Fallback to "Sconosciuto"
     /// when no peer is bound (e.g. between calls).
-    @State private var cachedPeerDisplayName: String = "Sconosciuto"
+    @State private var cachedPeerDisplayName: String = String(localized: "Sconosciuto")
     /// Numero interno PBX del peer risolto dalla stessa lookup di
     /// ContactsStore. nil quando il contatto è sconosciuto o non ha
     /// ancora un'estensione registrata — l'avatar ricade su initials().
@@ -712,7 +712,7 @@ struct LiveInCallScreen: View {
     // Helpers to avoid String(Int) overload-resolution timeout in @ViewBuilder
     // (CLAUDE.md §13 v1.0.255). All string building happens outside ViewBuilder.
     private static func latencyString(_ ms: Int) -> String {
-        guard ms > 0 else { return "n/d" }
+        guard ms > 0 else { return String(localized: "n/d") }
         return ms.description + " ms"
     }
 
@@ -733,7 +733,7 @@ struct LiveInCallScreen: View {
         diagRow("LATENZA RELAY",      latencyVal)
     }
 
-    private func diagRow(_ label: String, _ value: String) -> some View {
+    private func diagRow(_ label: LocalizedStringKey, _ value: String) -> some View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
@@ -916,7 +916,7 @@ struct LiveInCallScreen: View {
     /// re-deriving it by scanning text and truncating to 3 chars.
     private func resolvePeerDisplayName() {
         guard let id = appState.callContactId else {
-            cachedPeerDisplayName = "Sconosciuto"
+            cachedPeerDisplayName = String(localized: "Sconosciuto")
             cachedPeerShortNumber = nil
             cachedPeerAvatarUrl = nil
             return
