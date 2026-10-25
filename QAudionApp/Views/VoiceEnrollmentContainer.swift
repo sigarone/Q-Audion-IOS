@@ -25,6 +25,10 @@ final class VoiceEnrollmentContainer: ObservableObject {
     @Published private(set) var viewModel: VoiceEnrollmentViewModel
     @Published private(set) var isRecording: Bool = false
     @Published var errorMessage: String?
+    /// The system has not asked for the microphone yet: the first screen is then the one that leads to the request.
+    @Published private(set) var microphoneUndetermined: Bool = VoiceEnrollmentContainer.currentMicrophoneUndetermined()
+    /// True while the system microphone request is on screen: the button that opened it is disabled meanwhile.
+    @Published private(set) var requestingMicrophone: Bool = false
 
     private let audioEngine = AVAudioEngine()
     private var recordedSamples: [Float] = []
@@ -49,6 +53,32 @@ final class VoiceEnrollmentContainer: ObservableObject {
 
     init(initial: VoiceEnrollmentViewModel = .mock) {
         self.viewModel = initial
+    }
+
+    nonisolated static func currentMicrophoneUndetermined() -> Bool {
+        if #available(iOS 17.0, *) {
+            return AVAudioApplication.shared.recordPermission == .undetermined
+        }
+        return AVAudioSession.sharedInstance().recordPermission == .undetermined
+    }
+
+    /// "Continua" on the screen shown before the system microphone request: asks for the permission and nothing else.
+    /// Nothing is recorded; the enrollment starts with "Inizia" afterwards. A refusal ends in the error step.
+    func requestPermissionOnly() {
+        guard !requestingMicrophone else { return }
+        requestingMicrophone = true
+        Task {
+            do {
+                try await requestMicrophonePermission()
+                requestingMicrophone = false
+                microphoneUndetermined = Self.currentMicrophoneUndetermined()
+            } catch {
+                requestingMicrophone = false
+                microphoneUndetermined = Self.currentMicrophoneUndetermined()
+                errorMessage = error.localizedDescription
+                viewModel.transition(to: .error(message: error.localizedDescription))
+            }
+        }
     }
 
     func start() {
