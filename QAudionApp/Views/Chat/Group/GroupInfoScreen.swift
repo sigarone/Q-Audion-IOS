@@ -225,14 +225,14 @@ struct GroupInfoScreen: View {
         }
         // Fase 1C — admin promote/demote confirmation.
         .alert(pendingAdminToggle.map {
-                $0.isAdmin ? "Rimuovere \($0.displayName) da admin?"
-                           : "Rendere \($0.displayName) admin?"
+                $0.isAdmin ? String(localized: "group_chat.info.demote_admin_title", defaultValue: "Rimuovere \($0.displayName) da admin?", comment: "Group info: confirmation title before removing admin rights from a member; %@ is the member's name.")
+                           : String(localized: "group_chat.info.promote_admin_title", defaultValue: "Rendere \($0.displayName) admin?", comment: "Group info: confirmation title before making a member an admin; %@ is the member's name.")
                } ?? "",
                isPresented: Binding(
                 get: { pendingAdminToggle != nil },
                 set: { if !$0 { pendingAdminToggle = nil } })) {
             Button("Annulla", role: .cancel) { pendingAdminToggle = nil }
-            Button(pendingAdminToggle?.isAdmin == true ? "Rimuovi" : "Rendi admin") {
+            Button(pendingAdminToggle?.isAdmin == true ? String(localized: "Rimuovi") : String(localized: "group_chat.info.make_admin", defaultValue: "Rendi admin", comment: "Group info: confirmation button that makes a member an admin.")) {
                 if let m = pendingAdminToggle {
                     if m.isAdmin {
                         onDemoteAdmin(m.userId)
@@ -379,7 +379,7 @@ struct GroupInfoScreen: View {
                           size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(member.displayName + (member.isSelf ? " (tu)" : ""))
+                    Text(member.displayName)
                         .qaudionStyle(type.titleSmall)
                         .foregroundStyle(scheme.onSurface)
                         .lineLimit(1)
@@ -406,8 +406,8 @@ struct GroupInfoScreen: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(member.isAdmin
-                    ? "Rimuovi \(member.displayName) da admin"
-                    : "Rendi \(member.displayName) admin")
+                    ? String(localized: "group_chat.info.demote_admin_a11y", defaultValue: "Rimuovi \(member.displayName) da admin", comment: "VoiceOver label of the button that removes admin rights from a member; %@ is the member's name.")
+                    : String(localized: "group_chat.info.promote_admin_a11y", defaultValue: "Rendi \(member.displayName) admin", comment: "VoiceOver label of the button that makes a member an admin; %@ is the member's name."))
             }
             // Fase 1A — admin can remove any OTHER member. Tapping arms a
             // confirmation alert (destructive, forward-secrecy rekey).
@@ -580,7 +580,7 @@ struct GroupInfoScreen: View {
         f.locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)
         f.unitsStyle = .full
         let rel: String = f.localizedString(for: date, relativeTo: Date())
-        return "Aggiornato " + rel
+        return String(localized: "group_chat.info.refreshed", defaultValue: "Aggiornato \(rel)", comment: "Group info: when the member list was last refreshed; %@ is a relative time such as 2 minutes ago.")
     }
 
     private func handleLeave() {

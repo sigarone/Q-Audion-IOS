@@ -28,10 +28,10 @@ final class AvatarUploader {
 
         var errorDescription: String? {
             switch self {
-            case .notAuthenticated: return "Not signed in"
-            case .imageEncodingFailed: return "Could not encode image"
-            case .invalidImage: return "Immagine non valida"
-            case .uploadFailed(let m): return "Upload failed: \(m)"
+            case .notAuthenticated: return String(localized: "attachment.error.not_authenticated", defaultValue: "Non autenticato", comment: "Error text of an attachment, voice note or avatar transfer: the user is not signed in.")
+            case .imageEncodingFailed: return String(localized: "avatar.error.encode_failed", defaultValue: "Impossibile codificare l'immagine", comment: "Error text of a profile picture upload: the picture could not be encoded.")
+            case .invalidImage: return String(localized: "avatar.error.invalid_image", defaultValue: "Immagine non valida", comment: "Error text of a profile picture upload: the picked picture is not valid.")
+            case .uploadFailed(let m): return String(localized: "attachment.error.upload_failed", defaultValue: "Upload fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
             }
         }
     }

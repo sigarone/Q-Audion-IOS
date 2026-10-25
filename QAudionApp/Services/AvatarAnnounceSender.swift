@@ -35,13 +35,13 @@ final class AvatarAnnounceSender {
 
         var errorDescription: String? {
             switch self {
-            case .notAuthenticated:    return "Non autenticato"
-            case .readFailed(let m):   return "Lettura fallita: \(m)"
-            case .encryptFailed(let m):return "Cifratura fallita: \(m)"
-            case .uploadFailed(let m): return "Upload fallito: \(m)"
-            case .tokenIssueFailed(let m): return "Token di download fallito: \(m)"
-            case .envelopeFailed(let m): return "Envelope fallito: \(m)"
-            case .pskMissing: return "Scambio chiavi in corso — riprova tra poco."
+            case .notAuthenticated:    return String(localized: "attachment.error.not_authenticated", defaultValue: "Non autenticato", comment: "Error text of an attachment, voice note or avatar transfer: the user is not signed in.")
+            case .readFailed(let m):   return String(localized: "attachment.error.read_failed", defaultValue: "Lettura fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .encryptFailed(let m):return String(localized: "attachment.error.encrypt_failed", defaultValue: "Cifratura fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .uploadFailed(let m): return String(localized: "attachment.error.upload_failed", defaultValue: "Upload fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .tokenIssueFailed(let m): return String(localized: "avatar.error.token_failed", defaultValue: "Token di download fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .envelopeFailed(let m): return String(localized: "attachment.error.envelope_failed", defaultValue: "Envelope fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .pskMissing: return String(localized: "attachment.error.key_exchange_pending", defaultValue: "Scambio chiavi in corso — riprova tra poco.", comment: "Error text of an attachment, voice note or avatar transfer: the key exchange with the contact is not finished yet.")
             }
         }
     }

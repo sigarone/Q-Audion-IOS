@@ -167,6 +167,12 @@ struct MessageComposer: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(extras.warning.opacity(0.15)))
     }
 
+    /// Text of the countdown chip of the voice note recording: seconds left before the 5 minute limit.
+    private static func secondsLeftText(_ remaining: TimeInterval) -> String {
+        let secs: String = String(format: "%.0f", remaining)
+        return String(localized: "chat.composer.seconds_left", defaultValue: "\(secs)s alla fine", comment: "Voice note recording banner, countdown chip in the last seconds before the time limit; %@ is the number of seconds left.")
+    }
+
     /// W108: live recording banner. Shows a red pulsing dot + the
     /// elapsed time (M:SS), plus a "Rilascia per inviare" hint.
     private var recordingBanner: some View {
@@ -195,14 +201,14 @@ struct MessageComposer: View {
                 .monospacedDigit()
             // W115: copy switches when drag-up cancel is armed.
             Text(cancelArmed
-                 ? "Rilascia per ANNULLARE"
-                 : "Rilascia per inviare · scorri verso l'alto per annullare")
+                 ? String(localized: "chat.composer.release_to_cancel", defaultValue: "Rilascia per ANNULLARE", comment: "Voice note recording banner: the finger was dragged up, releasing now cancels the recording. ANNULLARE is in capitals on purpose.")
+                 : String(localized: "chat.composer.release_to_send", defaultValue: "Rilascia per inviare · scorri verso l'alto per annullare", comment: "Voice note recording banner: releasing the button sends the voice note, sliding up cancels it."))
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(cancelArmed ? scheme.error : scheme.onSurfaceVariant)
             Spacer(minLength: 0)
             // W131: countdown chip — only visible in last 30s.
             if nearingCap {
-                Text(String(format: "%.0fs alla fine", remaining))
+                Text(Self.secondsLeftText(remaining))
                     .qaudionStyle(type.labelSmall)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(extras.warning.opacity(0.3)))
@@ -446,7 +452,7 @@ struct MessageComposer: View {
                         }
                     }
             )
-            .accessibilityLabel(isRecording ? "Sto registrando vocale" : "Tieni premuto per registrare vocale")
+            .accessibilityLabel(isRecording ? String(localized: "chat.composer.voice_recording_a11y", defaultValue: "Sto registrando vocale", comment: "VoiceOver label of the voice note button while a recording is in progress.") : String(localized: "chat.composer.voice_hold_a11y", defaultValue: "Tieni premuto per registrare vocale", comment: "VoiceOver label of the voice note button: hold it to record a voice message."))
     }
 }
 

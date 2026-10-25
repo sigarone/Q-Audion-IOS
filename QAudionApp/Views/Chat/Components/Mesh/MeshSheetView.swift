@@ -174,11 +174,11 @@ struct MeshSheetView: View {
         guard consentAnswered else { return antennaOffLabel }
         switch btProbe.status {
         case .checking:
-            return "Verifica del Bluetooth in corso…"
+            return String(localized: "mesh.sheet.bt_checking", defaultValue: "Verifica del Bluetooth in corso…", comment: "Bluetooth mesh sheet, subtitle of the antenna row: the Bluetooth state of the phone is being checked.")
         case .unsupported:
-            return "Bluetooth non supportato su questo dispositivo"
+            return String(localized: "mesh.sheet.bt_unsupported", defaultValue: "Bluetooth non supportato su questo dispositivo", comment: "Bluetooth mesh sheet, subtitle of the antenna row: this device has no usable Bluetooth.")
         case .authorizationDenied:
-            return "Permesso Bluetooth negato — tocca per aprire Impostazioni"
+            return String(localized: "mesh.sheet.bt_denied", defaultValue: "Permesso Bluetooth negato — tocca per aprire Impostazioni", comment: "Bluetooth mesh sheet, subtitle of the antenna row: the Bluetooth permission was denied; the button below opens Settings.")
         case .poweredOff:
             // Says where the switch really is. The button below opens this
             // app's page in Settings (see `openSettingsLabel`), which has no
@@ -192,20 +192,24 @@ struct MeshSheetView: View {
         case .ready:
             switch runtime.antennaMode {
             case nil:
-                if case .error = runtime.radioState { return "Bluetooth non disponibile" }
+                if case .error = runtime.radioState { return String(localized: "mesh.sheet.bt_unavailable", defaultValue: "Bluetooth non disponibile", comment: "Bluetooth mesh sheet, subtitle of the antenna row: the Bluetooth radio reported an error.") }
                 // W-MESHDEAD — distinguishes "radio is fine, you just haven't
                 // turned it on" from "the mesh has been switched off for
                 // everyone for now" (the remote kill switch), instead of both
                 // reading as the same flat "Spenta".
                 return MeshFeature.enabled ? antennaOffLabel : featureUnavailableLabel
             case .visibleOnly:
-                return "Visibile · raggiungibile dai vicini"
+                return String(localized: "mesh.sheet.subtitle_visible", defaultValue: "Visibile · raggiungibile dai vicini", comment: "Bluetooth mesh sheet, subtitle of the antenna row: visible mode, nearby phones can reach this one.")
             case .direct:
-                if case .scanningOnly = runtime.radioState { return "Diretta · scansione in corso…" }
-                return "Diretta · \(runtime.peers.count) dispositivi raggiungibili"
+                if case .scanningOnly = runtime.radioState { return String(localized: "mesh.sheet.subtitle_direct_scanning", defaultValue: "Diretta · scansione in corso…", comment: "Bluetooth mesh sheet, subtitle of the antenna row: direct mode, scanning for nearby devices.") }
+                return runtime.peers.count == 1
+                    ? String(localized: "mesh.sheet.subtitle_direct_one", defaultValue: "Diretta · 1 dispositivo raggiungibile", comment: "Bluetooth mesh sheet, subtitle of the antenna row: direct mode, exactly one nearby device is reachable.")
+                    : String(localized: "mesh.sheet.subtitle_direct_many", defaultValue: "Diretta · \(runtime.peers.count) dispositivi raggiungibili", comment: "Bluetooth mesh sheet, subtitle of the antenna row: direct mode; %lld is the number of reachable nearby devices.")
             case .fullMesh:
-                if case .scanningOnly = runtime.radioState { return "Mesh completa · scansione in corso…" }
-                return "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili"
+                if case .scanningOnly = runtime.radioState { return String(localized: "mesh.sheet.subtitle_full_scanning", defaultValue: "Mesh completa · scansione in corso…", comment: "Bluetooth mesh sheet, subtitle of the antenna row: full mesh mode, scanning for nearby devices.") }
+                return runtime.peers.count == 1
+                    ? String(localized: "mesh.sheet.subtitle_full_one", defaultValue: "Mesh completa · 1 dispositivo raggiungibile", comment: "Bluetooth mesh sheet, subtitle of the antenna row: full mesh mode, exactly one nearby device is reachable.")
+                    : String(localized: "mesh.sheet.subtitle_full_many", defaultValue: "Mesh completa · \(runtime.peers.count) dispositivi raggiungibili", comment: "Bluetooth mesh sheet, subtitle of the antenna row: full mesh mode; %lld is the number of reachable nearby devices.")
             }
         }
     }
@@ -265,15 +269,15 @@ struct MeshSheetView: View {
                         antennaModeChip(label: antennaOffLabel, selected: runtime.antennaMode == nil) {
                             handleAntennaSelect(nil)
                         }
-                        antennaModeChip(label: "Visibile", selected: runtime.antennaMode == .visibleOnly) {
+                        antennaModeChip(label: String(localized: "mesh.sheet.mode_visible", defaultValue: "Visibile", comment: "Bluetooth mesh sheet: label of a mode chip (antenna: visible only, others can reach this phone)."), selected: runtime.antennaMode == .visibleOnly) {
                             handleAntennaSelect(.visibleOnly)
                         }
                     }
                     HStack(spacing: 8) {
-                        antennaModeChip(label: "Diretta", selected: runtime.antennaMode == .direct) {
+                        antennaModeChip(label: String(localized: "mesh.sheet.mode_direct", defaultValue: "Diretta", comment: "Bluetooth mesh sheet: label of a mode chip (antenna: direct connections with nearby devices, own messages only)."), selected: runtime.antennaMode == .direct) {
                             handleAntennaSelect(.direct)
                         }
-                        antennaModeChip(label: "Mesh completa", selected: runtime.antennaMode == .fullMesh) {
+                        antennaModeChip(label: String(localized: "mesh.sheet.mode_full_mesh", defaultValue: "Mesh completa", comment: "Bluetooth mesh sheet: label of a mode chip (antenna: full mesh, also relays messages of other people)."), selected: runtime.antennaMode == .fullMesh) {
                             handleAntennaSelect(.fullMesh)
                         }
                     }
@@ -347,7 +351,7 @@ struct MeshSheetView: View {
         let flagOn: Int = MeshFeature.enabled ? 1 : 0
         RTLog.info("call", "mesh antenna_tap flag=\(flagOn)")
         guard MeshFeature.enabled else {
-            onToast("La mesh Bluetooth non è disponibile al momento.")
+            onToast(String(localized: "mesh.sheet.toast_unavailable", defaultValue: "La mesh Bluetooth non è disponibile al momento.", comment: "Bluetooth mesh sheet, toast: the mesh is switched off for everyone for now."))
             return
         }
         // Turning the radio ON needs the consent screen to have been answered
@@ -400,13 +404,13 @@ struct MeshSheetView: View {
                     Spacer()
                 }
                 HStack(spacing: 8) {
-                    antennaModeChip(label: "Preferisci BT", selected: routingPreference == .preferMesh) {
+                    antennaModeChip(label: String(localized: "mesh.sheet.route_prefer_bt", defaultValue: "Preferisci BT", comment: "Bluetooth mesh sheet: label of a mode chip (network for this contact: prefer Bluetooth when the contact is near; BT stands for Bluetooth)."), selected: routingPreference == .preferMesh) {
                         setRouting(.preferMesh, for: peer)
                     }
-                    antennaModeChip(label: "Solo rete", selected: routingPreference == .networkOnly) {
+                    antennaModeChip(label: String(localized: "mesh.sheet.route_network_only", defaultValue: "Solo rete", comment: "Bluetooth mesh sheet: label of a mode chip (network for this contact: always use the internet)."), selected: routingPreference == .networkOnly) {
                         setRouting(.networkOnly, for: peer)
                     }
-                    antennaModeChip(label: "Solo BT", selected: routingPreference == .meshOnly) {
+                    antennaModeChip(label: String(localized: "mesh.sheet.route_bt_only", defaultValue: "Solo BT", comment: "Bluetooth mesh sheet: label of a mode chip (network for this contact: Bluetooth only; BT stands for Bluetooth)."), selected: routingPreference == .meshOnly) {
                         setRouting(.meshOnly, for: peer)
                     }
                 }
@@ -424,20 +428,20 @@ struct MeshSheetView: View {
         switch routingPreference {
         case .preferMesh:
             if let bridgeName {
-                return "Bluetooth quando il contatto è vicino · ora raggiungibile tramite \(bridgeName)"
+                return String(localized: "mesh.sheet.route_prefer_via", defaultValue: "Bluetooth quando il contatto è vicino · ora raggiungibile tramite \(bridgeName)", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth is preferred and the contact is reachable through another device; %@ is that device's name.")
             }
             return reachable
-                ? "Bluetooth quando il contatto è vicino · ora è raggiungibile"
-                : "Bluetooth quando il contatto è vicino · ora passa dalla rete"
+                ? String(localized: "mesh.sheet.route_prefer_reachable", defaultValue: "Bluetooth quando il contatto è vicino · ora è raggiungibile", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth is preferred and the contact is reachable now.")
+                : String(localized: "mesh.sheet.route_prefer_network", defaultValue: "Bluetooth quando il contatto è vicino · ora passa dalla rete", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth is preferred but the contact is not near, so the internet is used now.")
         case .networkOnly:
-            return "Sempre dalla rete pubblica"
+            return String(localized: "mesh.sheet.route_network_subtitle", defaultValue: "Sempre dalla rete pubblica", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: messages always go through the internet.")
         case .meshOnly:
             if let bridgeName {
-                return "Solo Bluetooth · raggiungibile tramite \(bridgeName)"
+                return String(localized: "mesh.sheet.route_bt_via", defaultValue: "Solo Bluetooth · raggiungibile tramite \(bridgeName)", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is reachable through another device; %@ is that device's name.")
             }
             return reachable
-                ? "Solo Bluetooth · il contatto è raggiungibile"
-                : "Solo Bluetooth · in attesa che il contatto sia vicino"
+                ? String(localized: "mesh.sheet.route_bt_reachable", defaultValue: "Solo Bluetooth · il contatto è raggiungibile", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is reachable now.")
+                : String(localized: "mesh.sheet.route_bt_waiting", defaultValue: "Solo Bluetooth · in attesa che il contatto sia vicino", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is not near yet.")
         }
     }
 
@@ -471,11 +475,11 @@ struct MeshSheetView: View {
     @ViewBuilder
     private var peerListSection: some View {
         if !runtime.antennaOn {
-            hintText("Accendi l'antenna per cercare dispositivi Q-Audion nel raggio del Bluetooth.")
+            hintText(String(localized: "mesh.sheet.hint_antenna_off", defaultValue: "Accendi l'antenna per cercare dispositivi Q-Audion nel raggio del Bluetooth.", comment: "Bluetooth mesh sheet, hint under the antenna row: turn the antenna on to look for Q-Audion devices in Bluetooth range."))
         } else if runtime.antennaMode == .visibleOnly {
-            hintText("Sei visibile — chi ti cerca può raggiungerti, ma solo finché l'app è aperta. Passa a \"Diretta\" o \"Mesh completa\" per vedere anche tu i dispositivi vicini e restare raggiungibile in secondo piano.")
+            hintText(String(localized: "mesh.sheet.hint_visible_only", defaultValue: "Sei visibile — chi ti cerca può raggiungerti, ma solo finché l'app è aperta. Passa a \"Diretta\" o \"Mesh completa\" per vedere anche tu i dispositivi vicini e restare raggiungibile in secondo piano.", comment: "Bluetooth mesh sheet, hint under the antenna row: in visible mode others can reach this phone only while the app is open; the quoted words are the names of the Direct and Full mesh chips."))
         } else if runtime.peers.isEmpty {
-            hintText("Nessun dispositivo raggiungibile al momento.")
+            hintText(String(localized: "mesh.sheet.hint_no_devices", defaultValue: "Nessun dispositivo raggiungibile al momento.", comment: "Bluetooth mesh sheet, hint under the antenna row: no nearby device is reachable right now."))
         } else {
             VStack(spacing: 6) {
                 ForEach(runtime.peers) { peer in
@@ -503,7 +507,7 @@ struct MeshSheetView: View {
                     .frame(width: 10, height: 10)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(label.name).qaudionStyle(type.bodyMedium).foregroundStyle(scheme.onSurface)
-                    Text(isChatPeer ? "Il contatto di questa chat" : (label.known ? "Contatto noto" : "Non verificato"))
+                    Text(isChatPeer ? String(localized: "mesh.sheet.peer_chat_contact", defaultValue: "Il contatto di questa chat", comment: "Bluetooth mesh sheet, caption of a nearby device: it is the contact of the open chat.") : (label.known ? String(localized: "mesh.sheet.peer_known", defaultValue: "Contatto noto", comment: "Bluetooth mesh sheet, caption of a nearby device: it is one of the user's contacts.") : String(localized: "trust.header.unverified", defaultValue: "Non verificato", comment: "Trust header: the contact is not verified.")))
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(isChatPeer ? extras.bluetoothAccent : scheme.onSurfaceVariant)
                 }
@@ -563,7 +567,7 @@ struct MeshSheetView: View {
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(extras.success)
 
-            sendButton(label: "Invia messaggio via mesh") {
+            sendButton(label: String(localized: "mesh.sheet.send_via_mesh", defaultValue: "Invia messaggio via mesh", comment: "Bluetooth mesh sheet: button that makes a nearby device the target of the next message.")) {
                 selectTarget(nodeHex: peer.nodeHex, displayName: label.name)
             }
 
@@ -577,9 +581,9 @@ struct MeshSheetView: View {
 
     private func signalLabel(for peer: MeshRuntimePeer) -> String {
         switch peer.radiusFraction {
-        case ..<0.4: return "Diretta · segnale forte"
-        case ..<0.7: return "Diretta · segnale medio"
-        default: return "Diretta · segnale debole"
+        case ..<0.4: return String(localized: "mesh.sheet.signal_strong", defaultValue: "Diretta · segnale forte", comment: "Bluetooth mesh sheet, detail card of a nearby device: signal strength of a direct link (strong).")
+        case ..<0.7: return String(localized: "mesh.sheet.signal_medium", defaultValue: "Diretta · segnale medio", comment: "Bluetooth mesh sheet, detail card of a nearby device: signal strength of a direct link (medium).")
+        default: return String(localized: "mesh.sheet.signal_weak", defaultValue: "Diretta · segnale debole", comment: "Bluetooth mesh sheet, detail card of a nearby device: signal strength of a direct link (weak).")
         }
     }
 
@@ -603,12 +607,9 @@ struct MeshSheetView: View {
         // in. Announcing "invio attivato" and nothing else is how a message
         // ended up reported as sent while the peer never received it.
         if runtime.antennaMode == .visibleOnly {
-            onToast(
-                "Invio via mesh attivato — \(displayName). In modalità Visibile questo telefono non avvia "
-                    + "il collegamento: la consegna dipende dall'altro dispositivo. Passa a Diretta o Mesh completa per inviare subito."
-            )
+            onToast(String(localized: "mesh.sheet.toast_target_set_visible", defaultValue: "Invio via mesh attivato — \(displayName). In modalità Visibile questo telefono non avvia il collegamento: la consegna dipende dall'altro dispositivo. Passa a Diretta o Mesh completa per inviare subito.", comment: "Bluetooth mesh sheet, toast: sending through the mesh is on for a device, but in visible mode this phone cannot start the link; %@ is the device name."))
         } else {
-            onToast("Invio via mesh attivato — \(displayName)")
+            onToast(String(localized: "mesh.sheet.toast_target_set", defaultValue: "Invio via mesh attivato — \(displayName)", comment: "Bluetooth mesh sheet, toast: sending through the mesh is on for a device; %@ is the device name."))
         }
         dismiss()
     }
@@ -620,7 +621,7 @@ struct MeshSheetView: View {
         // multi-segment formatting out of deeply-nested closure/builder
         // scopes.
         let viaName = viewModel.label(forNodeHex: peer.nodeHex).name
-        let headerText = "Raggiungibili tramite " + viaName
+        let headerText = String(localized: "mesh.sheet.reachable_via", defaultValue: "Raggiungibili tramite \(viaName)", comment: "Bluetooth mesh sheet: header of the list of devices reachable through a nearby device; %@ is the name of that device.")
         Button { viewModel.relaysExpanded.toggle() } label: {
             HStack {
                 Text(headerText)
@@ -658,7 +659,7 @@ struct MeshSheetView: View {
                     Text("2 hop").qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant)
                 }
                 Spacer()
-                Text(label.known ? "Invia" : "Verifica")
+                Text(label.known ? LocalizedStringKey("Invia") : LocalizedStringKey("mesh.sheet.verify"))
                     .qaudionStyle(type.labelMedium)
                     .foregroundStyle(label.known ? scheme.primary : extras.warning)
             }
@@ -672,7 +673,7 @@ struct MeshSheetView: View {
         if label.known {
             selectTarget(nodeHex: relayHex, displayName: label.name)
         } else {
-            onToast("Verifica il contatto prima di inviare")
+            onToast(String(localized: "mesh.sheet.toast_verify_first", defaultValue: "Verifica il contatto prima di inviare", comment: "Bluetooth mesh sheet, toast: a device that is not a verified contact cannot be used as a target yet."))
         }
     }
 }
@@ -708,8 +709,8 @@ struct MeshTransportChip: View {
                 .font(.system(size: 13))
                 .foregroundStyle(tint)
             Text(reachable
-                 ? "Invio via mesh Bluetooth — \(peerName)"
-                 : "Mesh Bluetooth — \(peerName) non raggiungibile: il messaggio resta in attesa")
+                 ? String(localized: "mesh.chip.reachable", defaultValue: "Invio via mesh Bluetooth — \(peerName)", comment: "Chip above the composer: messages are sent through the Bluetooth mesh; %@ is the name of the device.")
+                 : String(localized: "mesh.chip.unreachable", defaultValue: "Mesh Bluetooth — \(peerName) non raggiungibile: il messaggio resta in attesa", comment: "Chip above the composer: the device chosen for the Bluetooth mesh is out of reach, the message is held until it is back; %@ is the name of the device."))
                 .qaudionStyle(type.labelMedium)
                 .foregroundStyle(tint)
             Spacer(minLength: 4)

@@ -36,8 +36,8 @@ final class ConversationExporterTests: XCTestCase {
         }
 
         // Assert header is formatted correctly
-        XCTAssertTrue(contents.contains("Q-Audion — Chat con Mario Rossi"))
-        XCTAssertTrue(contents.contains("1 messaggio"))
+        XCTAssertTrue(contents.contains(String(localized: "chat.export.title", defaultValue: "Q-Audion — Chat con \("Mario Rossi")")))
+        XCTAssertTrue(contents.contains(String(localized: "chat.export.count_one", defaultValue: "1 messaggio")))
 
         // Assert body is formatted correctly (newlines in body should be replaced by spaces)
         // Note: The timestamp depends on the local timezone during test execution.
@@ -66,7 +66,7 @@ final class ConversationExporterTests: XCTestCase {
             return
         }
 
-        XCTAssertTrue(contents.contains("Mario Rossi: <messaggio eliminato>"))
+        XCTAssertTrue(contents.contains("Mario Rossi: " + String(localized: "chat.export.deleted_message", defaultValue: "<messaggio eliminato>")))
         XCTAssertFalse(contents.contains("Secret"))
     }
 
@@ -92,7 +92,7 @@ final class ConversationExporterTests: XCTestCase {
             return
         }
 
-        XCTAssertTrue(contents.contains("Tu: <allegato: audio/mp4 · 4200ms>"))
+        XCTAssertTrue(contents.contains("Tu: " + String(localized: "chat.export.attachment_with_duration", defaultValue: "<allegato: \("audio/mp4") · \("4200ms")>")))
     }
 
     func test_export_editedMessage_formatsWithSuffix() {
@@ -116,7 +116,7 @@ final class ConversationExporterTests: XCTestCase {
             return
         }
 
-        XCTAssertTrue(contents.contains("Tu: Edited text (modificato)"))
+        XCTAssertTrue(contents.contains("Tu: Edited text " + String(localized: "chat.export.edited", defaultValue: "(modificato)")))
     }
 
     func test_export_writeFailure_returnsNil() {
@@ -190,7 +190,7 @@ final class ConversationExporterTests: XCTestCase {
                               server: "0a1b2c3d-0000-4000-8000-123456789abc", at: 1777726260)
         guard let contents = exported([quoted, reply]) else { return XCTFail("Failed to read exported file") }
         // The author and the excerpt come from the local row (`q` is ignored), and the object is never written.
-        XCTAssertTrue(contents.contains("Tu: Va bene (in risposta a Mario Rossi: Ci vediamo alle otto)"))
+        XCTAssertTrue(contents.contains("Tu: Va bene " + String(localized: "chat.export.reply_to_excerpt", defaultValue: "(in risposta a \("Mario Rossi"): \("Ci vediamo alle otto"))")))
         XCTAssertFalse(contents.contains("qa_reply"))
         XCTAssertFalse(contents.contains("falso"))
     }
@@ -200,7 +200,7 @@ final class ConversationExporterTests: XCTestCase {
         let reply = serverRow(replyBody(to: quotedServerId, quote: "testo segreto", body: "Ok"), outgoing: true,
                               server: "0a1b2c3d-0000-4000-8000-123456789abc", at: 1777726260)
         guard let contents = exported([quoted, reply]) else { return XCTFail("Failed to read exported file") }
-        XCTAssertTrue(contents.contains("Tu: Ok (in risposta a un messaggio: non disponibile)"))
+        XCTAssertTrue(contents.contains("Tu: Ok " + String(localized: "chat.export.reply_unavailable", defaultValue: "(in risposta a un messaggio: non disponibile)")))
         XCTAssertFalse(contents.contains("testo segreto"))
     }
 
@@ -208,6 +208,6 @@ final class ConversationExporterTests: XCTestCase {
         let reply = serverRow(replyBody(to: quotedServerId, quote: "citazione", body: "Ok"), outgoing: true,
                               server: "0a1b2c3d-0000-4000-8000-123456789abc", at: 1777726260)
         guard let contents = exported([reply]) else { return XCTFail("Failed to read exported file") }
-        XCTAssertTrue(contents.contains("Tu: Ok (in risposta a un messaggio: citazione)"))
+        XCTAssertTrue(contents.contains("Tu: Ok " + String(localized: "chat.export.reply_to_message_excerpt", defaultValue: "(in risposta a un messaggio: \("citazione"))")))
     }
 }
