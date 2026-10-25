@@ -1958,13 +1958,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vous êtes hors ligne. Impossible de calculer la confiance du contact."
+            "value": "Tu es hors ligne. Impossible de calculer la confiance du contact."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Du bist offline. Das Vertrauen des Kontakts konnte nicht berechnet werden."
+            "value": "Sie sind offline. Das Vertrauen des Kontakts konnte nicht berechnet werden."
           }
         },
         "pt-BR": {
@@ -2084,13 +2084,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Échec de la vérification : utilisez « Réessayer » dans la section du numéro de sécurité."
+            "value": "Échec de la vérification : utilise « Réessayer » dans la section du numéro de sécurité."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Überprüfung fehlgeschlagen: Nutze „Erneut versuchen“ im Bereich Sicherheitsnummer."
+            "value": "Überprüfung fehlgeschlagen: Nutzen Sie „Erneut versuchen“ im Bereich Sicherheitsnummer."
           }
         },
         "pt-BR": {
@@ -2846,7 +2846,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connexion non sécurisée refusée : l'appel a été terminé."
+            "value": "Connexion non sécurisée refusée : l'appel a été terminé."
           }
         },
         "pt-BR": {
@@ -2888,7 +2888,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connexion média perdue : l'appel a été terminé."
+            "value": "Connexion média perdue : l'appel a été terminé."
           }
         },
         "pt-BR": {
@@ -2930,7 +2930,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Erreur de connexion média : l'appel a été terminé."
+            "value": "Erreur de connexion média : l'appel a été terminé."
           }
         },
         "pt-BR": {
@@ -3518,7 +3518,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Version copiée : %@"
+            "value": "Version copiée : %@"
           }
         },
         "pt-BR": {
@@ -4778,7 +4778,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Échec de l'enregistrement : %@"
+            "value": "Échec de l'enregistrement : %@"
           }
         },
         "pt-BR": {
@@ -5276,7 +5276,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Discussion supprimée de cet appareil. La sortie du groupe n'a pas pu être finalisée : l'app réessaiera automatiquement."
+            "value": "Discussion supprimée de cet appareil. La sortie du groupe n'a pas pu être finalisée : l'app réessaiera automatiquement."
           }
         },
         "de": {
@@ -5948,7 +5948,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Échec de l'envoi de la photo : format invalide ou fichier trop volumineux."
+            "value": "Échec de l'envoi de la photo : format invalide ou fichier trop volumineux."
           }
         },
         "de": {
@@ -5996,7 +5996,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$lld sur %2$lld photos non envoyées : format invalide ou fichiers trop volumineux."
+            "value": "%1$lld sur %2$lld photos non envoyées : format invalide ou fichiers trop volumineux."
           }
         },
         "pt-BR": {
@@ -7382,7 +7382,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La protection commence au sceau : l'audio est chiffré avec AES-256 à l'aide de clés dérivées de ML-KEM-1024, et les clés de ton identité restent dans le Keychain. Mais le micro se trouve juste en dehors de la zone protégée : l'audio brut existe dans le téléphone un instant avant d'être scellé, si bien qu'un système d'exploitation compromis pourrait l'intercepter en amont du chiffrement, sans avoir besoin d'aucune clé."
+            "value": "La protection commence au sceau : l'audio est chiffré avec AES-256 à l'aide de clés dérivées de ML-KEM-1024, et les clés de ton identité restent dans le Keychain. Mais le micro se trouve juste en dehors de la zone protégée : l'audio brut existe dans le téléphone un instant avant d'être scellé, si bien qu'un système d'exploitation compromis pourrait l'intercepter en amont du chiffrement, sans avoir besoin d'aucune clé."
           }
         },
         "pt-BR": {
@@ -7424,7 +7424,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le micro se trouve juste en dehors de la zone protégée : l'audio brut existe dans le téléphone un instant avant d'être scellé, si bien qu'un système d'exploitation compromis pourrait l'intercepter en amont du chiffrement, sans avoir besoin d'aucune clé."
+            "value": "Le micro se trouve juste en dehors de la zone protégée : l'audio brut existe dans le téléphone un instant avant d'être scellé, si bien qu'un système d'exploitation compromis pourrait l'intercepter en amont du chiffrement, sans avoir besoin d'aucune clé."
           }
         },
         "pt-BR": {
@@ -7466,7 +7466,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'échange de clés post-quantique (ML-KEM) est actif pour cet appel : il protège même si un ordinateur quantique du futur interceptait aujourd'hui le trafic chiffré et tentait de le déchiffrer plus tard."
+            "value": "L'échange de clés post-quantique (ML-KEM) est actif pour cet appel : il protège même si un ordinateur quantique du futur interceptait aujourd'hui le trafic chiffré et tentait de le déchiffrer plus tard."
           }
         },
         "pt-BR": {
@@ -7508,7 +7508,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'échange de clés post-quantique (ML-KEM) n'est pas actif pour cet appel : le bouclier reste gris tant que l'échange de clés ML-KEM n'est pas terminé. Lorsqu'il est actif, il protège même si un ordinateur quantique du futur interceptait aujourd'hui le trafic chiffré."
+            "value": "L'échange de clés post-quantique (ML-KEM) n'est pas actif pour cet appel : le bouclier reste gris tant que l'échange de clés ML-KEM n'est pas terminé. Lorsqu'il est actif, il protège même si un ordinateur quantique du futur interceptait aujourd'hui le trafic chiffré."
           }
         },
         "pt-BR": {
@@ -8096,7 +8096,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Compare la voix de l'autre personne avec le début de cet appel. Tout se passe sur ce téléphone. C'est un indice, pas une preuve d'identité : pour en être sûr, utilise le code de sécurité de l'appel."
+            "value": "Compare la voix de l'autre personne avec le début de cet appel. Tout se passe sur ce téléphone. C'est un indice, pas une preuve d'identité : pour en être sûr, utilise le code de sécurité de l'appel."
           }
         },
         "pt-BR": {
@@ -12169,7 +12169,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anomalie dans la voix : vérifie l'identité de la personne."
+            "value": "Anomalie dans la voix : vérifie l'identité de la personne."
           }
         },
         "pt-BR": {
@@ -12757,7 +12757,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le transport est protégé par DTLS 1.3 avec un échange de clés hybride post-quantique (X25519MLKEM768) et SRTP AEAD_AES_256_GCM, vérifié par ton appareil après la connexion. Le contenu est chiffré de bout en bout par chaque expéditeur, par époque, avec une clé aléatoire de 32 octets (AES-256-GCM). Les clés ne circulent que sur le canal de contrôle scellé entre les participants : le serveur média ne les voit jamais."
+            "value": "Le transport est protégé par DTLS 1.3 avec un échange de clés hybride post-quantique (X25519MLKEM768) et SRTP AEAD_AES_256_GCM, vérifié par ton appareil après la connexion. Le contenu est chiffré de bout en bout par chaque expéditeur, par époque, avec une clé aléatoire de 32 octets (AES-256-GCM). Les clés ne circulent que sur le canal de contrôle scellé entre les participants : le serveur média ne les voit jamais."
           }
         },
         "pt-BR": {
@@ -13009,7 +13009,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pour les appels 1 à 1, cherche une connexion directe entre les deux téléphones : ton téléphone n'utilise ni serveur TURN ni relais (les serveurs STUN du serveur BCrypto restent autorisés) et l'autre téléphone voit ton adresse IP. Si l'autre téléphone propose un relais, l'appel peut quand même passer par son relais. Si la connexion ne s'établit pas ou s'interrompt, la voix passe chiffrée par le serveur BCrypto jusqu'à ce que la connexion soit active."
+            "value": "Pour les appels 1 à 1, cherche une connexion directe entre les deux téléphones : ton téléphone n'utilise ni serveur TURN ni relais (les serveurs STUN du serveur BCrypto restent autorisés) et l'autre téléphone voit ton adresse IP. Si l'autre téléphone propose un relais, l'appel peut quand même passer par son relais. Si la connexion ne s'établit pas ou s'interrompt, la voix passe chiffrée par le serveur BCrypto jusqu'à ce que la connexion soit active."
           }
         },
         "pt-BR": {
@@ -13051,7 +13051,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fait passer les appels 1 à 1 uniquement par un serveur TURN du pool de relais par défaut, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Augmente la latence mais améliore le franchissement du NAT. N'utilise pas la liaison WSS. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+            "value": "Fait passer les appels 1 à 1 uniquement par un serveur TURN du pool de relais par défaut, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Augmente la latence mais améliore le franchissement du NAT. N'utilise pas la liaison WSS. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
           }
         },
         "pt-BR": {
@@ -13093,7 +13093,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fait passer les appels 1 à 1 uniquement par la liaison WSS (WebSocket sécurisé) vers le serveur BCrypto, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Fonctionne aussi là où UDP et les ports TURN sont bloqués, au prix d'une latence plus élevée. Si la liaison WSS ne peut pas être démarrée, les serveurs TURN du pool de relais par défaut sont utilisés : l'appel reste malgré tout sur un relais. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+            "value": "Fait passer les appels 1 à 1 uniquement par la liaison WSS (WebSocket sécurisé) vers le serveur BCrypto, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Fonctionne aussi là où UDP et les ports TURN sont bloqués, au prix d'une latence plus élevée. Si la liaison WSS ne peut pas être démarrée, les serveurs TURN du pool de relais par défaut sont utilisés : l'appel reste malgré tout sur un relais. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
           }
         },
         "pt-BR": {
@@ -13135,7 +13135,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fait passer les appels 1 à 1 uniquement par le serveur TURN saisi ci-dessous, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Le pool de relais par défaut et la liaison WSS ne sont pas utilisés. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+            "value": "Fait passer les appels 1 à 1 uniquement par le serveur TURN saisi ci-dessous, sans connexion directe : l'autre téléphone ne voit pas ton adresse IP. Le pool de relais par défaut et la liaison WSS ne sont pas utilisés. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
           }
         },
         "pt-BR": {
@@ -13177,7 +13177,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Adresse non valide : elle doit être turn: ou turns:, puis le nom du serveur et le port (par exemple turn:hostname:3478), sans utilisateur ni mot de passe, qui vont dans les champs Utilisateur et Mot de passe. Tant qu'elle n'est pas corrigée, le mode ne peut être ni enregistré ni vérifié."
+            "value": "Adresse non valide : elle doit être turn: ou turns:, puis le nom du serveur et le port (par exemple turn:hostname:3478), sans utilisateur ni mot de passe, qui vont dans les champs Utilisateur et Mot de passe. Tant qu'elle n'est pas corrigée, le mode ne peut être ni enregistré ni vérifié."
           }
         },
         "pt-BR": {
@@ -13219,7 +13219,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il faut un utilisateur et un mot de passe : le serveur que tu saisis ne reçoit pas les identifiants temporaires du serveur BCrypto, remplis donc les champs Utilisateur et Mot de passe. Tant qu'ils manquent, le mode ne peut être ni enregistré ni vérifié."
+            "value": "Il faut un utilisateur et un mot de passe : le serveur que tu saisis ne reçoit pas les identifiants temporaires du serveur BCrypto, remplis donc les champs Utilisateur et Mot de passe. Tant qu'ils manquent, le mode ne peut être ni enregistré ni vérifié."
           }
         },
         "pt-BR": {
@@ -13303,7 +13303,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "En mode P2P, ton téléphone n'utilise aucun relais : l'adresse TURN n'a aucun effet."
+            "value": "En mode P2P, ton téléphone n'utilise aucun relais : l'adresse TURN n'a aucun effet."
           }
         },
         "pt-BR": {
@@ -13345,7 +13345,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les appels 1 à 1 utiliseront uniquement ce serveur TURN, avec l'utilisateur et le mot de passe que tu as saisis ; les identifiants temporaires du serveur BCrypto ne lui sont pas donnés. Les serveurs par défaut (STUN et relais) et la liaison WSS ne sont pas utilisés. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
+            "value": "Les appels 1 à 1 utiliseront uniquement ce serveur TURN, avec l'utilisateur et le mot de passe que tu as saisis ; les identifiants temporaires du serveur BCrypto ne lui sont pas donnés. Les serveurs par défaut (STUN et relais) et la liaison WSS ne sont pas utilisés. Si la connexion ne s'établit pas ou s'interrompt, la voix passe à la place, chiffrée, par le serveur BCrypto jusqu'à ce que la connexion soit active."
           }
         },
         "pt-BR": {
@@ -13387,7 +13387,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Côté serveurs, les appels 1 à 1 utiliseront uniquement ce serveur TURN, avec l'utilisateur et le mot de passe que tu as saisis ; les identifiants temporaires du serveur BCrypto ne lui sont pas donnés. Les serveurs par défaut (STUN et relais) et la liaison WSS ne sont pas utilisés. Une connexion directe entre les deux téléphones reste possible. Si la connexion ne s'établit pas ou s'interrompt, la voix passe chiffrée par le serveur BCrypto jusqu'à ce que la connexion soit active."
+            "value": "Côté serveurs, les appels 1 à 1 utiliseront uniquement ce serveur TURN, avec l'utilisateur et le mot de passe que tu as saisis ; les identifiants temporaires du serveur BCrypto ne lui sont pas donnés. Les serveurs par défaut (STUN et relais) et la liaison WSS ne sont pas utilisés. Une connexion directe entre les deux téléphones reste possible. Si la connexion ne s'établit pas ou s'interrompt, la voix passe chiffrée par le serveur BCrypto jusqu'à ce que la connexion soit active."
           }
         },
         "pt-BR": {
@@ -13975,7 +13975,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "OK : ton téléphone n'a produit aucun candidat relais, comme prévu en mode P2P."
+            "value": "OK : ton téléphone n'a produit aucun candidat relais, comme prévu en mode P2P."
           }
         },
         "pt-BR": {
@@ -14017,7 +14017,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "OK : le réseau a produit des candidats de connexion."
+            "value": "OK : le réseau a produit des candidats de connexion."
           }
         },
         "pt-BR": {
@@ -14059,7 +14059,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "OK : au moins un candidat relais a été trouvé."
+            "value": "OK : au moins un candidat relais a été trouvé."
           }
         },
         "pt-BR": {
@@ -14101,7 +14101,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "PAS OK : un candidat relais est apparu, alors qu'il ne doit y en avoir aucun en mode P2P."
+            "value": "PAS OK : un candidat relais est apparu, alors qu'il ne doit y en avoir aucun en mode P2P."
           }
         },
         "pt-BR": {
@@ -14143,7 +14143,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "PAS OK : aucun candidat relais trouvé, le relais ne semble pas joignable depuis ce réseau."
+            "value": "PAS OK : aucun candidat relais trouvé, le relais ne semble pas joignable depuis ce réseau."
           }
         },
         "pt-BR": {
@@ -14185,7 +14185,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "PAS OK : aucun candidat trouvé, vérifie la connexion réseau."
+            "value": "PAS OK : aucun candidat trouvé, vérifie la connexion réseau."
           }
         },
         "pt-BR": {
@@ -14227,7 +14227,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "PAS OK : il n'y avait aucun serveur à tester pour ce mode, car la liste du serveur BCrypto n'est pas arrivée ou ne contient rien que ce mode puisse utiliser."
+            "value": "PAS OK : il n'y avait aucun serveur à tester pour ce mode, car la liste du serveur BCrypto n'est pas arrivée ou ne contient rien que ce mode puisse utiliser."
           }
         },
         "pt-BR": {
@@ -14395,7 +14395,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dernière confirmation : %@ avec résultat OK le %@"
+            "value": "Dernière confirmation : %@ avec résultat OK le %@"
           }
         },
         "pt-BR": {
@@ -14437,7 +14437,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dernière confirmation : %@ avec résultat PAS OK le %@"
+            "value": "Dernière confirmation : %@ avec résultat PAS OK le %@"
           }
         },
         "pt-BR": {
@@ -14479,7 +14479,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cette vérification a été faite avec un mode ou une adresse pas encore enregistrés : appuie sur Enregistrer pour les utiliser dans les appels 1 à 1."
+            "value": "Cette vérification a été faite avec un mode ou une adresse pas encore enregistrés : appuie sur Enregistrer pour les utiliser dans les appels 1 à 1."
           }
         },
         "pt-BR": {
@@ -14563,7 +14563,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'utilisateur et le mot de passe n'ont pas pu être enregistrés dans le trousseau du téléphone : les réglages précédents restent en vigueur. Réessaie."
+            "value": "L'utilisateur et le mot de passe n'ont pas pu être enregistrés dans le trousseau du téléphone : les réglages précédents restent en vigueur. Réessaie."
           }
         },
         "pt-BR": {
@@ -14731,7 +14731,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Numéro non valide : %@"
+            "value": "Numéro non valide : %@"
           }
         },
         "pt-BR": {
@@ -14857,7 +14857,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Échec de la demande de code : %@"
+            "value": "Échec de la demande de code : %@"
           }
         },
         "pt-BR": {
@@ -14983,7 +14983,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Code invalide ou expiré : %@"
+            "value": "Code invalide ou expiré : %@"
           }
         },
         "pt-BR": {
@@ -15193,7 +15193,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Échec de l'envoi des numéros au serveur : %@"
+            "value": "Échec de l'envoi des numéros au serveur : %@"
           }
         },
         "pt-BR": {
@@ -15277,7 +15277,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Échec de la vérification : %@"
+            "value": "Échec de la vérification : %@"
           }
         },
         "pt-BR": {
@@ -17901,7 +17901,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Audio et vidéo en attente : vérifie les mots SAS pour poursuivre l'appel en sécurité."
+            "value": "Audio et vidéo en attente : vérifie les mots SAS pour poursuivre l'appel en sécurité."
           }
         },
         "de": {
@@ -18065,7 +18065,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Avertissement de sécurité : la clé d'identité du contact a changé et n'est pas publiée par le serveur. Vérifie les mots SAS."
+            "value": "Avertissement de sécurité : la clé d'identité du contact a changé et n'est pas publiée par le serveur. Vérifie les mots SAS."
           }
         },
         "de": {
@@ -18106,7 +18106,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Avertissement de sécurité : la signature de cet appel ne correspond pas à la clé de confiance du contact. Vérifie les mots SAS."
+            "value": "Avertissement de sécurité : la signature de cet appel ne correspond pas à la clé de confiance du contact. Vérifie les mots SAS."
           }
         },
         "de": {
@@ -18311,7 +18311,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bannière factice dans ~1,5 s · verrouille l'écran pour la voir"
+            "value": "Bannière factice dans ~1,5 s · verrouille l'écran pour la voir"
           }
         },
         "de": {
@@ -18475,7 +18475,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Brouillon :"
+            "value": "Brouillon :"
           }
         },
         "de": {
@@ -18516,7 +18516,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "RF large bande (AD8318) : "
+            "value": "RF large bande (AD8318) : "
           }
         },
         "de": {
@@ -18557,7 +18557,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "RF large bande (AD8318) : non connecté (module P9 absent)"
+            "value": "RF large bande (AD8318) : non connecté (module P9 absent)"
           }
         },
         "de": {
@@ -19377,7 +19377,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Effacer tout l'historique ?"
+            "value": "Effacer tout l'historique ?"
           }
         },
         "de": {
@@ -20443,7 +20443,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Salut ! Tout va bien ?"
+            "value": "Salut ! Tout va bien ?"
           }
         },
         "de": {
@@ -20730,7 +20730,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Comment veux-tu t'appeler ?"
+            "value": "Comment veux-tu t'appeler ?"
           }
         },
         "de": {
@@ -21017,7 +21017,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirmes-tu le nouveau safety number ?"
+            "value": "Confirmes-tu le nouveau safety number ?"
           }
         },
         "de": {
@@ -21509,7 +21509,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Copie et partage avec le mainteneur. Il peut télécharger le dump via :"
+            "value": "Copie et partage avec le mainteneur. Il peut télécharger le dump via :"
           }
         },
         "de": {
@@ -21837,7 +21837,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Qu'est-ce qui ne va pas ?"
+            "value": "Qu'est-ce qui ne va pas ?"
           }
         },
         "de": {
@@ -22739,7 +22739,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Effet actuel :"
+            "value": "Effet actuel :"
           }
         },
         "de": {
@@ -28987,7 +28987,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer le contact ?"
+            "value": "Supprimer le contact ?"
           }
         },
         "de": {
@@ -29028,7 +29028,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer cette discussion de groupe ?"
+            "value": "Supprimer cette discussion de groupe ?"
           }
         },
         "de": {
@@ -29069,7 +29069,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer cette clé ?"
+            "value": "Supprimer cette clé ?"
           }
         },
         "de": {
@@ -29110,7 +29110,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer ce signalement de l'historique ?"
+            "value": "Supprimer ce signalement de l'historique ?"
           }
         },
         "de": {
@@ -30012,7 +30012,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Format E.164 : doit commencer par + et l'indicatif du pays."
+            "value": "Format E.164 : doit commencer par + et l'indicatif du pays."
           }
         },
         "de": {
@@ -30791,7 +30791,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "ID : "
+            "value": "ID : "
           }
         },
         "de": {
@@ -31242,7 +31242,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le QR contient seulement la clé publique X25519 et un code à usage unique : aucun secret ne transite."
+            "value": "Le QR contient seulement la clé publique X25519 et un code à usage unique : aucun secret ne transite."
           }
         },
         "de": {
@@ -33088,7 +33088,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'autre utilisateur veut activer les captures d'écran dans cette discussion. Approuves-tu ?"
+            "value": "L'autre utilisateur veut activer les captures d'écran dans cette discussion. Approuves-tu ?"
           }
         },
         "de": {
@@ -33334,7 +33334,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La distance par rapport au centre représente l'intensité du signal (proximité), pas une direction : le Bluetooth ne donne pas de boussole."
+            "value": "La distance par rapport au centre représente l'intensité du signal (proximité), pas une direction : le Bluetooth ne donne pas de boussole."
           }
         },
         "de": {
@@ -33703,13 +33703,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les photos et les vocaux reçus seront retéléchargés depuis leurs expéditeurs la prochaine fois que tu les ouvres. L'historique des messages n'est pas modifié."
+            "value": "Les photos et les notes vocales reçues seront retéléchargées depuis leurs expéditeurs la prochaine fois que tu les ouvres. L'historique des messages n'est pas modifié."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Empfangene Fotos und Sprachnachrichten werden beim nächsten Öffnen erneut von den Absendern heruntergeladen. Der Nachrichtenverlauf bleibt unangetastet."
+            "value": "Empfangene Fotos und Sprachnotizen werden beim nächsten Öffnen erneut von den Absendern heruntergeladen. Der Nachrichtenverlauf bleibt unangetastet."
           }
         },
         "pt-BR": {
@@ -33785,7 +33785,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les signalements sont enregistrés localement et envoyés au serveur. La liste ci-dessus est ton historique local ; les lignes plus anciennes que la limite sont supprimées automatiquement."
+            "value": "Les signalements sont enregistrés localement et envoyés au serveur. La liste ci-dessus est ton historique local ; les lignes plus anciennes que la limite sont supprimées automatiquement."
           }
         },
         "de": {
@@ -33908,7 +33908,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nous l'utiliserons uniquement pour identifier le compte : nous ne le montrerons jamais aux autres utilisateurs."
+            "value": "Nous l'utiliserons uniquement pour identifier le compte : nous ne le montrerons jamais aux autres utilisateurs."
           }
         },
         "de": {
@@ -34564,7 +34564,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mode : voir une seule fois"
+            "value": "Mode : voir une seule fois"
           }
         },
         "de": {
@@ -35917,7 +35917,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pas nécessaire : déjà authentifié en personne"
+            "value": "Pas nécessaire : déjà authentifié en personne"
           }
         },
         "de": {
@@ -37803,7 +37803,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cet appel n'est pas lié à un groupe enregistré : il n'y a pas de discussion chiffrée à laquelle envoyer des messages."
+            "value": "Cet appel n'est pas lié à un groupe enregistré : il n'y a pas de discussion chiffrée à laquelle envoyer des messages."
           }
         },
         "de": {
@@ -38418,7 +38418,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Réinitialiser les indicateurs de capacité ?"
+            "value": "Réinitialiser les indicateurs de capacité ?"
           }
         },
         "de": {
@@ -38623,7 +38623,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Révoquer l'appareil ?"
+            "value": "Révoquer l'appareil ?"
           }
         },
         "de": {
@@ -38869,7 +38869,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Détecteur d'activité/énergie 2,4 GHz (pas un analyseur de spectre) : signale les émetteurs proches/forts comme candidats à inspecter, pas comme des identifications certaines."
+            "value": "Détecteur d'activité/énergie 2,4 GHz (pas un analyseur de spectre) : signale les émetteurs proches/forts comme candidats à inspecter, pas comme des identifications certaines."
           }
         },
         "de": {
@@ -38951,7 +38951,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer ce numéro ?"
+            "value": "Supprimer ce numéro ?"
           }
         },
         "de": {
@@ -39197,7 +39197,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Risque d'interception : "
+            "value": "Risque d'interception : "
           }
         },
         "de": {
@@ -52362,7 +52362,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Interrupteurs internes pour le rollover des wire-formats cross-platform. En OFF, les correspondants iOS-iOS restent sur les formats legacy ; en ON, les messages passent au format compatible avec Android et Desktop."
+            "value": "Interrupteurs internes pour le rollover des wire-formats cross-platform. En OFF, les correspondants iOS-iOS restent sur les formats legacy ; en ON, les messages passent au format compatible avec Android et Desktop."
           }
         },
         "de": {
@@ -52608,7 +52608,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "ENVOI TERMINÉ — fileId :"
+            "value": "ENVOI TERMINÉ — fileId :"
           }
         },
         "de": {
@@ -53756,7 +53756,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wipe de tout l'état local non lié aux identifiants (UserDefaults). Utile pour le QA TestFlight : nettoie les numéros, l'opt-in bêta, les bannières fermées, sans déconnexion. La session et les tokens restent intacts."
+            "value": "Wipe de tout l'état local non lié aux identifiants (UserDefaults). Utile pour le QA TestFlight : nettoie les numéros, l'opt-in bêta, les bannières fermées, sans déconnexion. La session et les tokens restent intacts."
           }
         },
         "de": {
@@ -54637,7 +54637,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ envoie de la vidéo. Veux-tu activer ta caméra ?"
+            "value": "%@ envoie de la vidéo. Veux-tu activer ta caméra ?"
           }
         },
         "pt-BR": {
@@ -54805,7 +54805,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bluetooth à bande étroite : qualité vocale réduite"
+            "value": "Bluetooth à bande étroite : qualité vocale réduite"
           }
         },
         "pt-BR": {
@@ -55721,7 +55721,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'autre téléphone affiche ou scanne le code QR.\n\nLes téléphones se connectent tout seuls en Bluetooth : il n'y a rien à configurer.\n\nLisez à voix haute les 6 chiffres affichés sur les deux écrans : ils doivent correspondre.\n\nLes 6 chiffres servent à détecter quiconque tenterait de s'interposer dans l'échange. S'ils ne correspondent pas, annulez.\n\nL'échange utilise une cryptographie post-quantique hybride (ML-KEM-1024 + X25519) : rien ne quitte les deux téléphones en clair.\n\nLa clé ainsi créée reste sur vos téléphones et protège les appels entre vous à partir de maintenant."
+            "value": "L'autre téléphone affiche ou scanne le code QR.\n\nLes téléphones se connectent tout seuls en Bluetooth : il n'y a rien à configurer.\n\nLis à voix haute les 6 chiffres affichés sur les deux écrans : ils doivent correspondre.\n\nLes 6 chiffres servent à détecter quiconque tenterait de s'interposer dans l'échange. S'ils ne correspondent pas, annule.\n\nL'échange utilise une cryptographie post-quantique hybride (ML-KEM-1024 + X25519) : rien ne quitte les deux téléphones en clair.\n\nLa clé ainsi créée reste sur tes téléphones et protège les appels entre toi et ton contact à partir de maintenant."
           }
         },
         "pt-BR": {
@@ -55973,7 +55973,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "terminé : empreinte de connexion non valide"
+            "value": "terminé : empreinte de connexion non valide"
           }
         },
         "pt-BR": {
@@ -56015,7 +56015,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "terminé : échec de la confirmation des clés"
+            "value": "terminé : échec de la confirmation des clés"
           }
         },
         "pt-BR": {
@@ -56057,7 +56057,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "terminé : handshake non valide"
+            "value": "terminé : handshake non valide"
           }
         },
         "pt-BR": {
@@ -56099,7 +56099,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "terminé : identité non vérifiée"
+            "value": "terminé : identité non vérifiée"
           }
         },
         "pt-BR": {
@@ -56141,7 +56141,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "terminé : clé d'identité modifiée"
+            "value": "terminé : clé d'identité modifiée"
           }
         },
         "pt-BR": {
@@ -56183,7 +56183,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Terminé : code de sécurité invalide"
+            "value": "Terminé : code de sécurité invalide"
           }
         },
         "pt-BR": {
@@ -56393,7 +56393,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Terminé : correspondant occupé"
+            "value": "Terminé : correspondant occupé"
           }
         },
         "pt-BR": {
@@ -56435,7 +56435,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Terminé : correspondant injoignable"
+            "value": "Terminé : correspondant injoignable"
           }
         },
         "pt-BR": {
@@ -56477,7 +56477,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Terminé : code de sécurité non reçu"
+            "value": "Terminé : code de sécurité non reçu"
           }
         },
         "pt-BR": {
@@ -56507,7 +56507,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Warte auf den Sicherheitscode…"
+            "value": "Warten auf den Sicherheitscode…"
           }
         },
         "es": {
@@ -56603,7 +56603,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ : identité non vérifiée"
+            "value": "%@ : identité non vérifiée"
           }
         },
         "pt-BR": {
@@ -56801,7 +56801,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mit den Lautstärketasten geöffnet. Wenn du nichts melden wolltest, tippe auf Überspringen."
+            "value": "Mit den Lautstärketasten geöffnet. Wenn Sie nichts melden wollten, tippen Sie auf Überspringen."
           }
         },
         "es": {
@@ -56813,7 +56813,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ouvert avec les boutons de volume. si vous ne vouliez rien signaler, touchez Passer."
+            "value": "Ouvert avec les boutons de volume. Si tu ne voulais rien signaler, touche Passer."
           }
         },
         "pt-BR": {
@@ -56843,7 +56843,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Durch Schütteln des Telefons geöffnet. Wenn du nichts melden wolltest, tippe auf Überspringen."
+            "value": "Durch Schütteln des Telefons geöffnet. Wenn Sie nichts melden wollten, tippen Sie auf Überspringen."
           }
         },
         "es": {
@@ -56855,7 +56855,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ouvert en secouant le téléphone. si vous ne vouliez rien signaler, touchez Passer."
+            "value": "Ouvert en secouant le téléphone. Si tu ne voulais rien signaler, touche Passer."
           }
         },
         "pt-BR": {
@@ -56939,7 +56939,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le fichier dépasse la limite de 5 Go."
+            "value": "Le fichier dépasse la limite de 5 Go."
           }
         },
         "pt-BR": {
@@ -57779,7 +57779,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "📎 Pièce jointe non prise en charge : mets à jour l'app pour l'ouvrir"
+            "value": "📎 Pièce jointe non prise en charge : mets à jour l'app pour l'ouvrir"
           }
         },
         "pt-BR": {
@@ -58451,7 +58451,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le fichier n'est plus disponible : joins-le à nouveau."
+            "value": "Le fichier n'est plus disponible : joins-le à nouveau."
           }
         },
         "pt-BR": {
@@ -58661,7 +58661,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les documents et les vidéos ne peuvent pas être envoyés avec « voir une fois »."
+            "value": "Les documents et les vidéos ne peuvent pas être envoyés avec « voir une fois »."
           }
         },
         "pt-BR": {
@@ -58733,7 +58733,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "🎤 Sprachnachricht"
+            "value": "🎤 Sprachnotiz"
           }
         },
         "es": {
@@ -58745,7 +58745,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "🎤 Message vocal"
+            "value": "🎤 Note vocale"
           }
         },
         "pt-BR": {
@@ -59027,7 +59027,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Während eines Anrufs können keine Sprachnachrichten und Videos aufgenommen oder abgespielt werden, da sie den Ton des Anrufs belegen würden."
+            "value": "Während eines Anrufs können keine Sprachnotizen und Videos aufgenommen oder abgespielt werden, da sie den Ton des Anrufs belegen würden."
           }
         },
         "es": {
@@ -59039,7 +59039,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pendant un appel, il est impossible d'enregistrer ou de lire des messages vocaux et des vidéos : ils utiliseraient l'audio de l'appel."
+            "value": "Pendant un appel, il est impossible d'enregistrer ou de lire des notes vocales et des vidéos : ils utiliseraient l'audio de l'appel."
           }
         },
         "pt-BR": {
@@ -59081,7 +59081,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Image non envoyée : impossible de supprimer la position et les données de l'appareil de ce format."
+            "value": "Image non envoyée : impossible de supprimer la position et les données de l'appareil de ce format."
           }
         },
         "pt-BR": {
@@ -59123,7 +59123,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pendant un appel vidéo, la caméra est utilisée par l'appel : choisis une photo dans la galerie ou prends-en une après l'appel."
+            "value": "Pendant un appel vidéo, la caméra est utilisée par l'appel : choisis une photo dans la galerie ou prends-en une après l'appel."
           }
         },
         "pt-BR": {
@@ -59243,13 +59243,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vous"
+            "value": "Toi"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Du"
+            "value": "Ich"
           }
         },
         "pt-BR": {
@@ -59405,25 +59405,25 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "En respuesta a un mensaje de voz"
+            "value": "En respuesta a una nota de voz"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "En réponse à un message vocal"
+            "value": "En réponse à une note vocale"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Antwort auf eine Sprachnachricht"
+            "value": "Antwort auf eine Sprachnotiz"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Em resposta a uma mensagem de voz"
+            "value": "Em resposta a uma nota de voz"
           }
         }
       }
@@ -59453,7 +59453,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "En réponse à %1$@ : %2$@"
+            "value": "En réponse à %1$@ : %2$@"
           }
         },
         "de": {
@@ -59663,7 +59663,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "📍 Position non prise en charge : mets à jour l'app pour l'ouvrir"
+            "value": "📍 Position non prise en charge : mets à jour l'app pour l'ouvrir"
           }
         },
         "de": {
@@ -59831,7 +59831,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "±%@ m"
+            "value": "±%@ m"
           }
         },
         "de": {
@@ -68441,7 +68441,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Précision ±%@ m"
+            "value": "Précision ±%@ m"
           }
         },
         "de": {
@@ -68567,7 +68567,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La position est chiffrée de bout en bout : elle n'est visible que par %@, pas par le serveur. Tu peux arrêter quand tu veux, et le partage s'arrête tout seul à l'échéance."
+            "value": "La position est chiffrée de bout en bout : elle n'est visible que par %@, pas par le serveur. Tu peux arrêter quand tu veux, et le partage s'arrête tout seul à l'échéance."
           }
         },
         "de": {
@@ -69449,7 +69449,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La réponse est trop longue pour être envoyée. Raccourcissez le texte."
+            "value": "La réponse est trop longue pour être envoyée. Raccourcis le texte."
           }
         },
         "de": {
@@ -69575,7 +69575,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le texte modifié est trop long pour être envoyé. Raccourcissez-le."
+            "value": "Le texte modifié est trop long pour être envoyé. Raccourcis-le."
           }
         },
         "de": {
@@ -69659,13 +69659,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le message auquel vous répondez n'est plus disponible. Votre texte est resté dans le brouillon."
+            "value": "Le message auquel tu réponds n'est plus disponible. Ton texte est resté dans le brouillon."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Nachricht, auf die du antwortest, ist nicht mehr verfügbar. Dein Text bleibt im Entwurf."
+            "value": "Die Nachricht, auf die Sie antworten, ist nicht mehr verfügbar. Ihr Text bleibt im Entwurf."
           }
         },
         "pt-BR": {
@@ -69701,13 +69701,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le message auquel vous répondez est désormais temporaire : son contenu ne sera pas cité. Envoyez à nouveau pour confirmer."
+            "value": "Le message auquel tu réponds est désormais temporaire : son contenu ne sera pas cité. Envoie à nouveau pour confirmer."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Nachricht, auf die du antwortest, ist jetzt zeitlich begrenzt, daher wird ihr Inhalt nicht zitiert. Sende erneut zur Bestätigung."
+            "value": "Die Nachricht, auf die Sie antworten, ist jetzt zeitlich begrenzt, daher wird ihr Inhalt nicht zitiert. Senden Sie erneut zur Bestätigung."
           }
         },
         "pt-BR": {
@@ -70119,7 +70119,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ a échoué : SW=%2$@"
+            "value": "%1$@ a échoué : SW=%2$@"
           }
         },
         "de": {
@@ -70161,7 +70161,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Réponse invalide de l'autre téléphone : %@"
+            "value": "Réponse invalide de l'autre téléphone : %@"
           }
         },
         "de": {
@@ -70203,7 +70203,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La clé d'identité de l'autre téléphone a changé depuis la dernière association : opération annulée (attaque possible)"
+            "value": "La clé d'identité de l'autre téléphone a changé depuis la dernière association : opération annulée (attaque possible)"
           }
         },
         "de": {
@@ -70287,7 +70287,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tag incompatible : un téléphone Android avec Q-Audion est requis"
+            "value": "Tag incompatible : un téléphone Android avec Q-Audion est requis"
           }
         },
         "de": {
@@ -70581,7 +70581,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Erreur : %@"
+            "value": "Erreur : %@"
           }
         },
         "de": {
@@ -70623,7 +70623,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identité pas encore initialisée : termine la configuration avant d’échanger une clé via NFC"
+            "value": "Identité pas encore initialisée : termine la configuration avant d’échanger une clé via NFC"
           }
         },
         "de": {
@@ -71169,7 +71169,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Code : %@. Compare-le avec l’autre téléphone."
+            "value": "Code : %@. Compare-le avec l’autre téléphone."
           }
         },
         "de": {
@@ -71337,7 +71337,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Attention : la clé d’identité de ce contact est différente de celle vérifiée précédemment. Ne confirme que si tu es sûr que la personne en face de toi est bien ce contact."
+            "value": "Attention : la clé d’identité de ce contact est différente de celle vérifiée précédemment. Ne confirme que si tu es sûr que la personne en face de toi est bien ce contact."
           }
         },
         "de": {
@@ -71379,7 +71379,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Attention : le compte indiqué par ce téléphone n’a pas publié cette clé d’identité."
+            "value": "Attention : le compte indiqué par ce téléphone n’a pas publié cette clé d’identité."
           }
         },
         "de": {
@@ -72293,7 +72293,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Expire dans environ %lld h"
+            "value": "Expire dans environ %lld h"
           }
         },
         "de": {
@@ -72887,7 +72887,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Choisis ce que ce téléphone peut faire. Avec « Activer », il trouve les contacts proches, échange tes messages avec eux et relaie aussi les messages chiffrés d'autres utilisateurs de l'app qui se trouvent près de toi : il ne peut pas les lire, ils restent chiffrés de l'expéditeur au destinataire. Avec « Seulement mes messages », il trouve les contacts proches et n'échange que tes propres messages avec eux, sans relayer ceux des autres. Dans les deux cas, tant que le mesh est activé, le téléphone annonce un identifiant fixe que les autres téléphones Q-Audion proches peuvent voir."
+            "value": "Choisis ce que ce téléphone peut faire. Avec « Activer », il trouve les contacts proches, échange tes messages avec eux et relaie aussi les messages chiffrés d'autres utilisateurs de l'app qui se trouvent près de toi : il ne peut pas les lire, ils restent chiffrés de l'expéditeur au destinataire. Avec « Seulement mes messages », il trouve les contacts proches et n'échange que tes propres messages avec eux, sans relayer ceux des autres. Dans les deux cas, tant que le mesh est activé, le téléphone annonce un identifiant fixe que les autres téléphones Q-Audion proches peuvent voir."
           }
         },
         "pt-BR": {
@@ -73181,7 +73181,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le mesh est éteint : tu l'actives depuis le panneau mesh d'une discussion."
+            "value": "Le mesh est éteint : tu l'actives depuis le panneau mesh d'une discussion."
           }
         },
         "pt-BR": {
@@ -73265,7 +73265,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le mesh est activé : ce téléphone relaie les messages chiffrés des personnes proches."
+            "value": "Le mesh est activé : ce téléphone relaie les messages chiffrés des personnes proches."
           }
         },
         "pt-BR": {
@@ -74131,7 +74131,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "il y a %lld j"
+            "value": "il y a %lld j"
           }
         },
         "pt-BR": {
@@ -74173,7 +74173,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "il y a %lld h"
+            "value": "il y a %lld h"
           }
         },
         "pt-BR": {
@@ -74215,7 +74215,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "il y a %lld min"
+            "value": "il y a %lld min"
           }
         },
         "pt-BR": {
@@ -75077,7 +75077,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer définitivement le compte ?"
+            "value": "Supprimer définitivement le compte ?"
           }
         },
         "pt-BR": {
@@ -75118,7 +75118,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer le message pour tout le monde ?"
+            "value": "Supprimer le message pour tout le monde ?"
           }
         },
         "pt-BR": {
@@ -75159,7 +75159,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Supprimer la discussion « %@ » ?"
+            "value": "Supprimer la discussion « %@ » ?"
           }
         },
         "pt-BR": {
@@ -79034,7 +79034,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "délai sortant : %lld ms"
+            "value": "délai sortant : %lld ms"
           }
         },
         "pt-BR": {
@@ -79228,7 +79228,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bevor du ein Konto erstellst"
+            "value": "Bevor Sie ein Konto erstellen"
           }
         },
         "es": {
@@ -79525,7 +79525,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion ist nur für Personen ab %lld Jahren. Wir prüfen dein Alter nicht: Wir verlassen uns auf das, was du hier angibst."
+            "value": "Q-Audion ist nur für Personen ab %lld Jahren. Wir prüfen Ihr Alter nicht: Wir verlassen uns auf das, was Sie hier angeben."
           }
         },
         "es": {
@@ -79537,7 +79537,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion est réservé aux personnes âgées d'au moins %lld ans. Nous ne vérifions pas votre âge : nous nous fions à ce que vous déclarez ici."
+            "value": "Q-Audion est réservé aux personnes âgées d'au moins %lld ans. Nous ne vérifions pas ton âge : nous nous fions à ce que tu déclares ici."
           }
         },
         "pt-BR": {
@@ -80644,7 +80644,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vider le cache des pièces jointes ?"
+            "value": "Vider le cache des pièces jointes ?"
           }
         },
         "pt-BR": {
@@ -80685,7 +80685,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vider l'historique local ?"
+            "value": "Vider l'historique local ?"
           }
         },
         "pt-BR": {
@@ -80890,7 +80890,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Se déconnecter de Q-Audion ?"
+            "value": "Se déconnecter de Q-Audion ?"
           }
         },
         "pt-BR": {
@@ -80931,7 +80931,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quitter le groupe « %@ » ?"
+            "value": "Quitter le groupe « %@ » ?"
           }
         },
         "pt-BR": {
@@ -81095,7 +81095,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Veux-tu aussi bloquer ce contact ? Il ne pourra plus t'appeler ni t'écrire en privé."
+            "value": "Veux-tu aussi bloquer ce contact ? Il ne pourra plus t'appeler ni t'écrire en privé."
           }
         },
         "pt-BR": {
@@ -81219,7 +81219,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Retirer %@ ?"
+            "value": "Retirer %@ ?"
           }
         },
         "pt-BR": {
@@ -81626,7 +81626,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dernière actualisation : %@"
+            "value": "Dernière actualisation : %@"
           }
         },
         "de": {
@@ -81752,13 +81752,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Impossible d'enregistrer le nouvel ordre des clés. Réessayez."
+            "value": "Impossible d'enregistrer le nouvel ordre des clés. Réessaie."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die neue Reihenfolge der Schlüssel konnte nicht gespeichert werden. Versuche es erneut."
+            "value": "Die neue Reihenfolge der Schlüssel konnte nicht gespeichert werden. Versuchen Sie es erneut."
           }
         },
         "pt-BR": {
@@ -81836,13 +81836,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cette clé fait partie d'un nouvel appairage encore en attente de confirmation. Ce peut être la seule clé que possède l'autre téléphone : si vous la supprimez, les appels avec ce téléphone risquent de n'avoir plus de clé en commun. La clé sera retirée du coffre local."
+            "value": "Cette clé fait partie d'un nouvel appairage encore en attente de confirmation. Ce peut être la seule clé que possède l'autre téléphone : si tu la supprimes, les appels avec ce téléphone risquent de n'avoir plus de clé en commun. La clé sera retirée du coffre local."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dieser Schlüssel gehört zu einer neuen Kopplung, die noch auf Bestätigung wartet. Er kann der einzige Schlüssel sein, den das andere Telefon besitzt: Wenn du ihn löschst, haben Anrufe mit diesem Telefon möglicherweise keinen gemeinsamen Schlüssel mehr. Der Schlüssel wird aus dem lokalen Tresor entfernt."
+            "value": "Dieser Schlüssel gehört zu einer neuen Kopplung, die noch auf Bestätigung wartet. Er kann der einzige Schlüssel sein, den das andere Telefon besitzt: Wenn Sie ihn löschen, haben Anrufe mit diesem Telefon möglicherweise keinen gemeinsamen Schlüssel mehr. Der Schlüssel wird aus dem lokalen Tresor entfernt."
           }
         },
         "pt-BR": {
@@ -82082,13 +82082,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le volume de la tonalité et des sons que vous entendez pendant l'appel."
+            "value": "Le volume de la tonalité et des sons que tu entends pendant l'appel."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Lautstärke des Freizeichens und der Töne, die du beim Anrufen hörst."
+            "value": "Die Lautstärke des Freizeichens und der Töne, die Sie beim Anrufen hören."
           }
         },
         "pt-BR": {
@@ -82205,7 +82205,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le fichier personnalisé n'existe plus : la sonnerie est revenue à Q-Audion."
+            "value": "Le fichier personnalisé n'existe plus : la sonnerie est revenue à Q-Audion."
           }
         },
         "de": {
@@ -82820,7 +82820,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le fichier est protégé contre la copie et ne peut pas être utilisé : la sonnerie est revenue à Q-Audion."
+            "value": "Le fichier est protégé contre la copie et ne peut pas être utilisé : la sonnerie est revenue à Q-Audion."
           }
         },
         "de": {
@@ -82943,7 +82943,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le fichier ne peut pas être utilisé (format non pris en charge ou protégé) : la sonnerie précédente est conservée."
+            "value": "Le fichier ne peut pas être utilisé (format non pris en charge ou protégé) : la sonnerie précédente est conservée."
           }
         },
         "de": {
@@ -83025,7 +83025,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le fichier n'a pas pu être utilisé : la sonnerie est revenue à Q-Audion."
+            "value": "Le fichier n'a pas pu être utilisé : la sonnerie est revenue à Q-Audion."
           }
         },
         "de": {
@@ -83066,7 +83066,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le fichier dure moins de 30 secondes : il est utilisé en entier."
+            "value": "Le fichier dure moins de 30 secondes : il est utilisé en entier."
           }
         },
         "de": {
@@ -83148,13 +83148,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les apps ne peuvent pas contrôler le flash LED. Activez-le dans Réglages > Accessibilité > Audio/visuel > Flash LED pour alertes."
+            "value": "Les apps ne peuvent pas contrôler le flash LED. Active-le dans Réglages > Accessibilité > Audio/visuel > Flash LED pour alertes."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Apps können den LED-Blitz nicht steuern. Aktiviere ihn unter Einstellungen > Bedienungshilfen > Audio/Visuell > LED-Blitz bei Hinweisen."
+            "value": "Apps können den LED-Blitz nicht steuern. Aktivieren Sie ihn unter Einstellungen > Bedienungshilfen > Audio/Visuell > LED-Blitz bei Hinweisen."
           }
         },
         "pt-BR": {
@@ -83320,7 +83320,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quitter le groupe ?"
+            "value": "Quitter le groupe ?"
           }
         },
         "pt-BR": {
@@ -83350,7 +83350,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Um diesen Anruf zu tätigen, musst du zuerst den Gruppenanruf verlassen."
+            "value": "Um diesen Anruf zu tätigen, müssen Sie zuerst den Gruppenanruf verlassen."
           }
         },
         "es": {
@@ -83362,7 +83362,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pour passer cet appel, vous devez d'abord quitter l'appel de groupe."
+            "value": "Pour passer cet appel, tu dois d'abord quitter l'appel de groupe."
           }
         },
         "pt-BR": {
@@ -83392,7 +83392,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Um den Anruf anzunehmen, musst du zuerst den Gruppenanruf verlassen."
+            "value": "Um den Anruf anzunehmen, müssen Sie zuerst den Gruppenanruf verlassen."
           }
         },
         "es": {
@@ -83404,7 +83404,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pour répondre, vous devez d'abord quitter l'appel de groupe."
+            "value": "Pour répondre, tu dois d'abord quitter l'appel de groupe."
           }
         },
         "pt-BR": {
@@ -83602,7 +83602,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der Gruppenanruf entsprach nicht dem Vorschlag deines Gesprächspartners, daher hast du die Gruppe verlassen."
+            "value": "Der Gruppenanruf entsprach nicht dem Vorschlag Ihres Gesprächspartners, daher haben Sie die Gruppe verlassen."
           }
         },
         "es": {
@@ -83614,7 +83614,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'appel de groupe ne correspondait pas à celui proposé par votre interlocuteur : vous avez quitté le groupe."
+            "value": "L'appel de groupe ne correspondait pas à celui proposé par ton interlocuteur : tu as quitté le groupe."
           }
         },
         "pt-BR": {
@@ -83650,13 +83650,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirmez dans Q-Audion d’un toucher pour partager la position."
+            "value": "Confirme dans Q-Audion d’un toucher pour partager la position."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bestätige in Q-Audion mit einem Tipp, um den Standort zu teilen."
+            "value": "Bestätigen Sie in Q-Audion mit einem Tipp, um den Standort zu teilen."
           }
         },
         "pt-BR": {
@@ -83734,13 +83734,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connectez-vous à Q-Audion pour partager la position."
+            "value": "Connecte-toi à Q-Audion pour partager la position."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Melde dich bei Q-Audion an, um den Standort zu teilen."
+            "value": "Melden Sie sich bei Q-Audion an, um den Standort zu teilen."
           }
         },
         "pt-BR": {
@@ -83860,13 +83860,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ouvre la conversation avec un contact et affiche la confirmation pour partager la position. Rien n’est envoyé tant que vous ne confirmez pas d’un toucher."
+            "value": "Ouvre la conversation avec un contact et affiche la confirmation pour partager la position. Rien n’est envoyé tant que tu ne confirmes pas d’un toucher."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Öffnet den Chat mit einem Kontakt und zeigt die Bestätigung zum Teilen des Standorts. Es wird nichts gesendet, bis du mit einem Tipp bestätigst."
+            "value": "Öffnet den Chat mit einem Kontakt und zeigt die Bestätigung zum Teilen des Standorts. Es wird nichts gesendet, bis Sie mit einem Tipp bestätigen."
           }
         },
         "pt-BR": {
@@ -84238,13 +84238,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Avec qui voulez-vous partager la position ?"
+            "value": "Avec qui veux-tu partager la position ?"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mit wem möchtest du den Standort teilen?"
+            "value": "Mit wem möchten Sie den Standort teilen?"
           }
         },
         "pt-BR": {
@@ -84328,7 +84328,7 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Öffnet Q-Audion zur Auswahl des Kontakts, dem du schreiben möchtest."
+            "value": "Öffnet Q-Audion zur Auswahl des Kontakts, dem Sie schreiben möchten."
           }
         },
         "pt-BR": {
