@@ -83,8 +83,10 @@ struct GroupCallView: View {
                         // "the room is empty" when it's actually just not
                         // loaded yet.
                         Text(viewModel.participants.isEmpty
-                             ? "Connessione…"
-                             : "\(viewModel.participants.count) partecipanti")
+                             ? String(localized: "group_call.connecting", defaultValue: "Connessione…", comment: "Subtitle of the group call screen while the participant list has not arrived yet.")
+                             : (viewModel.participants.count == 1
+                                ? String(localized: "group_call.participants.one", defaultValue: "1 partecipante", comment: "Subtitle of the group call screen: exactly one participant.")
+                                : String(localized: "group_call.participants.many", defaultValue: "\(viewModel.participants.count) partecipanti", comment: "Subtitle of the group call screen: number of participants. %lld is the count.")))
                             .font(.caption).foregroundColor(.gray)
                     }
                     Spacer()
@@ -114,7 +116,8 @@ struct GroupCallView: View {
                     }
                     .padding(.leading, 10)
                     .accessibilityLabel(viewModel.layoutMode == .speaker
-                        ? "Passa a vista griglia" : "Passa a vista relatore")
+                        ? String(localized: "group_call.layout.switch_to_grid", defaultValue: "Passa a vista griglia", comment: "VoiceOver label of the button that switches the group call from speaker view to grid view.")
+                        : String(localized: "group_call.layout.switch_to_speaker", defaultValue: "Passa a vista relatore", comment: "VoiceOver label of the button that switches the group call from grid view to speaker view."))
                 }
                 .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
 
@@ -452,7 +455,9 @@ struct GroupCallView: View {
                           defaultValue: "Microfono in attesa",
                           comment: "Group call mute button — accessibility label while the microphone is held off after the app joined the call by itself")
         }
-        return viewModel.isMuted ? "Riattiva microfono" : "Disattiva microfono"
+        return viewModel.isMuted
+            ? String(localized: "group_call.mic.unmute_a11y", defaultValue: "Riattiva microfono", comment: "VoiceOver label of the microphone button of the group call while muted (tapping turns the microphone back on).")
+            : String(localized: "group_call.mic.mute_a11y", defaultValue: "Disattiva microfono", comment: "VoiceOver label of the microphone button of the group call while live (tapping mutes).")
     }
 
     /// The control-row buttons, extracted from `body` verbatim (2026-07-20
@@ -495,7 +500,9 @@ struct GroupCallView: View {
                         .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
                         .clipShape(Circle())
                 }
-                .accessibilityLabel(viewModel.isVideoEnabled ? "Disattiva video" : "Attiva video")
+                .accessibilityLabel(viewModel.isVideoEnabled
+                    ? String(localized: "group_call.video.turn_off_a11y", defaultValue: "Disattiva video", comment: "VoiceOver label of the camera button of the group call while the camera is on (tapping turns it off).")
+                    : String(localized: "Attiva video"))
             }
 
             // Item 1 (2026-07-16 wire contract) — raise/lower
@@ -515,7 +522,9 @@ struct GroupCallView: View {
                     .background(viewModel.isHandRaised ? Color.orange.opacity(0.35) : Color.white.opacity(0.15))
                     .clipShape(Circle())
             }
-            .accessibilityLabel(viewModel.isHandRaised ? "Abbassa la mano" : "Alza la mano")
+            .accessibilityLabel(viewModel.isHandRaised
+                ? String(localized: "group_call.hand.lower_a11y", defaultValue: "Abbassa la mano", comment: "VoiceOver label of the raise-hand button of the group call while the hand is raised.")
+                : String(localized: "group_call.hand.raise_a11y", defaultValue: "Alza la mano", comment: "VoiceOver label of the raise-hand button of the group call while the hand is down."))
 
             // Item 1 — reaction picker: small popup with the fixed
             // 6-emoji set (see `reactionPicker` below). `.popover`

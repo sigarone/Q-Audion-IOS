@@ -355,7 +355,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
         // Real userId, not a "self" placeholder. The server sends the creator no
         // `group_call_update` of its own (the first one comes with the first join or the
         // room), so this local entry is the roster until then.
-        _participants = [Participant(id: selfUserId, displayName: "Tu")]
+        _participants = [Participant(id: selfUserId, displayName: String(localized: "reply.author_me", defaultValue: "Tu", comment: "Label of yourself in a participant list"))]
         _senderKeyEpoch = 1
         lock.unlock()
         onStateChanged?(.creating)

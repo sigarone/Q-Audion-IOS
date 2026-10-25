@@ -98,8 +98,8 @@ struct CircularAction: View {
             }
             .buttonStyle(.plain)
             .disabled(isDisabled)
-            .accessibilityLabel(caption ?? "Azione chiamata")
-            .accessibilityHint(isDisabled ? "Non disponibile" : "")
+            .accessibilityLabel(caption ?? String(localized: "call.action.default_a11y", defaultValue: "Azione chiamata", comment: "VoiceOver label of a round call action button that has no caption."))
+            .accessibilityHint(isDisabled ? String(localized: "call.action.unavailable_hint", defaultValue: "Non disponibile", comment: "VoiceOver hint of a round call action button that is disabled.") : "")
 
             if let caption {
                 Text(caption)
