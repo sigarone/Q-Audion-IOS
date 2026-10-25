@@ -61,7 +61,7 @@ struct GroupChatScreen: View {
     /// File transfer v2: the upload progress of the rows of this device being sent (shown in place of the tick).
     @ObservedObject private var fileV2Uploads: GroupUploadProgress = .shared
     @State private var showingDocPicker = false
-    /// Location sharing (WIRE_SPEC 14): the share sheet of the group (a pin only), reachable only while the remote switch is on.
+    /// Location sharing (WIRE_SPEC 14): the share sheet of the group (a pin only), hidden when the remote kill switch is off.
     @State private var showingLocationSheet = false
 
     let groupId: UUID

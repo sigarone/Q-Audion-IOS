@@ -174,10 +174,14 @@ final class LocationAppTests: XCTestCase {
 
     // MARK: Remote switch and permissions
 
-    func test_theFeatureShipsOff() {
+    func test_theFeatureShipsOnAndTheFlagIsAKillSwitch() {
         XCTAssertEqual(LocationShareCenter.flagKey, "location_share.enabled")
+        XCTAssertTrue(LocationShareCenter.compiledDefault, "location sharing is part of the release")
         FeatureFlags.shared.resetForTests()
-        XCTAssertFalse(FeatureFlags.bool(LocationShareCenter.flagKey, false), "a build without the flag in the file has the feature off")
+        XCTAssertTrue(FeatureFlags.killSwitch(LocationShareCenter.flagKey, compiledDefault: LocationShareCenter.compiledDefault),
+                      "a build without the flag in the file has the feature on")
+        XCTAssertFalse(FeatureFlags.resolveKillSwitch(compiledDefault: LocationShareCenter.compiledDefault, remote: false),
+                       "the file can switch it off")
     }
 
     func test_theInfoPlistAsksForWhenInUseOnly() {

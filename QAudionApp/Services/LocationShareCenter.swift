@@ -23,13 +23,16 @@ final class LocationShareCenter: ObservableObject {
 
     static let shared = LocationShareCenter()
 
-    /// The remote switch (docs/LOCATION_SHARING.md 1.9): OFF by default, per-user override through the authenticated flag overlay.
+    /// The remote kill switch (docs/LOCATION_SHARING.md 1.9): the feature is compiled ON and the public flags file can only switch it OFF.
     static let flagKey: String = "location_share.enabled"
+
+    /// What the build ships with: location sharing is part of the release.
+    static let compiledDefault: Bool = true
 
     /// Whether location sharing is available: the entry points, the live strip and the settings list appear only when it is. A
     /// hidden feature must not be reachable: every way to start a share asks this first. Received cards render regardless.
     static var isFeatureEnabled: Bool {
-        featureOverride ?? FeatureFlags.bool(flagKey, false)
+        featureOverride ?? FeatureFlags.killSwitch(flagKey, compiledDefault: compiledDefault)
     }
 
     /// Test seams (internal, set only by `QAudionAppTests`): the remote switch, whether the location permission is granted, the clock in

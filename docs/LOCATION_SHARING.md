@@ -373,8 +373,9 @@ is the real consumer it asked for.
   the recipient; only the starting device sends frames; a `loc_stop` from any device of the sender account is valid.
 - Blocked contacts: the existing block policy covers `loc_stop`; the server's contact-block gate covers `eph_relay`. A
   receiver that blocks the sender ends the shares it holds from that sender and wipes their keys and positions.
-- Remote flag: `location_share.enabled` in the flags file (default OFF, exposed to clients by default). False hides the
-  entry points and ends active shares; received cards still render. It is a client gate: the server relays regardless.
+- Remote flag: `location_share.enabled` in the flags file is a kill switch (compiled default ON, the file can only turn it
+  OFF). False hides the entry points and ends active shares; received cards still render. It is a client gate: the server
+  relays regardless.
 - Server offline queue: the pending replay drops 1:1 messages older than 24 hours, so a pin to a recipient offline for
   more than a day is lost like any message.
 - Entitlements: free, outside `Capability.FILES`. Nothing is uploaded and messaging is never gated.
