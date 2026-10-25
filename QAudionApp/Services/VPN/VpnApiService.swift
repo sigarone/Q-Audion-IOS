@@ -19,9 +19,9 @@ enum VpnApiError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .httpError(let code, let body):
-            return "VPN API errore \(code): \(body)"
+            return String(localized: "vpn.error.http", defaultValue: "VPN API errore \(code): \(body)", comment: "VPN error: the VPN server API answered with an HTTP error; first %lld is the HTTP status code, %@ is the response text.")
         case .decodingError(let err):
-            return "VPN risposta non valida: \(err.localizedDescription)"
+            return String(localized: "vpn.error.invalid_response", defaultValue: "VPN risposta non valida: \(err.localizedDescription)", comment: "VPN error: the VPN server API answer could not be read; %@ is the technical reason.")
         }
     }
 }

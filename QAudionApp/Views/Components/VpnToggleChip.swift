@@ -243,7 +243,7 @@ struct VpnToggleChip: View {
                     setPreferredNodeId("")
                     showPicker = false
                 } label: {
-                    pickerRow(title: "Auto", subtitle: "Best node · latency + load", selected: preferredNodeId.isEmpty)
+                    pickerRow(title: "Auto", subtitle: String(localized: "vpn.picker.auto_subtitle", defaultValue: "Nodo migliore · latenza + carico", comment: "Subtitle of the Auto row in the VPN exit picker: the app picks the best server automatically."), selected: preferredNodeId.isEmpty)
                 }
                 ForEach(nodes) { n in
                     Button {
@@ -252,7 +252,7 @@ struct VpnToggleChip: View {
                     } label: {
                         pickerRow(
                             title: n.city.isEmpty ? n.id : n.city,
-                            subtitle: "\(n.country) · \(Int((n.loadPct * 100).rounded()))% load",
+                            subtitle: String(localized: "vpn.picker.node_load", defaultValue: "\(n.country) · carico \(Int((n.loadPct * 100).rounded()))%", comment: "Subtitle of a server row in the VPN exit picker: first %@ is the country, %lld the current server load in percent."),
                             selected: preferredNodeId == n.id
                         )
                     }

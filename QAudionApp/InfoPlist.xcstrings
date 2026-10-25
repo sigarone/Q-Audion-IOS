@@ -68,7 +68,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion utilise le NFC uniquement lorsque vous associez un contact en personne : vous approchez votre iPhone de son téléphone Android avec Q-Audion, et les deux téléphones calculent ensemble une clé partagée que vous comparez à l'aide d'un code à 6 chiffres."
+            "value": "Q-Audion utilise le NFC uniquement lorsque tu associes un contact en personne : tu approches ton iPhone de son téléphone Android avec Q-Audion, et les deux téléphones calculent ensemble une clé partagée que tu compares à l'aide d'un code à 6 chiffres."
           }
         },
         "de": {
@@ -110,13 +110,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion utilise l'appareil photo pour les appels vidéo chiffrés de bout en bout, pour prendre des photos que vous envoyez dans les discussions ou définissez comme avatar, et pour scanner les codes QR lors de l'association de contacts ou de l'importation de clés."
+            "value": "Q-Audion utilise l'appareil photo pour les appels vidéo chiffrés de bout en bout, pour prendre des photos que tu envoies dans les discussions ou définis comme avatar, et pour scanner les codes QR lors de l'association de contacts ou de l'importation de clés."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion verwendet die Kamera für Ende-zu-Ende-verschlüsselte Videoanrufe, um Fotos aufzunehmen, die du in Chats sendest oder als Profilbild festlegst, und um QR-Codes beim Verknüpfen von Kontakten oder Importieren von Schlüsseln zu scannen."
+            "value": "Q-Audion verwendet die Kamera für Ende-zu-Ende-verschlüsselte Videoanrufe, um Fotos aufzunehmen, die Sie in Chats senden oder als Profilbild festlegen, und um QR-Codes beim Koppeln von Kontakten oder Importieren von Schlüsseln zu scannen."
           }
         },
         "pt-BR": {
@@ -152,13 +152,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion peut utiliser vos contacts pour les importer dans votre carnet d'adresses chiffré, et pour afficher automatiquement le nom et la photo d'un contact lorsqu'il vous appelle ou que vous l'appelez. Pour trouver les contacts déjà présents sur Q-Audion, les numéros de téléphone sont hachés sur votre appareil avant la comparaison ; les noms et les photos ne quittent jamais votre téléphone."
+            "value": "Q-Audion peut utiliser tes contacts pour les importer dans ton carnet d'adresses chiffré, et pour afficher automatiquement le nom et la photo d'un contact lorsqu'il t'appelle ou que tu l'appelles. Pour trouver les contacts déjà présents sur Q-Audion, les numéros de téléphone sont hachés sur ton appareil avant la comparaison ; les noms et les photos ne quittent jamais ton téléphone."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion kann deine Kontakte verwenden, um sie in dein verschlüsseltes Adressbuch zu importieren und um Name und Foto eines Kontakts automatisch anzuzeigen, wenn er dich anruft oder du ihn anrufst. Um Kontakte zu finden, die Q-Audion bereits nutzen, werden Telefonnummern vor dem Abgleich auf deinem Gerät gehasht; Namen und Fotos verlassen dein Telefon nie."
+            "value": "Q-Audion kann Ihre Kontakte verwenden, um sie in Ihr verschlüsseltes Adressbuch zu importieren und um Name und Foto eines Kontakts automatisch anzuzeigen, wenn er Sie anruft oder Sie ihn anrufen. Um Kontakte zu finden, die Q-Audion bereits nutzen, werden Telefonnummern vor dem Abgleich auf Ihrem Gerät gehasht; Namen und Fotos verlassen Ihr Telefon nie."
           }
         },
         "pt-BR": {
@@ -194,13 +194,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion enregistre dans votre photothèque les images de discussion que vous choisissez de conserver."
+            "value": "Q-Audion enregistre dans ta photothèque les images de discussion que tu choisis de conserver."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion speichert Chatbilder, die du behalten möchtest, in deiner Fotomediathek."
+            "value": "Q-Audion speichert Chatbilder, die Sie behalten möchten, in Ihrer Fotomediathek."
           }
         },
         "pt-BR": {
@@ -320,13 +320,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion se connecte directement à d'autres appareils Q-Audion sur votre réseau local pour des appels chiffrés à latence réduite."
+            "value": "Q-Audion se connecte directement à d'autres appareils Q-Audion sur ton réseau local pour des appels chiffrés à latence réduite."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion verbindet sich direkt mit anderen Q-Audion-Geräten in deinem lokalen Netzwerk für verschlüsselte Anrufe mit geringerer Latenz."
+            "value": "Q-Audion verbindet sich direkt mit anderen Q-Audion-Geräten in Ihrem lokalen Netzwerk für verschlüsselte Anrufe mit geringerer Latenz."
           }
         },
         "pt-BR": {
@@ -356,25 +356,25 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion comparte los nombres de tus contactos con Siri para que puedas iniciar una llamada cifrada diciendo \"Llama a [nombre] en Q-Audion\"."
+            "value": "Q-Audion comparte los nombres de tus contactos con Siri para que puedas iniciar una llamada cifrada diciendo «Llama a [nombre] en Q-Audion»."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion partage les noms de vos contacts avec Siri afin que vous puissiez lancer un appel chiffré en disant « Appelle [nom] sur Q-Audion »."
+            "value": "Q-Audion partage les noms de tes contacts avec Siri afin que tu puisses lancer un appel chiffré en disant « Appelle [nom] sur Q-Audion »."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion teilt deine Kontaktnamen mit Siri, damit du einen verschlüsselten Anruf starten kannst, indem du „Rufe [Name] auf Q-Audion an\" sagst."
+            "value": "Q-Audion teilt Ihre Kontaktnamen mit Siri, damit Sie einen verschlüsselten Anruf starten können, indem Sie „Rufe [Name] auf Q-Audion an“ sagen."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O Q-Audion compartilha os nomes dos seus contatos com a Siri para que você possa iniciar uma chamada criptografada dizendo \"Ligar para [nome] no Q-Audion\"."
+            "value": "O Q-Audion compartilha os nomes dos seus contatos com a Siri para que você possa iniciar uma chamada criptografada dizendo “Ligar para [nome] no Q-Audion”."
           }
         }
       }
@@ -404,13 +404,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion utilise votre position uniquement lorsque vous choisissez de l'envoyer dans une discussion : en une seule fois ou en direct pour la durée que vous choisissez. La position est chiffrée de bout en bout et seul le contact à qui vous l'envoyez peut la lire. Pendant un partage en direct, Q-Audion continue d'utiliser votre position en arrière-plan et iOS affiche son indicateur de localisation ; vous pouvez l'arrêter à tout moment."
+            "value": "Q-Audion utilise ta position uniquement lorsque tu choisis de l'envoyer dans une discussion : en une seule fois ou en direct pour la durée que tu choisis. La position est chiffrée de bout en bout et seul le contact à qui tu l'envoies peut la lire. Pendant un partage en direct, Q-Audion continue d'utiliser ta position en arrière-plan et iOS affiche son indicateur de localisation ; tu peux l'arrêter à tout moment."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion verwendet deinen Standort nur, wenn du ihn in einem Chat senden möchtest: als einzelne Position oder live für die Dauer, die du wählst. Der Standort ist Ende-zu-Ende-verschlüsselt und nur der Kontakt, an den du ihn sendest, kann ihn lesen. Solange eine Live-Freigabe läuft, nutzt Q-Audion deinen Standort weiter im Hintergrund und iOS zeigt seine Standortanzeige; du kannst sie jederzeit beenden."
+            "value": "Q-Audion verwendet Ihren Standort nur, wenn Sie ihn in einem Chat senden möchten: als einzelne Position oder live für die Dauer, die Sie wählen. Der Standort ist Ende-zu-Ende-verschlüsselt und nur der Kontakt, an den Sie ihn senden, kann ihn lesen. Solange eine Live-Freigabe läuft, nutzt Q-Audion Ihren Standort weiter im Hintergrund und iOS zeigt seine Standortanzeige; Sie können sie jederzeit beenden."
           }
         },
         "pt-BR": {
@@ -446,13 +446,13 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion demande votre position exacte une seule fois, pour l'envoyer avec précision dans la discussion que vous avez choisie."
+            "value": "Q-Audion demande ta position exacte une seule fois, pour l'envoyer avec précision dans la discussion que tu as choisie."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion fragt einmalig nach deinem genauen Standort, um ihn präzise in dem Chat zu senden, den du gewählt hast."
+            "value": "Q-Audion fragt einmalig nach Ihrem genauen Standort, um ihn präzise in dem Chat zu senden, den Sie gewählt haben."
           }
         },
         "pt-BR": {

@@ -108,7 +108,7 @@ struct WelcomeScreen: View {
                     VStack(spacing: 12) {
                         QAudionButton(
                             action: onStartFastSetup,
-                            label: "Configurazione rapida (QR)",
+                            label: String(localized: "onboarding.welcome.cta_fast_setup", defaultValue: "Configurazione rapida (QR)", comment: "Welcome screen, main button: set up the app by scanning a QR code from the server admin panel."),
                             variant: .primary
                         )
                         // W459 — gallery QR shortcut, shown only when
@@ -121,7 +121,9 @@ struct WelcomeScreen: View {
                                 photoLibrary: .shared()
                             ) {
                                 Label(
-                                    galleryBusy ? "Analisi in corso…" : "Carica immagine QR",
+                                    galleryBusy
+                                        ? String(localized: "onboarding.welcome.gallery_busy", defaultValue: "Analisi in corso…", comment: "Welcome screen: label of the QR-from-photo button while the image is being analyzed.")
+                                        : String(localized: "onboarding.welcome.gallery_load", defaultValue: "Carica immagine QR", comment: "Welcome screen: button that picks a photo containing a QR code from the photo library."),
                                     systemImage: galleryBusy ? "hourglass" : "photo.on.rectangle.angled"
                                 )
                                 .font(.body.weight(.medium))
@@ -144,27 +146,27 @@ struct WelcomeScreen: View {
                         }
                         QAudionButton(
                             action: onStartRegister,
-                            label: "Inizia con un codice invito",
+                            label: String(localized: "onboarding.welcome.cta_invite", defaultValue: "Inizia con un codice invito", comment: "Welcome screen button: start the registration with an invite code."),
                             variant: .secondary
                         )
                         QAudionButton(
                             action: onStartLogin,
-                            label: "Accedi con un account esistente",
+                            label: String(localized: "onboarding.welcome.cta_login", defaultValue: "Accedi con un account esistente", comment: "Welcome screen button: sign in with an account that already exists."),
                             variant: .text
                         )
                         QAudionButton(
                             action: onStartExtensionLogin,
-                            label: "Accedi con estensione e password",
+                            label: String(localized: "Accedi con estensione e password"),
                             variant: .text
                         )
                         QAudionButton(
                             action: onStartExtensionOnlyRegister,
-                            label: "Registrati con interno e email (senza numero)",
+                            label: String(localized: "onboarding.welcome.cta_extension_register", defaultValue: "Registrati con interno e email (senza numero)", comment: "Welcome screen button: register with a PBX extension (interno) and an email, without a phone number."),
                             variant: .text
                         )
                         QAudionButton(
                             action: onStartRecoveryRestore,
-                            label: "Ho già una frase di recupero",
+                            label: String(localized: "onboarding.welcome.cta_recovery", defaultValue: "Ho già una frase di recupero", comment: "Welcome screen button: restore an account from an existing recovery phrase."),
                             variant: .text
                         )
                     }
@@ -217,7 +219,7 @@ struct WelcomeScreen: View {
         guard let data = try? await item.loadTransferable(type: Data.self),
               let uiImage = UIImage(data: data),
               let ciImage = CIImage(image: uiImage) else {
-            galleryError = "Impossibile caricare l'immagine selezionata."
+            galleryError = String(localized: "onboarding.welcome.gallery_error_load", defaultValue: "Impossibile caricare l'immagine selezionata.", comment: "Welcome screen error: the photo picked for the QR code could not be loaded.")
             return
         }
         let request = VNDetectBarcodesRequest()
@@ -226,12 +228,12 @@ struct WelcomeScreen: View {
         do {
             try handler.perform([request])
         } catch {
-            galleryError = "Errore analisi immagine: \(error.localizedDescription)"
+            galleryError = String(localized: "onboarding.welcome.gallery_error_analysis", defaultValue: "Errore analisi immagine: \(error.localizedDescription)", comment: "Welcome screen error: analyzing the photo for a QR code failed; %@ is the system error text.")
             return
         }
         guard let observation = request.results?.first as? VNBarcodeObservation,
               let payload = observation.payloadStringValue else {
-            galleryError = "Nessun QR trovato nell'immagine. Assicurati che il codice QR sia visibile e ben a fuoco."
+            galleryError = String(localized: "onboarding.welcome.gallery_no_qr", defaultValue: "Nessun QR trovato nell'immagine. Assicurati che il codice QR sia visibile e ben a fuoco.", comment: "Welcome screen error: no QR code was found in the chosen photo.")
             return
         }
         onGalleryQrDecoded?(payload)
