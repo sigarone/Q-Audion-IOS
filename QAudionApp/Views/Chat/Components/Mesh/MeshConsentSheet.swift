@@ -1,24 +1,22 @@
 import SwiftUI
 
-/// The one-time Bluetooth mesh consent screen.
+/// The one-time screen shown before the system Bluetooth permission request.
 ///
-/// Says in plain words what each answer lets this phone do: "Attiva" finds
-/// nearby contacts, exchanges the user's own messages and relays the encrypted
-/// messages of other app users who are nearby (it cannot read them); "Solo i
-/// miei messaggi" finds nearby contacts and exchanges only the user's own
-/// messages, relaying nothing. Two answers and no way to slide the sheet away
-/// without choosing; both start the radio, in full mesh and in direct mode.
+/// Says in plain words what Bluetooth is used for: the app finds nearby contacts and exchanges the user's own messages,
+/// and relaying the encrypted messages of other app users is off until the user allows it. It has ONE button,
+/// "Continua", which always leads to the system permission request (when the permission is not decided yet): the
+/// answer is recorded as "own messages only" and the radio starts in direct mode. There is no way to close the screen
+/// or postpone the request from it (the sheet cannot be slid away either). Relaying other people's messages is a
+/// separate, later choice: `meshRelayAlert`, from the Settings switch or the chat's mesh panel.
 ///
-/// Takes no AppState (CLAUDE.md section 16): what happens on each answer is the
-/// caller's closure. Shown by HomeView the first time, and again from the chat's
-/// mesh panel and the Settings switch for a user who has not accepted yet. All
-/// three present it through `meshConsentSheet`, so a call always goes first.
+/// Takes no AppState (CLAUDE.md section 16): what happens on Continue is the caller's closure. Shown only after a
+/// user action (a mode chip in the chat's mesh panel, or the Settings switch) while the user has not answered yet, never
+/// on its own. Both present it through `meshConsentSheet`, so a call always goes first.
 struct MeshConsentSheet: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
 
-    let onAccept: () -> Void
-    let onDecline: () -> Void
+    let onContinue: () -> Void
 
     var body: some View {
         ScrollView {
@@ -27,9 +25,8 @@ struct MeshConsentSheet: View {
                 paragraph(Self.bodyOne)
                 paragraph(Self.bodyTwo)
                 paragraph(Self.bodyThree)
-                acceptButton
+                continueButton
                     .padding(.top, 8)
-                declineButton
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 24)
@@ -56,9 +53,9 @@ struct MeshConsentSheet: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var acceptButton: some View {
-        Button(action: onAccept) {
-            Text(Self.acceptLabel)
+    private var continueButton: some View {
+        Button(action: onContinue) {
+            Text(Self.continueLabel)
                 .qaudionStyle(type.labelLarge)
                 .foregroundStyle(scheme.onPrimary)
                 .frame(maxWidth: .infinity)
@@ -68,26 +65,13 @@ struct MeshConsentSheet: View {
         .buttonStyle(.plain)
     }
 
-    private var declineButton: some View {
-        Button(action: onDecline) {
-            Text(Self.declineLabel)
-                .qaudionStyle(type.labelLarge)
-                .foregroundStyle(scheme.onSurface)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(scheme.surfaceVariant, in: RoundedRectangle(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
-    }
-
     // The strings are computed, not stored, so a change of the in-app language shows on the next render (Section 13: no
     // formatting inside view builders). Keyed by identifier like the Enigma settings texts; the Italian default is the source.
     private static var title: String { String(localized: "mesh_consent.title", defaultValue: "Mesh Bluetooth", comment: "Title of the one-time consent screen for the Bluetooth mesh.") }
     private static var bodyOne: String { String(localized: "mesh_consent.body_1", defaultValue: "Quando non c'è rete, Q-Audion può far arrivare i messaggi cifrati passando da un telefono all'altro, via Bluetooth.", comment: "Consent screen for the Bluetooth mesh, first paragraph: what the mesh is.") }
-    private static var bodyTwo: String { String(localized: "mesh_consent.body_2", defaultValue: "Scegli cosa può fare questo telefono. Con «Attiva» trova i contatti vicini, scambia i tuoi messaggi con loro e inoltra anche i messaggi cifrati di altri utenti dell'app che si trovano vicino a te: non può leggerli, restano cifrati da chi li scrive a chi li riceve. Con «Solo i miei messaggi» trova i contatti vicini e scambia solo i tuoi messaggi con loro, senza inoltrare quelli degli altri. In entrambi i casi, finché la mesh è accesa il telefono annuncia un identificativo fisso che gli altri telefoni Q-Audion vicini possono vedere.", comment: "Consent screen for the Bluetooth mesh, second paragraph: what each answer lets this phone do. 'Attiva' finds nearby contacts, exchanges the user's own messages and relays encrypted messages of other app users (it cannot read them); 'Solo i miei messaggi' finds nearby contacts and exchanges only the user's own messages and relays nothing. In both cases the phone announces a fixed identifier that other Q-Audion phones nearby can see. This is the thing the user consents to.") }
+    private static var bodyTwo: String { String(localized: "mesh_consent.body_2", defaultValue: "Per trovare i contatti vicini e scambiare i tuoi messaggi con loro, l'app usa il Bluetooth. Se non l'hai ancora concesso, subito dopo iOS ti chiederà il permesso. Finché la mesh è accesa il telefono annuncia un identificativo fisso che gli altri telefoni Q-Audion vicini possono vedere. L'inoltro dei messaggi cifrati di altri utenti è disattivato: puoi consentirlo con l'interruttore Mesh Bluetooth nelle Impostazioni.", comment: "Consent screen for the Bluetooth mesh, second paragraph: the app uses Bluetooth to find nearby contacts and exchange the user's own messages; the system will ask for the Bluetooth permission next if it was not given yet; the phone announces a fixed identifier that other Q-Audion phones nearby can see; relaying encrypted messages of other users is off by default and is allowed with the Bluetooth mesh switch in Settings.") }
     private static var bodyThree: String { String(localized: "mesh_consent.body_3", defaultValue: "Il Bluetooth resta attivo anche quando l'app è in secondo piano e usa un po' di batteria. Puoi cambiare scelta con l'interruttore Mesh Bluetooth nelle Impostazioni e spegnere l'antenna quando vuoi dal pannello mesh di una chat.", comment: "Consent screen for the Bluetooth mesh, third paragraph: Bluetooth stays active while the app is in the background and uses some battery; where to change the choice (the 'Mesh Bluetooth' switch in Settings) and where to turn the antenna off (the mesh panel of a chat).") }
-    private static var acceptLabel: String { String(localized: "mesh_consent.accept", defaultValue: "Attiva", comment: "Consent screen for the Bluetooth mesh: button that turns the mesh on, including relaying encrypted messages of other app users.") }
-    private static var declineLabel: String { String(localized: "mesh_consent.decline", defaultValue: "Solo i miei messaggi", comment: "Consent screen for the Bluetooth mesh: button that keeps relaying off. The phone still finds nearby contacts and exchanges the user's own messages with them (direct mode).") }
+    private static var continueLabel: String { String(localized: "mesh_consent.continue", defaultValue: "Continua", comment: "Consent screen for the Bluetooth mesh: the only button. It leads to the system Bluetooth permission request (if not answered yet) and starts the mesh with the user's own messages only.") }
 }
 
 // MARK: - Who goes first: the call
@@ -96,17 +80,15 @@ struct MeshConsentSheet: View {
 /// once when a call arrives, and reported to `MeshConsentArbiter` from the moment it is requested until it is gone from the
 /// screen, so the root's call cover can wait for it (`meshAwareCallCover`).
 ///
-/// `wanted` is whoever wants the question asked: HomeView's first run (a read-only binding derived from the stored answer, so
-/// the sheet comes back by itself after a call), or the `@State` of the Settings switch and the mesh panel (a request made
-/// over a call, or interrupted by one, is dropped: the user taps again).
+/// `wanted` is whoever wants the question asked: the `@State` of the Settings switch and the mesh panel, set by a tap of the
+/// user (a request made over a call, or interrupted by one, is dropped: the user taps again).
 ///
 /// After a call the sheet stays away a moment longer (`MeshConsentPresentation.settleAfterCall`), so it does not come up while
 /// the call cover is still sliding away.
 struct MeshConsentSheetHost: ViewModifier {
     @Binding var wanted: Bool
     let callBusy: Bool
-    let onAccept: () -> Void
-    let onDecline: () -> Void
+    let onContinue: () -> Void
     @State private var token = UUID()
     /// True from the moment a call is busy until a moment after it ended.
     @State private var settling: Bool = false
@@ -116,7 +98,7 @@ struct MeshConsentSheetHost: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: shownBinding, onDismiss: sheetGone) {
-                MeshConsentSheet(onAccept: onAccept, onDecline: onDecline)
+                MeshConsentSheet(onContinue: onContinue)
                     .onAppear(perform: sheetAppeared)
             }
             .onAppear {
@@ -235,10 +217,24 @@ extension View {
     func meshConsentSheet(
         wanted: Binding<Bool>,
         callBusy: Bool,
-        onAccept: @escaping () -> Void,
-        onDecline: @escaping () -> Void
+        onContinue: @escaping () -> Void
     ) -> some View {
-        modifier(MeshConsentSheetHost(wanted: wanted, callBusy: callBusy, onAccept: onAccept, onDecline: onDecline))
+        modifier(MeshConsentSheetHost(wanted: wanted, callBusy: callBusy, onContinue: onContinue))
+    }
+
+    /// The follow-up choice, asked after the Bluetooth permission was dealt with: may this phone relay the encrypted
+    /// messages of other app users? Shown from the Settings switch and the chat's mesh panel when the user turns relaying
+    /// on. "Consenti" records the consent to relay (`onAllow`); "Annulla" leaves it off.
+    func meshRelayAlert(isPresented: Binding<Bool>, onAllow: @escaping () -> Void) -> some View {
+        alert(
+            String(localized: "mesh_relay.alert_title", defaultValue: "Inoltrare i messaggi degli altri?", comment: "Title of the alert asked when the user turns on relaying of other users' encrypted messages (Settings switch or mesh panel)."),
+            isPresented: isPresented
+        ) {
+            Button(String(localized: "mesh_relay.allow", defaultValue: "Consenti", comment: "Button of the relay alert: allows relaying encrypted messages of other app users."), action: onAllow)
+            Button(String(localized: "Annulla"), role: .cancel) {}
+        } message: {
+            Text(String(localized: "mesh_relay.alert_message", defaultValue: "Questo telefono inoltrerà via Bluetooth i messaggi cifrati degli altri utenti dell'app che si trovano vicino a te. Non può leggerli: restano cifrati da chi li scrive a chi li riceve. Puoi disattivarlo in qualsiasi momento con l'interruttore Mesh Bluetooth nelle Impostazioni.", comment: "Message of the relay alert: this phone relays encrypted messages of other app users who are nearby and cannot read them; can be turned off at any time with the Bluetooth mesh switch in Settings."))
+        }
     }
 
     /// The root's call cover, waiting for a consent sheet that is still on screen (see `MeshAwareCallCover`).

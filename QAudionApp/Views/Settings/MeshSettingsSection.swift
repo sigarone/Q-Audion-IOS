@@ -22,6 +22,7 @@ struct MeshSettingsSection: View {
     /// Whether a call is busy (mirrored by the root): the consent screen is never presented over one.
     @ObservedObject private var arbiter = MeshConsentArbiter.shared
     @State private var showingConsent: Bool = false
+    @State private var showingRelayAlert: Bool = false
 
     var body: some View {
         if MeshFeature.enabled {
@@ -43,9 +44,11 @@ struct MeshSettingsSection: View {
         .meshConsentSheet(
             wanted: $showingConsent,
             callBusy: arbiter.callBusy,
-            onAccept: accept,
-            onDecline: decline
+            onContinue: continueAfterPriming
         )
+        .meshRelayAlert(isPresented: $showingRelayAlert) {
+            MeshRuntime.shared.acceptConsentAndStart()
+        }
     }
 
     /// What the radio is doing, in plain words, next to the consent the switch shows (`MeshSettingsStatus`).
@@ -63,14 +66,15 @@ struct MeshSettingsSection: View {
         }
     }
 
-    /// The switch IS the consent: it reads on only after "Attiva". Turning it on never changes the state by itself, it opens
-    /// the consent screen; turning it off records "declined" and stops the radio.
+    /// The switch IS the consent to relay: it reads on only after "Consenti" in the relay alert. Turning it on never changes
+    /// the state by itself: before the first answer it opens the screen that leads to the Bluetooth permission request, after
+    /// it the relay alert; turning it off records "declined" and drops a running radio to direct mode.
     private var meshBinding: Binding<Bool> {
         Binding(
             get: { consent.isAccepted },
             set: { turnOn in
                 if turnOn {
-                    showingConsent = true
+                    if consent.state == .undecided { showingConsent = true } else { showingRelayAlert = true }
                 } else {
                     // Relaying off; a running radio drops to direct mode, an antenna that is off stays off.
                     MeshRuntime.shared.declineRelayAndUseDirect(startIfOff: false)
@@ -79,16 +83,9 @@ struct MeshSettingsSection: View {
         )
     }
 
-    private func accept() {
+    private func continueAfterPriming() {
         showingConsent = false
-        MeshRuntime.shared.acceptConsentAndStart()
-    }
-
-    private func decline() {
-        // The first answer to the consent screen starts direct mode; a later one only lowers a running radio.
-        let firstAnswer: Bool = consent.state == .undecided
-        showingConsent = false
-        MeshRuntime.shared.declineRelayAndUseDirect(startIfOff: firstAnswer)
+        MeshRuntime.shared.continueAfterPriming()
     }
 
     private static var sectionTitle: String { String(localized: "mesh_settings.section", defaultValue: "MESH BLUETOOTH", comment: "Header of the Bluetooth mesh section in Settings > Privacy controls.") }

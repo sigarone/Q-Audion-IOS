@@ -253,7 +253,15 @@ final class MeshRuntime: ObservableObject {
         setAntenna(mode: nil)
     }
 
-    /// "Attiva": records the consent to relay and brings the antenna up in `mode`
+    /// "Continua" on the screen before the Bluetooth permission request: the answer is "own messages only" (no relaying),
+    /// and the antenna comes up in direct mode (or in the visible-only mode the user had tapped), which is what makes the
+    /// system ask for the Bluetooth permission when it is not decided yet. Relaying is a later, separate choice
+    /// (`acceptConsentAndStart` from the relay alert).
+    func continueAfterPriming(preferred: MeshAntennaMode? = nil) {
+        declineRelayAndUseDirect(startIfOff: true, preferred: preferred)
+    }
+
+    /// The relay alert's "Consenti": records the consent to relay and brings the antenna up in `mode`
     /// (full mesh unless the caller asks for another). The user just said they
     /// want the mesh, so the stored "antenna off" choice is cleared too.
     func acceptConsentAndStart(mode: MeshAntennaMode = .fullMesh) {
@@ -262,7 +270,7 @@ final class MeshRuntime: ObservableObject {
         setAntenna(mode: mode)
     }
 
-    /// "Solo i miei messaggi", or the Settings switch turned off: relaying is not
+    /// "Continua" on the first screen, or the Settings switch turned off: relaying is not
     /// allowed from now on. The phone does not go silent because of it: a radio that
     /// is running drops to direct mode (it still finds nearby contacts and exchanges
     /// the user's own messages, and forwards nothing), and with `startIfOff` a radio

@@ -6,10 +6,10 @@ import QAudionEngine
 ///
 /// Using the user's device for the benefit of other people needs the user's explicit consent, so the radio never starts
 /// on its own and never relays by default:
-///   - "Attiva" (`accepted`): this phone finds nearby contacts, exchanges its own messages with them and relays other
-///     people's encrypted messages (full mesh);
-///   - "Solo i miei messaggi" (`declined`): this phone still finds nearby contacts and exchanges its own messages with
-///     them (direct mode) but never forwards anyone else's;
+///   - the relay alert's "Consenti" (`accepted`): this phone finds nearby contacts, exchanges its own messages with them
+///     and relays other people's encrypted messages (full mesh);
+///   - "Continua" on the screen before the Bluetooth permission request (`declined`): this phone finds nearby contacts and
+///     exchanges its own messages with them (direct mode) but never forwards anyone else's;
 ///   - not answered yet (`undecided`): nothing starts and no Bluetooth permission is asked for.
 /// The rules for which mode each answer allows live in the engine (`MeshModePolicy`).
 typealias MeshConsentState = MeshRelayConsent
@@ -203,7 +203,7 @@ final class MeshConsent: ObservableObject {
         state = .accepted
     }
 
-    /// "Solo i miei messaggi", or the Settings switch turned off: relaying is not allowed. Direct mode stays available.
+    /// "Continua" on the screen before the permission request, or the Settings switch turned off: relaying is not allowed. Direct mode stays available.
     func decline() {
         store.record(.declined)
         state = .declined
