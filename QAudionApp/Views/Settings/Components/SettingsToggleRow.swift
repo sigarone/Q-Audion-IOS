@@ -12,13 +12,22 @@ struct SettingsToggleRow: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
 
-    let title: String
-    let subtitle: String?
+    private let title: Text
+    private let subtitle: Text?
     @Binding var isOn: Bool
 
+    /// Literal copy: looked up in the string catalog.
+    init(title: LocalizedStringKey, subtitle: LocalizedStringKey? = nil, isOn: Binding<Bool>) {
+        self.title = Text(title)
+        self.subtitle = subtitle.map { Text($0) }
+        self._isOn = isOn
+    }
+
+    /// Already-resolved runtime copy: shown as is, never parsed as a key or Markdown.
+    @_disfavoredOverload
     init(title: String, subtitle: String? = nil, isOn: Binding<Bool>) {
-        self.title = title
-        self.subtitle = subtitle
+        self.title = Text(verbatim: title)
+        self.subtitle = subtitle.map { Text(verbatim: $0) }
         self._isOn = isOn
     }
 
@@ -30,11 +39,11 @@ struct SettingsToggleRow: View {
                 .frame(width: 22)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                title
                     .qaudionStyle(type.bodyMedium)
                     .foregroundStyle(scheme.onSurface)
                 if let subtitle {
-                    Text(subtitle)
+                    subtitle
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .lineLimit(2)
@@ -72,7 +81,7 @@ struct SettingsToggleRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityValue(isOn ? "Attivo" : "Disattivo")
+        .accessibilityValue(isOn ? Text("settings.toggle.on") : Text("settings.toggle.off"))
     }
 }
 

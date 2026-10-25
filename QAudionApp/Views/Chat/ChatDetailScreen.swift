@@ -860,15 +860,15 @@ struct ChatDetailScreen: View {
         let peerId = container.viewModel.conversation.peerUserId
         if container.viewModel.isPeerOnline ||
            appState.presenceService.isOnline(peerId) {
-            return "Online · cifrato E2E"
+            return String(localized: "Online · cifrato E2E")
         }
         // W142: when offline, surface the most recent "last seen"
         // observation. Falls back to the static crypto label when the
         // peer has never been observed online on this device.
         if let lastSeen = LastSeenTracker.formatPresenceLabel(for: peerId) {
-            return "\(lastSeen) · cifrato E2E"
+            return String(localized: "\(lastSeen) · cifrato E2E")
         }
-        return "Cifrato E2E · ML-KEM 1024"
+        return String(localized: "Cifrato E2E · ML-KEM 1024")
     }
 
     // MARK: - Empty-state banner

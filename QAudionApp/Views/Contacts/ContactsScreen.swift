@@ -602,7 +602,7 @@ struct ContactsScreen: View {
                             .qaudionStyle(type.bodyMedium)
                             .foregroundStyle(scheme.onSurface)
                         Spacer()
-                        Button("Sblocca") { unblockContact(item) }
+                        Button("contacts.unblock") { unblockContact(item) }
                             .qaudionStyle(type.labelSmall)
                             .foregroundStyle(scheme.primary)
                             .buttonStyle(.plain)

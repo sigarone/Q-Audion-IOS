@@ -494,7 +494,7 @@ struct NotificationsSettingsScreen: View {
             await NotificationCenterService.shared.scheduleLocal(
                 category: .messageDelivered,
                 title: "Q-Audion test",
-                body: "Se vedi questo banner, le notifiche funzionano correttamente.",
+                body: String(localized: "Se vedi questo banner, le notifiche funzionano correttamente."),
                 delay: 1.5
             )
             // Refresh counts so the user sees pending+1 immediately,
@@ -529,24 +529,24 @@ struct NotificationsSettingsScreen: View {
     /// type-checker has clean scope (CLAUDE.md §13).
     private static func formatAuthStatus(_ status: UNAuthorizationStatus) -> String {
         switch status {
-        case .authorized:        return "Autorizzato"
-        case .denied:            return "Negato"
-        case .notDetermined:     return "Non richiesto"
-        case .provisional:       return "Provvisorio"
-        case .ephemeral:         return "Effimero"
-        @unknown default:        return "Sconosciuto"
+        case .authorized:        return String(localized: "Autorizzato")
+        case .denied:            return String(localized: "Negato")
+        case .notDetermined:     return String(localized: "Non richiesto")
+        case .provisional:       return String(localized: "Provvisorio")
+        case .ephemeral:         return String(localized: "Effimero")
+        @unknown default:        return String(localized: "Sconosciuto")
         }
     }
 
     // MARK: - kvRow helper
 
-    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+    private func kvRow(label: LocalizedStringKey, value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(scheme.onSurface)
             Spacer()
-            Text(value)
+            Text(verbatim: value)
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .modifier(MonoIfNeededN(mono: mono))

@@ -248,7 +248,7 @@ struct PrivacySettingsScreen: View {
         )
     }
 
-    private let appLockTimeoutOptions: [(label: String, ms: Int)] = [
+    private let appLockTimeoutOptions: [(label: LocalizedStringKey, ms: Int)] = [
         ("1 minuto",   60_000),
         ("2 minuti",  120_000),
         ("5 minuti",  300_000),
@@ -492,11 +492,11 @@ struct PrivacySettingsScreen: View {
                 } else {
                     // Items are protected → authenticate once to read them.
                     let ok = await policy.prepareSession(
-                        reason: "Conferma per disattivare la protezione biometrica delle chiavi")
+                        reason: String(localized: "Conferma per disattivare la protezione biometrica delle chiavi"))
                     if !ok {
                         // Auth cancelled/failed: leave protection ON, keys intact.
                         keyProtectionEnabled = policy.isEnabled
-                        keyProtectionError = "Autenticazione annullata. La protezione resta attiva."
+                        keyProtectionError = String(localized: "Autenticazione annullata. La protezione resta attiva.")
                         keyProtectionBusy = false
                         return
                     }
@@ -507,7 +507,7 @@ struct PrivacySettingsScreen: View {
             } catch {
                 // Keys are intact (migration is non-destructive). Revert the UI.
                 keyProtectionEnabled = policy.isEnabled
-                keyProtectionError = "Operazione non riuscita: \(error). Le chiavi non sono state modificate."
+                keyProtectionError = String(localized: "Operazione non riuscita: \(String(describing: error)). Le chiavi non sono state modificate.")
             }
             keyProtectionBusy = false
         }

@@ -122,8 +122,8 @@ struct CallsSettingsScreen: View {
                     statusRow(label: "Audio SRTP standard (WebRTC)",
                               active: CallCapabilities.isNativeSrtpEnabledLocally,
                               inactiveLabel: nativeSrtpAutoDisabledForThisBuild
-                                ? "Disattivato automaticamente su questa versione"
-                                : "Inattivo")
+                                ? LocalizedStringKey("Disattivato automaticamente su questa versione")
+                                : LocalizedStringKey("Inattivo"))
                     Text("Protocollo predefinito su tutti i dispositivi aggiornati. Con un dispositivo meno recente che non lo supporta ancora, o se il percorso e' stato disattivato da remoto o da una protezione automatica anti-crash, la chiamata passa automaticamente al protocollo Q-Audion.")
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
@@ -177,7 +177,7 @@ struct CallsSettingsScreen: View {
                     // its signature below), so this literal doesn't
                     // auto-localize.
                     statusRow(
-                        label: String(localized: "calls_settings.status.background_voip_mode", defaultValue: "Modalità VoIP background", comment: "Calls settings, BACKGROUND section — status row label for whether VoIP background mode is active"),
+                        label: LocalizedStringKey("calls_settings.status.background_voip_mode"),
                         active: container.viewModel.isVoipBackgroundModeActive
                     )
                     Text("La modalità background è controllata dall'entitlement UIBackgroundModes.")
@@ -230,13 +230,13 @@ struct CallsSettingsScreen: View {
 
     // MARK: - kvRow + statusRow + warningHint helpers
 
-    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+    private func kvRow(label: LocalizedStringKey, value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(scheme.onSurface)
             Spacer()
-            Text(value)
+            Text(verbatim: value)
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .modifier(MonoIfNeededC(mono: mono))
@@ -249,7 +249,7 @@ struct CallsSettingsScreen: View {
         )
     }
 
-    private func statusRow(label: String, active: Bool, inactiveLabel: String = "Inattivo") -> some View {
+    private func statusRow(label: LocalizedStringKey, active: Bool, inactiveLabel: LocalizedStringKey = "Inattivo") -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
@@ -259,7 +259,7 @@ struct CallsSettingsScreen: View {
                 Circle()
                     .fill(active ? extras.success : extras.riskHigh)
                     .frame(width: 8, height: 8)
-                Text(active ? "Attivo" : inactiveLabel)
+                Text(active ? LocalizedStringKey("Attivo") : inactiveLabel)
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(active ? extras.success : extras.riskHigh)
             }
@@ -272,7 +272,7 @@ struct CallsSettingsScreen: View {
         )
     }
 
-    private func warningHint(_ text: String) -> some View {
+    private func warningHint(_ text: LocalizedStringKey) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 14, weight: .semibold))
