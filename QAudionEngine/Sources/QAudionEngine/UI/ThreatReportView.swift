@@ -23,37 +23,37 @@ public struct ThreatReportView: View {
                 severityHeader
             }
 
-            Section("Detected event") {
-                LabeledContent("Type") {
+            Section("Evento rilevato") {
+                LabeledContent("Tipo") {
                     Text(viewModel.threatKind.displayLabel)
                 }
-                LabeledContent("Severity") {
+                LabeledContent("Gravità") {
                     Text(viewModel.severity.displayLabel)
                         .foregroundStyle(viewModel.severity.color)
                 }
-                LabeledContent("Detected") {
+                LabeledContent("Rilevato") {
                     Text(viewModel.detectedAt, style: .relative)
                         .foregroundStyle(.secondary)
                 }
                 if let sid = viewModel.sessionId {
-                    LabeledContent("Session") {
+                    LabeledContent("Sessione") {
                         Text(sid).font(.caption.monospaced()).lineLimit(1)
                     }
                 }
             }
 
-            Section("Auto-collected detail") {
+            Section("Dettaglio raccolto automaticamente") {
                 Text(viewModel.detail)
                     .font(.body)
             }
 
-            Section("Add your notes (optional)") {
-                TextField("Describe what happened…", text: $draftDetail, axis: .vertical)
+            Section("Aggiungi le tue note (facoltative)") {
+                TextField("Descrivi cosa è successo…", text: $draftDetail, axis: .vertical)
                     .lineLimit(3...6)
             }
 
             Section {
-                Button("Submit threat report") {
+                Button("Invia la segnalazione") {
                     let submitted = ThreatReportViewModel(
                         threatKind: viewModel.threatKind,
                         severity: viewModel.severity,
@@ -68,19 +68,19 @@ public struct ThreatReportView: View {
                 .foregroundStyle(.red)
 
                 if let dismiss = onDismiss {
-                    Button("Cancel", action: dismiss)
+                    Button("Annulla", action: dismiss)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .foregroundStyle(.secondary)
                 }
             }
 
             Section {
-                Text("Threat reports help us improve detection. The report includes the threat type, severity, and your notes — never your call audio or messages.")
+                Text("Le segnalazioni ci aiutano a migliorare il rilevamento. Includono il tipo di minaccia, la gravità e le tue note: mai l'audio delle chiamate o i tuoi messaggi.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Threat Report")
+        .navigationTitle("Segnalazione di minaccia")
     }
 
     private var severityHeader: some View {
@@ -89,7 +89,7 @@ public struct ThreatReportView: View {
                 .font(.title)
                 .foregroundStyle(viewModel.severity.color)
             VStack(alignment: .leading) {
-                Text("Threat detected").font(.headline)
+                Text("Minaccia rilevata").font(.headline)
                 Text(viewModel.severity.displayLabel)
                     .font(.subheadline)
                     .foregroundStyle(viewModel.severity.color)
@@ -101,12 +101,18 @@ public struct ThreatReportView: View {
 extension ThreatReportViewModel.ThreatKind {
     var displayLabel: String {
         switch self {
-        case .deepfakeDetected: return "Deepfake detected"
-        case .voiceMismatch: return "Voice mismatch"
-        case .keyTampering: return "Key tampering"
-        case .suspiciousNetwork: return "Suspicious network"
-        case .panicWipeTriggered: return "Panic wipe triggered"
-        case .other: return "Other"
+        case .deepfakeDetected:
+            return String(localized: "security.threat_category.deepfake", defaultValue: "Deepfake rilevato", comment: "Threat report category: a deepfake (synthetic voice or video) was detected")
+        case .voiceMismatch:
+            return String(localized: "security.threat_category.voice_mismatch", defaultValue: "Voce non corrispondente", comment: "Threat report category: the voice did not match the saved voice of the contact")
+        case .keyTampering:
+            return String(localized: "security.threat_category.key_tampering", defaultValue: "Manomissione chiavi", comment: "Threat report category: signs that encryption keys were tampered with")
+        case .suspiciousNetwork:
+            return String(localized: "security.threat_category.suspicious_network", defaultValue: "Rete sospetta", comment: "Threat report category: suspicious network behavior")
+        case .panicWipeTriggered:
+            return String(localized: "security.threat_category.panic_wipe", defaultValue: "Wipe di emergenza attivato", comment: "Threat report category: the emergency wipe (erasing all data) was triggered")
+        case .other:
+            return String(localized: "Altro")
         }
     }
 }
@@ -114,10 +120,10 @@ extension ThreatReportViewModel.ThreatKind {
 extension ThreatReportViewModel.Severity {
     var displayLabel: String {
         switch self {
-        case .low: return "Low"
-        case .medium: return "Medium"
-        case .high: return "High"
-        case .critical: return "Critical"
+        case .low: return String(localized: "security.severity.low", defaultValue: "Bassa", comment: "Threat report severity (feminine, agrees with 'gravity'): low")
+        case .medium: return String(localized: "security.severity.medium", defaultValue: "Media", comment: "Threat report severity (feminine, agrees with 'gravity'): medium")
+        case .high: return String(localized: "security.severity.high", defaultValue: "Alta", comment: "Threat report severity (feminine, agrees with 'gravity'): high")
+        case .critical: return String(localized: "security.severity.critical", defaultValue: "Critica", comment: "Threat report severity (feminine, agrees with 'gravity'): critical")
         }
     }
 

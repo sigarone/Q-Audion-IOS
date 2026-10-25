@@ -22,14 +22,15 @@ public enum ProximityPairingStore {
     private static let vaultEntryHexCharacters: Int = 16
     private static let hexDigits: [Character] = Array("0123456789abcdef")
 
-    private static let selfPairingMessage: String = "Non puoi associare il telefono con se stesso."
-    private static let pinMismatchWarning: String =
-        "Attenzione: la chiave di identità di questo contatto è diversa da quella verificata in precedenza. "
-        + "Conferma solo se sei sicuro che la persona davanti a te sia davvero questo contatto."
-    private static let contactKeyMismatchWarning: String =
-        "Attenzione: la chiave che questo telefono presenta è diversa da quella salvata in rubrica per questo contatto. "
-        + "Conferma solo se sei sicuro che la persona davanti a te sia davvero questo contatto: "
-        + "la rubrica non verrà modificata."
+    private static var selfPairingMessage: String {
+        String(localized: "pairing.error.self_pairing", defaultValue: "Non puoi associare il telefono con se stesso.", comment: "In-person pairing: shown when the other phone turns out to be this same phone or account")
+    }
+    private static var pinMismatchWarning: String {
+        String(localized: "pairing.warning.pin_mismatch", defaultValue: "Attenzione: la chiave di identità di questo contatto è diversa da quella verificata in precedenza. Conferma solo se sei sicuro che la persona davanti a te sia davvero questo contatto.", comment: "In-person pairing warning on the confirmation screen: this contact's identity key differs from the one verified before; confirm only if sure of who is in front of you")
+    }
+    private static var contactKeyMismatchWarning: String {
+        String(localized: "pairing.warning.contact_key_mismatch", defaultValue: "Attenzione: la chiave che questo telefono presenta è diversa da quella salvata in rubrica per questo contatto. Conferma solo se sei sicuro che la persona davanti a te sia davvero questo contatto: la rubrica non verrà modificata.", comment: "In-person pairing warning on the confirmation screen: the key presented by this phone differs from the one saved in the address book for this contact; confirm only if sure; the saved contact will not be changed")
+    }
 
     // MARK: - Vault naming
 

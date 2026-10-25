@@ -17,7 +17,7 @@ struct PhonebookImportView: View {
                 // W35: design-token loading placeholder (vs stock
                 // ProgressView). Stesso pattern dei restanti screen di
                 // attesa server.
-                QAudionLoadingState(message: "Richiesta permesso Contatti in corso…")
+                QAudionLoadingState(message: String(localized: "contact.phonebook.requesting_permission", defaultValue: "Richiesta permesso Contatti in corso…", comment: "Loading message while the app asks iOS for access to the address book"))
             case .scanning(let p):
                 progressBlock(label: "Scansione rubrica…", value: p)
             case .discovering(let p):
@@ -35,7 +35,7 @@ struct PhonebookImportView: View {
     /// Indeterminate-or-determinate progress block. Wraps a labeled
     /// linear ProgressView so scanning / discovering steps share the
     /// same shell.
-    private func progressBlock(label: String, value: Double) -> some View {
+    private func progressBlock(label: LocalizedStringKey, value: Double) -> some View {
         VStack(spacing: 12) {
             Text(label)
                 .font(.body)

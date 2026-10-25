@@ -505,43 +505,47 @@ public enum ProximityPairingError: Error, Equatable {
         }
     }
 
-    /// Italian, user-facing.
+    /// User-facing text, in the app language (source: Italian).
     public var userMessage: String {
         switch self {
         case .bluetoothUnavailable:
-            return "Bluetooth non disponibile: attivalo e consenti a Q-Audion di usarlo per associare un contatto di persona."
+            return String(localized: "pairing.error.bluetooth_unavailable", defaultValue: "Bluetooth non disponibile: attivalo e consenti a Q-Audion di usarlo per associare un contatto di persona.", comment: "In-person pairing error: Bluetooth is off or Q-Audion is not allowed to use it")
         case .identityUnavailable:
-            return "Identità non ancora inizializzata: completa la configurazione prima di associare un contatto."
+            return String(localized: "pairing.error.identity_unavailable", defaultValue: "Identità non ancora inizializzata: completa la configurazione prima di associare un contatto.", comment: "In-person pairing error: this phone has no identity yet because setup is not finished")
         case .invalidQrCode:
-            return "Questo non è un codice di associazione Q-Audion valido."
+            return String(localized: "pairing.error.invalid_qr", defaultValue: "Questo non è un codice di associazione Q-Audion valido.", comment: "In-person pairing error: the scanned QR code is not a valid pairing code")
         case .expiredQrCode:
-            return "Il codice è scaduto: inquadra di nuovo il codice mostrato sull'altro telefono."
+            return Self.expiredCodeMessage
         case .timeout:
-            return "L'altro telefono non ha risposto in tempo. Avvicinate i telefoni e riprovate."
+            return String(localized: "pairing.error.timeout", defaultValue: "L'altro telefono non ha risposto in tempo. Avvicinate i telefoni e riprovate.", comment: "In-person pairing error: the other phone did not answer in time; addressed to both people ('bring the phones closer and try again')")
         case .transportFailed:
-            return "Connessione Bluetooth interrotta. Riprova tenendo i telefoni vicini."
+            return String(localized: "pairing.error.transport_failed", defaultValue: "Connessione Bluetooth interrotta. Riprova tenendo i telefoni vicini.", comment: "In-person pairing error: the Bluetooth connection between the two phones dropped")
         case .protocolViolation, .authenticationFailed:
-            return "Verifica di sicurezza non superata: associazione annullata, nessuna chiave salvata."
+            return String(localized: "pairing.error.security_check_failed", defaultValue: "Verifica di sicurezza non superata: associazione annullata, nessuna chiave salvata.", comment: "In-person pairing error: the security check failed, pairing was cancelled and nothing was saved")
         case .identityRejected(let reason):
             return reason
         case .sessionBusy:
-            return "Questo codice è già in uso da un altro telefono. Chiedi di mostrarne uno nuovo."
+            return String(localized: "pairing.error.session_busy", defaultValue: "Questo codice è già in uso da un altro telefono. Chiedi di mostrarne uno nuovo.", comment: "In-person pairing error: this code is already being used by another phone; ask the other person to show a new one")
         case .peerAborted(let raw):
             switch ProximityPairing.AbortReason(rawValue: raw) {
             case .userRejected?:
-                return "L'altra persona ha annullato l'associazione."
+                return String(localized: "pairing.error.peer_cancelled_by_user", defaultValue: "L'altra persona ha annullato l'associazione.", comment: "In-person pairing: the other person cancelled the pairing on their phone")
             case .frameExpired?:
-                return "Il codice è scaduto: inquadra di nuovo il codice mostrato sull'altro telefono."
+                return Self.expiredCodeMessage
             case .authenticationFailed?, .protocolViolation?:
-                return "L'altro telefono ha rifiutato la verifica di sicurezza: nessuna chiave salvata."
+                return String(localized: "pairing.error.peer_rejected_security", defaultValue: "L'altro telefono ha rifiutato la verifica di sicurezza: nessuna chiave salvata.", comment: "In-person pairing error: the other phone refused the security check, nothing was saved")
             default:
-                return "L'altro telefono ha annullato l'associazione."
+                return String(localized: "pairing.error.peer_cancelled", defaultValue: "L'altro telefono ha annullato l'associazione.", comment: "In-person pairing: the other phone ended the pairing")
             }
         case .userRejected, .cancelled:
-            return "Associazione annullata."
+            return String(localized: "pairing.error.cancelled", defaultValue: "Associazione annullata.", comment: "In-person pairing: the pairing was cancelled")
         case .cryptoFailure:
-            return "Errore crittografico: associazione annullata, nessuna chiave salvata."
+            return String(localized: "pairing.error.crypto_failure", defaultValue: "Errore crittografico: associazione annullata, nessuna chiave salvata.", comment: "In-person pairing error: a cryptographic step failed, pairing was cancelled and nothing was saved")
         }
+    }
+
+    private static var expiredCodeMessage: String {
+        String(localized: "pairing.error.code_expired", defaultValue: "Il codice è scaduto: inquadra di nuovo il codice mostrato sull'altro telefono.", comment: "In-person pairing error: the QR code expired; scan the code shown on the other phone again")
     }
 }
 

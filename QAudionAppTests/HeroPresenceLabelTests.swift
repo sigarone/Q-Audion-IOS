@@ -43,7 +43,7 @@ final class HeroPresenceLabelTests: XCTestCase {
 
     func test_online_verified_mentionsVerifiedVoice() {
         let label = HeroPresenceLabel.select(presence: .online, isVerified: true)
-        XCTAssertTrue(label.text.contains("verified voice"))
+        XCTAssertTrue(label.text.contains("voce verificata"))
     }
 
     func test_online_unverified_mentionsNonVerificata() {

@@ -503,7 +503,7 @@ struct ContactDetailScreen: View {
     /// (Video) gets the exact same dim + lock-badge treatment as every
     /// other Task 5 site.
     private func gatedActionButton(icon: String,
-                                    caption: String,
+                                    caption: LocalizedStringKey,
                                     tint: Color,
                                     unlocked: Bool,
                                     onLockedClick: @escaping () -> Void,
@@ -554,7 +554,7 @@ struct ContactDetailScreen: View {
             }
             .padding(.bottom, 12)
 
-            trustFactorRow(label: "Identità pubblicata",
+            trustFactorRow(label: String(localized: "contact.detail.trust.identity_published", defaultValue: "Identità pubblicata", comment: "Trust card row title on a contact's detail screen: whether the contact has published their identity key on the server"),
                            description: trustIdentityRowDescription(identityPublished: identityPublished),
                            done: identityPublished)
             divider
@@ -583,12 +583,12 @@ struct ContactDetailScreen: View {
             // `SasVerifySheet` already lists "NFC" as one of its self-attest
             // methods, so a user who really did tap via the Contacts-list
             // "Aggiungi via NFC" flow can still record that here today.
-            trustFactorRow(label: "SAS verificato",
+            trustFactorRow(label: String(localized: "contact.detail.trust.sas_verified", defaultValue: "SAS verificato", comment: "Trust card row title on a contact's detail screen: whether the SAS verification ceremony was completed with this contact. SAS stays untranslated"),
                            description: verified
-                               ? "Cerimonia SAS completata"
-                               : "Avvia cerimonia NFC o SAS via voce",
+                               ? String(localized: "contact.detail.trust.sas_done", defaultValue: "Cerimonia SAS completata", comment: "Trust card row detail: the SAS verification ceremony was completed")
+                               : String(localized: "contact.detail.trust.sas_start_hint", defaultValue: "Avvia cerimonia NFC o SAS via voce", comment: "Trust card row detail: hint that the verification can be done with an NFC tap or by comparing SAS words aloud"),
                            done: verified,
-                           ctaLabel: verified ? nil : "Avvia verifica",
+                           ctaLabel: verified ? nil : String(localized: "contact.detail.trust.start_verification", defaultValue: "Avvia verifica", comment: "Small text button on the SAS trust row that starts the verification"),
                            ctaAction: verified ? nil : { showingSasSheet = true })
         }
         .padding(14)
@@ -700,11 +700,13 @@ struct ContactDetailScreen: View {
     private func trustIdentityRowDescription(identityPublished: Bool) -> String {
         switch trustModel.phase {
         case .loading:
-            return "Verifica in corso…"
+            return String(localized: "trust.header.loading", defaultValue: "Verifica in corso…", comment: "Contact trust badge — the safety number / trust evaluation is still being computed")
         case .failed:
             return String(localized: "contact_detail.trust.identity_failed", defaultValue: "Verifica non riuscita: usa «Riprova» nel numero di sicurezza.", comment: "Trust row description — the identity lookup failed; the safety-number card below offers a retry button")
         case .loaded:
-            return identityPublished ? "IK pubblicata sulla directory bcrypto" : "Impossibile risolvere l'identità del contatto"
+            return identityPublished
+                ? String(localized: "contact.detail.trust.ik_published", defaultValue: "IK pubblicata sulla directory bcrypto", comment: "Trust row description: the contact's identity key (IK) was found on the bcrypto server directory")
+                : String(localized: "contact.detail.trust.identity_unresolved", defaultValue: "Impossibile risolvere l'identità del contatto", comment: "Trust row description: the contact's identity could not be looked up")
         }
     }
 
@@ -774,7 +776,7 @@ struct ContactDetailScreen: View {
                         .tracking(1.2)
                         .foregroundStyle(scheme.onSurfaceVariant)
                     Spacer()
-                    TrustChip(presenceAuthStatusLabel(auth.status), accent: presenceAuthStatusTint(auth.status))
+                    TrustChip(verbatim: presenceAuthStatusLabel(auth.status), accent: presenceAuthStatusTint(auth.status))
                 }
                 .padding(.bottom, 4)
                 Text(presenceAuthSummary(auth))
@@ -793,9 +795,9 @@ struct ContactDetailScreen: View {
 
     private func presenceAuthStatusLabel(_ status: ContactsStore.PresenceAuth.Status) -> String {
         switch status {
-        case .active: return "ATTIVA"
-        case .suspended: return "SOSPESA"
-        case .revoked: return "REVOCATA"
+        case .active: return String(localized: "contact.presence_auth.status.active", defaultValue: "ATTIVA", comment: "Small ALL-CAPS status chip: the contact's in-person (NFC) authentication is active")
+        case .suspended: return String(localized: "contact.presence_auth.status.suspended", defaultValue: "SOSPESA", comment: "Small ALL-CAPS status chip: the contact's in-person (NFC) authentication is suspended because it was not used on the last call")
+        case .revoked: return String(localized: "contact.presence_auth.status.revoked", defaultValue: "REVOCATA", comment: "Small ALL-CAPS status chip: the contact's in-person (NFC) authentication was revoked")
         }
     }
 
@@ -828,16 +830,18 @@ struct ContactDetailScreen: View {
     private func presenceAuthSummary(_ auth: ContactsStore.PresenceAuth) -> String {
         let date = Date(timeIntervalSince1970: Double(auth.firstConfirmedAt) / 1000)
         let dateStr = Self.presenceAuthDateFormatter.string(from: date)
-        let times = auth.confirmedCallCount == 1 ? "1 volta" : "\(auth.confirmedCallCount) volte"
+        let times = auth.confirmedCallCount == 1
+            ? String(localized: "contact.presence_auth.times_one", defaultValue: "1 volta", comment: "Count of in-person confirmations, singular; used inside the sentence 'confirmed ... · 1 time in total'")
+            : String(localized: "contact.presence_auth.times_other", defaultValue: "\(auth.confirmedCallCount) volte", comment: "Count of in-person confirmations, plural; %lld is the number (2 or more); used inside the sentence 'confirmed ... · N times in total'")
         switch auth.status {
         case .active:
-            return "Confermata di persona la prima volta il \(dateStr) · \(times) in totale."
+            return String(localized: "contact.presence_auth.summary_active", defaultValue: "Confermata di persona la prima volta il \(dateStr) · \(times) in totale.", comment: "Description of an active in-person (NFC) authentication. First %@ is the date of the first confirmation, second %@ is the count text such as '3 times'")
         case .suspended:
             // VERBATIM wording family (design brief, S1/S7's persisted-record
             // description): "non usata nell'ultima chiamata".
-            return "Non usata nell'ultima chiamata — la cronologia resta valida (confermata dal \(dateStr))."
+            return String(localized: "contact.presence_auth.summary_suspended", defaultValue: "Non usata nell'ultima chiamata — la cronologia resta valida (confermata dal \(dateStr)).", comment: "Description of a suspended in-person (NFC) authentication: the key was not used on the last call but earlier confirmations remain valid. %@ is the date of the first confirmation")
         case .revoked:
-            return "Revocata: questa chiave NFC risultava associata a un'altra identità."
+            return String(localized: "contact.presence_auth.summary_revoked", defaultValue: "Revocata: questa chiave NFC risultava associata a un'altra identità.", comment: "Description of a revoked in-person (NFC) authentication: the NFC key turned out to belong to a different identity")
         }
     }
 
@@ -876,7 +880,7 @@ struct ContactDetailScreen: View {
             .padding(.vertical, 8)
     }
 
-    private func metaRow(_ label: String, value: String) -> some View {
+    private func metaRow(_ label: LocalizedStringKey, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
                 .qaudionStyle(type.labelSmall)
@@ -905,11 +909,16 @@ struct ContactDetailScreen: View {
         guard let eval = trustEval else { return trustModel.failure == nil ? "…" : "—" }
         switch eval.state {
         case .userVerified:
-            guard let date = eval.verifiedAt else { return "Verificato" }
+            guard let date = eval.verifiedAt else {
+                return String(localized: "trust.header.verified", defaultValue: "Verificato", comment: "Contact trust badge — verified state")
+            }
             return Self.lastVerificationDateFormatter.string(from: date)
-        case .identityChanged: return "🚨 Identità cambiata"
-        case .identityPinnedTofu: return "Mai (pinned TOFU)"
-        case .unverified: return "Mai"
+        case .identityChanged:
+            return String(localized: "trust.header.identity_changed", defaultValue: "🚨 Identità cambiata", comment: "Contact trust badge — the peer's identity key changed since last verification")
+        case .identityPinnedTofu:
+            return String(localized: "contact.detail.last_verification.never_pinned", defaultValue: "Mai (pinned TOFU)", comment: "Value of the 'last verification' metadata row: never verified by the user, the identity is only pinned on first use (TOFU stays untranslated)")
+        case .unverified:
+            return String(localized: "contact.detail.last_verification.never", defaultValue: "Mai", comment: "Value of the 'last verification' metadata row: the contact was never verified")
         }
     }
 
@@ -948,7 +957,7 @@ struct ContactDetailScreen: View {
             if let verifiedMs = stored?.verifiedAtMs {
                 eventRow(severity: extras.success,
                          when: Self.formatEventDate(verifiedMs),
-                         summary: "Identità verificata (\(stored?.verificationMethod ?? "SAS"))")
+                         summary: String(localized: "contact.detail.event.identity_verified", defaultValue: "Identità verificata (\(Self.verificationMethodLabel(stored?.verificationMethod)))", comment: "Security-log row for a contact: the identity was verified. %@ is the verification method (for example 'In person', 'QR scan', 'NFC', 'Voice')"))
             }
             if let voiceMs = stored?.voiceVerifiedAt {
                 eventRow(severity: extras.success,
@@ -1008,6 +1017,12 @@ struct ContactDetailScreen: View {
     private static func formatEventDate(_ epochMs: Int64) -> String {
         let date = Date(timeIntervalSince1970: Double(epochMs) / 1000)
         return eventDateFormatter.string(from: date)
+    }
+
+    /// Display name of the stored verification method (its raw value, e.g. "in-person"); unknown values are shown as stored.
+    private static func verificationMethodLabel(_ stored: String?) -> String {
+        guard let stored else { return "SAS" }
+        return TrustVerificationMethod(rawValue: stored)?.localized ?? stored
     }
 
     private func eventRow(severity: Color, when: String, summary: String) -> some View {
@@ -1101,11 +1116,13 @@ enum HeroPresenceLabel: Equatable {
     var text: String {
         switch self {
         case .online(let verifiedVoice):
-            return "online · " + (verifiedVoice ? "verified voice" : "voice non verificata")
+            return verifiedVoice
+                ? String(localized: "contact.hero.online_verified_voice", defaultValue: "online · voce verificata", comment: "Presence sub-label under the contact's name: the contact is online and the contact is verified")
+                : String(localized: "contact.hero.online_unverified_voice", defaultValue: "online · voice non verificata", comment: "Presence sub-label under the contact's name: the contact is online and not verified")
         case .inCall:       return ExtendedPresence.inCall.label
         case .doNotDisturb: return ExtendedPresence.doNotDisturb.label
-        case .offline:      return "offline"
-        case .unknown:      return "stato sconosciuto"
+        case .offline:      return String(localized: "contact.hero.offline", defaultValue: "offline", comment: "Presence sub-label under the contact's name: the contact is offline (lowercase)")
+        case .unknown:      return String(localized: "contact.hero.unknown", defaultValue: "stato sconosciuto", comment: "Presence sub-label under the contact's name: no presence information received yet from the server")
         }
     }
 }

@@ -91,14 +91,18 @@ enum ProximityPairingTelemetry {
 /// words are the same wherever the code was scanned.
 enum ProximityScanMessages {
     /// A QR that is not a pairing code at all (an identity, a link ...).
-    static let notPairing = String(localized: "proximity.scan.not_pairing",
+    static var notPairing: String {
+        String(localized: "proximity.scan.not_pairing",
         defaultValue: "Questo QR non è un codice di associazione. Sull'altro telefono apri Contatti → Associa di persona → Mostra il mio codice.",
         comment: "Shown when the in-person pairing scanner reads a QR that is not a pairing code; tells where the other phone shows the right one")
+    }
 
     /// A pairing code that fails the strict decoding.
-    static let invalid = String(localized: "proximity.scan.invalid",
+    static var invalid: String {
+        String(localized: "proximity.scan.invalid",
         defaultValue: "Questo non è un codice di associazione Q-Audion valido.",
         comment: "Shown when the in-person pairing scanner reads a pairing code that is damaged or not valid")
+    }
 }
 
 /// One log line and one telemetry event per rejected scan. Only the closed
@@ -138,14 +142,18 @@ enum ProximityEntryPointHint {
 
     /// The marker itself, for an entry point that shows it as a badge next to
     /// its own title (`menuTitle` carries it inside one string).
-    static let badgeTitle = String(localized: "proximity.entry.badge_new",
+    static var badgeTitle: String {
+        String(localized: "proximity.entry.badge_new",
         defaultValue: "Novità",
         comment: "Small badge on the Contacts tab's 'Pair in person' button until the user has opened the pairing screen once")
+    }
 
     /// The legacy Contacts "+" menu row title: the ordinary label, plus a
     /// one-time "Novità" marker appended until `markSeen()` has run once.
     static var menuTitle: String {
-        let base = "Associa di persona (QR + Bluetooth)"
+        let base = String(localized: "proximity.entry.menu_title",
+            defaultValue: "Associa di persona (QR + Bluetooth)",
+            comment: "Contacts '+' menu row title for in-person pairing (QR code + Bluetooth)")
         guard isUnseen else { return base }
         return String(localized: "proximity.entry.menu_title_new",
             defaultValue: "Associa di persona (QR + Bluetooth) · Novità",
@@ -176,13 +184,17 @@ enum ProximityHowItWorks {
         UserDefaults.standard.set(true, forKey: seenKey)
     }
 
-    static let title = String(localized: "proximity.howitworks.title",
+    static var title: String {
+        String(localized: "proximity.howitworks.title",
         defaultValue: "Come funziona",
         comment: "Title of the in-person (QR + Bluetooth) pairing explanation sheet, and the info button that reopens it")
+    }
 
-    static let body = String(localized: "proximity.howitworks.body",
+    static var body: String {
+        String(localized: "proximity.howitworks.body",
         defaultValue: "L'altro telefono mostra o scansiona il codice QR.\n\nI telefoni si collegano da soli via Bluetooth: non c'è nulla da configurare.\n\nLeggete ad alta voce le 6 cifre mostrate su entrambi gli schermi: devono coincidere.\n\nLe 6 cifre servono a scoprire chi provasse a mettersi in mezzo allo scambio — se non coincidono, annullate.\n\nLo scambio usa crittografia post-quantistica ibrida (ML-KEM-1024 + X25519): nulla lascia i due telefoni in chiaro.\n\nLa chiave così creata resta sui vostri telefoni e protegge le chiamate tra voi da questo momento in poi.",
         comment: "Body text of the in-person (QR + Bluetooth) pairing explanation sheet, plain language, one blank line between each of the 6 points: (1) show/scan the QR, (2) phones connect over Bluetooth by themselves, (3) compare the 6 digits out loud, (4) why the 6 digits matter (catch a man-in-the-middle), (5) the crypto used and that nothing leaves the phones unencrypted, (6) what the resulting key protects")
+    }
 }
 
 /// The explanation sheet itself. A plain, self-contained SwiftUI view (no

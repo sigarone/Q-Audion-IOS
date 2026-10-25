@@ -101,13 +101,13 @@ public struct FastSetupPayload: Codable, Equatable {
         public var errorDescription: String? {
             switch self {
             case .notJson:
-                return "QR code non valido (non è JSON)."
+                return String(localized: "qr.fast_setup.error.not_json", defaultValue: "QR code non valido (non è JSON).", comment: "Error shown after scanning a setup QR code whose content is not JSON")
             case .unexpectedKind(let k):
-                return "QR code non valido (kind = \(k), atteso bcrypto-fast-setup)."
+                return String(localized: "qr.fast_setup.error.unexpected_kind", defaultValue: "QR code non valido (kind = \(k), atteso bcrypto-fast-setup).", comment: "Error shown after scanning a setup QR code of the wrong kind. %@ is the kind value found in the code; keep 'kind' and 'bcrypto-fast-setup' as they are (technical field names)")
             case .unsupportedVersion(let v):
-                return "Versione QR non supportata (v=\(v), atteso 1)."
+                return String(localized: "qr.fast_setup.error.unsupported_version", defaultValue: "Versione QR non supportata (v=\(v), atteso 1).", comment: "Error shown after scanning a setup QR code with an unsupported format version. %lld is the version found in the code")
             case .missingField(let f):
-                return "QR code non valido (campo \(f) mancante)."
+                return String(localized: "qr.fast_setup.error.missing_field", defaultValue: "QR code non valido (campo \(f) mancante).", comment: "Error shown after scanning a setup QR code that lacks a required field. %@ is the technical field name, keep it unchanged")
             }
         }
     }

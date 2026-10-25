@@ -27,13 +27,13 @@ final class PhonebookSyncCoordinator {
         var errorDescription: String? {
             switch self {
             case .permissionDenied:
-                return "Contacts permission denied. Enable in Settings → Q-Audion → Contacts."
+                return String(localized: "contact.phonebook.error.permission_denied", defaultValue: "Permesso Contatti negato. Abilitalo in Impostazioni → Q-Audion → Contatti.", comment: "Error when importing the phone's address book: access to Contacts was denied; points to the iOS Settings app")
             case .notAuthenticated:
-                return "Not signed in"
+                return String(localized: "contact.phonebook.error.not_signed_in", defaultValue: "Accesso non effettuato.", comment: "Error when importing the phone's address book: the user is not signed in to Q-Audion")
             case .fetchFailed(let m):
-                return "Phonebook fetch failed: \(m)"
+                return String(localized: "contact.phonebook.error.fetch_failed", defaultValue: "Lettura della rubrica non riuscita: \(m)", comment: "Error when importing the phone's address book. %@ is a technical detail from the server or system")
             case .normalizationFailedAll:
-                return "No valid phone numbers found in your phonebook"
+                return String(localized: "contact.phonebook.error.no_numbers", defaultValue: "Nessun numero di telefono valido trovato nella tua rubrica.", comment: "Error when importing the phone's address book: none of the stored numbers could be used")
             }
         }
     }

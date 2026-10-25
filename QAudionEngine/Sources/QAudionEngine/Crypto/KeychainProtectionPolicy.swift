@@ -146,15 +146,20 @@ public final class KeychainProtectionPolicy: @unchecked Sendable {
 
     // MARK: - Session (read side)
 
+    /// Text of the system Face ID / passcode prompt when the app unlocks the secure keys.
+    public static var defaultSessionReason: String {
+        String(localized: "security.keychain.session_reason", defaultValue: "Sblocca le chiavi sicure di Q-Audion", comment: "Reason shown in the system Face ID / Touch ID / passcode prompt when Q-Audion unlocks its secure keys")
+    }
+
     /// Authenticate once (typically at app unlock) so subsequent protected
     /// reads in this session do not re-prompt. Returns true on success or if
     /// the policy is disabled (nothing to do). Safe to call repeatedly.
     @discardableResult
-    public func prepareSession(reason: String = "Sblocca le chiavi sicure di Q-Audion") async -> Bool {
+    public func prepareSession(reason: String = KeychainProtectionPolicy.defaultSessionReason) async -> Bool {
         guard isEnabled else { return true }
         #if canImport(LocalAuthentication)
         let ctx = LAContext()
-        ctx.localizedFallbackTitle = "Usa codice"
+        ctx.localizedFallbackTitle = String(localized: "security.keychain.fallback_title", defaultValue: "Usa codice", comment: "Title of the fallback button in the system biometric prompt: use the device passcode instead")
         // Allow Keychain reads to reuse this evaluation within the window so we
         // don't prompt on every PSK access during a call/chat session.
         ctx.touchIDAuthenticationAllowableReuseDuration = LATouchIDAuthenticationMaximumAllowableReuseDuration
