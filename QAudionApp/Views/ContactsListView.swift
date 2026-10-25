@@ -595,14 +595,14 @@ struct ContactsListView: View {
                         }
                     }()
                     lastScanResult = ScanResultBanner(
-                        title: "Contact added",
+                        title: String(localized: "contact.scan.banner.added", defaultValue: "Contatto aggiunto", comment: "Banner title after scanning a QR code: the contact was added"),
                         detail: id,
                         isError: false
                     )
                 } else {
                     lastScanResult = ScanResultBanner(
-                        title: "Scan ignored",
-                        detail: "Payload not supported as a contact",
+                        title: String(localized: "contact.scan.banner.ignored", defaultValue: "Scansione ignorata", comment: "Banner title after scanning a QR code: nothing was added"),
+                        detail: String(localized: "contact.scan.banner.unsupported", defaultValue: "Il contenuto del codice non è supportato come contatto", comment: "Banner detail after scanning a QR code: the code content cannot be used as a contact"),
                         isError: true
                     )
                 }
@@ -798,8 +798,11 @@ struct ContactsListView: View {
     }
 
     private func presenceLabelText(_ p: ExtendedPresence, isOnline: Bool) -> String {
-        if p == .unknown { return isOnline ? "Online" : "Offline" }
-        return p.label.isEmpty ? (isOnline ? "Online" : "Offline") : p.label
+        let fallback: String = isOnline
+            ? String(localized: "contact.list.presence_online", defaultValue: "Online", comment: "Presence label in the contact list: the contact is online")
+            : String(localized: "contact.list.presence_offline", defaultValue: "Offline", comment: "Presence label in the contact list: the contact is offline")
+        if p == .unknown { return fallback }
+        return p.label.isEmpty ? fallback : p.label
     }
 
     private func presenceLabelColor(_ p: ExtendedPresence, isOnline: Bool) -> Color {

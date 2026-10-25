@@ -77,16 +77,27 @@ final class ProximityPairingViewDriver: ObservableObject {
 
     // MARK: Copy (Italian, user-facing)
 
-    private static let displayerExchangingText: String = "Collegamento sicuro in corso…"
-    private static let scannerConnectingText: String = "Connessione Bluetooth all'altro telefono…"
-    private static let scannerExchangingText: String = "Scambio chiavi post-quantistiche…"
-    private static let completedPrefix: String = "Chiave post-quantistica condivisa con "
-    private static let qrUnavailableText: String = "Impossibile generare il codice QR. Riprova."
-    private static let bluetoothPermissionText: String =
-        "Consenti a Q-Audion di usare il Bluetooth: serve a verificare che l'altro telefono sia davvero qui."
-    private static let screenCapturedText: String =
-        "Lo schermo è registrato o condiviso: il codice resta nascosto finché non interrompi la registrazione "
-        + "o la condivisione."
+    private static var displayerExchangingText: String {
+        String(localized: "pairing.status.secure_link", defaultValue: "Collegamento sicuro in corso…", comment: "In-person pairing status on the phone showing the code: a secure link with the other phone is being set up")
+    }
+    private static var scannerConnectingText: String {
+        String(localized: "pairing.status.connecting_bluetooth", defaultValue: "Connessione Bluetooth all'altro telefono…", comment: "In-person pairing status on the scanning phone: connecting over Bluetooth to the other phone")
+    }
+    private static var scannerExchangingText: String {
+        String(localized: "pairing.status.exchanging_keys", defaultValue: "Scambio chiavi post-quantistiche…", comment: "In-person pairing status on the scanning phone: post-quantum keys are being exchanged")
+    }
+    private static func completedText(name: String) -> String {
+        String(localized: "pairing.status.completed", defaultValue: "Chiave post-quantistica condivisa con \(name)", comment: "In-person pairing success message. %@ is the other person's name")
+    }
+    private static var qrUnavailableText: String {
+        String(localized: "pairing.status.qr_unavailable", defaultValue: "Impossibile generare il codice QR. Riprova.", comment: "In-person pairing error: the QR code could not be generated")
+    }
+    private static var bluetoothPermissionText: String {
+        String(localized: "pairing.status.bluetooth_permission", defaultValue: "Consenti a Q-Audion di usare il Bluetooth: serve a verificare che l'altro telefono sia davvero qui.", comment: "In-person pairing: asks the user to allow Bluetooth access, needed to prove that the other phone is physically nearby")
+    }
+    private static var screenCapturedText: String {
+        String(localized: "pairing.status.screen_captured", defaultValue: "Lo schermo è registrato o condiviso: il codice resta nascosto finché non interrompi la registrazione o la condivisione.", comment: "In-person pairing: the QR code is hidden while the screen is being recorded or shared")
+    }
 
     // MARK: Tuning
 
@@ -578,7 +589,7 @@ final class ProximityPairingViewDriver: ObservableObject {
             return
         }
         let name: String = peerName(result.peer.userId)
-        let text: String = ProximityPairingViewDriver.completedPrefix + name
+        let text: String = ProximityPairingViewDriver.completedText(name: name)
         let outcome: ProximityServerCheckOutcome = ProximityPairingViewDriver.telemetryOutcome(for: serverCheck)
         let elapsedMs: Int = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
         setPhase(.completed(text))

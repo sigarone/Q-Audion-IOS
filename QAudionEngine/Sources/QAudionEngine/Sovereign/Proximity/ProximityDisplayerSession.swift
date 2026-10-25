@@ -577,7 +577,7 @@ public final class ProximityDisplayerSession {
     /// plain accept); throws `.identityRejected` otherwise.
     private func evaluatePeer(_ candidate: ProximityPeerIdentity) throws -> String? {
         if candidate.signingPublicKey == identity.signingPublicKey || candidate.userId == identity.userId {
-            throw ProximityPairingError.identityRejected("Non puoi associare il telefono con se stesso.")
+            throw ProximityPairingError.identityRejected(String(localized: "pairing.error.self_pairing", defaultValue: "Non puoi associare il telefono con se stesso.", comment: "In-person pairing: shown when the other phone turns out to be this same phone or account"))
         }
         switch identityPolicy(candidate) {
         case .accept:

@@ -32,7 +32,7 @@ final class ThreatReportContainer: ObservableObject {
     /// W12.A Android-shape signature.
     func submit(_ submitted: ThreatReportViewModel) {
         guard let provider = makeProvider() else {
-            errorMessage = "Not signed in"
+            errorMessage = String(localized: "security.threat_report.error.not_signed_in", defaultValue: "Accesso non effettuato.", comment: "Error when sending a threat report: the user is not signed in to Q-Audion")
             return
         }
         Task {

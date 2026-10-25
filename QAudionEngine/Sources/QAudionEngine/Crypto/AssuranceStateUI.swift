@@ -69,6 +69,12 @@ public enum AssuranceStateUI {
         }
     }
 
+    /// Placeholder name for the shared key when the caller has no contact name.
+    /// A computed value, so it follows the in-app language at call time.
+    public static var defaultSecretLabel: String {
+        String(localized: "trust.assurance.default_secret_label", defaultValue: "questo contatto", comment: "Lowercase fallback used inside the call security line 'Pre-shared key: <name>' when the contact's name is not known: 'this contact'")
+    }
+
     /// - Parameters:
     ///   - state: this call's live `AssuranceState.decide()` verdict.
     ///   - expectedNfc: ONLY consulted for `S0` — whether this contact
@@ -87,29 +93,28 @@ public enum AssuranceStateUI {
     public static func present(
         state: AssuranceState,
         expectedNfc: Bool = false,
-        secretLabel: String = "questo contatto"
+        secretLabel: String = AssuranceStateUI.defaultSecretLabel
     ) -> Presentation {
         switch state {
         case .peerLegacy: // S0 — evaluated before every other state.
-            var message = "L'app del contatto non supporta la conferma di presenza fisica multi-chiave."
+            var message = String(localized: "trust.assurance.peer_legacy", defaultValue: "L'app del contatto non supporta la conferma di presenza fisica multi-chiave.", comment: "In-call security notice: the other person's app is too old to support physical-presence (NFC or in-person) confirmation with several keys")
             if expectedNfc {
                 // VERBATIM (design brief, S0's expectedNfc-appended clause).
-                message += " L'app del contatto non supporta la conferma di presenza fisica."
+                message += " " + String(localized: "trust.assurance.peer_legacy_expected_nfc", defaultValue: "L'app del contatto non supporta la conferma di presenza fisica.", comment: "In-call security notice appended to the previous one when an in-person confirmation was expected from this contact: their app does not support physical-presence confirmation")
             }
             return Presentation(style: .info, message: message, sasRequired: true)
 
         case .kcFailed: // S1
             return Presentation(
                 style: .warning,
-                message: "Avviso di sicurezza: la verifica della chiave con l'altro partecipante non è riuscita. "
-                    + "Questo può indicare un tentativo di intercettazione attivo.",
+                message: String(localized: "trust.assurance.kc_failed", defaultValue: "Avviso di sicurezza: la verifica della chiave con l'altro partecipante non è riuscita. Questo può indicare un tentativo di intercettazione attivo.", comment: "In-call security warning: the key confirmation with the other participant failed, which may mean someone is actively intercepting the call"),
                 sasRequired: true
             )
 
         case .nfcAuthenticated: // S2 — reachable since W-NFCBADGE (2026-07-23).
             return Presentation(
                 style: .badge,
-                message: "Autenticato di persona (NFC o QR + Bluetooth) + chiave pre-condivisa: \(secretLabel)",
+                message: String(localized: "trust.assurance.nfc_authenticated", defaultValue: "Autenticato di persona (NFC o QR + Bluetooth) + chiave pre-condivisa: \(secretLabel)", comment: "In-call security badge: the other person was authenticated in person (NFC tap or QR + Bluetooth pairing) and a pre-shared key is also in use. %@ is the contact's name"),
                 sasRequired: false,
                 isPhysicalPresenceProof: true
             )
@@ -118,7 +123,7 @@ public enum AssuranceStateUI {
             return Presentation(
                 style: .warning,
                 // VERBATIM (design brief).
-                message: "Questa chiave NFC era stata stabilita con un'altra identità.",
+                message: String(localized: "trust.assurance.nfc_identity_mismatch", defaultValue: "Questa chiave NFC era stata stabilita con un'altra identità.", comment: "In-call security warning: the NFC key in use was originally established with a different identity than the one on this call"),
                 sasRequired: true
             )
 
@@ -126,14 +131,14 @@ public enum AssuranceStateUI {
             return Presentation(
                 style: .warning,
                 // VERBATIM (design brief).
-                message: "Chiave ripristinata da backup: la verifica di persona non è attestabile su questo dispositivo.",
+                message: String(localized: "trust.assurance.nfc_unattestable", defaultValue: "Chiave ripristinata da backup: la verifica di persona non è attestabile su questo dispositivo.", comment: "In-call security warning: the key was restored from a backup, so this device cannot prove that it was verified in person"),
                 sasRequired: true
             )
 
         case .identityUnverified: // S5 — W-NOBRICK: warning only, call continues.
             return Presentation(
                 style: .warning,
-                message: "La firma di identità di questo scambio di chiavi non è stata verificata.",
+                message: String(localized: "trust.assurance.identity_unverified", defaultValue: "La firma di identità di questo scambio di chiavi non è stata verificata.", comment: "In-call security warning: the identity signature of this key exchange could not be verified; the call continues"),
                 sasRequired: true
             )
 
@@ -141,7 +146,7 @@ public enum AssuranceStateUI {
             return Presentation(
                 style: .warning,
                 // VERBATIM (design brief).
-                message: "Chiave di presenza fisica presente, non confermata su questa chiamata.",
+                message: String(localized: "trust.assurance.nfc_present_unconfirmed", defaultValue: "Chiave di presenza fisica presente, non confermata su questa chiamata.", comment: "In-call security warning: a physical-presence key exists for this contact but was not confirmed on this call"),
                 sasRequired: true
             )
 
@@ -149,21 +154,21 @@ public enum AssuranceStateUI {
             return Presentation(
                 style: .warning,
                 // VERBATIM (design brief).
-                message: "La chiave di presenza fisica di questo contatto non è stata usata su questa chiamata.",
+                message: String(localized: "trust.assurance.expected_nfc_stripped", defaultValue: "La chiave di presenza fisica di questo contatto non è stata usata su questa chiamata.", comment: "In-call security warning: this contact has a physical-presence key but it was not used on this call"),
                 sasRequired: true
             )
 
         case .pskConfirmed: // S8 — NEVER the word "authenticated" (design brief).
             return Presentation(
                 style: .badge,
-                message: "Chiave pre-condivisa: \(secretLabel)",
+                message: String(localized: "trust.assurance.psk_confirmed", defaultValue: "Chiave pre-condivisa: \(secretLabel)", comment: "In-call security badge: a pre-shared key is in use. %@ is the contact's name. Never say 'authenticated' here"),
                 sasRequired: false
             )
 
         case .pskUnconfirmed: // S9 — same wording as S8 + "non confermata".
             return Presentation(
                 style: .info,
-                message: "Chiave pre-condivisa: \(secretLabel) (non confermata)",
+                message: String(localized: "trust.assurance.psk_unconfirmed", defaultValue: "Chiave pre-condivisa: \(secretLabel) (non confermata)", comment: "In-call security notice: a pre-shared key is in use but it was not confirmed on this call. %@ is the contact's name"),
                 sasRequired: true
             )
 
@@ -171,7 +176,7 @@ public enum AssuranceStateUI {
             return Presentation(
                 style: .info,
                 // VERBATIM (design brief).
-                message: "Solo PQC (ML-KEM-1024 + X25519)",
+                message: String(localized: "trust.assurance.pqc_only", defaultValue: "Solo PQC (ML-KEM-1024 + X25519)", comment: "In-call security notice: only the post-quantum key exchange protects this call (no pre-shared key). PQC and the algorithm names stay untranslated"),
                 sasRequired: true
             )
         }

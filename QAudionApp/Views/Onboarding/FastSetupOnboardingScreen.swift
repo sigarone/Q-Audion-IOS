@@ -71,9 +71,9 @@ struct FastSetupOnboardingScreen: View {
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
 
-                Text("Scansiona il QR generato dal pannello admin del server. " +
-                     "Il server nel QR viene verificato rispetto a \(PinnedServerHost.host) " +
-                     "prima dell'accesso.")
+                Text(String(localized: "qr.fast_setup.intro",
+                            defaultValue: "Scansiona il QR generato dal pannello admin del server. Il server nel QR viene verificato rispetto a \(PinnedServerHost.host) prima dell'accesso.",
+                            comment: "Intro text of the quick-setup screen. %@ is the official server host name, keep it unchanged"))
                     .font(.body)
                     .foregroundStyle(.white.opacity(0.7))
                     .multilineTextAlignment(.center)
@@ -141,7 +141,7 @@ struct FastSetupOnboardingScreen: View {
             Image(systemName: "exclamationmark.octagon.fill")
                 .font(.system(size: 56))
                 .foregroundStyle(.red)
-            Text(lastError ?? "Errore sconosciuto")
+            Text(lastError ?? String(localized: "qr.fast_setup.error.unknown", defaultValue: "Errore sconosciuto", comment: "Generic error shown on the quick-setup screen when no specific message is available"))
                 .font(.callout)
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
@@ -176,7 +176,7 @@ struct FastSetupOnboardingScreen: View {
             photoLibrary: .shared()
         ) {
             Label(
-                isDecodingPhoto ? "Analisi in corso…" : "Carica immagine QR",
+                isDecodingPhoto ? LocalizedStringKey("Analisi in corso…") : LocalizedStringKey("Carica immagine QR"),
                 systemImage: isDecodingPhoto ? "hourglass" : "photo.on.rectangle.angled"
             )
             .font(.body.weight(.medium))
@@ -214,7 +214,7 @@ struct FastSetupOnboardingScreen: View {
               let uiImage = UIImage(data: data),
               let ciImage = CIImage(image: uiImage) else {
             await MainActor.run {
-                lastError = "Impossibile caricare l'immagine selezionata."
+                lastError = String(localized: "qr.fast_setup.error.image_load", defaultValue: "Impossibile caricare l'immagine selezionata.", comment: "Error on the quick-setup screen: the photo picked from the library could not be loaded")
                 phase = .errorPending
             }
             return
@@ -228,7 +228,7 @@ struct FastSetupOnboardingScreen: View {
             try handler.perform([request])
         } catch {
             await MainActor.run {
-                lastError = "Errore analisi immagine: \(error.localizedDescription)"
+                lastError = String(localized: "qr.fast_setup.error.image_analysis", defaultValue: "Errore analisi immagine: \(error.localizedDescription)", comment: "Error on the quick-setup screen: the picked photo could not be analyzed. %@ is the system error text")
                 phase = .errorPending
             }
             return
@@ -237,8 +237,7 @@ struct FastSetupOnboardingScreen: View {
         guard let observation = request.results?.first as? VNBarcodeObservation,
               let payload = observation.payloadStringValue else {
             await MainActor.run {
-                lastError = "Nessun QR trovato nell'immagine. Assicurati che il " +
-                            "codice QR sia visibile e ben a fuoco."
+                lastError = String(localized: "qr.fast_setup.error.no_qr_in_image", defaultValue: "Nessun QR trovato nell'immagine. Assicurati che il codice QR sia visibile e ben a fuoco.", comment: "Error on the quick-setup screen: no QR code was found in the picked photo")
                 phase = .errorPending
             }
             return
@@ -265,11 +264,9 @@ struct FastSetupOnboardingScreen: View {
         // hostname OR known IP allowlist OR DNS-resolved IP intersection
         // with canonical hostname).
         guard PinnedServerHost.accepts(payload.server) else {
-            lastError = "Il server nel QR (\(payload.server)) non risulta tra " +
-                "gli indirizzi noti per \(PinnedServerHost.host) " +
-                "(controllo DNS + allowlist). Verifica che il QR sia " +
-                "stato emesso dal server di produzione e riprova; se il " +
-                "problema persiste contatta l'amministratore."
+            lastError = String(localized: "qr.fast_setup.error.server_not_pinned",
+                               defaultValue: "Il server nel QR (\(payload.server)) non risulta tra gli indirizzi noti per \(PinnedServerHost.host) (controllo DNS + allowlist). Verifica che il QR sia stato emesso dal server di produzione e riprova; se il problema persiste contatta l'amministratore.",
+                               comment: "Error on the quick-setup screen: the server named in the scanned QR code is not one of the known addresses of the official server. First %@ is the server found in the QR code, second %@ is the official host name; keep 'DNS' and 'allowlist' as they are")
             phase = .errorPending
             return
         }

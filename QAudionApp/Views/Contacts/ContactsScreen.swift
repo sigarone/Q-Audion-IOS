@@ -59,7 +59,7 @@ struct ContactsScreen: View {
     enum Tab: Hashable, CaseIterable {
         case all, discover, blocked
 
-        var title: String {
+        var title: LocalizedStringKey {
             switch self {
             case .all:      return "TUTTI"
             case .discover: return "SCOPRI"
@@ -77,7 +77,7 @@ struct ContactsScreen: View {
 
         var id: String { rawValue }
 
-        var label: String {
+        var label: LocalizedStringKey {
             switch self {
             case .nameAsc:        return "Nome (A→Z)"
             case .onlineFirst:    return "Online prima"
@@ -273,7 +273,9 @@ struct ContactsScreen: View {
 
     private func handleScannedContact(_ decoded: QrPayloadRouter.Decoded) {
         let added: Bool = container.addScannedContact(decoded)
-        let text: String = added ? "Contatto aggiunto." : "Questo codice non contiene un contatto."
+        let text: String = added
+            ? String(localized: "contact.scan.added", defaultValue: "Contatto aggiunto.", comment: "Snackbar after scanning a QR code: the contact in the code was added to the address book")
+            : String(localized: "contact.scan.no_contact", defaultValue: "Questo codice non contiene un contatto.", comment: "Snackbar after scanning a QR code: the code does not contain a contact")
         let severity: QAudionSnackbarSeverity = added ? .info : .error
         snackbar?.show(.init(text: text, severity: severity))
     }

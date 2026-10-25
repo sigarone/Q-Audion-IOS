@@ -862,7 +862,7 @@ public extension BCryptoError {
         case .paymentRequired:
             return String(localized: "error.feature_not_available_for_account", defaultValue: "Funzione non disponibile per il tuo account.", comment: "Shown when the server refuses a request because the account does not have the feature enabled.")
         default:
-            return "Errore di rete — riprova."
+            return String(localized: "security.error.network_retry", defaultValue: "Errore di rete — riprova.", comment: "Generic short error after a failed server request: network error, try again")
         }
     }
 }

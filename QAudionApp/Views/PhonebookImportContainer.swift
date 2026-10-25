@@ -103,10 +103,10 @@ final class PhonebookImportContainer: ObservableObject {
         guard let p = progress, p.pendingNumberCount > 0 else { return nil }
         let pending: Int = p.pendingNumberCount
         guard let wait = p.retryAfterSeconds else {
-            let plain: String = "Ricerca parziale: \(pending) numeri non ancora controllati. Riprova più tardi."
+            let plain: String = String(localized: "contact.phonebook.partial_notice", defaultValue: "Ricerca parziale: \(pending) numeri non ancora controllati. Riprova più tardi.", comment: "Notice on the address-book import results when the server stopped the search part-way. %lld is how many phone numbers were not checked yet")
             return plain
         }
-        let timed: String = "Ricerca parziale: \(pending) numeri non ancora controllati. Riprova tra circa \(wait) secondi."
+        let timed: String = String(localized: "contact.phonebook.partial_notice_wait", defaultValue: "Ricerca parziale: \(pending) numeri non ancora controllati. Riprova tra circa \(wait) secondi.", comment: "Notice on the address-book import results when the server stopped the search part-way and asked to wait. First %lld is how many phone numbers were not checked yet, second %lld is the number of seconds to wait")
         return timed
     }
 

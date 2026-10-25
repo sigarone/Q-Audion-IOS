@@ -101,7 +101,7 @@ struct ContactEditorScreen: View {
             }
             .accessibilityLabel("Indietro")
 
-            Text(mode == .add ? "Nuovo contatto" : "Modifica contatto")
+            Text(mode == .add ? LocalizedStringKey("Nuovo contatto") : LocalizedStringKey("Modifica contatto"))
                 .qaudionStyle(type.titleMedium)
                 .foregroundStyle(scheme.onSurface)
             Spacer(minLength: 8)
@@ -113,8 +113,8 @@ struct ContactEditorScreen: View {
 
     private var guidance: some View {
         Text(mode == .add
-             ? "Inserisci i dettagli del nuovo contatto. L'interno è obbligatorio: viene risolto sul server bcrypto per agganciarlo alla sua identità."
-             : "Aggiorna i dati salvati nella tua rubrica.")
+             ? LocalizedStringKey("Inserisci i dettagli del nuovo contatto. L'interno è obbligatorio: viene risolto sul server bcrypto per agganciarlo alla sua identità.")
+             : LocalizedStringKey("Aggiorna i dati salvati nella tua rubrica."))
             .qaudionStyle(type.bodySmall)
             .italic()
             .foregroundStyle(scheme.onSurfaceVariant)
@@ -158,13 +158,13 @@ struct ContactEditorScreen: View {
         }
     }
 
-    private func field(label: String,
-                       placeholder: String,
+    private func field(label: LocalizedStringKey,
+                       placeholder: LocalizedStringKey,
                        value: Binding<String>,
                        accent: Color,
                        autocapitalization: TextInputAutocapitalization = .never,
                        keyboardType: UIKeyboardType = .default,
-                       supporting: String? = nil) -> some View {
+                       supporting: LocalizedStringKey? = nil) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .qaudionStyle(type.labelSmall)
@@ -196,8 +196,8 @@ struct ContactEditorScreen: View {
         }
     }
 
-    private func multilineField(label: String,
-                                placeholder: String,
+    private func multilineField(label: LocalizedStringKey,
+                                placeholder: LocalizedStringKey,
                                 value: Binding<String>,
                                 accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -280,7 +280,7 @@ struct ContactEditorScreen: View {
         .padding(.top, 8)
     }
 
-    private var saveButtonLabel: String {
+    private var saveButtonLabel: LocalizedStringKey {
         if busy {
             return mode == .add ? "Aggiunta in corso…" : "Salvataggio…"
         }
@@ -292,17 +292,17 @@ struct ContactEditorScreen: View {
     private func handleSave() {
         let trimmedName = displayName.trimmingCharacters(in: .whitespaces)
         guard !trimmedName.isEmpty else {
-            error = "Il nome è obbligatorio"
+            error = String(localized: "contact.editor.error.name_required", defaultValue: "Il nome è obbligatorio", comment: "Validation error in the add/edit contact form: the display name field is empty")
             return
         }
         let trimmedExt = extensionText.trimmingCharacters(in: .whitespaces)
         if !trimmedExt.isEmpty,
            !trimmedExt.allSatisfy(\.isNumber) {
-            error = "L'interno deve essere numerico"
+            error = String(localized: "contact.editor.error.extension_numeric", defaultValue: "L'interno deve essere numerico", comment: "Validation error in the add/edit contact form: the extension (PBX internal number) must contain digits only")
             return
         }
         if mode == .add, trimmedExt.isEmpty {
-            error = "Inserisci l'interno per agganciare il contatto al server."
+            error = String(localized: "contact.editor.error.extension_required", defaultValue: "Inserisci l'interno per agganciare il contatto al server.", comment: "Validation error in the add contact form: the extension is needed to link the new contact to the server account")
             return
         }
         error = nil

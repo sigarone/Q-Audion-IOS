@@ -104,23 +104,48 @@ public struct ProximityPairingScannerView: View {
 // MARK: - Copy
 
 private enum ProximityPairingCopy {
-    static let displayerCaption: String =
-        "Fai inquadrare questo codice dall'altro telefono: Contatti → Associa di persona → Scansiona un codice."
-    static let preparingCode: String = "Preparazione del codice…"
-    static let preparing: String = "Preparazione…"
-    static let confirmHint: String = "Controlla che l'altro telefono mostri lo stesso codice, poi conferma."
-    static let confirmTitle: String = "Coincide, conferma"
-    static let rejectTitle: String = "Non coincide"
-    static let waitingForPeer: String = "In attesa della conferma sull'altro telefono…"
-    static let newCode: String = "Nuovo codice"
-    static let scanAgain: String = "Scansiona di nuovo"
-    static let qrAccessibility: String = "Codice QR di associazione"
-    static let serverChecking: String = "Verifica dell'account sul server…"
-    static let serverConfirmed: String = "Account verificato: la chiave di questo telefono è quella pubblicata dall'account."
-    static let serverUnknown: String = "Impossibile verificare l'account sul server: controlla bene chi hai davanti."
-    static let serverMismatch: String =
-        "Attenzione: questo account ha pubblicato sul server chiavi diverse da quella di questo telefono. "
-        + "La persona davanti a te potrebbe non essere il titolare dell'account: conferma solo se ne sei certo."
+    static var displayerCaption: String {
+        String(localized: "pairing.panel.displayer_caption", defaultValue: "Fai inquadrare questo codice dall'altro telefono: Contatti → Associa di persona → Scansiona un codice.", comment: "In-person pairing, under the QR code: the other person scans it with their phone; the arrows describe the menu path in the app")
+    }
+    static var preparingCode: String {
+        String(localized: "pairing.panel.preparing_code", defaultValue: "Preparazione del codice…", comment: "In-person pairing: the QR code is being prepared")
+    }
+    static var preparing: String {
+        String(localized: "pairing.panel.preparing", defaultValue: "Preparazione…", comment: "In-person pairing on the scanning phone: preparing the connection")
+    }
+    static var confirmHint: String {
+        String(localized: "pairing.panel.confirm_hint", defaultValue: "Controlla che l'altro telefono mostri lo stesso codice, poi conferma.", comment: "In-person pairing: ask the user to check that the other phone shows the same 6-digit code, then confirm")
+    }
+    static var confirmTitle: String {
+        String(localized: "pairing.panel.confirm", defaultValue: "Coincide, conferma", comment: "In-person pairing button: the two codes match, confirm")
+    }
+    static var rejectTitle: String {
+        String(localized: "pairing.panel.reject", defaultValue: "Non coincide", comment: "In-person pairing button: the two codes do not match")
+    }
+    static var waitingForPeer: String {
+        String(localized: "pairing.panel.waiting_for_peer", defaultValue: "In attesa della conferma sull'altro telefono…", comment: "In-person pairing: waiting for the other person to confirm on their phone")
+    }
+    static var newCode: String {
+        String(localized: "pairing.panel.new_code", defaultValue: "Nuovo codice", comment: "In-person pairing button after a failure on the phone showing the code: show a new QR code")
+    }
+    static var scanAgain: String {
+        String(localized: "pairing.panel.scan_again", defaultValue: "Scansiona di nuovo", comment: "In-person pairing button after a failure on the scanning phone: scan the code again")
+    }
+    static var qrAccessibility: String {
+        String(localized: "pairing.panel.qr_a11y", defaultValue: "Codice QR di associazione", comment: "VoiceOver label of the pairing QR code image")
+    }
+    static var serverChecking: String {
+        String(localized: "pairing.panel.server_checking", defaultValue: "Verifica dell'account sul server…", comment: "In-person pairing: checking on the server that the account really published this phone's key")
+    }
+    static var serverConfirmed: String {
+        String(localized: "pairing.panel.server_confirmed", defaultValue: "Account verificato: la chiave di questo telefono è quella pubblicata dall'account.", comment: "In-person pairing: the server confirmed that the key of the other phone is the one published by the account")
+    }
+    static var serverUnknown: String {
+        String(localized: "pairing.panel.server_unknown", defaultValue: "Impossibile verificare l'account sul server: controlla bene chi hai davanti.", comment: "In-person pairing: the account could not be checked on the server, so the user must be careful about who is in front of them")
+    }
+    static var serverMismatch: String {
+        String(localized: "pairing.panel.server_mismatch", defaultValue: "Attenzione: questo account ha pubblicato sul server chiavi diverse da quella di questo telefono. La persona davanti a te potrebbe non essere il titolare dell'account: conferma solo se ne sei certo.", comment: "In-person pairing warning: the account published different keys on the server than the one of the phone in front of the user; confirm only if completely sure")
+    }
 }
 
 // MARK: - Shared panel

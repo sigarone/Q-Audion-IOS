@@ -9,16 +9,23 @@ import SwiftUI
 struct TrustChip: View {
     @Environment(\.qaudionType) private var type
 
-    let label: String
+    let label: Text
     let accent: Color
 
-    init(_ label: String, accent: Color) {
-        self.label = label
+    /// Literal chip text: looked up in the String Catalog.
+    init(_ label: LocalizedStringKey, accent: Color) {
+        self.label = Text(label)
+        self.accent = accent
+    }
+
+    /// Already-localized (or non-translatable) text, shown as is.
+    init(verbatim label: String, accent: Color) {
+        self.label = Text(verbatim: label)
         self.accent = accent
     }
 
     var body: some View {
-        Text(label)
+        label
             .qaudionStyle(type.labelSmall)
             .tracking(1.2)
             .foregroundStyle(accent)

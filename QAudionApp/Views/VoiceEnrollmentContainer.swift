@@ -12,9 +12,12 @@ final class VoiceEnrollmentContainer: ObservableObject {
 
         var errorDescription: String? {
             switch self {
-            case .microphonePermissionDenied: return "Microphone permission denied. Enable in Settings → Q-Audion → Microphone."
-            case .audioEngineFailedToStart(let m): return "Audio engine failed: \(m)"
-            case .noPromptAvailable: return "No prompts to read"
+            case .microphonePermissionDenied:
+                return String(localized: "voice.enrollment.error.mic_denied", defaultValue: "Permesso microfono negato. Abilitalo in Impostazioni → Q-Audion → Microfono.", comment: "Error during voice enrollment: microphone access was denied; points to the iOS Settings app")
+            case .audioEngineFailedToStart(let m):
+                return String(localized: "voice.enrollment.error.audio_engine", defaultValue: "Motore audio non avviato: \(m)", comment: "Error during voice enrollment: the audio engine could not start. %@ is a technical detail from the system")
+            case .noPromptAvailable:
+                return String(localized: "voice.enrollment.error.no_prompt", defaultValue: "Nessuna frase da leggere", comment: "Error during voice enrollment: there is no phrase to read aloud")
             }
         }
     }
@@ -83,7 +86,7 @@ final class VoiceEnrollmentContainer: ObservableObject {
             viewModel.transition(to: .recording(prompt: prompt, secondsElapsed: 0))
             isRecording = true
         } catch {
-            errorMessage = "Recording failed: \(error.localizedDescription)"
+            errorMessage = String(localized: "voice.enrollment.error.recording_failed", defaultValue: "Registrazione non riuscita: \(error.localizedDescription)", comment: "Error during voice enrollment: the recording failed. %@ is the system error text")
             viewModel.transition(to: .error(message: errorMessage ?? ""))
         }
     }
@@ -124,7 +127,7 @@ final class VoiceEnrollmentContainer: ObservableObject {
                     if let embeddingId {
                         self.viewModel.transition(to: .complete(speakerEmbeddingId: embeddingId))
                     } else {
-                        let message = "Elaborazione del voiceprint non riuscita. Riprova la registrazione."
+                        let message = String(localized: "voice.enrollment.error.processing_failed", defaultValue: "Elaborazione del voiceprint non riuscita. Riprova la registrazione.", comment: "Error shown when the voiceprint could not be built from the recorded phrases at the end of voice enrollment")
                         self.errorMessage = message
                         self.viewModel.transition(to: .error(message: message))
                     }

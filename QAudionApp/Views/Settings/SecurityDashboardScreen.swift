@@ -116,9 +116,12 @@ struct SecurityDashboardScreen: View {
 
     private var keyHealthLabel: String {
         switch container.viewModel.keyHealth {
-        case .healthy:     return "Operativa"
-        case .rotationDue: return "Rotazione consigliata"
-        case .compromised: return "COMPROMESSA"
+        case .healthy:
+            return String(localized: "security.dashboard.key_health.healthy", defaultValue: "Operativa", comment: "Security dashboard, key status value: the identity key is working normally")
+        case .rotationDue:
+            return String(localized: "security.dashboard.key_health.rotation_due", defaultValue: "Rotazione consigliata", comment: "Security dashboard, key status value: it is time to replace the identity key")
+        case .compromised:
+            return String(localized: "security.dashboard.key_health.compromised", defaultValue: "COMPROMESSA", comment: "Security dashboard, key status value in ALL CAPS: the identity key may have been compromised")
         }
     }
 
@@ -129,11 +132,16 @@ struct SecurityDashboardScreen: View {
     /// "failed" is the one state that means a real submit attempt errored.
     private var ktStatusLabel: String {
         switch container.ktStatus {
-        case .confirmed: return "Verificata"
-        case .pending: return "In corso"
-        case .failed: return "Non riuscita"
-        case .notSubmitted: return "Non attiva"
-        case .unknown: return "Sconosciuto"
+        case .confirmed:
+            return String(localized: "security.dashboard.transparency.confirmed", defaultValue: "Verificata", comment: "Security dashboard, key transparency value: the key was found in the public transparency log")
+        case .pending:
+            return String(localized: "security.dashboard.transparency.pending", defaultValue: "In corso", comment: "Security dashboard, key transparency value: publication in the public transparency log is in progress")
+        case .failed:
+            return String(localized: "security.dashboard.transparency.failed", defaultValue: "Non riuscita", comment: "Security dashboard, key transparency value: publication in the public transparency log failed")
+        case .notSubmitted:
+            return String(localized: "security.dashboard.transparency.not_submitted", defaultValue: "Non attiva", comment: "Security dashboard, key transparency value: the key was not submitted to the public transparency log, so the check is off")
+        case .unknown:
+            return String(localized: "Sconosciuto")
         }
     }
 
@@ -266,7 +274,7 @@ struct SecurityDashboardScreen: View {
 
     // MARK: - Rows
 
-    private func kvRow(label: String, value: String, mono: Bool) -> some View {
+    private func kvRow(label: LocalizedStringKey, value: String, mono: Bool) -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)
@@ -308,7 +316,7 @@ struct SecurityDashboardScreen: View {
         )
     }
 
-    private func countRow(label: String, count: Int, warningColor: Color) -> some View {
+    private func countRow(label: LocalizedStringKey, count: Int, warningColor: Color) -> some View {
         HStack(spacing: 14) {
             Text(label)
                 .qaudionStyle(type.bodyMedium)

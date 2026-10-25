@@ -71,11 +71,11 @@ public enum TrustVerificationMethod: String, CaseIterable, Equatable {
 
     public var localized: String {
         switch self {
-        case .inPerson:   return "In persona"
+        case .inPerson:   return String(localized: "trust.method.in_person", defaultValue: "In persona", comment: "Safety-number verification method in a menu and in the verified footer: the two people verified it face to face")
         case .qr:         return "QR scan"
         case .nfc:        return "NFC"
         case .antiReplay: return "Anti-replay (in-call SAS)"
-        case .voice:      return "Voce"
+        case .voice:      return String(localized: "trust.method.voice", defaultValue: "Voce", comment: "Safety-number verification method in a menu and in the verified footer: verified by voice (reading the code aloud on a call)")
         }
     }
 }
@@ -308,8 +308,8 @@ public struct TrustVerificationCard: View {
                     .stroke(scheme.outline.opacity(0.4), lineWidth: 1)
             )
             .accessibilityLabel(index >= 0
-                ? "Gruppo \(index + 1): \(digits.map(String.init).joined(separator: " "))"
-                : "Gruppo non disponibile")
+                ? String(localized: "trust.safety_number.group_a11y", defaultValue: "Gruppo \(index + 1): \(digits.map(String.init).joined(separator: " "))", comment: "VoiceOver label of one 5-digit group of the safety number. First %lld is the group position (1 to 12), %@ is its digits separated by spaces.")
+                : String(localized: "trust.safety_number.group_unavailable_a11y", defaultValue: "Gruppo non disponibile", comment: "VoiceOver label of a safety-number cell that is still a placeholder because the number is not available"))
     }
 
     // MARK: - Footer (state-dependent)
