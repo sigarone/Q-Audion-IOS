@@ -1108,7 +1108,7 @@ struct InCallScreen: View {
     /// fit a phone at 11pt. `lineLimit(1)` + `minimumScaleFactor` are the
     /// belt to that braces — a truncated "FLUSSO kb…" would be worse than
     /// a slightly smaller one on the narrowest devices.
-    private func statColumn(_ label: String, _ value: String, _ color: Color) -> some View {
+    private func statColumn(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(spacing: 2) {
             Text(label)
                 .font(.system(size: 8.5, weight: .medium, design: .monospaced))
@@ -1350,7 +1350,7 @@ struct InCallScreen: View {
         )
     }
 
-    private func keyInfoRow(_ label: String, _ value: String) -> some View {
+    private func keyInfoRow(_ label: LocalizedStringKey, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(label)
                 .qaudionStyle(type.labelSmall)
@@ -2434,7 +2434,7 @@ struct InCallScreen: View {
                     // post-quantum" section below, which shows the static
                     // handshake parameters (keyInfo), not a trust verdict.
                     if let assurancePresentation {
-                        securitySection(title: "Verifica di questa chiamata") {
+                        securitySection(title: String(localized: "Verifica di questa chiamata")) {
                             assuranceSectionBody(assurancePresentation)
                         }
                     }
@@ -2455,13 +2455,13 @@ struct InCallScreen: View {
                     Divider().background(scheme.outline.opacity(0.25))
 
                     if sasWords.count == 6 {
-                        securitySection(title: "SAS · leggi ad alta voce per verificare \(peerDisplayName)") {
+                        securitySection(title: String(localized: "SAS · leggi ad alta voce per verificare \(peerDisplayName)")) {
                             sasPanel
                         }
                     }
 
                     if let keyInfo {
-                        securitySection(title: "Handshake · post-quantum") {
+                        securitySection(title: String(localized: "Handshake · post-quantum")) {
                             keyInfoPanel(keyInfo)
                         }
                     }
@@ -2472,12 +2472,12 @@ struct InCallScreen: View {
                     // call site passes nil and this row is simply absent
                     // rather than showing a fabricated "epoch 0" / countdown).
                     if keyInfo != nil || keyEpoch != nil {
-                        securitySection(title: "Cifra e chiave") {
+                        securitySection(title: String(localized: "Cifra e chiave")) {
                             cipherKeySectionBody
                         }
                     }
 
-                    securitySection(title: "Trasporto") {
+                    securitySection(title: String(localized: "Trasporto")) {
                         transportSectionBody
                     }
 
@@ -2501,7 +2501,7 @@ struct InCallScreen: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title.uppercased())
+            Text(verbatim: title.uppercased())
                 .qaudionStyle(type.labelSmall)
                 .tracking(1.2)
                 .foregroundStyle(scheme.onSurfaceVariant)
@@ -2545,7 +2545,7 @@ struct InCallScreen: View {
     private var transportSectionBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             keyInfoRow("PERCORSO", transportMode.label)
-            keyInfoRow("STATO", transportMode == .disconnected ? "in negoziazione…" : "attivo")
+            keyInfoRow("STATO", transportMode == .disconnected ? String(localized: "in negoziazione…") : String(localized: "attivo"))
         }
     }
 

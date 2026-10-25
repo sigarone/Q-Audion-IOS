@@ -524,7 +524,7 @@ struct SettingsScreen: View {
                         VoiceprintStore().delete(contactId: VoiceprintStore.deviceOwnerId)
                         ownerVoiceEnrolled = false
                         snackbar?.show(.init(
-                            text: "Voice-as-Key reimpostato.",
+                            text: String(localized: "Voice-as-Key reimpostato."),
                             severity: .info,
                             durationSeconds: 3))
                     }

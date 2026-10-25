@@ -231,7 +231,7 @@ struct MessageBubble<Body: View>: View {
         return HStack(spacing: 3) {
             Image(systemName: viaMesh ? "dot.radiowaves.left.and.right" : "globe")
                 .font(.system(size: 9, weight: .semibold))
-            Text(viaMesh ? "Bluetooth" : "Rete")
+            Text(viaMesh ? LocalizedStringKey("Bluetooth") : LocalizedStringKey("Rete"))
                 .qaudionStyle(type.labelSmall)
         }
         .foregroundStyle(tint)
@@ -239,8 +239,8 @@ struct MessageBubble<Body: View>: View {
         .padding(.vertical, 1)
         .background(tint.opacity(0.12), in: Capsule())
         .accessibilityLabel(viaMesh
-            ? "Trasmesso via mesh Bluetooth, senza passare dalla rete pubblica"
-            : "Trasmesso tramite la rete pubblica")
+            ? LocalizedStringKey("Trasmesso via mesh Bluetooth, senza passare dalla rete pubblica")
+            : LocalizedStringKey("Trasmesso tramite la rete pubblica"))
     }
 
     @ViewBuilder
@@ -327,7 +327,7 @@ struct MessageBubble<Body: View>: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reazione \(r.emoji), \(r.count)")
-            .accessibilityHint(r.highlighted ? "Rimuovi la tua reazione" : "Aggiungi questa reazione")
+            .accessibilityHint(r.highlighted ? LocalizedStringKey("Rimuovi la tua reazione") : LocalizedStringKey("Aggiungi questa reazione"))
         } else {
             label
         }

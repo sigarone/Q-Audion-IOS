@@ -466,7 +466,7 @@ struct ContactDetailScreen: View {
                          caption: "SAS",
                          tint: extras.warning) { showingSasSheet = true }
             actionButton(icon: isBlocked ? "circle.slash.fill" : "circle.slash",
-                         caption: isBlocked ? "Sblocca" : "Blocca",
+                         caption: isBlocked ? LocalizedStringKey("contacts.unblock") : LocalizedStringKey("contacts.block"),
                          tint: extras.riskHigh) {
                 if isBlocked { performUnblock() } else { performBlock() }
             }
@@ -477,7 +477,7 @@ struct ContactDetailScreen: View {
     }
 
     private func actionButton(icon: String,
-                              caption: String,
+                              caption: LocalizedStringKey,
                               tint: Color,
                               action: @escaping () -> Void) -> some View {
         VStack(spacing: 6) {

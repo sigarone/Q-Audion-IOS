@@ -319,8 +319,8 @@ struct ChatListScreen: View {
         // 2. First-launch hint.
         if container.viewModel.items.isEmpty && container.searchText.isEmpty {
             return AdminBannerData(
-                title: "Q-Audion attivo",
-                message: "Le tue chiamate e i tuoi messaggi sono protetti con ML-KEM 1024 + Voice-as-Key.",
+                title: String(localized: "Q-Audion attivo"),
+                message: String(localized: "Le tue chiamate e i tuoi messaggi sono protetti con ML-KEM 1024 + Voice-as-Key."),
                 ctaLabel: nil
             )
         }
@@ -349,10 +349,11 @@ struct ChatListScreen: View {
             .replacingOccurrences(of: "_", with: " ")
             .capitalized
         let when = formatRelative(latest.submittedAt)
+        let detailsText = "\(latest.details.prefix(160))\(latest.details.count > 160 ? "…" : "")"
         return AdminBannerData(
-            title: "Allerta sicurezza · \(pretty)",
-            message: "\(latest.details.prefix(160))\(latest.details.count > 160 ? "…" : "") · segnalata \(when)",
-            ctaLabel: "Vedi dettagli"
+            title: String(localized: "Allerta sicurezza · \(pretty)"),
+            message: String(localized: "\(detailsText) · segnalata \(when)"),
+            ctaLabel: String(localized: "Vedi dettagli")
         )
     }
 
@@ -898,8 +899,9 @@ struct ChatListScreen: View {
 
     // MARK: - Section header
 
-    private func sectionHeader(_ text: String) -> some View {
-        Text(text.uppercased())
+    private func sectionHeader(_ text: LocalizedStringKey) -> some View {
+        Text(text)
+            .textCase(.uppercase)
             .qaudionStyle(type.labelSmall)
             .tracking(1.5)
             .foregroundStyle(scheme.onSurfaceVariant)
@@ -915,10 +917,10 @@ struct ChatListScreen: View {
                 .foregroundStyle(extras.warning)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
-                Text(data.title)
+                Text(verbatim: data.title)
                     .qaudionStyle(type.titleSmall)
                     .foregroundStyle(scheme.onSurface)
-                Text(data.message)
+                Text(verbatim: data.message)
                     .qaudionStyle(type.bodySmall)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .lineLimit(3)
@@ -1353,7 +1355,7 @@ struct ChatListScreen: View {
             Button {
                 container.togglePinned(conversationId: item.conversationId)
             } label: {
-                Label(item.pinned ? "Sblocca" : "Fissa",
+                Label(item.pinned ? LocalizedStringKey("chat_list.unpin") : LocalizedStringKey("Fissa"),
                       systemImage: item.pinned ? "pin.slash" : "pin")
             }
             .tint(.orange)
@@ -1362,7 +1364,7 @@ struct ChatListScreen: View {
             Button {
                 container.toggleMuted(conversationId: item.conversationId)
             } label: {
-                Label(item.muted ? "Riattiva" : "Silenzia",
+                Label(item.muted ? LocalizedStringKey("Riattiva") : LocalizedStringKey("Silenzia"),
                       systemImage: item.muted ? "bell" : "bell.slash")
             }
             .tint(.indigo)
@@ -1384,13 +1386,13 @@ struct ChatListScreen: View {
             Button {
                 container.togglePinned(conversationId: item.conversationId)
             } label: {
-                Label(item.pinned ? "Sblocca" : "Fissa",
+                Label(item.pinned ? LocalizedStringKey("chat_list.unpin") : LocalizedStringKey("Fissa"),
                       systemImage: item.pinned ? "pin.slash" : "pin")
             }
             Button {
                 container.toggleMuted(conversationId: item.conversationId)
             } label: {
-                Label(item.muted ? "Riattiva" : "Silenzia",
+                Label(item.muted ? LocalizedStringKey("Riattiva") : LocalizedStringKey("Silenzia"),
                       systemImage: item.muted ? "bell" : "bell.slash")
             }
             // W139: export the transcript as a plaintext .txt and hand

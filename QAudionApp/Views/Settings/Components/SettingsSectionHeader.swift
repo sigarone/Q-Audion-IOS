@@ -13,12 +13,17 @@ struct SettingsSectionHeader: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionType) private var type
 
-    let title: String
+    private let title: Text
 
-    init(_ title: String) { self.title = title }
+    /// Literal copy: looked up in the string catalog.
+    init(_ title: LocalizedStringKey) { self.title = Text(title) }
+
+    /// Already-resolved runtime copy: shown as is, never parsed as a key or Markdown.
+    @_disfavoredOverload
+    init(_ title: String) { self.title = Text(verbatim: title) }
 
     var body: some View {
-        Text(title)
+        title
             .qaudionStyle(type.labelSmall)
             .tracking(1.5)
             .foregroundStyle(scheme.primary)
