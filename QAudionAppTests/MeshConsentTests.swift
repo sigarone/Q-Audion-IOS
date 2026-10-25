@@ -165,6 +165,20 @@ final class MeshConsentTests: XCTestCase {
         XCTAssertNil(runtime.localNodeIdHex, "an account that left takes its node id with it")
     }
 
+    func test_continueOnTheScreenBeforeThePermissionNeverGrantsRelaying() throws {
+        let consent = MeshConsent(store: MeshConsentStore(defaults: try makeDefaults()))
+        let runtime = MeshRuntime(forTesting: consent)
+        XCTAssertEqual(consent.state, .undecided)
+        runtime.continueAfterPriming()
+        XCTAssertEqual(consent.state, .declined, "\"Continua\" records own messages only")
+        XCTAssertNotEqual(consent.state, .accepted, "relaying needs the separate, explicit yes")
+        XCTAssertTrue(runtime.startAllowed, "the direct mode may start, which is what makes the system ask for the permission")
+        XCTAssertEqual(MeshModePolicy.allowedMode(.fullMesh, consent: consent.state), .direct)
+
+        runtime.acceptConsentAndStart()
+        XCTAssertEqual(consent.state, .accepted, "the relay alert's yes is what records the consent to relay")
+    }
+
     func test_aUserWhoDeclinedRelayingStillGetsTheDirectModeAndNeverFullMesh() throws {
         let consent = MeshConsent(store: MeshConsentStore(defaults: try makeDefaults()))
         let runtime = MeshRuntime(forTesting: consent)

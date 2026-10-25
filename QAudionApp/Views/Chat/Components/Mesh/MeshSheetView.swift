@@ -36,6 +36,8 @@ struct MeshSheetView: View {
     /// Whether a call is busy (mirrored by the root): the consent screen is never presented over one.
     @ObservedObject private var arbiter = MeshConsentArbiter.shared
     @State private var showingConsent: Bool = false
+    /// The follow-up question asked when full mesh (which relays other people's messages) is tapped before relaying was allowed.
+    @State private var showingRelayAlert: Bool = false
     /// The mode the user tapped before the consent screen came up; it is started if they accept.
     @State private var pendingConsentMode: MeshAntennaMode?
 
@@ -110,9 +112,13 @@ struct MeshSheetView: View {
         .meshConsentSheet(
             wanted: $showingConsent,
             callBusy: arbiter.callBusy,
-            onAccept: acceptConsent,
-            onDecline: declineConsent
+            onContinue: continueAfterPriming
         )
+        .meshRelayAlert(isPresented: $showingRelayAlert) {
+            let mode: MeshAntennaMode = pendingConsentMode ?? .fullMesh
+            pendingConsentMode = nil
+            runtime.acceptConsentAndStart(mode: mode)
+        }
     }
 
     /// The consent screen was answered (either way): the Bluetooth may be probed and a mode may be started, within
@@ -121,21 +127,13 @@ struct MeshSheetView: View {
         consent.state != .undecided
     }
 
-    /// "Attiva" on the consent screen: starts the mode the user had tapped.
-    private func acceptConsent() {
-        let mode: MeshAntennaMode = pendingConsentMode ?? .fullMesh
-        pendingConsentMode = nil
-        showingConsent = false
-        runtime.acceptConsentAndStart(mode: mode)
-    }
-
-    /// "Solo i miei messaggi": relaying stays off and the antenna comes up in direct mode (or in the visible-only mode
-    /// the user had tapped); nothing is forwarded for anyone else.
-    private func declineConsent() {
+    /// "Continua" on the screen before the Bluetooth permission request: relaying stays off and the antenna comes up in
+    /// direct mode (or in the visible-only mode the user had tapped); nothing is forwarded for anyone else.
+    private func continueAfterPriming() {
         let tapped: MeshAntennaMode? = pendingConsentMode
         pendingConsentMode = nil
         showingConsent = false
-        runtime.declineRelayAndUseDirect(startIfOff: true, preferred: tapped)
+        runtime.continueAfterPriming(preferred: tapped)
     }
 
     private var header: some View {
@@ -360,7 +358,9 @@ struct MeshSheetView: View {
         // mode only if they accept. Turning it OFF never needs asking.
         if let mode, !MeshModePolicy.mayStart(featureEnabled: true, consent: consent.state, mode: mode) {
             pendingConsentMode = mode
-            showingConsent = true
+            // Before the first answer: the screen that leads to the Bluetooth permission request. After it, the only mode
+            // still blocked is full mesh, which needs the separate yes to relaying.
+            if consent.state == .undecided { showingConsent = true } else { showingRelayAlert = true }
             return
         }
         runtime.setAntenna(mode: mode)

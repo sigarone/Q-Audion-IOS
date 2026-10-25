@@ -1,5 +1,6 @@
 import SwiftUI
 import QAudionEngine
+import Contacts
 
 /// Container / presenter that drives `PhonebookImportView` through its full
 /// state machine by delegating to `PhonebookSyncCoordinator`.
@@ -12,6 +13,10 @@ final class PhonebookImportContainer: ObservableObject {
 
     @Published private(set) var viewModel: PhonebookImportViewModel
     @Published private(set) var progress: PhonebookSyncCoordinator.ScanProgress?
+    /// Whether the system has not asked for Contacts access yet: the first screen is then the one that leads to the request.
+    /// True while the system Contacts request is on screen: the button that opened it is disabled meanwhile.
+    @Published private(set) var requestingSystemPermission: Bool = false
+    @Published private(set) var permissionNotDetermined: Bool = CNContactStore.authorizationStatus(for: .contacts) == .notDetermined
 
     private let coordinator: PhonebookSyncCoordinator
 
@@ -23,7 +28,24 @@ final class PhonebookImportContainer: ObservableObject {
 
     // MARK: - Actions
 
-    /// Called by the View's "Start" button.  Drives the full pipeline.
+    /// Called by "Continua" on the screen shown before the system Contacts request: asks for the permission and nothing
+    /// else. Nothing is scanned or sent; the import starts only when the user taps "Importa" afterwards.
+    func requestPermissionOnly() {
+        guard !requestingSystemPermission else { return }
+        requestingSystemPermission = true
+        Task { [self] in
+            let granted = (try? await coordinator.requestPermission()) ?? false
+            requestingSystemPermission = false
+            permissionNotDetermined = CNContactStore.authorizationStatus(for: .contacts) == .notDetermined
+            if !granted {
+                viewModel.transition(to: .error(
+                    message: PhonebookSyncCoordinator.Error.permissionDenied.localizedDescription
+                ))
+            }
+        }
+    }
+
+    /// Called by the View's "Importa" button.  Drives the full pipeline.
     func startImport() {
         Task { [self] in
             do {

@@ -39,6 +39,9 @@ struct LocationShareSheet: View {
     @State private var reducedAccuracy: Bool = false
     @State private var showExplainer: Bool = false
     @State private var pendingDuration: Int64 = 0
+    /// The explainer precedes the system location request (permission not decided yet): it has the one Continue button and
+    /// leads to the request. When the permission is already decided it confirms the share and keeps a cancel button.
+    @State private var explainerIsPriming: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -77,7 +80,9 @@ struct LocationShareSheet: View {
         }
         .alert(Text(verbatim: LocationCardStrings.sheetShareLive), isPresented: $showExplainer) {
             Button(LocationCardStrings.explainerContinue) { explainerConfirmed() }
-            Button(LocationCardStrings.cancel, role: .cancel) { }
+            if !explainerIsPriming {
+                Button(LocationCardStrings.cancel, role: .cancel) { pendingDuration = 0 }
+            }
         } message: {
             Text(verbatim: LocationCardStrings.explainer(name: peerName))
         }
@@ -182,15 +187,47 @@ struct LocationShareSheet: View {
             working = true
             Task { await startLive(duration: seconds) }
         } else {
+            explainerIsPriming = LocationService.shared.isNotDetermined
             showExplainer = true
         }
     }
 
     private func explainerConfirmed() {
+        if explainerIsPriming {
+            // Continue leads to the system request only; nothing is shared until the user picks a duration again.
+            pendingDuration = 0
+            working = true
+            Task { await askForPermissionOnly() }
+            return
+        }
         UserDefaults.standard.set(true, forKey: Self.explainerSeenKey)
         working = true
         let seconds: Int64 = pendingDuration
         Task { await startLive(duration: seconds) }
+    }
+
+    @MainActor
+    private func askForPermissionOnly() async {
+        await awaitPermissionDecision()
+        let service = LocationService.shared
+        LocationTelemetry.permission(state: service.authorizationLabel)
+        if !service.isAuthorized {
+            notice = LocationCardStrings.permissionDenied
+            showSettingsButton = true
+        }
+        working = false
+    }
+
+    @MainActor
+    private func awaitPermissionDecision() async {
+        let service = LocationService.shared
+        guard service.isNotDetermined else { return }
+        service.requestWhenInUse()
+        var waited: Int = 0
+        while service.isNotDetermined && waited < 240 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            waited += 1
+        }
     }
 
     private func openSystemSettings() {
@@ -217,14 +254,7 @@ struct LocationShareSheet: View {
     @MainActor
     private func obtainReading() async -> LocationReading? {
         let service = LocationService.shared
-        if service.isNotDetermined {
-            service.requestWhenInUse()
-            var waited: Int = 0
-            while service.isNotDetermined && waited < 240 {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                waited += 1
-            }
-        }
+        await awaitPermissionDecision()
         LocationTelemetry.permission(state: service.authorizationLabel)
         if !service.isAuthorized {
             notice = LocationCardStrings.permissionDenied

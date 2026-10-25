@@ -1,8 +1,10 @@
 import SwiftUI
 import QAudionEngine
+import Contacts
 
 struct PhonebookImportView: View {
     @StateObject private var container: PhonebookImportContainer
+    @Environment(\.dismiss) private var dismiss
 
     init(appState: AppState) {
         _container = StateObject(wrappedValue: PhonebookImportContainer(appState: appState))
@@ -30,6 +32,26 @@ struct PhonebookImportView: View {
         }
         .padding()
         .navigationTitle("Importa contatti")
+        // The screen that only precedes the system Contacts request (permission not decided yet) leads to it and has no
+        // way to postpone it. Once the permission is decided the screen can be closed again.
+        .interactiveDismissDisabled(isPriming)
+        .toolbar {
+            if !isPriming {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(isIntroduction ? LocalizedStringKey("Annulla") : LocalizedStringKey("Fatto")) { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var isIntroduction: Bool {
+        if case .introduction = container.viewModel.step { return true }
+        return false
+    }
+
+    private var isPriming: Bool {
+        if case .introduction = container.viewModel.step { return container.permissionNotDetermined }
+        return false
     }
 
     /// Indeterminate-or-determinate progress block. Wraps a labeled
@@ -51,8 +73,18 @@ struct PhonebookImportView: View {
             Image(systemName: "person.crop.rectangle.stack").font(.system(size: 64)).foregroundStyle(.blue)
             Text("Trova utenti Q-Audion nella tua rubrica").font(.title2.bold())
             Text("Calcoliamo l'hash di ogni numero localmente con un pepper fornito dal server, poi chiediamo al server quali hash corrispondono a utenti noti. La tua rubrica non lascia mai il dispositivo in chiaro.").font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button("Inizia") {
-                container.startImport()
+            Group {
+                if container.permissionNotDetermined {
+                    // Only the system request: nothing is scanned or sent until the user taps "Importa".
+                    Button("Continua") {
+                        container.requestPermissionOnly()
+                    }
+                    .disabled(container.requestingSystemPermission)
+                } else {
+                    Button("Importa") {
+                        container.startImport()
+                    }
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -87,6 +119,13 @@ struct PhonebookImportView: View {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 64)).foregroundStyle(.red)
             Text("Errore di importazione").font(.title.bold())
             Text(msg).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if CNContactStore.authorizationStatus(for: .contacts) == .denied {
+                Button("Apri Impostazioni") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+            }
         }
     }
 }

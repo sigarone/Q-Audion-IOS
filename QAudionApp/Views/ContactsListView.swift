@@ -577,11 +577,6 @@ struct ContactsListView: View {
         .sheet(isPresented: $showingPhonebookImport) {
             NavigationStack {
                 PhonebookImportView(appState: appState)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Fatto") { showingPhonebookImport = false }
-                        }
-                    }
             }
         }
         .sheet(isPresented: $showingQrScanner) {

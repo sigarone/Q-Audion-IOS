@@ -125,7 +125,7 @@ enum LocationCardStrings {
     }
 
     static var explainerContinue: String {
-        String(localized: "location.sheet.explainer_continue", defaultValue: "Continua", comment: "Button that confirms the explanation and starts the live share.")
+        String(localized: "location.sheet.explainer_continue", defaultValue: "Continua", comment: "Button of the explanation shown before the first live share: when the location permission is not decided yet it leads to the system request; otherwise it confirms and starts the live share.")
     }
 
     static var cancel: String {
