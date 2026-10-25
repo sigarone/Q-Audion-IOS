@@ -37,12 +37,12 @@ final class ChatAttachAnnounceReceiver {
 
         var errorDescription: String? {
             switch self {
-            case .notAuthenticated:    return "Non autenticato"
-            case .downloadFailed(let m): return "Download fallito: \(m)"
-            case .decodeFailed(let m): return "Decodifica fallita: \(m)"
-            case .writeFailed(let m):  return "Scrittura fallita: \(m)"
-            case .invalidId:           return "ID allegato non valido"
-            case .pskMissing: return "Scambio chiavi in corso — riprova tra poco."
+            case .notAuthenticated:    return String(localized: "attachment.error.not_authenticated", defaultValue: "Non autenticato", comment: "Error text of an attachment, voice note or avatar transfer: the user is not signed in.")
+            case .downloadFailed(let m): return String(localized: "attachment.error.download_failed", defaultValue: "Download fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .decodeFailed(let m): return String(localized: "attachment.error.decode_failed", defaultValue: "Decodifica fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .writeFailed(let m):  return String(localized: "attachment.error.write_failed", defaultValue: "Scrittura fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .invalidId:           return String(localized: "attachment.error.invalid_id", defaultValue: "ID allegato non valido", comment: "Error text of an attachment download: the attachment identifier is not valid.")
+            case .pskMissing: return String(localized: "attachment.error.key_exchange_pending", defaultValue: "Scambio chiavi in corso — riprova tra poco.", comment: "Error text of an attachment, voice note or avatar transfer: the key exchange with the contact is not finished yet.")
             }
         }
     }

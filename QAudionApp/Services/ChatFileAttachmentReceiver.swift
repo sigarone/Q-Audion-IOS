@@ -70,17 +70,17 @@ final class ChatFileAttachmentReceiver {
 
         var errorDescription: String? {
             switch self {
-            case .notAuthenticated: return "Non autenticato"
-            case .noWrapForDevice: return "Allegato non indirizzato a questo dispositivo"
-            case .noIdentityKey: return "Chiave dispositivo mancante"
-            case .openFailed(let m): return "Apertura chiave fallita: \(m)"
-            case .downloadFailed(let m): return "Download fallito: \(m)"
-            case .truncated(let m): return "File troncato: \(m)"
-            case .decryptFailed(let m): return "Decrittazione fallita: \(m)"
-            case .writeFailed(let m): return "Scrittura fallita: \(m)"
-            case .signatureMalformed: return "Firma allegato malformata"
-            case .signatureInvalid: return "Firma allegato non valida"
-            case .signatureUnresolvable: return "Identità del mittente non verificabile"
+            case .notAuthenticated: return String(localized: "attachment.error.not_authenticated", defaultValue: "Non autenticato", comment: "Error text of an attachment, voice note or avatar transfer: the user is not signed in.")
+            case .noWrapForDevice: return String(localized: "file.error.not_for_device", defaultValue: "Allegato non indirizzato a questo dispositivo", comment: "Error text of a received file: it was not sealed for this device.")
+            case .noIdentityKey: return String(localized: "file.error.no_device_key", defaultValue: "Chiave dispositivo mancante", comment: "Error text of a received file: this device has no key to open it.")
+            case .openFailed(let m): return String(localized: "file.error.key_open_failed", defaultValue: "Apertura chiave fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .downloadFailed(let m): return String(localized: "attachment.error.download_failed", defaultValue: "Download fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .truncated(let m): return String(localized: "file.error.truncated", defaultValue: "File troncato: \(m)", comment: "Error text of a received file: the file is incomplete; %@ is the technical reason.")
+            case .decryptFailed(let m): return String(localized: "file.error.decrypt_failed", defaultValue: "Decrittazione fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .writeFailed(let m): return String(localized: "attachment.error.write_failed", defaultValue: "Scrittura fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .signatureMalformed: return String(localized: "file.error.signature_malformed", defaultValue: "Firma allegato malformata", comment: "Error text of a received file: the signature that comes with it is malformed.")
+            case .signatureInvalid: return String(localized: "file.error.signature_invalid", defaultValue: "Firma allegato non valida", comment: "Error text of a received file: its signature does not verify.")
+            case .signatureUnresolvable: return String(localized: "file.error.sender_unverifiable", defaultValue: "Identità del mittente non verificabile", comment: "Error text of a received file: the identity of the sender cannot be verified.")
             }
         }
     }
@@ -332,11 +332,11 @@ final class ChatFileAttachmentReceiver {
     private static func describeDownloadFailure(_ error: Error) -> String {
         switch error {
         case BCryptoError.httpError(let code):
-            return "il server ha risposto con codice \(code) dopo i tentativi di ripetizione"
+            return String(localized: "file.error.http_status", defaultValue: "il server ha risposto con codice \(code) dopo i tentativi di ripetizione", comment: "Reason inside a file download error: the server kept answering with an error code (%lld) after the retries.")
         case BCryptoError.paymentRequired:
-            return "il nodo che ospita il file non è disponibile per questo account"
+            return String(localized: "file.error.node_unavailable", defaultValue: "il nodo che ospita il file non è disponibile per questo account", comment: "Reason inside a file download error: the server that holds the file is not available for this account.")
         case BCryptoError.unauthorized:
-            return "sessione scaduta — riprova ad accedere"
+            return String(localized: "file.error.session_expired", defaultValue: "sessione scaduta — riprova ad accedere", comment: "Reason inside a file download error: the sign-in session expired.")
         default:
             return String(describing: error)
         }

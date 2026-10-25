@@ -92,7 +92,7 @@ final class MeshSheetViewModel: ObservableObject {
         if let contact = resolveContact(nodeHex: nodeHex) {
             return (contact.displayName, true)
         }
-        return ("Dispositivo non identificato", false)
+        return (String(localized: "mesh.sheet.unidentified_device", defaultValue: "Dispositivo non identificato", comment: "Bluetooth mesh sheet: name shown for a nearby device that is not one of the user's contacts."), false)
     }
 
     /// Reverse lookup: which known contact (if any) owns `nodeHex`.

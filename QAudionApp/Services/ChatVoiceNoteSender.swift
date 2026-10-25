@@ -49,11 +49,11 @@ final class ChatVoiceNoteSender {
 
         var errorDescription: String? {
             switch self {
-            case .readFailed(let m):           return "Lettura voice note fallita: \(m)"
-            case .uploadFailed(let m):         return "Upload voice note fallito: \(m)"
-            case .tokenIssueFailed(let m):     return "Mint token download fallito: \(m)"
-            case .markerSerializeFailed(let m): return "Serializzazione marker fallita: \(m)"
-            case .pskMissing: return "Scambio chiavi in corso — riprova tra poco."
+            case .readFailed(let m):           return String(localized: "attachment.voice_note.read_failed", defaultValue: "Lettura voice note fallita: \(m)", comment: "Error text of a failed voice note transfer; %@ is the technical reason.")
+            case .uploadFailed(let m):         return String(localized: "attachment.voice_note.upload_failed", defaultValue: "Upload voice note fallito: \(m)", comment: "Error text of a failed voice note transfer; %@ is the technical reason.")
+            case .tokenIssueFailed(let m):     return String(localized: "attachment.voice_note.token_failed", defaultValue: "Mint token download fallito: \(m)", comment: "Error text of a failed voice note transfer; %@ is the technical reason.")
+            case .markerSerializeFailed(let m): return String(localized: "attachment.voice_note.marker_failed", defaultValue: "Serializzazione marker fallita: \(m)", comment: "Error text of a failed voice note transfer; %@ is the technical reason.")
+            case .pskMissing: return String(localized: "attachment.error.key_exchange_pending", defaultValue: "Scambio chiavi in corso — riprova tra poco.", comment: "Error text of an attachment, voice note or avatar transfer: the key exchange with the contact is not finished yet.")
             }
         }
     }
@@ -224,7 +224,7 @@ final class ChatVoiceNoteSender {
         //    up on the next send.
         guard let token = appState.authService.loadToken(), !token.isEmpty,
               let senderId = appState.currentUserId, !senderId.isEmpty else {
-            throw Error.uploadFailed("non autenticato")
+            throw Error.uploadFailed(String(localized: "attachment.detail.not_authenticated", defaultValue: "non autenticato", comment: "Reason inside an attachment error (lower case, it follows a colon): the user is not signed in."))
         }
         // `token` here only gates the "authenticated" early-throw above;
         // `makeUploadProvider` re-reads it (plus the refresh token) itself.
@@ -406,7 +406,7 @@ final class ChatVoiceNoteSender {
     ) async throws -> String {
         guard let token = appState.authService.loadToken(), !token.isEmpty,
               let senderId = appState.currentUserId, !senderId.isEmpty else {
-            throw Error.uploadFailed("non autenticato")
+            throw Error.uploadFailed(String(localized: "attachment.detail.not_authenticated", defaultValue: "non autenticato", comment: "Reason inside an attachment error (lower case, it follows a colon): the user is not signed in."))
         }
         // `token` here only gates the "authenticated" early-throw above.
         _ = token
@@ -420,7 +420,7 @@ final class ChatVoiceNoteSender {
             // No concrete impl to reach the TUS resume primitives —
             // signal_not_kill: never crash, let the caller fall through
             // to tier 3 (today's fresh-upload behavior).
-            throw Error.uploadFailed("resume non disponibile per questo backend")
+            throw Error.uploadFailed(String(localized: "attachment.detail.resume_unavailable", defaultValue: "resume non disponibile per questo backend", comment: "Reason inside an upload error (lower case, it follows a colon): resuming the upload is not possible with this server."))
         }
 
         let storage = FileTransfer.StorageApi(
@@ -474,7 +474,7 @@ final class ChatVoiceNoteSender {
             throw Error.pskMissing
         }
         guard TusResumeStateStore.fingerprint(ofPsk: currentPsk) == state.pskFingerprintHex else {
-            throw Error.uploadFailed("PSK cambiata dal tentativo originale — resume non sicuro")
+            throw Error.uploadFailed(String(localized: "attachment.detail.psk_changed", defaultValue: "PSK cambiata dal tentativo originale — resume non sicuro", comment: "Reason inside an upload error (lower case, it follows a colon): the pairing key changed since the first attempt, so resuming is not safe."))
         }
 
         let vaultAdapter = Self.makeVaultAdapter(

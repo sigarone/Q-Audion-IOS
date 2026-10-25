@@ -458,8 +458,8 @@ struct GroupChatScreen: View {
     private var typingRow: some View {
         let names = typingSenderIds.map(resolveMemberName)
         let typingText: String = names.count == 1
-            ? "\(names[0]) sta scrivendo…"
-            : "\(names.count) persone stanno scrivendo…"
+            ? String(localized: "group_chat.typing_one", defaultValue: "\(names[0]) sta scrivendo…", comment: "Group chat typing indicator: one member is typing; %@ is their name.")
+            : String(localized: "group_chat.typing_many", defaultValue: "\(names.count) persone stanno scrivendo…", comment: "Group chat typing indicator: several members are typing; %lld is how many.")
         return HStack(spacing: 8) {
             TypingIndicator()
             Text(typingText)
@@ -697,7 +697,7 @@ struct GroupChatScreen: View {
                 // Fase 1B — resolve the raw sender UUID to a contact name so
                 // group bubbles never label a peer with a bare UUID (mirrors
                 // the 1:1 inbound path, AppState.persistIncomingPeerMessage).
-                senderLabel: m.mine ? "Tu" : resolveMemberName(m.senderId),
+                senderLabel: m.mine ? String(localized: "reply.author_me", defaultValue: "Tu", comment: "Label of your own messages and of yourself in a group chat") : resolveMemberName(m.senderId),
                 timestamp: Self.timeFormatterHHmm.string(from: m.ts),
                 mine: m.mine,
                 // Fase 1B — attachment fields (nil for a plain text row).
@@ -1051,7 +1051,7 @@ struct GroupChatScreen: View {
                 GroupMemberRowUi(
                     userId: uid,
                     // Fase 1B — resolve UUID → contact name (was raw `uid`).
-                    displayName: uid == selfId ? "Tu" : resolveMemberName(uid),
+                    displayName: uid == selfId ? String(localized: "reply.author_me", defaultValue: "Tu", comment: "Label of your own messages and of yourself in a group chat") : resolveMemberName(uid),
                     isAdmin: entry.admins.contains(uid),
                     isSelf: uid == selfId)
             }
@@ -1081,7 +1081,7 @@ struct GroupChatScreen: View {
             name: state.name,
             epoch: 1,
             members: [
-                GroupMemberRowUi(userId: selfId, displayName: "Tu",
+                GroupMemberRowUi(userId: selfId, displayName: String(localized: "reply.author_me", defaultValue: "Tu", comment: "Label of your own messages and of yourself in a group chat"),
                                  isAdmin: true, isSelf: true)
             ],
             error: String(localized: "group_chat.error.members_not_synced", defaultValue: "Elenco membri non ancora disponibile — in attesa di sincronizzazione.", comment: "Error banner (surfaced via GroupInfoUiState.error, rendered by GroupInfoScreen) — the local group registry entry isn't populated yet, shown while waiting for the invite to sync")

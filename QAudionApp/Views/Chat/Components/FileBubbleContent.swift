@@ -75,7 +75,7 @@ struct FileBubbleContent: View {
     /// `ImageBubbleContent`.
     private var displayName: String {
         guard let path = mediaLocalPath, !path.isEmpty else {
-            return "Allegato"
+            return String(localized: "chat.file.default_name", defaultValue: "Allegato", comment: "Name shown for a received file in a chat bubble when its own file name is not known.")
         }
         return (path as NSString).lastPathComponent
     }
@@ -186,7 +186,7 @@ struct FileBubbleContent: View {
     }
 
     @ViewBuilder
-    private func actionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func actionButton(title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 3) {
                 Image(systemName: systemImage)
