@@ -1,0 +1,53 @@
+# Italian text in Swift string literals that is not user-facing text, or that cannot go through the String Catalog.
+# Read by scripts/ci/check_hardcoded_italian.py. One entry per line:  path | literal exactly as written in the source | reason
+# An entry that no longer matches anything fails the check, so the list cannot collect dead lines.
+QAudionApp/AppState.swift | Sconosciuto | fallback value for a missing sender id; the name shown comes from DisplayName
+QAudionApp/Services/FastSetupPayload.swift | FastSetupPayload(version: \(version), kind: \(kind), server: \(server), extensionNumber: \(extensionNumber), phoneId: \(phoneId), password: <REDACTED>, displayName: \(displayName)) | CustomStringConvertible text for debugging
+QAudionApp/Services/PairwiseChainKeyResolver.swift | Scambio chiavi in corso — riprova tra poco. | error description that is logged, never shown to the user
+QAudionApp/Views/Chat/Components/MessageComposer.swift | Vecchio testo del messaggio… | sample data of the design preview harness
+QAudionApp/Views/Chat/Components/MessageComposer.swift | ho la chiave nuova | sample data of the design preview harness
+QAudionApp/Views/ScreenshotDemo/ScreenshotDemo.swift | Chiamami quando sei libero. | sample conversation text of the screenshot build, never part of the shipping UI
+QAudionApp/Views/ScreenshotDemo/ScreenshotDemo.swift | Ci vediamo alle 20 al ristorante? | sample conversation text of the screenshot build, never part of the shipping UI
+QAudionApp/Views/ScreenshotDemo/ScreenshotDemo.swift | Dove sei? | sample conversation text of the screenshot build, never part of the shipping UI
+QAudionApp/Views/ScreenshotDemo/ScreenshotDemo.swift | On se retrouve toujours à 20 h au restaurant ? | sample conversation text of the screenshot build, never part of the shipping UI
+QAudionApp/Views/ScreenshotDemo/ScreenshotDemo.swift | Sì, prenoto io il tavolo. | sample conversation text of the screenshot build, never part of the shipping UI
+QAudionApp/Views/ScreenshotDemo/ScreenshotDemo.swift | Ti vedo, arrivo tra 5 minuti. | sample conversation text of the screenshot build, never part of the shipping UI
+QAudionApp/Views/Settings/DevResetScreen.swift | Wipe completato — \(wiped) chiavi rimosse. | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Errore: ct_ee assente dopo Stage 1 | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Timeout: ct_ee non ricevuto | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | proxy GATT non disponibile | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/P3ControlScreen.swift | Errore: \(msg) | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/P3ControlScreen.swift | Modalità | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/P3ControlScreen.swift | Più forte | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/P3ControlScreen.swift | Stato | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/P3ControlScreen.swift | anti micro a contatto / laser — usa l'esciter P4 | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionEngine/Sources/QAudionEngine/Enigma/EnigmaTypes.swift | AES-256-GCM · chiave 256 bit · %lld byte · integrità protetta | Italian default paired with a catalog key (enigma.*); the app reads the translated text from the catalog
+QAudionEngine/Sources/QAudionEngine/Enigma/EnigmaTypes.swift | AES-256-GCM · chiave 256 bit · %lld byte · integrità verificata | Italian default paired with a catalog key (enigma.*); the app reads the translated text from the catalog
+QAudionEngine/Sources/QAudionEngine/Enigma/EnigmaTypes.swift | Effetto Enigma ridotto per mantenere fluida la chat | Italian default paired with a catalog key (enigma.*); the app reads the translated text from the catalog
+QAudionEngine/Sources/QAudionEngine/Enigma/EnigmaTypes.swift | Scartato · verifica di integrità non riuscita | Italian default paired with a catalog key (enigma.*); the app reads the translated text from the catalog
+QAudionEngine/Sources/QAudionEngine/Enigma/EnigmaTypes.swift | solo grafica, il cifrario è AES-256-GCM | Italian default paired with a catalog key (enigma.*); the app reads the translated text from the catalog
+QAudionEngine/Sources/QAudionEngine/Location/LocationCodec.swift | 📍 Posizione non disponibile | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Location/LocationCodec.swift | 📍 Posizione non supportata: aggiorna l'app per aprirla | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Location/LocationRowForm.swift | 📍 Posizione in tempo reale | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Location/LocationRowForm.swift | 📍 Posizione | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Messaging/FileV2ChatBody.swift | 🎤 Nota vocale | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Messaging/FileV2ChatBody.swift | 📎 Allegato non supportato: aggiorna l'app per aprirlo | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Messaging/FileV2ChatBody.swift | 📎 Allegato non valido | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Messaging/FileV2ChatBody.swift | 📷 Foto | engine default; the app replaces it at launch with the catalog lookup (FileV2AppServices)
+QAudionEngine/Sources/QAudionEngine/Persistence/OutboxRetryPolicy.swift | [messaggio cifrato non leggibile] | placeholder text that is stored and compared by value; translating it needs a display-time mapping
+QAudionEngine/Sources/QAudionEngine/UI/ContactDiscoveryView.swift | Aggiungi Contatto | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/ContactDiscoveryView.swift | Scopri contatti dalla rubrica | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Aggiungi contatti tramite QR code o link | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Nessun contatto | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Nessuna chiamata | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Nessuna conversazione | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Tocca + per iniziare una nuova chat | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/VideoCallView.swift | Muto | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/ViewModels/ChatViewModel.swift | Tutto bene, grazie. Ci vediamo alle 18? | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/ViewModels/ConversationListViewModel.swift | Tutto bene, grazie. Ci vediamo alle 18? | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Accedi con Telefono | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Accedi | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Anti-deepfake vocale AI | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Identita' sovrana senza numero | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Nessun numero di telefono richiesto.\nLa tua identita' e' protetta da chiavi crittografiche. | engine demo view that the app target does not instantiate
+QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Non hai un account? Registrati | engine demo view that the app target does not instantiate
