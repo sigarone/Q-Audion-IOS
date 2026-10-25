@@ -58,7 +58,9 @@ struct VoiceEnrollmentScreen: View {
                 }
                 Spacer()
                 primaryCta
-                skipButton
+                if !isMicrophonePriming {
+                    skipButton
+                }
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
@@ -70,6 +72,13 @@ struct VoiceEnrollmentScreen: View {
                 onComplete(id)
             }
         }
+    }
+
+    /// The introduction precedes the system microphone request (permission not decided yet): one "Continua" that leads to it
+    /// and no way to postpone it from this step. The back chevron of the top bar leaves the screen as usual.
+    private var isMicrophonePriming: Bool {
+        if case .introduction = container.viewModel.step { return container.microphoneUndetermined }
+        return false
     }
 
     // MARK: - Top bar
@@ -263,7 +272,12 @@ struct VoiceEnrollmentScreen: View {
     private var primaryCta: some View {
         switch container.viewModel.step {
         case .introduction:
-            primaryButton(label: "Inizia") { container.start() }
+            if isMicrophonePriming {
+                // Only the system microphone request: nothing is recorded until "Inizia".
+                primaryButton(label: "Continua", disabled: container.requestingMicrophone) { container.requestPermissionOnly() }
+            } else {
+                primaryButton(label: "Inizia") { container.start() }
+            }
         case .promptShowing:
             primaryButton(label: "Registra") { container.startRecordingPrompt() }
         case .recording:
