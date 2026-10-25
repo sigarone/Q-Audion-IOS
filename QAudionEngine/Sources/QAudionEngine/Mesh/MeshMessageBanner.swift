@@ -6,7 +6,9 @@ import Foundation
 public enum MeshMessageBanner {
 
     /// Body shown when the user hid notification content.
-    public static let hiddenBody = "Nuovo messaggio"
+    public static var hiddenBody: String {
+        String(localized: "Nuovo messaggio", comment: "Body of the notification banner of a message that arrived over the Bluetooth mesh when the content is hidden.")
+    }
     /// A longer preview is cut to this many characters and gets an ellipsis.
     public static let previewLimit = 120
 

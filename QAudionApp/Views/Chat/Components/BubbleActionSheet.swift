@@ -132,20 +132,20 @@ struct BubbleActionSheet: View {
                 // entirely so the user doesn't try and get a surprise
                 // failure from the engine.
                 if let replyEnabled = canReply {
-                    actionRow(label: Self.replyLabel,
+                    actionRow(label: Text(Self.replyLabel),
                               icon: "arrowshape.turn.up.left",
                               danger: false,
                               enabled: replyEnabled,
                               action: { onReply(); dismiss() })
                 }
                 if isOwn && isText && withinEditWindow && !isReply {
-                    actionRow(label: "Modifica",
+                    actionRow(label: Text("Modifica"),
                               icon: "pencil",
                               danger: false,
                               action: { onEdit(); dismiss() })
                 }
                 if isText {
-                    actionRow(label: "Copia testo",
+                    actionRow(label: Text("Copia testo"),
                               icon: "doc.on.doc",
                               danger: false,
                               action: { onCopy(); dismiss() })
@@ -161,11 +161,11 @@ struct BubbleActionSheet: View {
                     if exportBlocked {
                         lockedExportRow
                     } else {
-                        actionRow(label: "Salva in Foto",
+                        actionRow(label: Text("Salva in Foto"),
                                   icon: "square.and.arrow.down",
                                   danger: false,
                                   action: { onSaveImage(); dismiss() })
-                        actionRow(label: "Condividi immagine",
+                        actionRow(label: Text("Condividi immagine"),
                                   icon: "square.and.arrow.up",
                                   danger: false,
                                   action: { onShareMedia(); dismiss() })
@@ -174,13 +174,13 @@ struct BubbleActionSheet: View {
                 // W446: voice-note-only row — moved here from
                 // VoiceNoteBubbleContent's inner .contextMenu.
                 if mediaKind == .voiceNote {
-                    actionRow(label: "Condividi audio",
+                    actionRow(label: Text("Condividi audio"),
                               icon: "square.and.arrow.up",
                               danger: false,
                               action: { onShareMedia(); dismiss() })
                 }
                 if isLocation && locationCopyEnabled {
-                    actionRow(label: LocationCardStrings.copyCoordinates,
+                    actionRow(label: Text(LocationCardStrings.copyCoordinates),
                               icon: "doc.on.doc",
                               danger: false,
                               action: { onCopy(); dismiss() })
@@ -189,18 +189,18 @@ struct BubbleActionSheet: View {
                 // can both be forwarded). Parity with Android ChatDetailScreen.kt
                 // commented-out ActionRow for "Inoltra". Not for a location (WIRE_SPEC 14.3.6).
                 if !isLocation {
-                    actionRow(label: "Inoltra",
+                    actionRow(label: Text("Inoltra"),
                               icon: "arrowshape.turn.up.right.fill",
                               danger: false,
                               action: { onForward(); dismiss() })
                 }
                 if isOwn {
-                    actionRow(label: "Elimina per tutti",
+                    actionRow(label: Text("Elimina per tutti"),
                               icon: "trash",
                               danger: true,
                               action: { onDeleteForAll(); dismiss() })
                 }
-                actionRow(label: "Elimina solo per me",
+                actionRow(label: Text("Elimina solo per me"),
                           icon: "trash",
                           danger: true,
                           action: { onDeleteForMe(); dismiss() })
@@ -251,9 +251,12 @@ struct BubbleActionSheet: View {
 
     // MARK: - W325 helpers
 
-    private static let plusHintText: String = "Picker emoji in arrivo"
-    private static let plusHintAccessibilityLabel: String =
-        "Altre reazioni: picker emoji in arrivo"
+    private static var plusHintText: String {
+        String(localized: "chat.reactions.picker_soon", defaultValue: "Picker emoji in arrivo", comment: "Hint shown when the disabled + button of the reaction row is tapped: the emoji picker is not available yet.")
+    }
+    private static var plusHintAccessibilityLabel: String {
+        String(localized: "chat.reactions.picker_soon_a11y", defaultValue: "Altre reazioni: picker emoji in arrivo", comment: "VoiceOver label of the disabled + button of the reaction row: more reactions will come with an emoji picker.")
+    }
     private static let plusHintAutoDismissSeconds: Double = 2.0
 
     private var plusHintRow: some View {
@@ -313,7 +316,7 @@ struct BubbleActionSheet: View {
         String(localized: "reply.action", defaultValue: "Rispondi", comment: "Action of the message menu: answer this message, quoting it.")
     }
 
-    private func actionRow(label: String,
+    private func actionRow(label: Text,
                            icon: String,
                            danger: Bool,
                            enabled: Bool = true,
@@ -324,7 +327,7 @@ struct BubbleActionSheet: View {
                     .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(danger ? scheme.error : scheme.onSurface)
                     .frame(width: 22)
-                Text(label)
+                label
                     .qaudionStyle(type.bodyLarge)
                     .foregroundStyle(danger ? scheme.error : scheme.onSurface)
                 Spacer()

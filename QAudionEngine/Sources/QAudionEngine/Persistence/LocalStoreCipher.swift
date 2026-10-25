@@ -124,7 +124,9 @@ public enum LocalStoreCipher {
     /// was never there, and worded differently from the wire-decrypt
     /// placeholder ("[messaggio cifrato non leggibile]") so a log or a
     /// screenshot says which of the two layers failed.
-    public static let unreadableMarker = "[messaggio non leggibile su questo dispositivo]"
+    public static var unreadableMarker: String {
+        String(localized: "chat.message.unreadable_on_device", defaultValue: "[messaggio non leggibile su questo dispositivo]", comment: "Text shown in place of a stored message that cannot be opened on this device (for example after a restore onto a new device).")
+    }
 
     // MARK: - Key management
 

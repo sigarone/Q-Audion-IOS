@@ -33,7 +33,7 @@ enum ConversationExporter {
     /// Returns the file URL on success, nil on I/O failure.
     static func export(messages: [Message],
                        peerDisplayName: String,
-                       myDisplayLabel: String = "Tu") -> URL? {
+                       myDisplayLabel: String = ReplyQuotePresenter.meLabel) -> URL? {
         let header = buildHeader(peerDisplayName: peerDisplayName,
                                  messageCount: messages.count)
         let body = messages
@@ -68,11 +68,12 @@ enum ConversationExporter {
     private static func buildHeader(peerDisplayName: String,
                                     messageCount: Int) -> String {
         let exportedAt = humanFormatter.string(from: Date())
-        return """
-        Q-Audion — Chat con \(peerDisplayName)
-        Esportata il \(exportedAt)
-        \(messageCount) \(messageCount == 1 ? "messaggio" : "messaggi")
-        """
+        let titleLine: String = String(localized: "chat.export.title", defaultValue: "Q-Audion — Chat con \(peerDisplayName)", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): title; %@ is the name of the contact.")
+        let exportedLine: String = String(localized: "chat.export.exported_on", defaultValue: "Esportata il \(exportedAt)", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): when it was exported; %@ is the date and time.")
+        let countLine: String = messageCount == 1
+            ? String(localized: "chat.export.count_one", defaultValue: "1 messaggio", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): the transcript holds exactly one message.")
+            : String(localized: "chat.export.count_other", defaultValue: "\(messageCount) messaggi", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): number of messages in the transcript; %lld is the count.")
+        return [titleLine, exportedLine, countLine].joined(separator: "\n")
     }
 
     private static func format(message m: Message,
@@ -83,7 +84,7 @@ enum ConversationExporter {
         let author = (m.direction == .outgoing) ? myDisplayLabel : peerDisplayName
         let body: String
         if m.deletedAt != nil {
-            body = "<messaggio eliminato>"
+            body = String(localized: "chat.export.deleted_message", defaultValue: "<messaggio eliminato>", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): a message that was deleted.")
         } else if let shown = FileV2ChatBody.classify(text: m.plaintext).displayText {
             // A file message (WIRE_SPEC 12.7.1): its one-line preview, never the descriptor (it holds the key of the file).
             body = shown
@@ -95,7 +96,9 @@ enum ConversationExporter {
             // images (image/jpeg) etc. The actual binary stays in the
             // cache — exporting it inline would balloon the file.
             let dur = m.mediaDurationMs.map { "\($0)ms" } ?? ""
-            body = "<allegato: \(mime)\(dur.isEmpty ? "" : " · \(dur)")>"
+            body = dur.isEmpty
+                ? String(localized: "chat.export.attachment", defaultValue: "<allegato: \(mime)>", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): an attachment; %@ is its MIME type.")
+                : String(localized: "chat.export.attachment_with_duration", defaultValue: "<allegato: \(mime) · \(dur)>", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): an attachment with a duration; %1$@ is its MIME type, %2$@ the duration such as 4200ms.")
         } else {
             // Strip newlines from the message body so each entry stays
             // on a single line — easier to scan, paste, search.
@@ -105,7 +108,7 @@ enum ConversationExporter {
                 .replacingOccurrences(of: "\n", with: " ")
             body = shown + replyNote(for: m, among: all, peerDisplayName: peerDisplayName, myDisplayLabel: myDisplayLabel)
         }
-        let editedSuffix = (m.edited == true) ? " (modificato)" : ""
+        let editedSuffix: String = (m.edited == true) ? " " + String(localized: "chat.export.edited", defaultValue: "(modificato)", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a message that was edited.") : ""
         return "[\(stamp)] \(author): \(body)\(editedSuffix)"
     }
 
@@ -123,12 +126,16 @@ enum ConversationExporter {
         let block = MessageReplyCodec.resolve(reply, rows: rows)
         switch block.source {
         case .unavailable:
-            return " (in risposta a un messaggio: non disponibile)"
+            return " " + String(localized: "chat.export.reply_unavailable", defaultValue: "(in risposta a un messaggio: non disponibile)", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply whose original message is no longer available.")
         case .local:
-            let who: String = block.author ?? "un messaggio"
-            return block.excerpt.isEmpty ? " (in risposta a \(who))" : " (in risposta a \(who): \(block.excerpt))"
+            let who: String = block.author ?? String(localized: "chat.export.reply_a_message", defaultValue: "un messaggio", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): stands for the author of the original message when it is not known (it follows 'in reply to').")
+            return " " + (block.excerpt.isEmpty
+                ? String(localized: "chat.export.reply_to", defaultValue: "(in risposta a \(who))", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply; %@ is the author of the original message.")
+                : String(localized: "chat.export.reply_to_excerpt", defaultValue: "(in risposta a \(who): \(block.excerpt))", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply; %1$@ is the author of the original message, %2$@ its text."))
         case .quote:
-            return block.excerpt.isEmpty ? " (in risposta a un messaggio)" : " (in risposta a un messaggio: \(block.excerpt))"
+            return " " + (block.excerpt.isEmpty
+                ? String(localized: "chat.export.reply_to_message", defaultValue: "(in risposta a un messaggio)", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply to a message that is not in the transcript.")
+                : String(localized: "chat.export.reply_to_message_excerpt", defaultValue: "(in risposta a un messaggio: \(block.excerpt))", comment: "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply to a message that is not in the transcript; %@ is the quoted text."))
         }
     }
 

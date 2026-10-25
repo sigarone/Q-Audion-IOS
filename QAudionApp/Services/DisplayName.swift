@@ -78,7 +78,7 @@ enum DisplayName {
                         knownPhoneNumber: String? = nil,
                         contacts: [ContactsStore.StoredContact]? = nil) -> String {
         let id = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !id.isEmpty else { return "Sconosciuto" }
+        guard !id.isEmpty else { return String(localized: "Sconosciuto") }
         let stored = contacts ?? ContactsStore().load()
         let match = stored.first(where: { $0.userId == id })
 

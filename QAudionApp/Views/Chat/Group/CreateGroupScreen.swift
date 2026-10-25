@@ -157,8 +157,8 @@ struct CreateGroupScreen: View {
             LazyVStack(spacing: 4) {
                 if state.filteredContacts.isEmpty {
                     Text(state.contacts.isEmpty
-                         ? "Nessun contatto nella rubrica."
-                         : "Nessun risultato.")
+                         ? String(localized: "group_chat.create.no_contacts", defaultValue: "Nessun contatto nella rubrica.", comment: "New group screen: empty state when the user has no contacts to pick from.")
+                         : String(localized: "group_chat.create.no_results", defaultValue: "Nessun risultato.", comment: "New group screen: empty state when the search matches no contact."))
                         .qaudionStyle(type.bodySmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.top, 32)
@@ -225,9 +225,7 @@ struct CreateGroupScreen: View {
     /// avoid the `String(Int)` overload trap (SWIFT6_PATTERNS §3).
     private static func formatSelectionCounter(selected: Int,
                                                total: Int) -> String {
-        let s: String = String(describing: selected)
-        let t: String = String(describing: total)
-        return s + " selezionati su " + t
+        return String(localized: "group_chat.create.selected_count", defaultValue: "\(selected) selezionati su \(total)", comment: "New group screen: counter of the contacts picked; first %lld is how many are selected, second %lld how many contacts there are.")
     }
 
     private var canCreate: Bool {
@@ -267,7 +265,7 @@ struct CreateGroupScreen: View {
         state.creating = true
         let displayName = state.name.trimmingCharacters(in: .whitespaces)
             .isEmpty
-            ? "Gruppo \(state.selectedMemberIds.count) membri"
+            ? String(localized: "group_chat.create.default_name", defaultValue: "Gruppo \(state.selectedMemberIds.count) membri", comment: "Name given to a new group when the user leaves the name empty; %lld is the number of members picked.")
             : state.name
         let memberIds = Array(state.selectedMemberIds)
         // Admin-only initial set: just self. The local user can

@@ -22920,6 +22920,5844 @@
         }
       }
     },
+    "attachment.error.not_authenticated": {
+      "extractionState": "manual",
+      "comment": "Error text of an attachment, voice note or avatar transfer: the user is not signed in.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non autenticato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not signed in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sesión no iniciada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non connecté"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht angemeldet"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessão não iniciada"
+          }
+        }
+      }
+    },
+    "attachment.error.key_exchange_pending": {
+      "extractionState": "manual",
+      "comment": "Error text of an attachment, voice note or avatar transfer: the key exchange with the contact is not finished yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scambio chiavi in corso — riprova tra poco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key exchange in progress — try again shortly."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Intercambio de claves en curso — inténtalo de nuevo en un momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échange de clés en cours — réessaie dans un instant."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüsselaustausch läuft — versuchen Sie es gleich noch einmal."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troca de chaves em andamento — tente novamente em instantes."
+          }
+        }
+      }
+    },
+    "attachment.error.download_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error en la descarga: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du téléchargement : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no download: %@"
+          }
+        }
+      }
+    },
+    "attachment.error.upload_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error en la subida: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'envoi : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no upload: %@"
+          }
+        }
+      }
+    },
+    "attachment.error.decode_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decodifica fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decoding failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de decodificación: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du décodage : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dekodierung fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na decodificação: %@"
+          }
+        }
+      }
+    },
+    "attachment.error.write_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrittura fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de escritura: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'écriture : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schreiben fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na gravação: %@"
+          }
+        }
+      }
+    },
+    "attachment.error.read_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lettura fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de lectura: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la lecture : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lesen fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na leitura: %@"
+          }
+        }
+      }
+    },
+    "attachment.error.encrypt_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cifratura fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encryption failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de cifrado: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du chiffrement : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verschlüsselung fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na criptografia: %@"
+          }
+        }
+      }
+    },
+    "attachment.error.envelope_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envelope fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envelope failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error en el envelope: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'enveloppe : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envelope fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no envelope: %@"
+          }
+        }
+      }
+    },
+    "attachment.error.invalid_id": {
+      "extractionState": "manual",
+      "comment": "Error text of an attachment download: the attachment identifier is not valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID allegato non valido"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid attachment ID"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID de adjunto no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID de pièce jointe non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültige Anhangs-ID"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID de anexo inválido"
+          }
+        }
+      }
+    },
+    "avatar.error.invalid_id": {
+      "extractionState": "manual",
+      "comment": "Error text of a profile picture download: the picture identifier is not valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID avatar non valido"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid avatar ID"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID de avatar no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID d'avatar non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültige Avatar-ID"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID de avatar inválido"
+          }
+        }
+      }
+    },
+    "avatar.error.token_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Token di download fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download token failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error en el token de descarga: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du jeton de téléchargement : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download-Token fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no token de download: %@"
+          }
+        }
+      }
+    },
+    "avatar.error.encode_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a profile picture upload: the picture could not be encoded.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile codificare l'immagine"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't encode the image"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo codificar la imagen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'encoder l'image"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Bild konnte nicht kodiert werden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível codificar a imagem"
+          }
+        }
+      }
+    },
+    "avatar.error.invalid_image": {
+      "extractionState": "manual",
+      "comment": "Error text of a profile picture upload: the picked picture is not valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immagine non valida"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid image"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagen no válida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiges Bild"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imagem inválida"
+          }
+        }
+      }
+    },
+    "file.error.not_for_device": {
+      "extractionState": "manual",
+      "comment": "Error text of a received file: it was not sealed for this device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allegato non indirizzato a questo dispositivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attachment not addressed to this device"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adjunto no dirigido a este dispositivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pièce jointe non destinée à cet appareil"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Anhang ist nicht für dieses Gerät bestimmt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anexo não endereçado a este dispositivo"
+          }
+        }
+      }
+    },
+    "file.error.no_device_key": {
+      "extractionState": "manual",
+      "comment": "Error text of a received file: this device has no key to open it.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave dispositivo mancante"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Device key missing"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falta la clave del dispositivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé de l'appareil manquante"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerätschlüssel fehlt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave do dispositivo ausente"
+          }
+        }
+      }
+    },
+    "file.error.key_open_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apertura chiave fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening the key failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al abrir la clave: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'ouverture de la clé : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnen des Schlüssels fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao abrir a chave: %@"
+          }
+        }
+      }
+    },
+    "file.error.truncated": {
+      "extractionState": "manual",
+      "comment": "Error text of a received file: the file is incomplete; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File troncato: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File truncated: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archivo truncado: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fichier tronqué : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datei unvollständig: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arquivo truncado: %@"
+          }
+        }
+      }
+    },
+    "file.error.decrypt_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decrittazione fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decryption failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de descifrado: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du déchiffrement : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entschlüsselung fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na descriptografia: %@"
+          }
+        }
+      }
+    },
+    "file.error.signature_malformed": {
+      "extractionState": "manual",
+      "comment": "Error text of a received file: the signature that comes with it is malformed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma allegato malformata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attachment signature malformed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma del adjunto mal formada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signature de la pièce jointe mal formée"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Signatur des Anhangs hat ein ungültiges Format"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assinatura do anexo malformada"
+          }
+        }
+      }
+    },
+    "file.error.signature_invalid": {
+      "extractionState": "manual",
+      "comment": "Error text of a received file: its signature does not verify.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma allegato non valida"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attachment signature invalid"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma del adjunto no válida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signature de la pièce jointe non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Signatur des Anhangs ist ungültig"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assinatura do anexo inválida"
+          }
+        }
+      }
+    },
+    "file.error.sender_unverifiable": {
+      "extractionState": "manual",
+      "comment": "Error text of a received file: the identity of the sender cannot be verified.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identità del mittente non verificabile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sender identity can't be verified"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se puede verificar la identidad del remitente"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité de l'expéditeur impossible à vérifier"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Identität des Absenders kann nicht überprüft werden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível verificar a identidade do remetente"
+          }
+        }
+      }
+    },
+    "file.error.http_status": {
+      "extractionState": "manual",
+      "comment": "Reason inside a file download error: the server kept answering with an error code (%lld) after the retries.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "il server ha risposto con codice %lld dopo i tentativi di ripetizione"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "the server answered with code %lld after the retries"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "el servidor respondió con el código %lld tras los reintentos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "le serveur a répondu avec le code %lld après les nouvelles tentatives"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "der Server hat nach den Wiederholungsversuchen mit Code %lld geantwortet"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "o servidor respondeu com o código %lld após as novas tentativas"
+          }
+        }
+      }
+    },
+    "file.error.node_unavailable": {
+      "extractionState": "manual",
+      "comment": "Reason inside a file download error: the server that holds the file is not available for this account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "il nodo che ospita il file non è disponibile per questo account"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "the node that hosts the file isn't available for this account"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "el nodo que aloja el archivo no está disponible para esta cuenta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "le nœud qui héberge le fichier n'est pas disponible pour ce compte"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "der Knoten, der die Datei hostet, ist für dieses Konto nicht verfügbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "o nó que hospeda o arquivo não está disponível para esta conta"
+          }
+        }
+      }
+    },
+    "file.error.session_expired": {
+      "extractionState": "manual",
+      "comment": "Reason inside a file download error: the sign-in session expired.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sessione scaduta — riprova ad accedere"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "session expired — sign in again"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sesión caducada — vuelve a iniciar sesión"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "session expirée — reconnecte-toi"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung abgelaufen — melden Sie sich erneut an"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sessão expirada — faça login novamente"
+          }
+        }
+      }
+    },
+    "file.error.peer_no_key": {
+      "extractionState": "manual",
+      "comment": "Error text of a file send: the recipient has not published an encryption key yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il destinatario non ha ancora pubblicato una chiave — riprova più tardi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recipient hasn't published a key yet — try again later."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El destinatario aún no ha publicado una clave — inténtalo más tarde."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le destinataire n'a pas encore publié de clé — réessaie plus tard."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Empfänger hat noch keinen Schlüssel veröffentlicht — versuchen Sie es später erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O destinatário ainda não publicou uma chave — tente novamente mais tarde."
+          }
+        }
+      }
+    },
+    "file.error.send_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invio fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al enviar: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'envoi : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senden fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no envio: %@"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.missing_claim": {
+      "extractionState": "manual",
+      "comment": "Error text of a received voice note: the message carries no download claim, the other app is probably outdated.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marker senza download_claim — peer obsoleto?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marker without download_claim — outdated peer?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marcador sin download_claim — ¿interlocutor desactualizado?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marqueur sans download_claim — correspondant obsolète ?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marker ohne download_claim — veralteter Peer?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marcador sem download_claim — a outra pessoa está desatualizada?"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.download_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed voice note transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download voice note fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice note download failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al descargar la nota de voz: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du téléchargement de la note vocale : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download der Sprachnotiz fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao baixar a nota de voz: %@"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.decrypt_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed voice note transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decrypt voice note fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice note decryption failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al descifrar la nota de voz: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du déchiffrement de la note vocale : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entschlüsselung der Sprachnotiz fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao descriptografar a nota de voz: %@"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.cache_write_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed voice note transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrittura cache fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache write failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al escribir en la caché: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'écriture dans le cache : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schreiben in den Cache fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao gravar no cache: %@"
+          }
+        }
+      }
+    },
+    "attachment.detail.not_authenticated": {
+      "extractionState": "manual",
+      "comment": "Reason inside an attachment error (lower case, it follows a colon): the user is not signed in.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "non autenticato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "not signed in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sesión no iniciada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "non connecté"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nicht angemeldet"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sessão não iniciada"
+          }
+        }
+      }
+    },
+    "attachment.detail.invalid_id": {
+      "extractionState": "manual",
+      "comment": "Reason inside an attachment error (lower case, it follows a colon): the attachment identifier is not valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "attachment id non valido"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "invalid attachment id"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "id de adjunto no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "id de pièce jointe non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ungültige Anhangs-ID"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "id de anexo inválido"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.received_with_duration": {
+      "extractionState": "manual",
+      "comment": "One-line label of a received voice note with its length; %@ is the number of seconds, such as 4.2.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Nota vocale (%@s)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Voice note (%@s)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Nota de voz (%@ s)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Note vocale (%@ s)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Sprachnotiz (%@ s)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "🎤 Nota de voz (%@ s)"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.read_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed voice note transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lettura voice note fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice note read failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al leer la nota de voz: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la lecture de la note vocale : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lesen der Sprachnotiz fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao ler a nota de voz: %@"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.upload_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed voice note transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload voice note fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice note upload failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al subir la nota de voz: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'envoi de la note vocale : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload der Sprachnotiz fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao enviar a nota de voz: %@"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.token_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed voice note transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mint token download fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download token minting failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al generar el token de descarga: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la création du jeton de téléchargement : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erstellen des Download-Tokens fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao gerar o token de download: %@"
+          }
+        }
+      }
+    },
+    "attachment.voice_note.marker_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed voice note transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serializzazione marker fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marker serialization failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al serializar el marcador: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la sérialisation du marqueur : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serialisierung des Markers fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao serializar o marcador: %@"
+          }
+        }
+      }
+    },
+    "attachment.detail.resume_unavailable": {
+      "extractionState": "manual",
+      "comment": "Reason inside an upload error (lower case, it follows a colon): resuming the upload is not possible with this server.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "resume non disponibile per questo backend"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "resume not available for this backend"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "reanudación no disponible para este backend"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "reprise non disponible pour ce backend"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fortsetzen ist für dieses Backend nicht verfügbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "retomada indisponível para este backend"
+          }
+        }
+      }
+    },
+    "attachment.detail.psk_changed": {
+      "extractionState": "manual",
+      "comment": "Reason inside an upload error (lower case, it follows a colon): the pairing key changed since the first attempt, so resuming is not safe.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PSK cambiata dal tentativo originale — resume non sicuro"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PSK changed since the original attempt — resuming is not safe"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PSK cambiada desde el intento original — reanudar no es seguro"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PSK modifiée depuis la tentative initiale — reprise non sécurisée"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PSK seit dem ursprünglichen Versuch geändert — Fortsetzen nicht sicher"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PSK alterada desde a tentativa original — retomar não é seguro"
+          }
+        }
+      }
+    },
+    "group_chat.error.no_token_for_self": {
+      "extractionState": "manual",
+      "comment": "Error text of a group attachment download: the sender issued no download token for this user.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun token di download per questo utente"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No download token for this user"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay token de descarga para este usuario"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun jeton de téléchargement pour cet utilisateur"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kein Download-Token für diesen Benutzer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum token de download para este usuário"
+          }
+        }
+      }
+    },
+    "group_chat.error.bad_descriptor": {
+      "extractionState": "manual",
+      "comment": "Error text of a group attachment download: the attachment description is not valid; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descriptor non valido: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid descriptor: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descriptor no válido: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descripteur non valide : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiger Deskriptor: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descritor inválido: %@"
+          }
+        }
+      }
+    },
+    "group_chat.error.token_failed": {
+      "extractionState": "manual",
+      "comment": "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Token fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Token failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error en el token: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec du jeton : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Token fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no token: %@"
+          }
+        }
+      }
+    },
+    "chat.export.title": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): title; %@ is the name of the contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion — Chat con %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion — Chat with %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion — Chat con %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion — Discussion avec %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion — Chat mit %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion — Conversa com %@"
+          }
+        }
+      }
+    },
+    "chat.export.exported_on": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): when it was exported; %@ is the date and time.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esportata il %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exported on %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exportado el %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exportée le %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exportiert am %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exportada em %@"
+          }
+        }
+      }
+    },
+    "chat.export.count_one": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): the transcript holds exactly one message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 messaggio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 mensaje"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 message"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 Nachricht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 mensagem"
+          }
+        }
+      }
+    },
+    "chat.export.count_other": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): number of messages in the transcript; %lld is the count.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld messaggi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld messages"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld mensajes"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld messages"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Nachrichten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld mensagens"
+          }
+        }
+      }
+    },
+    "chat.export.deleted_message": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): a message that was deleted.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<messaggio eliminato>"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<message deleted>"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<mensaje eliminado>"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<message supprimé>"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<Nachricht gelöscht>"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<mensagem excluída>"
+          }
+        }
+      }
+    },
+    "chat.export.attachment": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): an attachment; %@ is its MIME type.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<allegato: %@>"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<attachment: %@>"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<adjunto: %@>"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<pièce jointe : %@>"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<Anhang: %@>"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<anexo: %@>"
+          }
+        }
+      }
+    },
+    "chat.export.attachment_with_duration": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): an attachment with a duration; %1$@ is its MIME type, %2$@ the duration such as 4200ms.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<allegato: %@ · %@>"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<attachment: %@ · %@>"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<adjunto: %@ · %@>"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<pièce jointe : %@ · %@>"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<Anhang: %@ · %@>"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<anexo: %@ · %@>"
+          }
+        }
+      }
+    },
+    "chat.export.edited": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a message that was edited.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(modificato)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(edited)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(editado)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(modifié)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(bearbeitet)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(editada)"
+          }
+        }
+      }
+    },
+    "chat.export.reply_unavailable": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply whose original message is no longer available.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in risposta a un messaggio: non disponibile)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in reply to a message: not available)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en respuesta a un mensaje: no disponible)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en réponse à un message : indisponible)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Antwort auf eine Nachricht: nicht verfügbar)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(em resposta a uma mensagem: indisponível)"
+          }
+        }
+      }
+    },
+    "chat.export.reply_a_message": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): stands for the author of the original message when it is not known (it follows 'in reply to').",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "un messaggio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "a message"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "un mensaje"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "un message"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "eine Nachricht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "uma mensagem"
+          }
+        }
+      }
+    },
+    "chat.export.reply_to": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply; %@ is the author of the original message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in risposta a %@)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in reply to %@)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en respuesta a %@)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en réponse à %@)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Antwort auf %@)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(em resposta a %@)"
+          }
+        }
+      }
+    },
+    "chat.export.reply_to_excerpt": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply; %1$@ is the author of the original message, %2$@ its text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in risposta a %@: %@)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in reply to %@: %@)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en respuesta a %@: %@)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en réponse à %@ : %@)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Antwort auf %@: %@)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(em resposta a %@: %@)"
+          }
+        }
+      }
+    },
+    "chat.export.reply_to_message": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply to a message that is not in the transcript.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in risposta a un messaggio)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in reply to a message)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en respuesta a un mensaje)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en réponse à un message)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Antwort auf eine Nachricht)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(em resposta a uma mensagem)"
+          }
+        }
+      }
+    },
+    "chat.export.reply_to_message_excerpt": {
+      "extractionState": "manual",
+      "comment": "Line of the exported plain-text transcript of a conversation (shared as a .txt file): appended to a reply to a message that is not in the transcript; %@ is the quoted text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in risposta a un messaggio: %@)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(in reply to a message: %@)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en respuesta a un mensaje: %@)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(en réponse à un message : %@)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Antwort auf eine Nachricht: %@)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(em resposta a uma mensagem: %@)"
+          }
+        }
+      }
+    },
+    "Copia testo": {
+      "extractionState": "manual",
+      "comment": "Action of the message menu: copy the text of the message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copia testo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy text"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copiar texto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copier le texte"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text kopieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copiar texto"
+          }
+        }
+      }
+    },
+    "Salva in Foto": {
+      "extractionState": "manual",
+      "comment": "Action of the message menu on a picture: save it to the Photos library.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva in Foto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save to Photos"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guardar en Fotos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer dans Photos"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Fotos sichern"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar em Fotos"
+          }
+        }
+      }
+    },
+    "Condividi immagine": {
+      "extractionState": "manual",
+      "comment": "Action of the message menu on a picture: share it with another app.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi immagine"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share image"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir imagen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partager l'image"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bild teilen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhar imagem"
+          }
+        }
+      }
+    },
+    "Condividi audio": {
+      "extractionState": "manual",
+      "comment": "Action of the message menu on a voice note: share it with another app.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi audio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share audio"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir audio"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partager l'audio"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio teilen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhar áudio"
+          }
+        }
+      }
+    },
+    "Inoltra": {
+      "extractionState": "manual",
+      "comment": "Action of the message menu: forward the message to another chat.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inoltra"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Forward"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reenviar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transférer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiterleiten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encaminhar"
+          }
+        }
+      }
+    },
+    "Elimina solo per me": {
+      "extractionState": "manual",
+      "comment": "Action of the message menu: delete the message on this device only.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elimina solo per me"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete for me"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eliminar solo para mí"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supprimer pour moi"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur für mich löschen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Excluir só para mim"
+          }
+        }
+      }
+    },
+    "chat.reactions.picker_soon": {
+      "extractionState": "manual",
+      "comment": "Hint shown when the disabled + button of the reaction row is tapped: the emoji picker is not available yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Picker emoji in arrivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emoji picker coming soon"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selector de emojis próximamente"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sélecteur d'emoji bientôt disponible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emoji-Auswahl folgt bald"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seletor de emojis em breve"
+          }
+        }
+      }
+    },
+    "chat.reactions.picker_soon_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the disabled + button of the reaction row: more reactions will come with an emoji picker.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Altre reazioni: picker emoji in arrivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More reactions: emoji picker coming soon"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Más reacciones: selector de emojis próximamente"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plus de réactions : sélecteur d'emoji bientôt disponible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weitere Reaktionen: Emoji-Auswahl folgt bald"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mais reações: seletor de emojis em breve"
+          }
+        }
+      }
+    },
+    "chat.file.default_name": {
+      "extractionState": "manual",
+      "comment": "Name shown for a received file in a chat bubble when its own file name is not known.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allegato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attachment"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adjunto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pièce jointe"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anhang"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anexo"
+          }
+        }
+      }
+    },
+    "mesh.sheet.unidentified_device": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: name shown for a nearby device that is not one of the user's contacts.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispositivo non identificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unidentified device"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispositivo no identificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appareil non identifié"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht identifiziertes Gerät"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispositivo não identificado"
+          }
+        }
+      }
+    },
+    "mesh.sheet.bt_checking": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: the Bluetooth state of the phone is being checked.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica del Bluetooth in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking Bluetooth…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobando Bluetooth…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification du Bluetooth…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth wird überprüft…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando o Bluetooth…"
+          }
+        }
+      }
+    },
+    "mesh.sheet.bt_unsupported": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: this device has no usable Bluetooth.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth non supportato su questo dispositivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth isn't supported on this device"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth no es compatible con este dispositivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le Bluetooth n'est pas pris en charge sur cet appareil"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth wird auf diesem Gerät nicht unterstützt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Bluetooth não é compatível com este dispositivo"
+          }
+        }
+      }
+    },
+    "mesh.sheet.bt_denied": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: the Bluetooth permission was denied; the button below opens Settings.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permesso Bluetooth negato — tocca per aprire Impostazioni"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth permission denied — tap to open Settings"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permiso de Bluetooth denegado — toca para abrir Ajustes"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorisation Bluetooth refusée — touche pour ouvrir les Réglages"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Zugriff verweigert — tippen Sie, um die Einstellungen zu öffnen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissão de Bluetooth negada — toque para abrir Ajustes"
+          }
+        }
+      }
+    },
+    "mesh.sheet.bt_unavailable": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: the Bluetooth radio reported an error.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth unavailable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth indisponible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth nicht verfügbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth indisponível"
+          }
+        }
+      }
+    },
+    "mesh.sheet.subtitle_visible": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: visible mode, nearby phones can reach this one.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visibile · raggiungibile dai vicini"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visible · reachable by nearby devices"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visible · alcanzable por los dispositivos cercanos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visible · joignable par les appareils proches"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sichtbar · für Geräte in der Nähe erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visível · alcançável por dispositivos próximos"
+          }
+        }
+      }
+    },
+    "mesh.sheet.subtitle_direct_scanning": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: direct mode, scanning for nearby devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diretta · scansione in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct · scanning…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directa · buscando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directe · recherche en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direkt · Suche läuft…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direta · procurando…"
+          }
+        }
+      }
+    },
+    "mesh.sheet.subtitle_direct_one": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: direct mode, exactly one nearby device is reachable.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diretta · 1 dispositivo raggiungibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct · 1 device reachable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directa · 1 dispositivo alcanzable"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directe · 1 appareil joignable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direkt · 1 Gerät erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direta · 1 dispositivo alcançável"
+          }
+        }
+      }
+    },
+    "mesh.sheet.subtitle_direct_many": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: direct mode; %lld is the number of reachable nearby devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diretta · %lld dispositivi raggiungibili"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct · %lld devices reachable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directa · %lld dispositivos alcanzables"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directe · %lld appareils joignables"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direkt · %lld Geräte erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direta · %lld dispositivos alcançáveis"
+          }
+        }
+      }
+    },
+    "mesh.sheet.subtitle_full_scanning": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: full mesh mode, scanning for nearby devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · scansione in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full mesh · scanning…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · buscando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh complet · recherche en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vollständiges Mesh · Suche läuft…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · procurando…"
+          }
+        }
+      }
+    },
+    "mesh.sheet.subtitle_full_one": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: full mesh mode, exactly one nearby device is reachable.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · 1 dispositivo raggiungibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full mesh · 1 device reachable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · 1 dispositivo alcanzable"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh complet · 1 appareil joignable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vollständiges Mesh · 1 Gerät erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · 1 dispositivo alcançável"
+          }
+        }
+      }
+    },
+    "mesh.sheet.subtitle_full_many": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the antenna row: full mesh mode; %lld is the number of reachable nearby devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · %lld dispositivi raggiungibili"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full mesh · %lld devices reachable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · %lld dispositivos alcanzables"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh complet · %lld appareils joignables"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vollständiges Mesh · %lld Geräte erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa · %lld dispositivos alcançáveis"
+          }
+        }
+      }
+    },
+    "mesh.sheet.mode_visible": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: label of a mode chip (antenna: visible only, others can reach this phone).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visible"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sichtbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visível"
+          }
+        }
+      }
+    },
+    "mesh.sheet.mode_direct": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: label of a mode chip (antenna: direct connections with nearby devices, own messages only).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diretta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directa"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directe"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direkt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direta"
+          }
+        }
+      }
+    },
+    "mesh.sheet.mode_full_mesh": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: label of a mode chip (antenna: full mesh, also relays messages of other people).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full mesh"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh complet"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vollständiges Mesh"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh completa"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_prefer_bt": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: label of a mode chip (network for this contact: prefer Bluetooth when the contact is near; BT stands for Bluetooth).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preferisci BT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prefer BT"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preferir BT"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Préférer BT"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BT bevorzugen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preferir BT"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_network_only": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: label of a mode chip (network for this contact: always use the internet).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo rete"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network only"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo red"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réseau seul"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur Netz"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Só rede"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_bt_only": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: label of a mode chip (network for this contact: Bluetooth only; BT stands for Bluetooth).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo BT"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BT only"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo BT"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BT seul"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur BT"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Só BT"
+          }
+        }
+      }
+    },
+    "mesh.sheet.toast_unavailable": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, toast: the mesh is switched off for everyone for now.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La mesh Bluetooth non è disponibile al momento."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth mesh isn't available right now."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La mesh Bluetooth no está disponible en este momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le mesh Bluetooth n'est pas disponible pour le moment."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Bluetooth-Mesh ist derzeit nicht verfügbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A mesh Bluetooth não está disponível no momento."
+          }
+        }
+      }
+    },
+    "mesh.sheet.toast_verify_first": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, toast: a device that is not a verified contact cannot be used as a target yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica il contatto prima di inviare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify the contact before sending"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica el contacto antes de enviar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifie le contact avant d'envoyer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifizieren Sie den Kontakt, bevor Sie senden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifique o contato antes de enviar"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_prefer_via": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth is preferred and the contact is reachable through another device; %@ is that device's name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quando il contatto è vicino · ora raggiungibile tramite %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth when the contact is near · now reachable via %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth cuando el contacto está cerca · ahora alcanzable a través de %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quand le contact est proche · joignable via %@ en ce moment"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth, wenn der Kontakt in der Nähe ist · derzeit erreichbar über %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quando o contato está por perto · agora alcançável por %@"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_prefer_reachable": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth is preferred and the contact is reachable now.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quando il contatto è vicino · ora è raggiungibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth when the contact is near · reachable now"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth cuando el contacto está cerca · alcanzable ahora"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quand le contact est proche · joignable en ce moment"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth, wenn der Kontakt in der Nähe ist · derzeit erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quando o contato está por perto · alcançável agora"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_prefer_network": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth is preferred but the contact is not near, so the internet is used now.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quando il contatto è vicino · ora passa dalla rete"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth when the contact is near · currently using the network"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth cuando el contacto está cerca · ahora usa la red"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quand le contact est proche · passe par le réseau pour le moment"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth, wenn der Kontakt in der Nähe ist · derzeit über das Netz"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth quando o contato está por perto · agora usa a rede"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_network_subtitle": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: messages always go through the internet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sempre dalla rete pubblica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always over the public network"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Siempre por la red pública"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toujours par le réseau public"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Immer über das öffentliche Netz"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sempre pela rede pública"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_bt_via": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is reachable through another device; %@ is that device's name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo Bluetooth · raggiungibile tramite %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth only · reachable via %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo Bluetooth · alcanzable a través de %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth uniquement · joignable via %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur Bluetooth · erreichbar über %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Só Bluetooth · alcançável por %@"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_bt_reachable": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is reachable now.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo Bluetooth · il contatto è raggiungibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth only · the contact is reachable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo Bluetooth · el contacto es alcanzable"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth uniquement · le contact est joignable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur Bluetooth · der Kontakt ist erreichbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Só Bluetooth · o contato é alcançável"
+          }
+        }
+      }
+    },
+    "mesh.sheet.route_bt_waiting": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is not near yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo Bluetooth · in attesa che il contatto sia vicino"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth only · waiting for the contact to be near"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo Bluetooth · esperando a que el contacto esté cerca"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth uniquement · en attente que le contact soit proche"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur Bluetooth · wartet, bis der Kontakt in der Nähe ist"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Só Bluetooth · aguardando o contato ficar por perto"
+          }
+        }
+      }
+    },
+    "mesh.sheet.hint_antenna_off": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, hint under the antenna row: turn the antenna on to look for Q-Audion devices in Bluetooth range.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accendi l'antenna per cercare dispositivi Q-Audion nel raggio del Bluetooth."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on the antenna to look for Q-Audion devices within Bluetooth range."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enciende la antena para buscar dispositivos Q-Audion al alcance del Bluetooth."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active l'antenne pour chercher des appareils Q-Audion à portée du Bluetooth."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schalten Sie die Antenne ein, um nach Q-Audion-Geräten in Bluetooth-Reichweite zu suchen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ligue a antena para procurar dispositivos Q-Audion no alcance do Bluetooth."
+          }
+        }
+      }
+    },
+    "mesh.sheet.hint_visible_only": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, hint under the antenna row: in visible mode others can reach this phone only while the app is open; the quoted words are the names of the Direct and Full mesh chips.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sei visibile — chi ti cerca può raggiungerti, ma solo finché l'app è aperta. Passa a \"Diretta\" o \"Mesh completa\" per vedere anche tu i dispositivi vicini e restare raggiungibile in secondo piano."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You're visible — people looking for you can reach you, but only while the app is open. Switch to “Direct” or “Full mesh” to see nearby devices yourself and stay reachable in the background."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eres visible — quien te busca puede alcanzarte, pero solo mientras la app esté abierta. Cambia a «Directa» o «Mesh completa» para ver tú también los dispositivos cercanos y seguir siendo alcanzable en segundo plano."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu es visible — ceux qui te cherchent peuvent te joindre, mais seulement tant que l'app est ouverte. Passe à « Directe » ou « Mesh complet » pour voir toi aussi les appareils proches et rester joignable en arrière-plan."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie sind sichtbar — wer nach Ihnen sucht, kann Sie erreichen, aber nur solange die App geöffnet ist. Wechseln Sie zu „Direkt“ oder „Vollständiges Mesh“, um auch selbst Geräte in der Nähe zu sehen und im Hintergrund erreichbar zu bleiben."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você está visível — quem procura por você pode se conectar, mas só enquanto o app estiver aberto. Mude para “Direta” ou “Mesh completa” para também ver os dispositivos próximos e continuar alcançável em segundo plano."
+          }
+        }
+      }
+    },
+    "mesh.sheet.hint_no_devices": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, hint under the antenna row: no nearby device is reachable right now.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun dispositivo raggiungibile al momento."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No devices reachable right now."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ningún dispositivo alcanzable por ahora."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun appareil joignable pour le moment."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Derzeit ist kein Gerät erreichbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum dispositivo alcançável no momento."
+          }
+        }
+      }
+    },
+    "mesh.sheet.peer_chat_contact": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, caption of a nearby device: it is the contact of the open chat.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il contatto di questa chat"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contact of this chat"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El contacto de este chat"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le contact de cette discussion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Kontakt dieses Chats"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O contato desta conversa"
+          }
+        }
+      }
+    },
+    "mesh.sheet.peer_known": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, caption of a nearby device: it is one of the user's contacts.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contatto noto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Known contact"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contacto conocido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact connu"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bekannter Kontakt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contato conhecido"
+          }
+        }
+      }
+    },
+    "mesh.sheet.send_via_mesh": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: button that makes a nearby device the target of the next message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invia messaggio via mesh"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send message via mesh"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviar mensaje por la mesh"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer le message via le mesh"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nachricht über das Mesh senden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviar mensagem pela mesh"
+          }
+        }
+      }
+    },
+    "mesh.sheet.signal_strong": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, detail card of a nearby device: signal strength of a direct link (strong).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diretta · segnale forte"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct · strong signal"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directa · señal fuerte"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directe · signal fort"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direkt · starkes Signal"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direta · sinal forte"
+          }
+        }
+      }
+    },
+    "mesh.sheet.signal_medium": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, detail card of a nearby device: signal strength of a direct link (medium).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diretta · segnale medio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct · medium signal"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directa · señal media"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directe · signal moyen"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direkt · mittleres Signal"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direta · sinal médio"
+          }
+        }
+      }
+    },
+    "mesh.sheet.signal_weak": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, detail card of a nearby device: signal strength of a direct link (weak).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diretta · segnale debole"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct · weak signal"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directa · señal débil"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directe · signal faible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direkt · schwaches Signal"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direta · sinal fraco"
+          }
+        }
+      }
+    },
+    "mesh.sheet.toast_target_set_visible": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, toast: sending through the mesh is on for a device, but in visible mode this phone cannot start the link; %@ is the device name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invio via mesh attivato — %@. In modalità Visibile questo telefono non avvia il collegamento: la consegna dipende dall'altro dispositivo. Passa a Diretta o Mesh completa per inviare subito."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending via mesh turned on — %@. In Visible mode this phone doesn't start the connection: delivery depends on the other device. Switch to Direct or Full mesh to send right away."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envío por la mesh activado — %@. En modo Visible este teléfono no inicia la conexión: la entrega depende del otro dispositivo. Cambia a Directa o Mesh completa para enviar de inmediato."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoi via le mesh activé — %@. En mode Visible, ce téléphone n'établit pas la connexion : la remise dépend de l'autre appareil. Passe à Directe ou à Mesh complet pour envoyer tout de suite."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senden über das Mesh aktiviert — %@. Im Modus „Sichtbar“ baut dieses Telefon keine Verbindung auf: Die Zustellung hängt vom anderen Gerät ab. Wechseln Sie zu „Direkt“ oder „Vollständiges Mesh“, um sofort zu senden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envio pela mesh ativado — %@. No modo Visível, este telefone não inicia a conexão: a entrega depende do outro dispositivo. Mude para Direta ou Mesh completa para enviar agora mesmo."
+          }
+        }
+      }
+    },
+    "mesh.sheet.toast_target_set": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet, toast: sending through the mesh is on for a device; %@ is the device name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invio via mesh attivato — %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending via mesh turned on — %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envío por la mesh activado — %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoi via le mesh activé — %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senden über das Mesh aktiviert — %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envio pela mesh ativado — %@"
+          }
+        }
+      }
+    },
+    "mesh.sheet.reachable_via": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: header of the list of devices reachable through a nearby device; %@ is the name of that device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Raggiungibili tramite %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reachable via %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alcanzables a través de %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Joignables via %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreichbar über %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alcançáveis por %@"
+          }
+        }
+      }
+    },
+    "mesh.sheet.verify": {
+      "extractionState": "manual",
+      "comment": "Bluetooth mesh sheet: button of a device reachable through another one that is not a verified contact yet; tapping it asks the user to verify the contact first.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifizieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        }
+      }
+    },
+    "mesh.chip.reachable": {
+      "extractionState": "manual",
+      "comment": "Chip above the composer: messages are sent through the Bluetooth mesh; %@ is the name of the device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invio via mesh Bluetooth — %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending via Bluetooth mesh — %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envío por la mesh Bluetooth — %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoi via le mesh Bluetooth — %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senden über das Bluetooth-Mesh — %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envio pela mesh Bluetooth — %@"
+          }
+        }
+      }
+    },
+    "mesh.chip.unreachable": {
+      "extractionState": "manual",
+      "comment": "Chip above the composer: the device chosen for the Bluetooth mesh is out of reach, the message is held until it is back; %@ is the name of the device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth — %@ non raggiungibile: il messaggio resta in attesa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth mesh — %@ is out of reach: the message stays on hold"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth — %@ fuera de alcance: el mensaje queda en espera"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth — %@ est hors de portée : le message reste en attente"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Mesh — %@ nicht erreichbar: Die Nachricht wartet"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesh Bluetooth — %@ fora do alcance: a mensagem fica em espera"
+          }
+        }
+      }
+    },
+    "chat.composer.release_to_cancel": {
+      "extractionState": "manual",
+      "comment": "Voice note recording banner: the finger was dragged up, releasing now cancels the recording. ANNULLARE is in capitals on purpose.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rilascia per ANNULLARE"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release to CANCEL"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suelta para CANCELAR"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relâche pour ANNULER"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zum ABBRECHEN loslassen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solte para CANCELAR"
+          }
+        }
+      }
+    },
+    "chat.composer.release_to_send": {
+      "extractionState": "manual",
+      "comment": "Voice note recording banner: releasing the button sends the voice note, sliding up cancels it.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rilascia per inviare · scorri verso l'alto per annullare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release to send · slide up to cancel"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suelta para enviar · desliza hacia arriba para cancelar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relâche pour envoyer · glisse vers le haut pour annuler"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zum Senden loslassen · zum Abbrechen nach oben wischen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solte para enviar · deslize para cima para cancelar"
+          }
+        }
+      }
+    },
+    "chat.composer.seconds_left": {
+      "extractionState": "manual",
+      "comment": "Voice note recording banner, countdown chip in the last seconds before the time limit; %@ is the number of seconds left.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@s alla fine"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@s left"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ s restantes"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ s restantes"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "noch %@ s"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ s restantes"
+          }
+        }
+      }
+    },
+    "chat.composer.voice_recording_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the voice note button while a recording is in progress.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sto registrando vocale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording voice note"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grabando nota de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrement de la note vocale"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprachnotiz wird aufgenommen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gravando nota de voz"
+          }
+        }
+      }
+    },
+    "chat.composer.voice_hold_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the voice note button: hold it to record a voice message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tieni premuto per registrare vocale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold to record a voice note"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mantén pulsado para grabar una nota de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maintiens appuyé pour enregistrer une note vocale"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gedrückt halten, um eine Sprachnotiz aufzunehmen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mantenha pressionado para gravar uma nota de voz"
+          }
+        }
+      }
+    },
+    "Configura": {
+      "extractionState": "manual",
+      "comment": "Banner above the chat list: button that opens the recovery phrase setup.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configura"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configurar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configurer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einrichten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configurar"
+          }
+        }
+      }
+    },
+    "Ignora promemoria frase di recupero": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the button that dismisses the recovery phrase reminder.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignora promemoria frase di recupero"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss recovery phrase reminder"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descartar el recordatorio de la frase de recuperación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignorer le rappel de la phrase de récupération"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erinnerung an die Wiederherstellungsphrase schließen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispensar o lembrete da frase de recuperação"
+          }
+        }
+      }
+    },
+    "chat.banner.disconnected": {
+      "extractionState": "manual",
+      "comment": "Banner above the chat list: the connection to the server was lost.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione al server persa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection to the server lost"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexión con el servidor perdida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion au serveur perdue"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung zum Server verloren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexão com o servidor perdida"
+          }
+        }
+      }
+    },
+    "chat.banner.reconnecting": {
+      "extractionState": "manual",
+      "comment": "Banner above the chat list: the app is reconnecting to the server.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riconnessione in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnecting…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconectando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnexion en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung wird wiederhergestellt…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconectando…"
+          }
+        }
+      }
+    },
+    "group_chat.create.no_contacts": {
+      "extractionState": "manual",
+      "comment": "New group screen: empty state when the user has no contacts to pick from.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun contatto nella rubrica."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No contacts in your address book."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay contactos en la agenda."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun contact dans le carnet d'adresses."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Kontakte im Adressbuch."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum contato na agenda."
+          }
+        }
+      }
+    },
+    "group_chat.create.no_results": {
+      "extractionState": "manual",
+      "comment": "New group screen: empty state when the search matches no contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun risultato."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No results."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin resultados."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun résultat."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Ergebnisse."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum resultado."
+          }
+        }
+      }
+    },
+    "group_chat.create.selected_count": {
+      "extractionState": "manual",
+      "comment": "New group screen: counter of the contacts picked; first %lld is how many are selected, second %lld how many contacts there are.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld selezionati su %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld of %lld selected"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld seleccionados de %lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld sélectionnés sur %lld"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld von %lld ausgewählt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld de %lld selecionados"
+          }
+        }
+      }
+    },
+    "group_chat.create.default_name": {
+      "extractionState": "manual",
+      "comment": "Name given to a new group when the user leaves the name empty; %lld is the number of members picked.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppo %lld membri"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group of %lld members"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grupo de %lld miembros"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Groupe de %lld membres"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppe mit %lld Mitgliedern"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grupo de %lld membros"
+          }
+        }
+      }
+    },
+    "group_chat.typing_one": {
+      "extractionState": "manual",
+      "comment": "Group chat typing indicator: one member is typing; %@ is their name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ sta scrivendo…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is typing…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ está escribiendo…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ est en train d'écrire…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ schreibt…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ está digitando…"
+          }
+        }
+      }
+    },
+    "group_chat.typing_many": {
+      "extractionState": "manual",
+      "comment": "Group chat typing indicator: several members are typing; %lld is how many.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld persone stanno scrivendo…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld people are typing…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld personas están escribiendo…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld personnes écrivent…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld Personen schreiben…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld pessoas estão digitando…"
+          }
+        }
+      }
+    },
+    "group_chat.info.demote_admin_title": {
+      "extractionState": "manual",
+      "comment": "Group info: confirmation title before removing admin rights from a member; %@ is the member's name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rimuovere %@ da admin?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %@ as admin?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Quitar a %@ como administrador?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retirer %@ des administrateurs ?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ als Admin entfernen?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remover %@ como administrador?"
+          }
+        }
+      }
+    },
+    "group_chat.info.promote_admin_title": {
+      "extractionState": "manual",
+      "comment": "Group info: confirmation title before making a member an admin; %@ is the member's name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rendere %@ admin?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make %@ an admin?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Hacer administrador a %@?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nommer %@ administrateur ?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ zum Admin machen?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tornar %@ administrador?"
+          }
+        }
+      }
+    },
+    "group_chat.info.make_admin": {
+      "extractionState": "manual",
+      "comment": "Group info: confirmation button that makes a member an admin.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rendi admin"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make admin"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hacer administrador"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nommer administrateur"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zum Admin machen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tornar administrador"
+          }
+        }
+      }
+    },
+    "group_chat.info.demote_admin_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the button that removes admin rights from a member; %@ is the member's name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rimuovi %@ da admin"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %@ as admin"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quitar a %@ como administrador"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retirer %@ des administrateurs"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ als Admin entfernen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remover %@ como administrador"
+          }
+        }
+      }
+    },
+    "group_chat.info.promote_admin_a11y": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the button that makes a member an admin; %@ is the member's name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rendi %@ admin"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make %@ an admin"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hacer administrador a %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nommer %@ administrateur"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ zum Admin machen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tornar %@ administrador"
+          }
+        }
+      }
+    },
+    "group_chat.info.refreshed": {
+      "extractionState": "manual",
+      "comment": "Group info: when the member list was last refreshed; %@ is a relative time such as 2 minutes ago.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiornato %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updated %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualizado %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mis à jour %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualisiert %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atualizado %@"
+          }
+        }
+      }
+    },
+    "Messaggio...": {
+      "extractionState": "manual",
+      "comment": "Message field of the basic chat view of the engine demo UI.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messaggio..."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message..."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensaje..."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message..."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nachricht..."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensagem..."
+          }
+        }
+      }
+    },
+    "Audio": {
+      "extractionState": "manual",
+      "comment": "Button label of the basic chat view of the engine demo UI: start an audio call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Áudio"
+          }
+        }
+      }
+    },
+    "Video": {
+      "extractionState": "manual",
+      "comment": "Button label of the basic chat view of the engine demo UI: start a video call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vidéo"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Video"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vídeo"
+          }
+        }
+      }
+    },
+    "chat.message.unreadable_on_device": {
+      "extractionState": "manual",
+      "comment": "Text shown in place of a stored message that cannot be opened on this device (for example after a restore onto a new device).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[messaggio non leggibile su questo dispositivo]"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[message not readable on this device]"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[mensaje no legible en este dispositivo]"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[message illisible sur cet appareil]"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Nachricht auf diesem Gerät nicht lesbar]"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[mensagem ilegível neste dispositivo]"
+          }
+        }
+      }
+    },
+    "group_chat.qr.error_missing_payload": {
+      "extractionState": "manual",
+      "comment": "Error shown by the QR scanner when the scanned group invitation cannot be read: the link has no payload.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URL group-invite senza payload."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group invite URL without payload."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URL de invitación de grupo sin payload."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URL d'invitation de groupe sans payload."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppeneinladungs-URL ohne Payload."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URL de convite de grupo sem payload."
+          }
+        }
+      }
+    },
+    "group_chat.qr.error_base64": {
+      "extractionState": "manual",
+      "comment": "Error shown by the QR scanner when the scanned group invitation cannot be read: the payload is not valid base64url.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Payload base64url non valido."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid base64url payload."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Payload base64url no válido."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Payload base64url non valide."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiger base64url-Payload."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Payload base64url inválido."
+          }
+        }
+      }
+    },
+    "group_chat.qr.error_json": {
+      "extractionState": "manual",
+      "comment": "Error shown by the QR scanner when the scanned group invitation cannot be read: the payload is not valid JSON; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "JSON non valido: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid JSON: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "JSON no válido: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "JSON non valide : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiges JSON: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "JSON inválido: %@"
+          }
+        }
+      }
+    },
+    "group_chat.qr.error_missing_field": {
+      "extractionState": "manual",
+      "comment": "Error shown by the QR scanner when the scanned group invitation cannot be read: a required field is missing; %@ is the field name.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Campo mancante: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Missing field: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falta el campo: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Champ manquant : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fehlendes Feld: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Campo ausente: %@"
+          }
+        }
+      }
+    },
+    "group_chat.qr.error_version": {
+      "extractionState": "manual",
+      "comment": "Error shown by the QR scanner when the scanned group invitation cannot be read: the invitation version is not supported; %lld is the version number.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Versione %lld non supportata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %lld is not supported."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La versión %lld no es compatible."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La version %lld n'est pas prise en charge."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %lld wird nicht unterstützt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A versão %lld não é compatível."
+          }
+        }
+      }
+    },
+    "group_chat.qr.error_group_id": {
+      "extractionState": "manual",
+      "comment": "Error shown by the QR scanner when the scanned group invitation cannot be read: the group id is not a valid UUID; %@ is the value read.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "groupId non è un UUID: '%@'"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "groupId is not a UUID: '%@'"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "groupId no es un UUID: '%@'"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "groupId n'est pas un UUID : '%@'"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "groupId ist keine UUID: '%@'"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "groupId não é um UUID: '%@'"
+          }
+        }
+      }
+    },
     "Elimina chat": {
       "extractionState": "manual",
       "localizations": {

@@ -43,11 +43,11 @@ final class ChatFileAttachmentSender {
 
         var errorDescription: String? {
             switch self {
-            case .notAuthenticated: return "Non autenticato"
-            case .peerNoX25519: return "Il destinatario non ha ancora pubblicato una chiave — riprova più tardi."
-            case .encryptFailed(let m): return "Cifratura fallita: \(m)"
-            case .uploadFailed(let m): return "Upload fallito: \(m)"
-            case .sendFailed(let m): return "Invio fallito: \(m)"
+            case .notAuthenticated: return String(localized: "attachment.error.not_authenticated", defaultValue: "Non autenticato", comment: "Error text of an attachment, voice note or avatar transfer: the user is not signed in.")
+            case .peerNoX25519: return String(localized: "file.error.peer_no_key", defaultValue: "Il destinatario non ha ancora pubblicato una chiave — riprova più tardi.", comment: "Error text of a file send: the recipient has not published an encryption key yet.")
+            case .encryptFailed(let m): return String(localized: "attachment.error.encrypt_failed", defaultValue: "Cifratura fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .uploadFailed(let m): return String(localized: "attachment.error.upload_failed", defaultValue: "Upload fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .sendFailed(let m): return String(localized: "file.error.send_failed", defaultValue: "Invio fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
             }
         }
     }

@@ -17,8 +17,8 @@ enum ConnectionStatusBannerPolicy: Equatable {
 
     var title: String {
         switch self {
-        case .disconnected: return "Connessione al server persa"
-        case .reconnecting: return "Riconnessione in corso…"
+        case .disconnected: return String(localized: "chat.banner.disconnected", defaultValue: "Connessione al server persa", comment: "Banner above the chat list: the connection to the server was lost.")
+        case .reconnecting: return String(localized: "chat.banner.reconnecting", defaultValue: "Riconnessione in corso…", comment: "Banner above the chat list: the app is reconnecting to the server.")
         }
     }
 

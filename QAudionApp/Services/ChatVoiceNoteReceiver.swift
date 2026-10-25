@@ -41,11 +41,11 @@ final class ChatVoiceNoteReceiver {
 
         var errorDescription: String? {
             switch self {
-            case .missingClaim:           return "Marker senza download_claim — peer obsoleto?"
-            case .downloadFailed(let m):  return "Download voice note fallito: \(m)"
-            case .decryptFailed(let m):   return "Decrypt voice note fallito: \(m)"
-            case .writeFailed(let m):     return "Scrittura cache fallita: \(m)"
-            case .pskMissing:             return "Scambio chiavi in corso — riprova tra poco."
+            case .missingClaim:           return String(localized: "attachment.voice_note.missing_claim", defaultValue: "Marker senza download_claim — peer obsoleto?", comment: "Error text of a received voice note: the message carries no download claim, the other app is probably outdated.")
+            case .downloadFailed(let m):  return String(localized: "attachment.voice_note.download_failed", defaultValue: "Download voice note fallito: \(m)", comment: "Error text of a failed voice note transfer; %@ is the technical reason.")
+            case .decryptFailed(let m):   return String(localized: "attachment.voice_note.decrypt_failed", defaultValue: "Decrypt voice note fallito: \(m)", comment: "Error text of a failed voice note transfer; %@ is the technical reason.")
+            case .writeFailed(let m):     return String(localized: "attachment.voice_note.cache_write_failed", defaultValue: "Scrittura cache fallita: \(m)", comment: "Error text of a failed voice note transfer; %@ is the technical reason.")
+            case .pskMissing:             return String(localized: "attachment.error.key_exchange_pending", defaultValue: "Scambio chiavi in corso — riprova tra poco.", comment: "Error text of an attachment, voice note or avatar transfer: the key exchange with the contact is not finished yet.")
             }
         }
     }
@@ -65,7 +65,7 @@ final class ChatVoiceNoteReceiver {
         }
         let hasToken = appState.authService.loadToken()?.isEmpty == false
         guard hasToken, let selfUserId = appState.currentUserId, !selfUserId.isEmpty else {
-            throw Error.downloadFailed("non autenticato")
+            throw Error.downloadFailed(String(localized: "attachment.detail.not_authenticated", defaultValue: "non autenticato", comment: "Reason inside an attachment error (lower case, it follows a colon): the user is not signed in."))
         }
 
         // UPLOAD-401 FIX (2026-07-03) / 2026-08-07 parity — use the
@@ -174,17 +174,18 @@ final class ChatVoiceNoteReceiver {
         if mime.hasPrefix("audio/") {
             if let dur = marker.qfile.durationMs, dur > 0 {
                 let secs = Double(dur) / 1000.0
-                return String(format: "🎤 Nota vocale (%.1fs)", secs)
+                let secsText: String = String(format: "%.1f", secs)
+                return String(localized: "attachment.voice_note.received_with_duration", defaultValue: "🎤 Nota vocale (\(secsText)s)", comment: "One-line label of a received voice note with its length; %@ is the number of seconds, such as 4.2.")
             }
-            return "🎤 Nota vocale"
+            return String(localized: "file_v2.kind.voice", defaultValue: "🎤 Nota vocale", comment: "One-line label of a voice note in the conversation list and in notifications.")
         }
         if mime.hasPrefix("image/") {
-            return "📷 Foto"
+            return String(localized: "file_v2.kind.image", defaultValue: "📷 Foto", comment: "One-line label of an image message in the conversation list and in notifications.")
         }
         if mime.hasPrefix("video/") {
-            return "🎬 Video"
+            return String(localized: "file_v2.kind.video", defaultValue: "🎬 Video", comment: "One-line label of a video message in the conversation list and in notifications.")
         }
-        return "📎 Allegato"
+        return String(localized: "reply.kind.file", defaultValue: "📎 Allegato", comment: "Quote block of a reply to a document that has no name.")
     }
 
     // MARK: - W363: attach_announce path (cross-platform)
@@ -205,13 +206,13 @@ final class ChatVoiceNoteReceiver {
             // working.
             switch err {
             case .notAuthenticated:
-                throw Error.downloadFailed("non autenticato")
+                throw Error.downloadFailed(String(localized: "attachment.detail.not_authenticated", defaultValue: "non autenticato", comment: "Reason inside an attachment error (lower case, it follows a colon): the user is not signed in."))
             case .downloadFailed(let m):
                 throw Error.downloadFailed(m)
             case .decodeFailed(let m):
                 throw Error.decryptFailed(m)
             case .invalidId:
-                throw Error.decryptFailed("attachment id non valido")
+                throw Error.decryptFailed(String(localized: "attachment.detail.invalid_id", defaultValue: "attachment id non valido", comment: "Reason inside an attachment error (lower case, it follows a colon): the attachment identifier is not valid."))
             case .writeFailed(let m):
                 throw Error.writeFailed(m)
             case .pskMissing:

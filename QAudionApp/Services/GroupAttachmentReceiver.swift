@@ -32,12 +32,12 @@ final class GroupAttachmentReceiver {
 
         var errorDescription: String? {
             switch self {
-            case .notAuthenticated:      return "Non autenticato"
-            case .noTokenForSelf:        return "Nessun token di download per questo utente"
-            case .badDescriptor(let m):  return "Descriptor non valido: \(m)"
-            case .downloadFailed(let m): return "Download fallito: \(m)"
-            case .decodeFailed(let m):   return "Decodifica fallita: \(m)"
-            case .writeFailed(let m):    return "Scrittura fallita: \(m)"
+            case .notAuthenticated:      return String(localized: "attachment.error.not_authenticated", defaultValue: "Non autenticato", comment: "Error text of an attachment, voice note or avatar transfer: the user is not signed in.")
+            case .noTokenForSelf:        return String(localized: "group_chat.error.no_token_for_self", defaultValue: "Nessun token di download per questo utente", comment: "Error text of a group attachment download: the sender issued no download token for this user.")
+            case .badDescriptor(let m):  return String(localized: "group_chat.error.bad_descriptor", defaultValue: "Descriptor non valido: \(m)", comment: "Error text of a group attachment download: the attachment description is not valid; %@ is the technical reason.")
+            case .downloadFailed(let m): return String(localized: "attachment.error.download_failed", defaultValue: "Download fallito: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .decodeFailed(let m):   return String(localized: "attachment.error.decode_failed", defaultValue: "Decodifica fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
+            case .writeFailed(let m):    return String(localized: "attachment.error.write_failed", defaultValue: "Scrittura fallita: \(m)", comment: "Error text of a failed attachment, voice note or avatar transfer; %@ is the technical reason.")
             }
         }
     }

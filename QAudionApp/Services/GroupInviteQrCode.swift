@@ -50,12 +50,12 @@ public enum GroupInviteQrCode {
 
         public var errorDescription: String? {
             switch self {
-            case .missingPath: return "URL group-invite senza payload."
-            case .base64Decode: return "Payload base64url non valido."
-            case .jsonDecode(let r): return "JSON non valido: \(r)"
-            case .missingField(let f): return "Campo mancante: \(f)"
-            case .versionUnsupported(let v): return "Versione \(v) non supportata."
-            case .invalidGroupId(let s): return "groupId non è un UUID: '\(s)'"
+            case .missingPath: return String(localized: "group_chat.qr.error_missing_payload", defaultValue: "URL group-invite senza payload.", comment: "Error shown by the QR scanner when the scanned group invitation cannot be read: the link has no payload.")
+            case .base64Decode: return String(localized: "group_chat.qr.error_base64", defaultValue: "Payload base64url non valido.", comment: "Error shown by the QR scanner when the scanned group invitation cannot be read: the payload is not valid base64url.")
+            case .jsonDecode(let r): return String(localized: "group_chat.qr.error_json", defaultValue: "JSON non valido: \(r)", comment: "Error shown by the QR scanner when the scanned group invitation cannot be read: the payload is not valid JSON; %@ is the technical reason.")
+            case .missingField(let f): return String(localized: "group_chat.qr.error_missing_field", defaultValue: "Campo mancante: \(f)", comment: "Error shown by the QR scanner when the scanned group invitation cannot be read: a required field is missing; %@ is the field name.")
+            case .versionUnsupported(let v): return String(localized: "group_chat.qr.error_version", defaultValue: "Versione \(v) non supportata.", comment: "Error shown by the QR scanner when the scanned group invitation cannot be read: the invitation version is not supported; %lld is the version number.")
+            case .invalidGroupId(let s): return String(localized: "group_chat.qr.error_group_id", defaultValue: "groupId non è un UUID: '\(s)'", comment: "Error shown by the QR scanner when the scanned group invitation cannot be read: the group id is not a valid UUID; %@ is the value read.")
             }
         }
     }
