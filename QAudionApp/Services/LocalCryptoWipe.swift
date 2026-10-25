@@ -44,6 +44,9 @@ enum LocalCryptoWipe {
         KeychainGroupSessionVault().wipeAll()
         PeerIdentityPinStore().wipeAll()
         ContactsStore().wipeAll()
+        // The "address book imported" mark belongs to the account that is leaving (logout, remote wipe and account deletion all
+        // come through here): the next account must run "Importa" itself before a refresh scans anything.
+        PhonebookImportGate().clear()
         ConversationStore().wipeAll()
         // The live-share records, the tombstones, the sender's journal and the keys of the shares: the deletion of the whole local
         // store, which is the one thing that takes the ids of the starts with it (WIRE_SPEC 14.6.2 step 1).

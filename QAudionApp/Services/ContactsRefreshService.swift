@@ -19,13 +19,14 @@ final class ContactsRefreshService {
         self.coordinator = PhonebookSyncCoordinator(appState: appState, contactsStore: store)
     }
 
-    /// Refresh by scanning the user's phonebook. Requires Contacts permission.
-    /// Returns the resolved StoredContacts.
+    /// Refresh the contact list. It never asks for the Contacts permission and sends nothing unless the permission is
+    /// already given and the user has completed an import ("Importa") before (`PhonebookImportGate`); otherwise it only
+    /// reloads what is stored. Returns the stored contacts.
     func refreshFromPhonebook(
+        gate: PhonebookImportGate = PhonebookImportGate(),
         onProgress: @escaping (PhonebookSyncCoordinator.ScanProgress) -> Void = { _ in }
     ) async throws -> [ContactsStore.StoredContact] {
-        let granted = try await coordinator.requestPermission()
-        guard granted else { throw PhonebookSyncCoordinator.Error.permissionDenied }
+        guard gate.mayScanOnRefresh() else { return store.load() }
         _ = try await coordinator.scanAndDiscover(onProgress: onProgress)
         return store.load()
     }

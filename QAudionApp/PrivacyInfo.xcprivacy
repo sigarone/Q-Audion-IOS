@@ -116,9 +116,11 @@
         </dict>
 
         <!-- Contacts - address-book phone numbers are uploaded ONLY as peppered
-             SHA-256 hashes, and only after an explicit import tap or
-             pull-to-refresh (PhonebookSyncCoordinator, ContactsRefreshService);
-             names and photos never leave the device. Optional. -->
+             SHA-256 hashes, and only after the user runs the import ("Importa");
+             a later pull-to-refresh rescans only after such an import and only
+             while the permission stays granted (PhonebookSyncCoordinator,
+             ContactsRefreshService, PhonebookImportGate); names and photos
+             never leave the device. Optional. -->
         <dict>
             <key>NSPrivacyCollectedDataType</key>
             <string>NSPrivacyCollectedDataTypeContacts</string>
