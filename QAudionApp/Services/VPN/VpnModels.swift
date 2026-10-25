@@ -115,9 +115,9 @@ enum VpnState: Equatable {
     var statusLabel: String {
         switch self {
         case .disconnected:          return "VPN"
-        case .connecting:            return "Connessione…"
+        case .connecting:            return String(localized: "vpn.status.connecting", defaultValue: "Connessione…", comment: "Label of the VPN chip while the tunnel is being established. Keep it short.")
         case .connected(let n, _):   return "VPN · \(n.city)"
-        case .error:                 return "Errore VPN"
+        case .error:                 return String(localized: "vpn.status.error", defaultValue: "Errore VPN", comment: "Label of the VPN chip when the tunnel failed. Keep it short.")
         }
     }
 }

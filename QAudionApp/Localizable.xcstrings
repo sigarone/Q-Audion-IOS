@@ -48769,6 +48769,2442 @@
         }
       }
     },
+    "app.logexport.not_authenticated": {
+      "extractionState": "manual",
+      "comment": "Error shown when exporting or uploading the diagnostic log while the session is not authenticated.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessione non autenticata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session not authenticated."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sesión no autenticada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session non authentifiée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sitzung nicht authentifiziert."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sessão não autenticada."
+          }
+        }
+      }
+    },
+    "app.logexport.upload_failed": {
+      "extractionState": "manual",
+      "comment": "Error shown when uploading the diagnostic log fails; %@ is the system error text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload fallito: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload failed: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al subir el archivo: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'envoi : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload fehlgeschlagen: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha no upload: %@"
+          }
+        }
+      }
+    },
+    "app.logexport.write_failed": {
+      "extractionState": "manual",
+      "comment": "Error shown when the diagnostic log file cannot be written to disk; %@ is the system error text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scrittura file fallita: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't write the file: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al escribir el archivo: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de l'écriture du fichier : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datei konnte nicht geschrieben werden: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao gravar o arquivo: %@"
+          }
+        }
+      }
+    },
+    "app.p3.bluetooth_not_ready": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when a scan is started while Bluetooth is off or not ready.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth non attivo o non pronto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth is off or not ready"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth desactivado o no listo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth désactivé ou non prêt"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth ist ausgeschaltet oder nicht bereit"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth desativado ou não pronto"
+          }
+        }
+      }
+    },
+    "app.p3.bluetooth_off": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when Bluetooth is switched off.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth disattivato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth is off"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth desactivado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth désactivé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth ist ausgeschaltet"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth desativado"
+          }
+        }
+      }
+    },
+    "app.p3.bluetooth_unauthorized": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when the app is not allowed to use Bluetooth.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth non autorizzato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth not authorized"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth no autorizado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth non autorisé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth nicht autorisiert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth não autorizado"
+          }
+        }
+      }
+    },
+    "app.p3.bluetooth_unsupported": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when the device has no usable Bluetooth LE.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth non supportato su questo dispositivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth isn't supported on this device"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth no es compatible con este dispositivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth non pris en charge sur cet appareil"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth wird auf diesem Gerät nicht unterstützt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth não é compatível com este dispositivo"
+          }
+        }
+      }
+    },
+    "app.p3.bluetooth_unavailable": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when the Bluetooth state is unknown or unavailable.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stato Bluetooth non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth state unavailable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estado de Bluetooth no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "État du Bluetooth indisponible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth-Status nicht verfügbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estado do Bluetooth indisponível"
+          }
+        }
+      }
+    },
+    "app.p3.connection_failed": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when connecting to the board failed and the system gave no detail.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione fallita"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection failed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de conexión"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la connexion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung fehlgeschlagen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na conexão"
+          }
+        }
+      }
+    },
+    "app.p3.disconnected_error": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when the board disconnected with an error; %@ is the system error text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnesso: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnected: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectado: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déconnecté : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Getrennt: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectado: %@"
+          }
+        }
+      }
+    },
+    "app.p3.services_discovery_failed": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when discovering the GATT services of the board failed; %@ is the system error text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Errore scoperta servizi: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service discovery error: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al descubrir los servicios: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur de découverte des services : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fehler bei der Diensterkennung: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro ao descobrir os serviços: %@"
+          }
+        }
+      }
+    },
+    "app.p3.characteristics_discovery_failed": {
+      "extractionState": "manual",
+      "comment": "Status of the Bluetooth bench-board screen when discovering the GATT characteristics of the board failed; %@ is the system error text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Errore scoperta caratteristiche: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Characteristic discovery error: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al descubrir las características: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur de découverte des caractéristiques : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fehler bei der Erkennung der Charakteristiken: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro ao descobrir as características: %@"
+          }
+        }
+      }
+    },
+    "vpn.status.connecting": {
+      "extractionState": "manual",
+      "comment": "Label of the VPN chip while the tunnel is being established. Keep it short.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conectando…"
+          }
+        }
+      }
+    },
+    "vpn.status.error": {
+      "extractionState": "manual",
+      "comment": "Label of the VPN chip when the tunnel failed. Keep it short.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Errore VPN"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN error"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de VPN"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur VPN"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN-Fehler"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro de VPN"
+          }
+        }
+      }
+    },
+    "vpn.error.invalid_configuration": {
+      "extractionState": "manual",
+      "comment": "VPN error shown when the system reports the VPN configuration as invalid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configurazione VPN non valida"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid VPN configuration"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configuración de VPN no válida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configuration VPN non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültige VPN-Konfiguration"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configuração de VPN inválida"
+          }
+        }
+      }
+    },
+    "vpn.error.pqc_state_mismatch": {
+      "extractionState": "manual",
+      "comment": "VPN error: the server answered with a post-quantum (ML-KEM) ciphertext but the app has no matching local key. Technical message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: ciphertext senza chiave ML-KEM locale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: ciphertext without a local ML-KEM key"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: ciphertext sin clave ML-KEM local"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC : ciphertext sans clé ML-KEM locale"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: Ciphertext ohne lokalen ML-KEM-Schlüssel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: ciphertext sem chave ML-KEM local"
+          }
+        }
+      }
+    },
+    "vpn.error.invalid_mlkem_ciphertext": {
+      "extractionState": "manual",
+      "comment": "VPN error: the post-quantum (ML-KEM) ciphertext sent by the server is malformed. Technical message.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: ciphertext ML-KEM non valido"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: invalid ML-KEM ciphertext"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: ciphertext ML-KEM no válido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC : ciphertext ML-KEM non valide"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: Ungültiger ML-KEM-Ciphertext"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN PQC: ciphertext ML-KEM inválido"
+          }
+        }
+      }
+    },
+    "vpn.error.http": {
+      "extractionState": "manual",
+      "comment": "VPN error: the VPN server API answered with an HTTP error; first %lld is the HTTP status code, %@ is the response text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN API errore %lld: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN API error %lld: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error de la API de VPN %lld: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur de l'API VPN %lld : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN-API-Fehler %lld: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro da API de VPN %lld: %@"
+          }
+        }
+      }
+    },
+    "vpn.error.invalid_response": {
+      "extractionState": "manual",
+      "comment": "VPN error: the VPN server API answer could not be read; %@ is the technical reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VPN risposta non valida: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid VPN response: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respuesta de VPN no válida: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réponse VPN non valide : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültige VPN-Antwort: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resposta de VPN inválida: %@"
+          }
+        }
+      }
+    },
+    "vpn.picker.auto_subtitle": {
+      "extractionState": "manual",
+      "comment": "Subtitle of the Auto row in the VPN exit picker: the app picks the best server automatically.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nodo migliore · latenza + carico"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Best node · latency + load"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mejor nodo · latencia + carga"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meilleur nœud · latence + charge"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bester Knoten · Latenz + Last"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Melhor nó · latência + carga"
+          }
+        }
+      }
+    },
+    "vpn.picker.node_load": {
+      "extractionState": "manual",
+      "comment": "Subtitle of a server row in the VPN exit picker: first %@ is the country, %lld the current server load in percent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · carico %lld%%"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %lld%% load"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · carga %lld%%"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · charge %lld %%"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Last %lld%%"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · carga %lld%%"
+          }
+        }
+      }
+    },
+    "onboarding.action.login": {
+      "extractionState": "manual",
+      "comment": "Sign-in button / screen title in onboarding (phone sign-in and extension sign-in button).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acceder"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecter"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmelden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar"
+          }
+        }
+      }
+    },
+    "onboarding.action.verify": {
+      "extractionState": "manual",
+      "comment": "Button that submits the SMS verification code during onboarding.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifizieren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        }
+      }
+    },
+    "onboarding.otp.verifying": {
+      "extractionState": "manual",
+      "comment": "Label of the verify button while the SMS code is being checked.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifizierung läuft…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando…"
+          }
+        }
+      }
+    },
+    "onboarding.action.continue": {
+      "extractionState": "manual",
+      "comment": "Continue button at the end of the profile name step in onboarding.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar"
+          }
+        }
+      }
+    },
+    "onboarding.phone.title_register": {
+      "extractionState": "manual",
+      "comment": "Title of the phone number screen when the user is creating a new account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crea un account"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create an account"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crea una cuenta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Créer un compte"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konto erstellen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Criar uma conta"
+          }
+        }
+      }
+    },
+    "onboarding.phone.cta_register": {
+      "extractionState": "manual",
+      "comment": "Main button of the phone number screen in registration mode.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con la registrazione"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue with sign-up"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar con el registro"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer l'inscription"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit der Registrierung fortfahren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar com o cadastro"
+          }
+        }
+      }
+    },
+    "onboarding.phone.cta_login": {
+      "extractionState": "manual",
+      "comment": "Main button of the phone number screen in sign-in mode.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua con l'accesso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue with sign-in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar con el acceso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer la connexion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit der Anmeldung fortfahren"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar com o login"
+          }
+        }
+      }
+    },
+    "onboarding.phone.last_attempt": {
+      "extractionState": "manual",
+      "comment": "Small caption on the phone number screen after an attempt; %@ is the time of day (HH:mm:ss).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ultimo tentativo: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last attempt: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Último intento: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernière tentative : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Letzter Versuch: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última tentativa: %@"
+          }
+        }
+      }
+    },
+    "onboarding.register.create": {
+      "extractionState": "manual",
+      "comment": "Submit button of the extension-and-email registration screen.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crea account"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create account"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crear cuenta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Créer le compte"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konto erstellen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Criar conta"
+          }
+        }
+      }
+    },
+    "onboarding.register.creating": {
+      "extractionState": "manual",
+      "comment": "Label of the registration submit button while the account is being created.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creazione account…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creating account…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creando cuenta…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Création du compte…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konto wird erstellt…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Criando conta…"
+          }
+        }
+      }
+    },
+    "onboarding.error.email_invalid": {
+      "extractionState": "manual",
+      "comment": "Registration error (HTTP 400): the email is missing or not valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email mancante o non valida."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email missing or invalid."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falta el correo electrónico o no es válido."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-mail manquant ou non valide."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-Mail fehlt oder ist ungültig."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-mail ausente ou inválido."
+          }
+        }
+      }
+    },
+    "onboarding.error.email_taken": {
+      "extractionState": "manual",
+      "comment": "Registration error (HTTP 409): the email is already registered.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa email risulta già registrata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This email is already registered."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este correo electrónico ya está registrado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette adresse e-mail est déjà enregistrée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese E-Mail-Adresse ist bereits registriert."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este e-mail já está cadastrado."
+          }
+        }
+      }
+    },
+    "onboarding.error.too_many_attempts": {
+      "extractionState": "manual",
+      "comment": "Onboarding error (HTTP 429): rate limit reached.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppi tentativi. Riprova tra qualche minuto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Try again in a few minutes."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiados intentos. Inténtalo de nuevo en unos minutos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de tentatives. Réessaie dans quelques minutes."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Versuche. Bitte versuchen Sie es in ein paar Minuten erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitas tentativas. Tente novamente em alguns minutos."
+          }
+        }
+      }
+    },
+    "onboarding.error.service_unavailable": {
+      "extractionState": "manual",
+      "comment": "Registration error (HTTP 503): the service is temporarily unavailable.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servizio non disponibile al momento. Riprova più tardi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service unavailable right now. Try again later."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servicio no disponible en este momento. Inténtalo más tarde."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service indisponible pour le moment. Réessaie plus tard."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Dienst ist derzeit nicht verfügbar. Bitte versuchen Sie es später erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serviço indisponível no momento. Tente novamente mais tarde."
+          }
+        }
+      }
+    },
+    "onboarding.error.server": {
+      "extractionState": "manual",
+      "comment": "Onboarding error for any other server answer; %lld is the HTTP status code.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Errore del server (%lld)."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server error (%lld)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error del servidor (%lld)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur du serveur (%lld)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serverfehler (%lld)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro do servidor (%lld)."
+          }
+        }
+      }
+    },
+    "onboarding.otp.error.no_account": {
+      "extractionState": "manual",
+      "comment": "Sign-in error (HTTP 404): no account exists for the phone number.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun account trovato per questo numero. Prova a registrarti."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No account found for this number. Try signing up."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se encontró ninguna cuenta con este número. Prueba a registrarte."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun compte trouvé pour ce numéro. Essaie de t'inscrire."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für diese Nummer wurde kein Konto gefunden. Bitte versuchen Sie, sich zu registrieren."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhuma conta encontrada para este número. Tente criar uma conta."
+          }
+        }
+      }
+    },
+    "onboarding.otp.error.invalid_request": {
+      "extractionState": "manual",
+      "comment": "Registration error (HTTP 404 in registration mode): the request is not valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiesta non valida."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid request."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solicitud no válida."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requête non valide."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültige Anfrage."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solicitação inválida."
+          }
+        }
+      }
+    },
+    "onboarding.otp.error.already_registered": {
+      "extractionState": "manual",
+      "comment": "Registration error (HTTP 409): the phone number already has an account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo numero risulta già registrato. Prova ad accedere invece."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This number is already registered. Try signing in instead."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este número ya está registrado. Prueba a iniciar sesión."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce numéro est déjà enregistré. Essaie plutôt de te connecter."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Nummer ist bereits registriert. Bitte versuchen Sie stattdessen, sich anzumelden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este número já está cadastrado. Tente fazer login."
+          }
+        }
+      }
+    },
+    "onboarding.otp.error.code_invalid": {
+      "extractionState": "manual",
+      "comment": "Sign-in error (HTTP 409): the SMS code is wrong or expired.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice non valido o scaduto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid or expired code."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código no válido o caducado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code non valide ou expiré."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiger oder abgelaufener Code."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código inválido ou expirado."
+          }
+        }
+      }
+    },
+    "onboarding.otp.error.sms_unavailable": {
+      "extractionState": "manual",
+      "comment": "Error (HTTP 503): the SMS provider is temporarily unavailable.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servizio SMS temporaneamente non disponibile. Riprova più tardi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SMS service temporarily unavailable. Try again later."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servicio de SMS no disponible temporalmente. Inténtalo más tarde."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service SMS temporairement indisponible. Réessaie plus tard."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der SMS-Dienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serviço de SMS temporariamente indisponível. Tente novamente mais tarde."
+          }
+        }
+      }
+    },
+    "onboarding.profile.save_failed": {
+      "extractionState": "manual",
+      "comment": "Error under the display-name field in onboarding when saving the name failed; %@ is the system error text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile salvare il nome: %@. Puoi riprovare più tardi dalle impostazioni."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save your name: %@. You can try again later in Settings."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo guardar el nombre: %@. Puedes intentarlo de nuevo más tarde desde Ajustes."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'enregistrer le nom : %@. Tu pourras réessayer plus tard dans les Réglages."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Name konnte nicht gespeichert werden: %@. Sie können es später in den Einstellungen erneut versuchen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível salvar o nome: %@. Você pode tentar novamente mais tarde em Ajustes."
+          }
+        }
+      }
+    },
+    "onboarding.welcome.cta_fast_setup": {
+      "extractionState": "manual",
+      "comment": "Welcome screen, main button: set up the app by scanning a QR code from the server admin panel.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configurazione rapida (QR)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick setup (QR)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configuración rápida (QR)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configuration rapide (QR)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schnellkonfiguration (QR)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configuração rápida (QR)"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.cta_invite": {
+      "extractionState": "manual",
+      "comment": "Welcome screen button: start the registration with an invite code.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inizia con un codice invito"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start with an invite code"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empezar con un código de invitación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Commencer avec un code d'invitation"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit einem Einladungscode starten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Começar com um código de convite"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.cta_login": {
+      "extractionState": "manual",
+      "comment": "Welcome screen button: sign in with an account that already exists.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi con un account esistente"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in with an existing account"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accede con una cuenta existente"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecter avec un compte existant"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit einem bestehenden Konto anmelden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar com uma conta existente"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.cta_extension_register": {
+      "extractionState": "manual",
+      "comment": "Welcome screen button: register with a PBX extension (interno) and an email, without a phone number.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registrati con interno e email (senza numero)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign up with extension and email (no number)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regístrate con extensión y correo (sin número)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S'inscrire avec un poste et un e-mail (sans numéro)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Nebenstelle und E-Mail registrieren (ohne Nummer)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cadastrar com ramal e e-mail (sem número)"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.cta_recovery": {
+      "extractionState": "manual",
+      "comment": "Welcome screen button: restore an account from an existing recovery phrase.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ho già una frase di recupero"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I already have a recovery phrase"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ya tengo una frase de recuperación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J'ai déjà une phrase de récupération"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich habe bereits eine Wiederherstellungsphrase"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Já tenho uma frase de recuperação"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.gallery_busy": {
+      "extractionState": "manual",
+      "comment": "Welcome screen: label of the QR-from-photo button while the image is being analyzed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analisi in corso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyzing…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analizando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyse en cours…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analyse läuft…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analisando…"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.gallery_load": {
+      "extractionState": "manual",
+      "comment": "Welcome screen: button that picks a photo containing a QR code from the photo library.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carica immagine QR"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose QR image"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cargar imagen QR"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Charger une image QR"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QR-Bild laden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carregar imagem QR"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.gallery_error_load": {
+      "extractionState": "manual",
+      "comment": "Welcome screen error: the photo picked for the QR code could not be loaded.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile caricare l'immagine selezionata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load the selected image."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo cargar la imagen seleccionada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de charger l'image sélectionnée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das ausgewählte Bild konnte nicht geladen werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível carregar a imagem selecionada."
+          }
+        }
+      }
+    },
+    "onboarding.welcome.gallery_error_analysis": {
+      "extractionState": "manual",
+      "comment": "Welcome screen error: analyzing the photo for a QR code failed; %@ is the system error text.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Errore analisi immagine: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image analysis error: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error al analizar la imagen: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur d'analyse de l'image : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fehler bei der Bildanalyse: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erro ao analisar a imagem: %@"
+          }
+        }
+      }
+    },
+    "onboarding.welcome.gallery_no_qr": {
+      "extractionState": "manual",
+      "comment": "Welcome screen error: no QR code was found in the chosen photo.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun QR trovato nell'immagine. Assicurati che il codice QR sia visibile e ben a fuoco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No QR code found in the image. Make sure the QR code is visible and in focus."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se encontró ningún QR en la imagen. Asegúrate de que el código QR sea visible y esté bien enfocado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun QR code trouvé dans l'image. Assure-toi que le QR code est visible et net."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Im Bild wurde kein QR-Code gefunden. Stellen Sie sicher, dass der QR-Code sichtbar und scharf ist."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum QR code encontrado na imagem. Verifique se o QR code está visível e bem focado."
+          }
+        }
+      }
+    },
+    "app.group.auto_joined": {
+      "extractionState": "manual",
+      "comment": "Snackbar when the user was added to a group by someone else; first %@ is the group name, second %@ the name of the person who added them.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiunto al gruppo %@ da %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added to group %@ by %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Añadido al grupo %@ por %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajouté au groupe %@ par %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zur Gruppe %@ von %@ hinzugefügt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adicionado ao grupo %@ por %@"
+          }
+        }
+      }
+    },
+    "app.report.auto_sent": {
+      "extractionState": "manual",
+      "comment": "Snackbar after an automatic problem report was sent; %@ is a short technical tag.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report automatico inviato (tag: %@)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic report sent (tag: %@)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reporte automático enviado (tag: %@)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rapport automatique envoyé (tag : %@)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatischer Bericht gesendet (Tag: %@)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relatório automático enviado (tag: %@)"
+          }
+        }
+      }
+    },
+    "app.call.group_video_subtitle": {
+      "extractionState": "manual",
+      "comment": "Subtitle of the incoming group call screen for a group video call (before the creator's name).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Videochiamata di gruppo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group video call"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Videollamada de grupo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appel vidéo de groupe"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gruppenvideoanruf"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Videochamada em grupo"
+          }
+        }
+      }
+    },
+    "push.action.answer": {
+      "extractionState": "manual",
+      "comment": "Button on the incoming-call notification: answer the call (opens the app).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rispondi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answer"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contestar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répondre"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annehmen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atender"
+          }
+        }
+      }
+    },
+    "push.action.view": {
+      "extractionState": "manual",
+      "comment": "Button on a notification: open the related item in the app.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visualizza"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ver"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ansehen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ver"
+          }
+        }
+      }
+    },
+    "push.action.dismiss": {
+      "extractionState": "manual",
+      "comment": "Button on a notification: dismiss it without opening the app.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignora"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Descartar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignorer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verwerfen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignorar"
+          }
+        }
+      }
+    },
     "Numero, interno o ID utente": {
       "extractionState": "manual",
       "localizations": {

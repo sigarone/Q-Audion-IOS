@@ -35,9 +35,12 @@ public final class LogExportService {
 
         public var errorDescription: String? {
             switch self {
-            case .notAuthenticated:    return "Sessione non autenticata."
-            case .uploadFailed(let m): return "Upload fallito: \(m)"
-            case .writeFailed(let m):  return "Scrittura file fallita: \(m)"
+            case .notAuthenticated:
+                return String(localized: "app.logexport.not_authenticated", defaultValue: "Sessione non autenticata.", comment: "Error shown when exporting or uploading the diagnostic log while the session is not authenticated.")
+            case .uploadFailed(let m):
+                return String(localized: "app.logexport.upload_failed", defaultValue: "Upload fallito: \(m)", comment: "Error shown when uploading the diagnostic log fails; %@ is the system error text.")
+            case .writeFailed(let m):
+                return String(localized: "app.logexport.write_failed", defaultValue: "Scrittura file fallita: \(m)", comment: "Error shown when the diagnostic log file cannot be written to disk; %@ is the system error text.")
             }
         }
     }

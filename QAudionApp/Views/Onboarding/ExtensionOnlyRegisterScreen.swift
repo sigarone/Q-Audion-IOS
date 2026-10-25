@@ -147,7 +147,9 @@ struct ExtensionOnlyRegisterScreen: View {
                     Button {
                         Task { await submit() }
                     } label: {
-                        Text(isSubmitting ? "Creazione account…" : "Crea account")
+                        Text(isSubmitting
+                                ? String(localized: "onboarding.register.creating", defaultValue: "Creazione account…", comment: "Label of the registration submit button while the account is being created.")
+                                : String(localized: "onboarding.register.create", defaultValue: "Crea account", comment: "Submit button of the extension-and-email registration screen."))
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 56)
                             .foregroundStyle(canSubmit ? .black : .white.opacity(0.4))
@@ -193,11 +195,11 @@ struct ExtensionOnlyRegisterScreen: View {
         }
         if let bcryptoError = error as? BCryptoError, case .httpError(let statusCode) = bcryptoError {
             switch statusCode {
-            case 400: return "Email mancante o non valida."
-            case 409: return "Questa email risulta già registrata."
-            case 429: return "Troppi tentativi. Riprova tra qualche minuto."
-            case 503: return "Servizio non disponibile al momento. Riprova più tardi."
-            default: return "Errore del server (\(statusCode))."
+            case 400: return String(localized: "onboarding.error.email_invalid", defaultValue: "Email mancante o non valida.", comment: "Registration error (HTTP 400): the email is missing or not valid.")
+            case 409: return String(localized: "onboarding.error.email_taken", defaultValue: "Questa email risulta già registrata.", comment: "Registration error (HTTP 409): the email is already registered.")
+            case 429: return String(localized: "onboarding.error.too_many_attempts", defaultValue: "Troppi tentativi. Riprova tra qualche minuto.", comment: "Onboarding error (HTTP 429): rate limit reached.")
+            case 503: return String(localized: "onboarding.error.service_unavailable", defaultValue: "Servizio non disponibile al momento. Riprova più tardi.", comment: "Registration error (HTTP 503): the service is temporarily unavailable.")
+            default: return String(localized: "onboarding.error.server", defaultValue: "Errore del server (\(statusCode)).", comment: "Onboarding error for any other server answer; %lld is the HTTP status code.")
             }
         }
         return error.localizedDescription

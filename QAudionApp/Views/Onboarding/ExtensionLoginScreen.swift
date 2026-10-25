@@ -112,7 +112,7 @@ struct ExtensionLoginScreen: View {
                     Button {
                         Task { await submit() }
                     } label: {
-                        Text(isSubmitting ? "Accesso in corso…" : "Accedi")
+                        Text(isSubmitting ? String(localized: "Accesso in corso…") : String(localized: "onboarding.action.login", defaultValue: "Accedi", comment: "Sign-in button / screen title in onboarding."))
                             .font(.body.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 56)
                             .foregroundStyle(canSubmit ? .black : .white.opacity(0.4))

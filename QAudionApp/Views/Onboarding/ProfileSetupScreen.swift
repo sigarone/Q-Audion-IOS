@@ -66,7 +66,7 @@ struct ProfileSetupScreen: View {
                 Button {
                     Task { await save() }
                 } label: {
-                    Text(isSaving ? "Salvataggio…" : "Continua")
+                    Text(isSaving ? String(localized: "Salvataggio…") : String(localized: "onboarding.action.continue", defaultValue: "Continua", comment: "Continue button at the end of the profile name step in onboarding."))
                         .font(.body.weight(.semibold))
                         .frame(maxWidth: .infinity, minHeight: 56)
                         .foregroundStyle(.black)
@@ -118,7 +118,7 @@ struct ProfileSetupScreen: View {
             try await provider.accountApi.updateProfile(displayName: trimmed, statusMessage: nil, avatarUrl: nil)
             onDone()
         } catch {
-            errorText = "Impossibile salvare il nome: \(error.localizedDescription). Puoi riprovare più tardi dalle impostazioni."
+            errorText = String(localized: "onboarding.profile.save_failed", defaultValue: "Impossibile salvare il nome: \(error.localizedDescription). Puoi riprovare più tardi dalle impostazioni.", comment: "Error under the display-name field in onboarding when saving the name failed; %@ is the system error text.")
         }
     }
 }
