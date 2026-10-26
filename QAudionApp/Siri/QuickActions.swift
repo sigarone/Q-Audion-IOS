@@ -85,7 +85,25 @@ enum QuickActions {
 
 /// The scene delegate that receives an item tapped while the app is running or suspended. A tap that launches the app is in the
 /// connection options, read by `AppDelegate`.
+///
+/// It also keeps the app to ONE phone/iPad window. The app's scene manifest allows several scenes because CarPlay is a
+/// second scene next to the phone's; an iPad user could otherwise open further app windows, and every window runs the root
+/// view's start-up (observers, scene-phase handling) while the app lock and the call state are per app. A second window
+/// session is closed as soon as it connects; the CarPlay scene has its own delegate and is not affected.
 final class QuickActionSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        let otherWindows = UIApplication.shared.openSessions.filter {
+            $0.role == .windowApplication && $0 !== session && $0.scene != nil
+        }
+        guard !otherWindows.isEmpty else { return }
+        RTLog.info("ui", "second app window refused, the app keeps one window")
+        UIApplication.shared.requestSceneSessionDestruction(session, options: nil, errorHandler: nil)
+    }
+
     func windowScene(
         _ windowScene: UIWindowScene,
         performActionFor shortcutItem: UIApplicationShortcutItem,

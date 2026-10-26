@@ -124,10 +124,25 @@
 	<array>
 		<string>INStartCallIntent</string>
 	</array>
+	<!-- The CarPlay scene (CarPlay Communication app): the car shows CarPlaySceneDelegate's templates. Multiple scenes
+	     are on because CarPlay is a second scene next to the phone's window; the phone's scene needs no entry here
+	     (the SwiftUI lifecycle creates it). -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>CPTemplateApplicationSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>QAudionCarPlay</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
 	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>

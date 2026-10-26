@@ -1,29 +1,28 @@
 #!/usr/bin/env python3
-"""check_carplay_gating.py - source gate: the CarPlay scene is compiled only with QAUDION_CARPLAY, and nothing
-on the car screen points at the phone.
+"""check_carplay_gating.py - source gate: CarPlay is part of every build, and nothing on the car screen points at
+the phone.
 
-WHY. CarPlay (Tier B, the in-car app) needs the entitlement com.apple.developer.carplay-communication,
-which Apple grants on request. Until it is granted the scene is a compile-time switch that is OFF in every
-default and release build. The compiler of the default build cannot tell that a CarPlay reference slipped out of
-`#if QAUDION_CARPLAY`, and nothing else stops somebody from putting the entitlement into the entitlements the
-app is signed with (which would make the signing step fail on a profile that does not have it) or from
-switching the flag on in the spec the TestFlight workflow archives. This script checks, on any machine with
-Python 3 and in a second, that:
+WHY. The app is a CarPlay Communication app. The scene (QAudionApp/CarPlay/CarPlayScene.swift) only runs when all of
+the following are in place, and a build that drops one of them either has no CarPlay icon in the car or fails to
+sign. This script checks, on any machine with Python 3 and in a second, that:
 
-  1. no spec but the variant (every QAudionApp/project*.yml) sets the flag, links CarPlay.framework or mentions
-     the entitlement;
-  2. the variant spec (QAudionApp/project-carplay.yml) includes the default spec, sets the flag and links
-     CarPlay.framework weakly (-weak_framework CarPlay), keeping the linker flags of the default spec;
-  3. no entitlements file of the repository carries a com.apple.developer.carplay-* key;
-  4. neither Info.plist (app, Intents extension) has a CarPlay scene role;
-  5. ios-testflight.yml never mentions the variant spec, the flag or the entitlement outside comments;
-  6. every CarPlay type and `import CarPlay` in the app and Intents extension sources is inside
-     `#if QAUDION_CARPLAY`;
+  1. QAudionApp/project.yml links CarPlay.framework weakly (`weak: true`), there is no CarPlay variant spec any more
+     (QAudionApp/project-carplay.yml), and nothing refers to the old compilation flag (QAUDION_CARPLAY): the scene is
+     not conditional, so a leftover `#if QAUDION_CARPLAY` would silently compile code out;
+  2. the app's Info.plist declares the scene: UIApplicationSupportsMultipleScenes on and the role
+     CPTemplateApplicationSceneSessionRoleApplication with the scene delegate class CarPlaySceneDelegate;
+  3. both entitlements files the app is signed with (QAudion.entitlements, QAudionVPN.entitlements) carry
+     com.apple.developer.carplay-communication = true, and no other entitlements file (the extensions') does;
+  4. the Intents extension's Info.plist has no CarPlay scene role;
+  5. the CarPlay framework is used by the scene only (QAudionApp/CarPlay/CarPlayScene.swift): the bridge, the list
+     model and everything else stay free of CarPlay types, so they run in unit tests;
+  6. ios-testflight.yml checks the main app's provisioning profile against the entitlements file before the archive,
+     and never builds a CarPlay variant;
   7. the text that can appear on the car screen (the carplay.* strings of the catalog in every language, and the
      default values in the CarPlay sources) never tells the driver to use the phone: a CarPlay flow has to be
      possible without touching it.
 
-The built binaries are checked as well, on macOS, by the steps of ios-app-tests.yml that read the built apps.
+The built app is checked as well, on macOS, by the step "CarPlay scene in the default build" of ios-app-tests.yml.
 
 USAGE   python3 -I scripts/ci/check_carplay_gating.py [--root DIR]
 EXIT    0 clean | 1 a check failed | 2 cannot run
@@ -32,19 +31,24 @@ import argparse
 import json
 import os
 import pathlib
+import plistlib
 import re
 import sys
 
-FLAG = "QAUDION_CARPLAY"
+OLD_FLAG = "QAUDION_CARPLAY"
+ENTITLEMENT = "com.apple.developer.carplay-communication"
+ROLE = "CPTemplateApplicationSceneSessionRoleApplication"
+SCENE_FILE = "QAudionApp/CarPlay/CarPlayScene.swift"
+
+# Entitlements files the app itself is signed with; each must carry the CarPlay entitlement.
+APP_ENTITLEMENTS = ("QAudionApp/QAudion.entitlements", "QAudionApp/QAudionVPN.entitlements")
 
 SKIP_DIRS = {".git", "graphify-out", ".build", "build", "DerivedData", "node_modules", ".cache"}
 
 # Directories of Swift sources that are compiled into the app or into one of its extensions.
 SOURCE_DIRS = ("QAudionApp", "QAudionIntents")
 
-# Types of the CarPlay framework that the app code may use. A reference outside the flag does not compile
-# without the framework import, but the import itself is checked separately, so a stray type name is a
-# second, independent signal.
+# Types of the CarPlay framework.
 CP_TYPE = re.compile(
     r"\bCP(Template|List|Message|Contact|Grid|Interface|Session|Alert|Assistant|TabBar|Window|Maneuver)[A-Za-z]*\b")
 
@@ -71,6 +75,15 @@ def read_inside(root, path, errors="strict"):
 
 def read(root, rel):
     return read_inside(root, os.path.join(root, rel))
+
+
+def read_bytes(root, rel):
+    path = os.path.join(root, rel)
+    root_real = os.path.realpath(root)
+    real = os.path.realpath(path)
+    if os.path.commonpath([root_real, real]) != root_real:
+        raise ValueError("%s is outside %s" % (path, root))
+    return pathlib.Path(real).read_bytes()
 
 
 def exists(root, rel):
@@ -153,106 +166,123 @@ def spec_files(root):
             yield "QAudionApp/" + name
 
 
-def ld_flags(text):
-    """The tokens of the OTHER_LDFLAGS line of a spec (comments already stripped), without $(inherited)."""
-    match = re.search(r"(?m)^\s*OTHER_LDFLAGS:\s*(.*)$", text)
-    if not match:
-        return []
-    return [t for t in match.group(1).split() if t != "$(inherited)"]
-
-
-def flag_in_stack(stack):
-    # Active under the flag only when some enclosing `#if` is exactly `#if QAUDION_CARPLAY` (or a conjunction
-    # that includes it) and we are in its true branch.
-    for cond, in_true_branch in stack:
-        if in_true_branch and re.search(r"(^|&&|\()\s*" + FLAG + r"\s*($|&&|\))", cond):
-            return True
-    return False
-
-
-def references_outside_flag(text):
-    """Line numbers of CarPlay references (import, CP types) that are not under `#if QAUDION_CARPLAY`."""
-    problems = []
-    stack = []  # (condition text, in the true branch)
-    for number, line in enumerate(strip_swift_comments(text), start=1):
-        stripped = line.strip()
-        if stripped.startswith("#if "):
-            stack.append((stripped[4:].strip(), True))
-            continue
-        if stripped.startswith("#elseif "):
-            if stack:
-                stack[-1] = (stripped[8:].strip(), False)
-            continue
-        if stripped == "#else":
-            if stack:
-                stack[-1] = (stack[-1][0], False)
-            continue
-        if stripped.startswith("#endif"):
-            if stack:
-                stack.pop()
-            continue
-        mentions = re.match(r"import\s+CarPlay\b", stripped) or CP_TYPE.search(line)
-        if mentions and not flag_in_stack(stack):
-            problems.append((number, stripped))
-    return problems
-
-
-# What no spec but the variant may contain (outside comments): the flag, a link to the framework.
-FRAMEWORK_LINK = re.compile(r"weak_framework\s+CarPlay\b|CarPlay\.framework")
+# CarPlay.framework linked weakly: a dependency with `weak: true`, or the linker flag. A strong link
+# (`- sdk: CarPlay.framework` alone, `-framework CarPlay`) does not count: the app may run where the framework is absent.
+FRAMEWORK_LINK = re.compile(
+    r"(?m)^\s*-\s*sdk:\s*CarPlay\.framework\s*\n\s*weak:\s*true\s*$|weak_framework\s+CarPlay\b")
 
 
 def check_specs(root):
     problems = []
     default_spec = "QAudionApp/project.yml"
-    variant_spec = "QAudionApp/project-carplay.yml"
     if not exists(root, default_spec):
         return ["%s is missing" % default_spec]
+    if not FRAMEWORK_LINK.search(strip_yaml_comments(read(root, default_spec))):
+        problems.append("%s does not link CarPlay.framework weakly (- sdk: CarPlay.framework with weak: true)" % default_spec)
+    if exists(root, "QAudionApp/project-carplay.yml"):
+        problems.append("QAudionApp/project-carplay.yml exists: CarPlay is part of the default spec, there is no variant")
     for rel in spec_files(root):
-        if rel == variant_spec:
-            continue
         text = strip_yaml_comments(read(root, rel))
-        if FLAG in text:
-            problems.append("%s sets %s: only the variant spec may, the default build must not compile the CarPlay scene"
-                            % (rel, FLAG))
-        if FRAMEWORK_LINK.search(text):
-            problems.append("%s links CarPlay.framework: only the variant spec may" % rel)
-        if "carplay-communication" in text:
-            problems.append("%s adds the CarPlay entitlement" % rel)
-    if not exists(root, variant_spec):
-        problems.append("%s is missing" % variant_spec)
-    else:
-        text = strip_yaml_comments(read(root, variant_spec))
-        if "-D" + FLAG not in text:
-            problems.append("%s does not set -D%s" % (variant_spec, FLAG))
-        if not re.search(r"(?m)^include:\s*\n\s*-\s*project\.yml\s*$", text):
-            problems.append("%s does not include project.yml" % variant_spec)
-        if "carplay-communication" in text:
-            problems.append("%s adds the CarPlay entitlement" % variant_spec)
-        flags = ld_flags(text)
-        if "-weak_framework" not in flags or flags[flags.index("-weak_framework") + 1:][:1] != ["CarPlay"]:
-            problems.append("%s does not link CarPlay.framework weakly (-weak_framework CarPlay in OTHER_LDFLAGS)"
-                            % variant_spec)
-        for flag in ld_flags(strip_yaml_comments(read(root, default_spec))):
-            if flag not in flags:
-                problems.append("%s drops the linker flag %s of %s (a value in the variant replaces the included one)"
-                                % (variant_spec, flag, default_spec))
+        if OLD_FLAG in text:
+            problems.append("%s mentions %s: the flag no longer exists, the scene is always compiled" % (rel, OLD_FLAG))
     return problems
 
 
-def check_entitlements_and_plists(root):
+def check_flag_in_sources(root):
     problems = []
+    for rel in swift_files(root):
+        for number, line in enumerate(strip_swift_comments(read(root, rel)), start=1):
+            if OLD_FLAG in line:
+                problems.append("%s:%d refers to %s: the flag no longer exists, the code is always compiled"
+                                % (rel, number, OLD_FLAG))
+    return problems
+
+
+def load_plist(root, rel):
+    try:
+        return plistlib.loads(read_bytes(root, rel))
+    except Exception as exc:  # a plist that does not parse is a failed check, not a crash
+        return exc
+
+
+def check_entitlements(root):
+    problems = []
+    for rel in APP_ENTITLEMENTS:
+        if not exists(root, rel):
+            problems.append("%s is missing" % rel)
+            continue
+        data = load_plist(root, rel)
+        if isinstance(data, Exception):
+            problems.append("%s cannot be read: %s" % (rel, data))
+        elif data.get(ENTITLEMENT) is not True:
+            problems.append("%s does not carry %s = true: the build would have no CarPlay scene or fail to sign"
+                            % (rel, ENTITLEMENT))
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
-            if name.endswith(".entitlements"):
-                rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
-                # A key, not a comment that names it.
-                text = read_inside(root, os.path.join(dirpath, name), errors="replace")
-                if re.search(r"<key>\s*com\.apple\.developer\.carplay[^<]*</key>", text):
-                    problems.append("%s carries a CarPlay entitlement, which this build is not provisioned for" % rel)
-    for rel in ("QAudionApp/Info.plist", "QAudionIntents/Info.plist"):
-        if exists(root, rel) and "CPTemplateApplicationSceneSessionRoleApplication" in read(root, rel):
-            problems.append("%s has a CarPlay scene role: only the variant build adds it" % rel)
+            if not name.endswith(".entitlements"):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
+            if rel in APP_ENTITLEMENTS:
+                continue
+            text = read_inside(root, os.path.join(dirpath, name), errors="replace")
+            if re.search(r"<key>\s*com\.apple\.developer\.carplay[^<]*</key>", text):
+                problems.append("%s carries a CarPlay entitlement: only the app's own entitlements files may" % rel)
+    return problems
+
+
+def check_plists(root):
+    problems = []
+    rel = "QAudionApp/Info.plist"
+    if not exists(root, rel):
+        return ["%s is missing" % rel]
+    data = load_plist(root, rel)
+    if isinstance(data, Exception):
+        return ["%s cannot be read: %s" % (rel, data)]
+    manifest = data.get("UIApplicationSceneManifest")
+    if not isinstance(manifest, dict):
+        problems.append("%s has no UIApplicationSceneManifest" % rel)
+    else:
+        if manifest.get("UIApplicationSupportsMultipleScenes") is not True:
+            problems.append("%s: UIApplicationSupportsMultipleScenes is not true, which CarPlay needs" % rel)
+        roles = (manifest.get("UISceneConfigurations") or {}).get(ROLE)
+        if not isinstance(roles, list) or not roles:
+            problems.append("%s has no %s scene role" % (rel, ROLE))
+        else:
+            delegate = str(roles[0].get("UISceneDelegateClassName", ""))
+            if not delegate.endswith(".CarPlaySceneDelegate"):
+                problems.append("%s: the CarPlay scene delegate is %r, not <module>.CarPlaySceneDelegate" % (rel, delegate))
+    intents = "QAudionIntents/Info.plist"
+    if exists(root, intents) and ROLE in read(root, intents):
+        problems.append("%s has a CarPlay scene role: only the app does" % intents)
+    return problems
+
+
+def check_scene_source(root):
+    if not exists(root, SCENE_FILE):
+        return ["%s is missing" % SCENE_FILE]
+    lines = strip_swift_comments(read(root, SCENE_FILE))
+    text = "\n".join(lines)
+    problems = []
+    if not re.search(r"(?m)^import\s+CarPlay\b", text):
+        problems.append("%s does not import CarPlay" % SCENE_FILE)
+    if not re.search(r"\bclass\s+CarPlaySceneDelegate\b", text):
+        problems.append("%s does not define CarPlaySceneDelegate, which Info.plist names" % SCENE_FILE)
+    if re.search(r"(?m)^\s*#if\b", text):
+        problems.append("%s has a conditional compilation block: the scene is always compiled" % SCENE_FILE)
+    return problems
+
+
+def check_framework_use(root):
+    """CarPlay types and the import belong to the scene file; the rest stays testable without the framework."""
+    problems = []
+    for rel in swift_files(root):
+        if rel == SCENE_FILE:
+            continue
+        for number, line in enumerate(strip_swift_comments(read(root, rel)), start=1):
+            stripped = line.strip()
+            if re.match(r"import\s+CarPlay\b", stripped) or CP_TYPE.search(line):
+                problems.append("%s:%d uses CarPlay outside %s: %s" % (rel, number, SCENE_FILE, stripped))
     return problems
 
 
@@ -262,20 +292,12 @@ def check_testflight(root):
         return []
     text = strip_yaml_comments(read(root, rel))
     problems = []
-    for needle in ("project-carplay", FLAG, "carplay-communication", "weak_framework CarPlay"):
+    for needle in ("project-carplay", OLD_FLAG, "carplay-add-scene"):
         if needle in text:
-            problems.append("%s mentions %s: no release build may enable CarPlay" % (rel, needle))
-    return problems
-
-
-def check_sources(root):
-    problems = []
-    for rel in swift_files(root):
-        text = read(root, rel)
-        if "CarPlay" not in text and not CP_TYPE.search(text):
-            continue
-        for number, line in references_outside_flag(text):
-            problems.append("%s:%d uses CarPlay outside #if %s: %s" % (rel, number, FLAG, line))
+            problems.append("%s mentions %s: CarPlay has no variant spec or flag any more" % (rel, needle))
+    if "verify_profile_entitlements" not in text:
+        problems.append("%s does not check the main app's provisioning profile against the entitlements file "
+                        "(verify_profile_entitlements)" % rel)
     return problems
 
 
@@ -308,9 +330,12 @@ def check_copy(root):
 def run(root):
     problems = []
     problems += check_specs(root)
-    problems += check_entitlements_and_plists(root)
+    problems += check_flag_in_sources(root)
+    problems += check_entitlements(root)
+    problems += check_plists(root)
+    problems += check_scene_source(root)
+    problems += check_framework_use(root)
     problems += check_testflight(root)
-    problems += check_sources(root)
     problems += check_copy(root)
     return problems
 
@@ -327,7 +352,8 @@ def main(argv=None):
         for p in problems:
             print("FAIL " + p)
         return 1
-    print("CarPlay gating: ok (flag only in project-carplay.yml, no entitlement, no scene role, no copy pointing at the phone)")
+    print("CarPlay gating: ok (framework linked, scene in Info.plist, entitlement in both app entitlements files, "
+          "no copy pointing at the phone)")
     return 0
 
 

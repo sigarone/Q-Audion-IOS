@@ -13,11 +13,12 @@
 #     its tests include mutations of the real sources. scripts/ci/test-assert-no-earbud.sh is the
 #     self-test of the BINARY gate (the real gate runs on the built app in ios-app-tests.yml and on
 #     the shipped IPA in ios-testflight.yml).
-#   * the CarPlay scene is a compile-time switch (QAUDION_CARPLAY, see QAudionApp/project-carplay.yml).
-#     scripts/ci/check_carplay_gating.py proves on the SOURCES that the flag is set only by the variant spec,
-#     that no entitlements file carries a CarPlay key, that ios-testflight.yml never builds the variant, that
-#     every CarPlay reference is inside the flag, and that no car-screen text points at the phone; its tests
-#     include mutations of the real files. The built app is checked on macOS by ios-app-tests.yml.
+#   * the CarPlay scene is part of every build. scripts/ci/check_carplay_gating.py proves on the SOURCES that
+#     project.yml links CarPlay.framework, that the app's Info.plist declares the scene, that both app
+#     entitlements files carry the CarPlay Communication key (and no other file does), that ios-testflight.yml
+#     regenerates the App Store profile against every entitlement, and that no car-screen text points at the
+#     phone; its tests include mutations of the real files. The built app is checked on macOS by
+#     ios-app-tests.yml.
 #   * every Siri intent the Intents extension declares (IntentsSupported in QAudionIntents/Info.plist) has
 #     example phrases that name the app in every QAudionApp/<lang>.lproj/AppIntentVocabulary.plist, the
 #     vocabulary of the development language included. scripts/ci/check_siri_intent_phrases.py reads the

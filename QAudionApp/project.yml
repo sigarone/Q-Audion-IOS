@@ -102,22 +102,21 @@ targets:
         # which is gone; kept because the other C++-backed binary frameworks
         # may rely on it and it is harmless when already satisfied.
         OTHER_LDFLAGS: $(inherited) -lc++
-        # CarPlay (Tier B custom in-car app) is gated behind QAUDION_CARPLAY and
-        # is OFF by default so `v*` TestFlight builds stay green WITHOUT the
-        # Apple-approval-gated `com.apple.developer.carplay-communication`
-        # entitlement. CarPlay/CarPlayScene.swift is excluded from compilation
-        # while the flag is absent, and so is the CarPlay scene configuration
-        # of the app's Info.plist. This spec never sets the flag and never links
-        # CarPlay.framework: the variant with both is project-carplay.yml (see
-        # its header), which ios-app-tests.yml builds on every pull request.
-        # CallKit-driven incoming/active calls already surface on CarPlay with
-        # NONE of the above (Tier A) — that path needs no flag and no entitlement.
+        # CarPlay (Tier B custom in-car app) is part of every build: CarPlay/CarPlayScene.swift is always
+        # compiled, CarPlay.framework is linked below, the scene configuration is in Info.plist and both
+        # entitlements files carry `com.apple.developer.carplay-communication` (the CarPlay Communication
+        # capability is enabled on the App ID). scripts/ci/check_carplay_gating.py keeps all of it in place.
+        # CallKit-driven incoming/active calls surface on CarPlay on their own (Tier A).
     dependencies:
       - package: QAudionEngine
       - sdk: CoreAudio.framework
       - sdk: AudioToolbox.framework
       - sdk: Accelerate.framework
       - sdk: CallKit.framework
+      # CarPlay Communication app (QAudionApp/CarPlay/CarPlayScene.swift). Linked weakly: the app can also run as an
+      # iPad app on a Mac, where the framework may be absent.
+      - sdk: CarPlay.framework
+        weak: true
       - sdk: PushKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreNFC.framework

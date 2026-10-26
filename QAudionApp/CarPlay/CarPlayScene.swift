@@ -1,12 +1,6 @@
 //
 //  CarPlayScene.swift — Q-Audion in-car UI (Tier B, custom CarPlay app)
 //
-//  ┌──────────────────────────────────────────────────────────────────────┐
-//  │  GATED BEHIND `QAUDION_CARPLAY`. OFF by default → this whole file is    │
-//  │  excluded from compilation so `v*` TestFlight tag builds stay GREEN     │
-//  │  without the (Apple-approval-gated) CarPlay entitlement.                │
-//  └──────────────────────────────────────────────────────────────────────┘
-//
 //  ── TIER A (works TODAY, no code, no entitlement) ───────────────────────
 //  Incoming + active calls already surface on CarPlay automatically because
 //  the engine drives CallKit (see CallKitProvider.swift). Answer / end / mute
@@ -31,27 +25,14 @@
 //  `CarPlayListModel.swift`, which is compiled in every build and unit tested.
 //  This file only draws it.
 //
-//  ── HOW TO BUILD IT ─────────────────────────────────────────────────────
-//  The spec `QAudionApp/project-carplay.yml` includes `project.yml` and adds
-//  the compilation condition QAUDION_CARPLAY and the CarPlay scene
-//  configuration (CPTemplateApplicationSceneSessionRoleApplication, with
-//  UIApplicationSupportsMultipleScenes on). `ios-app-tests.yml` compiles it on
-//  every pull request. `project-carplay.yml` links CarPlay.framework weakly (-weak_framework CarPlay).
-//  The default spec and every release build leave all of it out.
-//
-//  ── HOW TO ENABLE IT FOR A DEVICE (after Apple grants the entitlement) ───
-//  1. Request entitlement:  developer.apple.com/contact/request/carplay-entitlement
-//     category = "Communication app" → `com.apple.developer.carplay-communication`.
-//     (Free, discretionary, can take weeks. NOT MFi — no hardware program.)
-//  2. Add to the entitlements the build is signed with:
-//        <key>com.apple.developer.carplay-communication</key><true/>
-//     and enable the CarPlay capability on the App ID, then regenerate the
-//     provisioning profile. Until then the entitlement is NOT in any
-//     entitlements file of this repository, and no release build carries the flag.
-//  3. Generate the project from project-carplay.yml.
+//  ── HOW IT IS BUILT ────────────────────────────────────────────────────
+//  This file is part of every build of the app. `project.yml` links CarPlay.framework, the app's Info.plist declares
+//  the scene (role CPTemplateApplicationSceneSessionRoleApplication, delegate `CarPlaySceneDelegate`, multiple
+//  scenes on) and `QAudion.entitlements` / `QAudionVPN.entitlements` carry
+//  `com.apple.developer.carplay-communication`. `scripts/ci/check_carplay_gating.py` fails a pull request that
+//  drops any of them, and `ios-app-tests.yml` checks the built app for all of them.
 //
 
-#if QAUDION_CARPLAY
 import CarPlay
 import UIKit
 import Combine
@@ -480,4 +461,3 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         interfaceController.presentTemplate(alert, animated: true, completion: nil)
     }
 }
-#endif

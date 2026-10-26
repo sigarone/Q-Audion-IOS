@@ -105,4 +105,33 @@ final class AppLockServiceTests: XCTestCase {
         XCTAssertTrue(AppLockService.graceExpired(
             backgroundedAt: backgroundedAt, graceMs: 60_000, now: now.addingTimeInterval(61)))
     }
+
+    func test_aBypassForAnAnsweredCallConsumesTheBackgroundTime() {
+        let service = AppLockService()
+        persistBackgroundTime(secondsAgo: 600)
+        service.bypassForCall(answered: true)
+        XCTAssertFalse(service.isLocked)
+        XCTAssertNil(UserDefaults.standard.object(forKey: key))
+        refresh(service)
+        XCTAssertFalse(service.isLocked, "the car screen must not lock a window that the bypass brought to the foreground")
+    }
+
+    func test_thePhoneWindowGoingToTheBackgroundLocksAfterTheGraceWhileTheCarIsConnected() {
+        let bridge = CarPlayBridge.shared
+        bridge.carPlayConnected()
+        defer { bridge.carPlayDisconnected() }
+        let service = AppLockService()
+        service.handleBackground()
+        XCTAssertNotNil(UserDefaults.standard.object(forKey: key), "the phone window's background time is stored")
+        service.lockIfGraceExpiredWithoutPrompt(
+            now: Date().addingTimeInterval(61), policy: { (enabled: true, graceMs: 60_000) })
+        XCTAssertTrue(service.isLocked)
+    }
+
+    func test_aBypassThatDoesNotApplyKeepsTheBackgroundTime() {
+        let service = AppLockService()
+        persistBackgroundTime(secondsAgo: 600)
+        service.bypassForCall(callState: .ringing, answered: false)
+        XCTAssertNotNil(UserDefaults.standard.object(forKey: key))
+    }
 }

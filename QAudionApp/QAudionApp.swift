@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             MeshBoot.bootIdentityAndRadio()
             // CarPlay can start the app with only its own scene (the phone has no window): the root view's `onAppear`
             // never runs then, so the way into the app is wired here, before any scene exists. Nothing happens
-            // unless a CarPlay scene exists, which needs the QAUDION_CARPLAY build and the CarPlay entitlement.
+            // unless a CarPlay scene exists, which needs the CarPlay entitlement the app is signed with.
             CarPlayBridge.shared.bootApp = { QAudionApp.startForCarPlayLaunch() }
             CarPlayBridge.shared.continueStartCall = { activity in AppState.shared.handleSiriStartCall(activity) }
             // The icon menu follows the remote switch of location sharing.
@@ -92,7 +92,6 @@ struct QAudionApp: App {
     @StateObject private var appState = AppState.shared
     /// W441: App lock service. isLocked drives the gate overlay in body.
     @StateObject private var lockService = AppLockService.shared
-    @Environment(\.scenePhase) private var scenePhase
 
     /// W441: reactive screenshot-protection flag, so the ZStack modifier
     /// re-evaluates when the user toggles the setting in PrivacySettings.
@@ -330,9 +329,10 @@ struct QAudionApp: App {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: lockService.isLocked)
-            .onChange(of: scenePhase) { newPhase in
-                handleScenePhase(newPhase)
-            }
+            // The phone window's OWN phase, not the App-level one: with a CarPlay scene connected the App-level phase
+            // is the aggregate of all scenes and stays `.active` while the car is in front, so the phone window going
+            // to the background would never reach the app lock.
+            .modifier(PhoneWindowPhase(handle: handleScenePhase))
             // Pending phone-number transfer: the state is dropped when the app locks, nothing is read
             // while it is locked, and the list is read again from the server when it unlocks.
             .onChange(of: lockService.isLocked) { locked in
@@ -391,6 +391,9 @@ struct QAudionApp: App {
                 appState.initializeForPhoneWindow()
                 // W-MK ... W441: MetricKit subscriber and the expired-message sweep, after initialize().
                 QAudionApp.startServicesAfterInitialize()
+                // The observers below are registered once per process, whatever number of times the root view appears.
+                guard QAudionApp.observersRegistered == false else { return }
+                QAudionApp.observersRegistered = true
                 // W441: listen for OS screenshot events and warn in the log.
                 registerScreenshotObserver()
                 // W-SCREENRECDETECT (2026-09-02): listen for an active
@@ -537,7 +540,23 @@ struct QAudionApp: App {
         }
     }
 
+    // MARK: - Phone window lifecycle
+
+    /// Reports the scene phase of the window this modifier is applied to. `@Environment(\.scenePhase)` read inside a
+    /// view is the phase of that view's scene; read in the `App` it is the aggregate of every scene.
+    private struct PhoneWindowPhase: ViewModifier {
+        @Environment(\.scenePhase) private var phase
+        let handle: (ScenePhase) -> Void
+
+        func body(content: Content) -> some View {
+            content.onChange(of: phase) { newPhase in handle(newPhase) }
+        }
+    }
+
     // MARK: - Screenshot detection
+
+    /// True once the privacy observers of the root view's `onAppear` are registered.
+    @MainActor private static var observersRegistered = false
 
     private func registerScreenshotObserver() {
         NotificationCenter.default.addObserver(

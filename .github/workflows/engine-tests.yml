@@ -25,7 +25,7 @@ env:
   # ios-simulator-tests below builds/tests against the same Xcode major
   # version that actually ships to TestFlight, instead of silently running
   # on macos-14's old Xcode 15.4 default while production ships on Xcode 27.x.
-  # ios-xcode27-canary.yml still compiles the CarPlay variant with Xcode 26, report only.
+  # ios-xcode27-canary.yml still compiles the app (CarPlay scene included) with Xcode 26, report only.
   XCODE_VERSION: '27'
 
 jobs:

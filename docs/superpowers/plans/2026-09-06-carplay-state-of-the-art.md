@@ -189,29 +189,23 @@ template reads from — no new data layer, only new presentation surfaces.
   `INSearchForMessagesIntentHandling` (S2). The no-plaintext-on-screen
   policy is unchanged — only what Siri may say aloud changed, not what the
   screen draws.
-- **S7 — Tier B is built by CI, tested, and has its own start-up path
-  (2026-10-23).** The scene is behind `QAUDION_CARPLAY` (off in the default
-  spec and in every release build):
-  - `QAudionApp/project-carplay.yml` is the variant spec (flag
-    `-DQAUDION_CARPLAY` through `OTHER_SWIFT_FLAGS`, like the VPN and
-    earbud variants). A build phase (`scripts/ci/carplay-add-scene.sh`) adds
-    the CarPlay scene configuration (`CPTemplateApplicationSceneSessionRole
-    Application`, `CarPlaySceneDelegate`, multiple scenes on) to the BUILT
-    Info.plist; the source `Info.plist` never has it.
-    `ios-app-tests.yml` builds the variant on every pull request
-    (`carplay-variant-build`) and reads the built Info.plist; the default
-    build is checked for the opposite (no scene configuration, no scene class
-    in the binary, no CarPlay.framework load command, no CarPlay entitlement).
-  - `CarPlay.framework` is linked only by the variant spec, weakly
-    (`-weak_framework CarPlay` in `OTHER_LDFLAGS`); the variant job fails when
-    the binary has no weak load command for it or has a strong one.
-  - `scripts/ci/check_carplay_gating.py` (with its tests, run by
-    `ios-ci-gates.yml`): the flag, the framework link and the entitlement
-    appear in no spec but the variant (every `project*.yml`), no
-    entitlements file carries a CarPlay key, `ios-testflight.yml` never
-    mentions the variant or the flag, every CarPlay reference in the app and
-    Intents sources is inside `#if QAUDION_CARPLAY`, and no car-screen text
-    points at the phone.
+- **S7 — Tier B is part of every build (2026-10-26).** Apple assigned the CarPlay
+  Communication entitlement and the capability is enabled on the App ID, so the
+  variant is folded into the default spec:
+  - `CarPlayScene.swift` is always compiled (no compilation flag), `project.yml`
+    links `CarPlay.framework`, the source `Info.plist` declares the scene
+    (`CPTemplateApplicationSceneSessionRoleApplication`, `CarPlaySceneDelegate`,
+    multiple scenes on) and `QAudion.entitlements` / `QAudionVPN.entitlements`
+    carry `com.apple.developer.carplay-communication`. `project-carplay.yml`,
+    `carplay-add-scene.sh` and the `carplay-variant-build` job are gone.
+  - `ios-app-tests.yml` reads the built app and requires the scene
+    configuration, the scene class, the framework load command and the
+    entitlement. `scripts/ci/check_carplay_gating.py` (with its tests, run by
+    `ios-ci-gates.yml`) requires the same of the sources, keeps CarPlay types
+    inside the scene file and keeps car-screen text free of phone references.
+  - `ios-testflight.yml` deletes every App Store profile of the App ID and
+    recreates it, then compares the profile with the entitlements file the
+    build is signed with (`verify_profile_entitlements`).
   - Lists are built by `CarPlayListModel.swift` (compiled in every build, no
     CarPlay type): rows are capped by `CPListTemplate.maximumItemCount` and
     by 12 on a vehicle that limits lists (`CPLimitableUserInterface.lists`),
@@ -282,21 +276,19 @@ template reads from — no new data layer, only new presentation surfaces.
 
 - Tier A (CallKit-driven incoming/active call on CarPlay): **works today**,
   zero code, zero entitlement. Unaffected by this programme.
-- Tier B (`CarPlayScene.swift`): compiled only by `project-carplay.yml`
-  (`QAUDION_CARPLAY`), built by CI on every pull request, absent from the
-  default spec and from every release build. Three
+- Tier B (`CarPlayScene.swift`): part of every build (see S7). Three
   `CPListTemplate` tabs (Recenti/Contatti/Messaggi) plus the assistant cell on
   Recenti, `CPContactTemplate` with call and message buttons,
   `CPMessageListItem` rows, an iOS 26 pinned grid. The rows and their caps
   come from `CarPlayListModel.swift` (always compiled, unit tested).
-- `QAudion.entitlements`: `com.apple.developer.siri` and the Siri App Group;
-  no CarPlay key (a gate fails the pull request that adds one).
+- `QAudion.entitlements` / `QAudionVPN.entitlements`: `com.apple.developer.siri`,
+  the Siri App Group and `com.apple.developer.carplay-communication` (a gate
+  fails the pull request that drops it).
 - `project.yml`: `QAudionIntents` app-extension target (compiles
   `SiriMessageBridgeStore.swift` and `SiriIntentPolicy.swift` from
-  `QAudionApp/Siri/`), `Intents.framework`. No CarPlay link: only
-  `project-carplay.yml` links it.
-- `Info.plist`: `UIApplicationSupportsMultipleScenes = false` and no scene
-  configuration; the variant build adds the CarPlay scene to the built file.
+  `QAudionApp/Siri/`), `Intents.framework`, `CarPlay.framework`.
+- `Info.plist`: `UIApplicationSupportsMultipleScenes = true` and the CarPlay
+  scene configuration.
 - Intents: `INStartCallIntent`, `INSendMessageIntent`,
   `INSearchForMessagesIntent`, `INSetMessageAttributeIntent`. Donations: the
   call donation after every outgoing call.
@@ -329,14 +321,11 @@ template reads from — no new data layer, only new presentation surfaces.
 6. S1/S2: testable TODAY on a real iPhone via Xcode's "run Siri or Maps as
    the host app" debug flow — no CarPlay hardware or entitlement needed to
    verify the Intents Extension in isolation.
-7. Every pull request: `ios-app-tests.yml` builds the CarPlay variant
-   (`carplay-variant-build`) and runs the app-target tests, `ios-ci-gates.yml`
+7. Every pull request: `ios-app-tests.yml` builds the app, checks the CarPlay
+   scene in the built app and runs the app-target tests, `ios-ci-gates.yml`
    runs `check_carplay_gating.py` and its tests.
-8. S4/S5: **cannot be verified end-to-end until S3's entitlement is granted**
-   — Apple will not sign a build carrying `com.apple.developer.carplay-
-   communication` without it. Write and review the code regardless (gated
-   behind `QAUDION_CARPLAY`, same as today), but do not expect a TestFlight
-   build with Tier B active before the grant lands.
+8. S4/S5: the entitlement is granted; verify end-to-end in a car or the Xcode
+   CarPlay Simulator with a TestFlight build.
 
 ## Live verification checklist (needs S3 granted + CarPlay hardware or the Xcode CarPlay Simulator)
 

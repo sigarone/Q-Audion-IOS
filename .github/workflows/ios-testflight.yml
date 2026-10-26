@@ -48,7 +48,7 @@
 #   - QAUDION_DEV_TOOLS is injected into the QAudionApp target's
 #     SWIFT_ACTIVE_COMPILATION_CONDITIONS before `xcodegen generate` runs
 #     (see "Patch project.yml for dev tools build" step) -- app target only,
-#     $(inherited) and any other condition (e.g. QAUDION_CARPLAY) untouched.
+#     $(inherited) and any other condition untouched.
 #   - The store-readiness gate that fails the build on TestFlight-only
 #     strings (itms-beta:// / testflight.apple.com) in the shipped binary is
 #     skipped -- that string IS expected to be present once dev tools are
@@ -354,7 +354,7 @@ jobs:
       #     appears inside a comment, which never starts with the bare
       #     keyword at column 0 of its stripped indentation, so it can't
       #     match). $(inherited) and any other already-present condition
-      #     (e.g. QAUDION_CARPLAY on a branch that enables it) are preserved
+      #     are preserved
       #     -- the new token is appended, nothing is replaced.
       # ----------------------------------------------------------
       - name: Patch project.yml for dev tools build (opt-in)
@@ -734,19 +734,36 @@ jobs:
               --bundle-ids "$MAIN_BID_RES" --type IOS_APP_STORE 2>&1 || true)
             MAIN_PROF_PLAIN=$(printf '%s\n' "$MAIN_PROF_LOOKUP" | sed 's/\x1b\[[0-9;]*m//g')
             MAIN_PROF_RES=$(printf '%s\n' "$MAIN_PROF_PLAIN" \
-              | grep -E '^Id: ' | head -1 | sed 's/^Id: //' || echo "")
+              | grep -E '^Id: ' | sed 's/^Id: //' || echo "")
             if [ -n "$MAIN_PROF_RES" ]; then
-              echo "Deleting stale main app profile $MAIN_PROF_RES (created without Associated Domains)..."
-              app-store-connect profiles delete "$MAIN_PROF_RES" 2>&1 \
-                && echo "  Profile deleted." \
-                || echo "  Profile delete WARN (may already be gone)"
+              # Every App Store profile of the App ID goes, not only the first: whichever one the next step picks must
+              # be a fresh one that carries every capability enabled on the App ID now (CarPlay Communication,
+              # Associated Domains, SiriKit, ...). The check after Phase 3 compares it with the entitlements file.
+              for PROF_ID in $MAIN_PROF_RES; do
+                echo "Deleting main app profile $PROF_ID (it may predate a capability of the App ID)..."
+                app-store-connect profiles delete "$PROF_ID" 2>&1 \
+                  && echo "  Profile deleted." \
+                  || echo "  Profile delete WARN (may already be gone)"
+              done
             else
               echo "WARNING: could not resolve main app profile resource -- relying on --create below."
             fi
 
-            # Phase 3: re-create the main app profile. It will now include
-            # Associated Domains, satisfying the entitlements file.
-            echo "Re-creating main app signing files with Associated Domains..."
+            # The profiles the first fetch saved on this runner are the ones just deleted on the server. Remove the
+            # local copies of every profile of this App ID, so the profile Phase 3 saves is the only one on disk and
+            # the check below and `xcode-project use-profiles` read the same file.
+            for LOCAL_PROF in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
+              [ -f "$LOCAL_PROF" ] || continue
+              security cms -D -i "$LOCAL_PROF" > /tmp/local-profile.plist 2>/dev/null || continue
+              LOCAL_APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /tmp/local-profile.plist 2>/dev/null || true)
+              case "$LOCAL_APPID" in
+                *".$BUNDLE_ID") rm -f "$LOCAL_PROF"; echo "  Removed a local profile of $BUNDLE_ID." ;;
+              esac
+            done
+
+            # Phase 3: re-create the main app profile. It now carries the capabilities of the App ID, which
+            # the check below compares with the entitlements file.
+            echo "Re-creating main app signing files..."
             app-store-connect fetch-signing-files "$BUNDLE_ID" \
               --type IOS_APP_STORE \
               --create \
@@ -754,7 +771,56 @@ jobs:
               --certificate-key "@file:$CERT_KEY_PATH" \
               --strict-match-identifier
           else
-            echo "WARNING: could not resolve main app Bundle ID resource -- archive may still fail on Associated Domains."
+            echo "WARNING: could not resolve main app Bundle ID resource -- archive may still fail on a capability the profile lacks."
+          fi
+
+          # The main app profile must carry every entitlement of the entitlements file the build is signed with
+          # (QAudion.entitlements, or QAudionVPN.entitlements for a build with VPN support). A capability that is
+          # on the App ID but missing here is a profile made before it was enabled; the failure names the keys (never
+          # values) instead of leaving it to the archive step to say so.
+          verify_profile_entitlements() {
+            local ent_file="$1"
+            local dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+            local found="" f appid
+            for f in "$dir"/*.mobileprovision; do
+              [ -f "$f" ] || continue
+              security cms -D -i "$f" > /tmp/main-profile-cand.plist 2>/dev/null || continue
+              appid=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /tmp/main-profile-cand.plist 2>/dev/null || true)
+              # An App Store profile has no device list; a development or ad hoc profile of the same App ID does.
+              if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' /tmp/main-profile-cand.plist >/dev/null 2>&1; then
+                continue
+              fi
+              case "$appid" in
+                *".$BUNDLE_ID")
+                  # Of the App Store profiles of the App ID, the newest is the one the archive step takes.
+                  if [ -z "$found" ] || [ "$f" -nt "$found" ]; then
+                    found="$f"
+                    cp /tmp/main-profile-cand.plist /tmp/main-profile.plist
+                  fi ;;
+              esac
+            done
+            if [ -z "$found" ]; then
+              echo "::error::no downloaded App Store provisioning profile for $BUNDLE_ID to check against $ent_file"
+              return 1
+            fi
+            plutil -extract Entitlements json -o /tmp/main-profile-ent.json -- /tmp/main-profile.plist
+            plutil -convert json -o /tmp/main-required-ent.json -- "$ent_file"
+            python3 -I - <<'PROFCHECK'
+          import json, sys
+          profile = json.load(open("/tmp/main-profile-ent.json"))
+          required = json.load(open("/tmp/main-required-ent.json"))
+          missing = sorted(k for k in required if k not in profile)
+          if missing:
+              for key in missing:
+                  print("::error::the App Store profile of the main app lacks the entitlement " + key)
+              sys.exit(1)
+          print("Main app profile carries all %d entitlements of the entitlements file." % len(required))
+          PROFCHECK
+          }
+          if [ "$VPN_BUILD" = "true" ]; then
+            verify_profile_entitlements QAudionApp/QAudionVPN.entitlements
+          else
+            verify_profile_entitlements QAudionApp/QAudion.entitlements
           fi
 
           # The packet-tunnel extension's App ID / profile are only needed for a
