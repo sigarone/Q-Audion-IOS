@@ -752,7 +752,8 @@ jobs:
             # The profiles the first fetch saved on this runner are the ones just deleted on the server. Remove the
             # local copies of every profile of this App ID, so the profile Phase 3 saves is the only one on disk and
             # the check below and `xcode-project use-profiles` read the same file.
-            for LOCAL_PROF in "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
+            # The signing tool saves profiles in the folder of the installed Xcode: the Xcode 16+ one or the older one.
+            for LOCAL_PROF in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision                 "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
               [ -f "$LOCAL_PROF" ] || continue
               security cms -D -i "$LOCAL_PROF" > /tmp/local-profile.plist 2>/dev/null || continue
               LOCAL_APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /tmp/local-profile.plist 2>/dev/null || true)
@@ -780,9 +781,8 @@ jobs:
           # values) instead of leaving it to the archive step to say so.
           verify_profile_entitlements() {
             local ent_file="$1"
-            local dir="$HOME/Library/MobileDevice/Provisioning Profiles"
             local found="" f appid
-            for f in "$dir"/*.mobileprovision; do
+            for f in "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"/*.mobileprovision                 "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision; do
               [ -f "$f" ] || continue
               security cms -D -i "$f" > /tmp/main-profile-cand.plist 2>/dev/null || continue
               appid=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /tmp/main-profile-cand.plist 2>/dev/null || true)
