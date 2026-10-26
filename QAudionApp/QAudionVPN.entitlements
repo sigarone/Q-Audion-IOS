@@ -9,10 +9,12 @@
 	<array>
 		<string>TAG</string>
 	</array>
-	<!-- CarPlay/Siri state-of-the-art plan S1 — self-service capability
-	     (unlike com.apple.developer.carplay-communication, which needs a
-	     discretionary Apple grant, see the plan's S3). Lets the
-	     QAudionIntents Intents Extension handle "Hey Siri, chiama X su
+	<!-- CarPlay Communication app (managed capability, enabled on the App ID): the in-car scene of
+	     QAudionApp/CarPlay. -->
+	<key>com.apple.developer.carplay-communication</key>
+	<true/>
+	<!-- CarPlay/Siri state-of-the-art plan S1 — self-service capability.
+	     Lets the QAudionIntents Intents Extension handle "Hey Siri, chiama X su
 	     Q-Audion" (INStartCallIntent) and hands off to AppState.startCall
 	     via QAudionApp.swift's .onContinueUserActivity. -->
 	<key>com.apple.developer.siri</key>

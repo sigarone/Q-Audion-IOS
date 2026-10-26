@@ -1,8 +1,7 @@
 import Foundation
 import QAudionEngine
 
-// What the CarPlay lists show, decided without a single CarPlay type, so it compiles in every build (the
-// `QAUDION_CARPLAY` flag only gates the scene that draws it) and the unit tests can run it on a simulator or a Mac.
+// What the CarPlay lists show, decided without a single CarPlay type, so the unit tests can run it on a simulator or a Mac.
 // `CarPlayScene.swift` turns these values into templates.
 
 // MARK: - Notices

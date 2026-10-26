@@ -194,6 +194,15 @@ final class AppLockService: ObservableObject {
     ///   already implies the user (or the creator) chose to join/create —
     ///   there is no pre-accept "ringing-only" case that maps to
     ///   `.connecting`.
+    /// A bypass happens with the window in the foreground, so the background time of the earlier trip is consumed, as
+    /// `handleForeground()` consumes it. Left in place it would outlive the bypass: the car screen
+    /// (`lockIfGraceExpiredWithoutPrompt`) would read it as "in the background since then" and set the lock again
+    /// under a window that is on screen.
+    private func liftLockForCall() {
+        isLocked = false
+        UserDefaults.standard.removeObject(forKey: Self.backgroundedAtKey)
+    }
+
     func bypassForCall(callState: CallState? = nil, answered: Bool = false, groupCallActive: Bool = false) {
         RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall called — answered=\(answered) callState=\(String(describing: callState)) groupCallActive=\(groupCallActive) isLocked(before)=\(isLocked)")
         // An EXPLICIT CallKit answer (user accepted) may suppress the lock even
@@ -204,7 +213,7 @@ final class AppLockService: ObservableObject {
         // a mere incoming ring never trips it, so an unanswered call still holds
         // the lock (SECURITY M-25/L-7 preserved).
         if answered || groupCallActive {
-            isLocked = false
+            liftLockForCall()
             RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — bypassed (answered=\(answered) groupCallActive=\(groupCallActive)), isLocked=false")
             return
         }
@@ -214,7 +223,7 @@ final class AppLockService: ObservableObject {
                 RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — NOT bypassed, callState=\(callState) is pre-answer, lock stays as-is (isLocked=\(isLocked))")
                 return
             }
-            isLocked = false
+            liftLockForCall()
             RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — bypassed via callState=\(callState), isLocked=false")
             return
         }
@@ -222,7 +231,7 @@ final class AppLockService: ObservableObject {
         // `nil`. The production call site (QAudionApp.swift) DOES pass
         // `appState.callState`, so the `guard` above is the live
         // enforcement — `.ringing` no longer bypasses the lock.
-        isLocked = false
+        liftLockForCall()
         RTLog.info("call", "W-CALLFG-DIAG AppLockService.bypassForCall — legacy fallback (no callState/groupCallActive supplied), isLocked=false")
     }
 }

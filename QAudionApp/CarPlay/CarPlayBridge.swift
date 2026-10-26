@@ -8,7 +8,7 @@ import Foundation
 /// call them to start an outgoing post-quantum call and to read the session and
 /// the app lock. This file is pure Foundation — no `CarPlay` / `CallKit` /
 /// `Intents` imports and no `AppState` parameter anywhere — so it ALWAYS
-/// compiles regardless of the `QAUDION_CARPLAY` compilation flag and never
+/// stays free of the CarPlay framework and never
 /// trips the Swift-6 AppState-Sendable-inference trap that silently breaks the
 /// IPA build.
 ///
@@ -136,7 +136,10 @@ public final class CarPlayBridge {
     public func deliverSiriActivity(_ activity: NSUserActivity) -> Bool {
         guard activity.activityType == Self.startCallActivityType else { return false }
         ensureBooted()
-        guard let continueStartCall else { return false }
+        guard let continueStartCall else {
+            report(.notReady)
+            return false
+        }
         guard !appIsLocked() else {
             report(.appLocked)
             return false

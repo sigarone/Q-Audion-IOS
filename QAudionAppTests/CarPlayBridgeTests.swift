@@ -138,6 +138,14 @@ final class CarPlayBridgeTests: XCTestCase {
         XCTAssertEqual(told, [.appLocked])
     }
 
+    func test_aSiriCallRequestTheAppCannotTakeIsToldOnTheCarScreen() {
+        var told: [CarPlayNotice] = []
+        bridge.continueStartCall = nil
+        bridge.noticeSink = { told.append($0) }
+        XCTAssertFalse(bridge.deliverSiriActivity(startCallActivity()))
+        XCTAssertEqual(told, [.notReady])
+    }
+
     func test_everyReadOfTheLockBringsItUpToDateFirst() {
         var locked = false
         bridge.refreshAppLock = { locked = true }

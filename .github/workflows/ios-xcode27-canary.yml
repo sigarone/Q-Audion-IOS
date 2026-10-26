@@ -15,12 +15,10 @@
 #                        only, on iPhone Duo. Only the flow that does not register an account.
 #                        Manual and weekly runs only: it launches the app, so it never runs
 #                        from a pull request.
-#   carplay-compile      Compiles the app with QAUDION_CARPLAY defined, for a device
-#                        destination without signing, once with SDK 26 and once with SDK 27.
-#                        The condition comes from a spec generated in the job (it includes
-#                        QAudionApp/project.yml and adds one compiler flag); no spec, build
-#                        setting or entitlement in the repository enables it, and the build is
-#                        never signed or uploaded. Runs on every trigger.
+#   carplay-compile      Compiles the app (CarPlay scene included) from QAudionApp/project.yml
+#                        for a device destination without signing, once with SDK 26 and once
+#                        with SDK 27. The build is never signed or uploaded. Runs on every
+#                        trigger.
 #
 # Xcode: scripts/ci/select-xcode.sh with an exact release (27.1 by default; the manual run
 # takes another one). A release candidate or beta is never selected and the job fails when
@@ -391,25 +389,13 @@ jobs:
             brew install xcodegen
           fi
 
-      # The spec only exists in this job. It adds the compilation condition to the app target
-      # through OTHER_SWIFT_FLAGS, the way project-earbud.yml does for its condition.
-      - name: Generate Xcode project with QAUDION_CARPLAY defined
+      - name: Generate Xcode project
         working-directory: QAudionApp
         run: |
-          cat > project-carplay-compile.yml <<'EOF'
-          include:
-            - project.yml
-
-          targets:
-            QAudionApp:
-              settings:
-                base:
-                  OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_CARPLAY
-          EOF
-          xcodegen generate --spec project-carplay-compile.yml
+          xcodegen generate --spec project.yml
           xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
 
-      - name: Build QAudionApp with QAUDION_CARPLAY (device, unsigned)
+      - name: Build QAudionApp (device, unsigned)
         working-directory: QAudionApp
         run: |
           set -o pipefail

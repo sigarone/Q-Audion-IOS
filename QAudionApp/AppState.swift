@@ -486,7 +486,7 @@ final class AppState: ObservableObject {
     /// corpus, zero "carplay" hits) — a head-unit-only incident was
     /// undiagnosable by construction. This just logs on every route change
     /// whether the route IS CarPlay right now, independent of Tier B's
-    /// `QAUDION_CARPLAY` flag (see `isCarPlayConnected()`).
+    /// scene (see `isCarPlayConnected()`).
     private var carPlayRouteLogObserver: NSObjectProtocol?
     /// Listens for the Intents extension queuing a message or a read mark while this app is running.
     private var siriBridgeObserver: SiriBridgeSignalObserver?
@@ -4014,9 +4014,7 @@ final class AppState: ObservableObject {
         // CarPlay — wire the call bridge so the in-car CarPlay scene (a separate
         // UIScene that must NOT import AppState, CLAUDE.md §16) can place
         // outgoing PQC calls. Pure closure injection, same primitives-only
-        // pattern as LiveLogStreamer above. Harmless when the QAUDION_CARPLAY
-        // flag is off: no CarPlay scene is ever created without the entitlement,
-        // so `placeCall` simply stays unused.
+        // pattern as LiveLogStreamer above.
         CarPlayBridge.shared.placeCall = { [weak self] peerUserId, displayName in
             guard let self = self else { return }
             Task { @MainActor in
@@ -10019,6 +10017,8 @@ final class AppState: ObservableObject {
                     RTLog.error("security", "TRUST-2 remote_wipe REJECTED — missing/malformed/expired/replayed signature or wrong device_id; refusing to wipe")
                     return
                 }
+                // A live call ends first (CallKit and the peer hear it) while the call's own state is still there.
+                self.endLiveCallsForSessionEnd()
                 self.authService.clearToken()
                 // Whole-phase-review finding I1 (2026-08-17): this handler
                 // clears the Keychain token but neither nils `currentUserId`
@@ -10031,6 +10031,11 @@ final class AppState: ObservableObject {
                 self.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
                 self.resetAccountScopedRuntimeState()
+                // The session's runtime goes with it (socket, engine, presence), so the next sign-in builds a new one;
+                // then nobody is signed in any more: the car screen (which follows `isAuthenticated`) drops its lists
+                // and shows the signed-out state, and the phone goes back to the sign-in screen.
+                self.tearDownSessionRuntime()
+                self.isAuthenticated = false
                 self.errorMessage = String(localized: "call.account.remote_wipe", defaultValue: "Account cancellato remotamente.", comment: "Message shown on the login screen after the account was deleted remotely by the server.")
             }
         }
@@ -10041,11 +10046,16 @@ final class AppState: ObservableObject {
         ws.registerHandler(type: "account_locked") { [weak self] _, data in
             let reason = (data["reason"] as? String) ?? String(localized: "call.account.locked_default", defaultValue: "Account bloccato", comment: "Fallback message shown after the server locked the account, when it gave no reason.")
             DispatchQueue.main.async {
+                self?.endLiveCallsForSessionEnd()
                 self?.authService.clearToken()
                 // Whole-phase-review finding I1 (2026-08-17) — same
                 // reasoning as the `remote_wipe` handler just above.
                 self?.capabilityGate.discard()
                 self?.phoneTransferNotice.reset()
+                // As for `remote_wipe`: the session's runtime goes, then the car screen and the phone follow
+                // `isAuthenticated`.
+                self?.tearDownSessionRuntime()
+                self?.isAuthenticated = false
                 self?.errorMessage = reason
             }
         }
@@ -17392,9 +17402,8 @@ final class AppState: ObservableObject {
     /// W-CARPLAYVIDEOFIX (2026-09-08) — true when the shared audio route is
     /// currently CarPlay. Entitlement-free (`AVAudioSession.Port.carAudio` is
     /// public API — the same signal `AudioCapture`'s route-code beacon
-    /// already uses for mid-call telemetry), so this works even with Tier
-    /// B's `CPTemplateApplicationScene` compiled out (`QAUDION_CARPLAY` off,
-    /// the default — see `CarPlayScene.swift`'s header). Checked BEFORE
+    /// already uses for mid-call telemetry), so it does not depend on Tier
+    /// B's `CPTemplateApplicationScene` (see `CarPlayScene.swift`'s header). Checked BEFORE
     /// every native CallKit report so the W-CALLKITVIDEOFORCE decision below
     /// can take CarPlay into account instead of forcing blind.
     /// `nonisolated` deliberately: `AppState` is `@MainActor`, but every
@@ -18289,6 +18298,7 @@ final class AppState: ObservableObject {
     }
 
     func logout() {
+        endLiveCallsForSessionEnd()
         authService.clearToken()
         // The per-user flag overlay belongs to the account that just left. Not
         // clearing it hands the next account on this device whatever was
@@ -18301,6 +18311,29 @@ final class AppState: ObservableObject {
         // conversation/threat-report store on the device untouched.
         LocalCryptoWipe.wipeAll()
         resetAccountScopedRuntimeState()
+        tearDownSessionRuntime()
+        isAuthenticated = false
+    }
+
+    /// Ends whatever call is live, for the end of a session (logout, remote wipe, account lock): the 1:1 call through
+    /// `endCall` (which tells CallKit, so the system call UI goes too, and the peer) and a group call through
+    /// `leaveLiveGroupCall`. Without it the call would go on with its screen hidden behind the sign-in screen.
+    func endLiveCallsForSessionEnd() {
+        if isInCall || callState != .idle {
+            endCall()
+        }
+        if groupCallControllerState != .idle {
+            leaveLiveGroupCall(why: .hangUp)
+        }
+    }
+
+    /// Everything the signed-in session holds in memory that belongs to it: the live calls, the call engine, the
+    /// persistent WebSocket and its provider, the relay credentials, presence, and the identity shown on screen. After
+    /// it `liveProvider` is nil, so the next sign-in's `connectPersistentSocket()` builds a new connection instead of
+    /// returning early on the old one. Shared by `logout()` and by the server-sent `remote_wipe` and `account_locked`;
+    /// the caller sets `isAuthenticated` to false after it.
+    func tearDownSessionRuntime() {
+        endLiveCallsForSessionEnd()
         // Released here, rebuilt by `ensureCallEngine` on the next login / call.
         if callEngineLifecycle.teardown() {
             RTLog.info("call", "engine released on logout")
@@ -18333,7 +18366,6 @@ final class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "currentUserDisplayName")
         currentUserStatusMessage = nil
         UserDefaults.standard.removeObject(forKey: "currentUserStatusMessage")
-        isAuthenticated = false
         callState = .idle
         isInCall = false
         // A start admitted by `callStartGate` but never committed (a future exit
@@ -18661,6 +18693,8 @@ final class AppState: ObservableObject {
               let intent = interaction.intent as? INStartCallIntent,
               let person = intent.contacts?.first else {
             RTLog.warn("call", "Siri INStartCallIntent handoff missing a resolved contact")
+            // Nobody reads the log in the car: say it on the car screen when one is connected.
+            CarPlayBridge.shared.report(.contactNotFound)
             return
         }
         let video = intent.callCapability == .videoCall
