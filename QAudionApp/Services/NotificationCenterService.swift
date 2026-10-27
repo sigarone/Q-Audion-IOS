@@ -207,6 +207,9 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             print("[NotificationCenterService] quiet-hours active, suppressing banner")
             return
         }
+        // The server may already have shown its generic alert for this burst while the app had no live socket;
+        // this banner carries the real sender and text, so the generic one goes first.
+        if category == .messageDelivered { await clearRemoteMessageAlerts(for: .inboundStored) }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -331,6 +334,12 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         center.removePendingNotificationRequests(withIdentifiers: [id])
     }
 
+    /// Removes the generic message alerts pushed by the server (see `RemoteMessageAlertPolicy`). Local banners and
+    /// other categories are left alone.
+    func clearRemoteMessageAlerts(for trigger: RemoteMessageAlertPolicy.Trigger) async {
+        await RemoteMessageAlertCleaner(center: center).clear(for: trigger)
+    }
+
     func clearAllDelivered() {
         center.removeAllDeliveredNotifications()
     }
@@ -449,6 +458,10 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
                     self.pendingIncomingAction = (action, infoFinal)
                 }
             } else if let cat = categoryFinal {
+                if cat == .messageDelivered, RemoteMessageAlertPolicy.isGenericTap(userInfo: infoFinal) {
+                    // Generic alert pushed by the server: the alerts of the burst go; the messages arrive over the socket.
+                    Task { await self.clearRemoteMessageAlerts(for: .alertTapped) }
+                }
                 self.onNotificationTap?(cat, infoFinal)
             }
         }

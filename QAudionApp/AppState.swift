@@ -344,12 +344,25 @@ final class AppState: ObservableObject {
     /// `handleIncomingMessage` to suppress local-notification banners
     /// for the conversation the user is actively viewing — avoids the
     /// "banner pops up while I'm reading the message" UX gaffe.
-    internal var activePeerUserId: String?
+    internal var activePeerUserId: String? {
+        didSet {
+            // Opening a chat clears the generic message alerts the server pushed while the app had no socket.
+            if activePeerUserId != nil {
+                clearGenericMessageAlerts(for: .chatOpened)
+            }
+        }
+    }
     /// Fase 1B — groupHex of the currently-open group chat. GroupChatScreen
     /// sets this on `.onAppear` and clears it on `.onDisappear`; used by
     /// `handleIncomingGroupMessage` to suppress the inbound-group banner for
     /// the group the user is actively viewing (mirrors `activePeerUserId`).
-    internal var activeGroupHex: String?
+    internal var activeGroupHex: String? {
+        didSet {
+            if activeGroupHex != nil {
+                clearGenericMessageAlerts(for: .chatOpened)
+            }
+        }
+    }
     /// W94: pending chat deep link. Set by the notification-tap
     /// handler (NotificationCenterService.onNotificationTap) when the
     /// user taps a `.messageDelivered` banner. ChatListScreen observes
@@ -3043,6 +3056,12 @@ final class AppState: ObservableObject {
     /// Bumped when a notification tap asks for the chat list (the home screen shows the Chat tab at root).
     @Published private(set) var chatListOpenRequest = 0
 
+    /// Removes the generic message alerts the server pushed while the app had no socket, whether or not a local banner
+    /// follows (a muted conversation, banners off or an open chat post none).
+    func clearGenericMessageAlerts(for trigger: RemoteMessageAlertPolicy.Trigger) {
+        Task { @MainActor in await NotificationCenterService.shared.clearRemoteMessageAlerts(for: trigger) }
+    }
+
     /// A tap on the notice of a pending phone-number transfer: show the chat list, where the banner is,
     /// and read the transfer state again without waiting (a launch by the tap reads it once the socket
     /// authenticates).
@@ -4160,6 +4179,11 @@ final class AppState: ObservableObject {
         // overwrites the closure with a fresh AppState capture.
         NotificationCenterService.shared.onNotificationTap = { [weak self] category, info in
             guard category == .messageDelivered else { return }
+            // The generic alert names no conversation: the app opens on its chat list.
+            if RemoteMessageAlertPolicy.isGenericTap(userInfo: info) {
+                DispatchQueue.main.async { self?.chatListOpenRequest += 1 }
+                return
+            }
             guard let convIdStr = info["conversationId"],
                   let convId = UUID(uuidString: convIdStr) else { return }
             DispatchQueue.main.async {
@@ -9907,6 +9931,7 @@ final class AppState: ObservableObject {
                     clientMsgId: clientMsgId,
                     serverTs: serverTs
                 )
+                self.clearGenericMessageAlerts(for: .inboundStored)
             }
         }
         ws.registerHandler(type: "msg_delivered") { [weak self] _, data in
@@ -10571,6 +10596,7 @@ final class AppState: ObservableObject {
                 for entry in batch {
                     self.replayPendingSyncEntry(entry)
                 }
+                if !batch.isEmpty { self.clearGenericMessageAlerts(for: .inboundStored) }
             }
         }
 
@@ -10583,6 +10609,7 @@ final class AppState: ObservableObject {
             guard let self = self else { return }
             DispatchQueue.main.async {
                 self.handleIncomingGroupMessage(data, live: true)
+                self.clearGenericMessageAlerts(for: .inboundStored)
             }
         }
         ws.registerHandler(type: "group_msg_pending_sync") { [weak self] _, data in
@@ -10596,6 +10623,7 @@ final class AppState: ObservableObject {
                 for entry in batch {
                     self.handleIncomingGroupMessage(entry, live: false)
                 }
+                if !batch.isEmpty { self.clearGenericMessageAlerts(for: .inboundStored) }
             }
         }
 

@@ -73,6 +73,7 @@ targets:
           - MeshReachTests.swift
           - MissedCallsBadgeTests.swift
           - NoticeServiceTests.swift
+          - RemoteMessageAlertPolicyTests.swift
           - PersistentCallRecordStoreTests.swift
           - PhonebookImportGateTests.swift
           - PhoneEntryScreenInviteTests.swift

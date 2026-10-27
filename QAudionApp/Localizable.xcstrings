@@ -1,6 +1,30 @@
 {
   "sourceLanguage": "it",
   "strings": {
+    "MSG_NEW_BODY": {
+      "extractionState": "manual",
+      "comment": "Body of the generic push alert for a new message received while the app has no live connection. Resolved by the system from the loc-key; keep it generic.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Nuovo messaggio cifrato" } },
+        "en": { "stringUnit": { "state": "translated", "value": "New encrypted message" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Nouveau message chiffré" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Neue verschlüsselte Nachricht" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Nuevo mensaje cifrado" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Nova mensagem criptografada" } }
+      }
+    },
+    "MSG_NEW_TITLE": {
+      "extractionState": "manual",
+      "comment": "Title of the generic push alert for a new message received while the app has no live connection. Resolved by the system from the loc-key.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Q-Audion" } }
+      }
+    },
     "carplay.tab.recents": {
       "extractionState": "manual",
       "comment": "CarPlay tab title — recent calls list",

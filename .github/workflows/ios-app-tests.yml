@@ -335,6 +335,8 @@ jobs:
             -only-testing:QAudionAppTests/MeshReachTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
             -only-testing:QAudionAppTests/NoticeServiceTests \
+            -only-testing:QAudionAppTests/RemoteMessageAlertPolicyTests \
+            -only-testing:QAudionAppTests/RemoteMessageAlertCleanerTests \
             -only-testing:QAudionAppTests/PhonebookImportGateTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
             -only-testing:QAudionAppTests/PhoneEntryScreenInviteTests \
