@@ -46,6 +46,7 @@ targets:
           - CallCloseReasonRedactionTests.swift
           - CallMetricsRedactionTests.swift
           - CallMinimizePolicyTests.swift
+          - SasCardPlacementTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
           - CarPlayBridgeTests.swift
