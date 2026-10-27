@@ -1776,6 +1776,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `armSrtpFallbackIfNeeded`). Feeds the `duration_ms=` field on the
     /// `audiosrtp fallback=0 recover=1` line. `nil` when not currently engaged.
     private var srtpFallbackEngagedAtMs: Int64?
+    /// Times the owner gave the relay-capture start up and handed the call back to the
+    /// native sender during this call (see `audioSrtpFallbackHandedBack`).
+    private var srtpFallbackGiveUps: Int = 0
     /// Debounce task for the fallback engage decision. Cancelled on genuine
     /// ICE recovery (mirrors `iceRecoveryWatchdogTask`'s own cancel-on-heal
     /// discipline) so a self-healed blip never fires the engage callback
@@ -2996,6 +2999,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         iceBadSinceMs = nil
         srtpFallbackEngaged = false
         srtpFallbackEngagedAtMs = nil
+        srtpFallbackGiveUps = 0
         // D6 — same early-teardown-race reasoning as the watchdog above:
         // startP2pProbeWatch() can have armed this during a setup that then
         // failed before `peerConnection` was ever assigned.
@@ -3493,6 +3497,38 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             log?("audiosrtp fallback=0 recover=1")
         }
         onAudioSrtpFallbackRecover?()
+    }
+
+    /// The owner could not start the relay capture and handed the call back to the
+    /// native sender. Resets the engaged state exactly as a recovery does (without the
+    /// recover callback: the owner already restored the native path), so a later
+    /// ICE-down can engage again. The engage loop is re-armed only after
+    /// `SrtpFallbackDecisions.giveUpCooldownMs`, and not at all after
+    /// `maxGiveUpsPerCall` give-ups in one call, so there is no tight engage/give-up loop.
+    public func audioSrtpFallbackHandedBack() {
+        guard !intentionalShutdown else { return }
+        srtpFallbackGiveUps += 1
+        srtpFallbackEngaged = false
+        srtpFallbackEngagedAtMs = nil
+        srtpFallbackTask?.cancel()
+        srtpFallbackTask = nil
+        guard srtpFallbackGiveUps < SrtpFallbackDecisions.maxGiveUpsPerCall else {
+            return
+        }
+        log?("audiosrtpfb handback=1")
+        // The cool-down is the task: ICE recovery cancels it (`disarmSrtpFallbackIfRecovered`),
+        // a closing call cancels it, and while it sleeps the streak marker keeps every new
+        // bad-ICE edge from arming a second loop.
+        let cooldownMs = SrtpFallbackDecisions.giveUpCooldownMs
+        srtpFallbackTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(cooldownMs) * 1_000_000)
+            guard !Task.isCancelled, let self, !self.intentionalShutdown else { return }
+            self.srtpFallbackTask = nil
+            if self.iceBadSinceMs != nil {
+                self.iceBadSinceMs = nil
+                self.armSrtpFallbackIfNeeded()
+            }
+        }
     }
 
     /// W-VIDEOSENDGATE (2026-08-26) — true only once ICE has stayed in a

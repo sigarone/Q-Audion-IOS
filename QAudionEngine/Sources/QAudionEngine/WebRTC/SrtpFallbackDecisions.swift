@@ -43,6 +43,11 @@ public enum SrtpFallbackDecisions {
     /// AVAudioEngine capture path."
     public static let fallbackEngageDebounceMs: Int64 = 1_000
 
+    /// After the relay-capture start was given up, no new engage before this long.
+    public static let giveUpCooldownMs: Int64 = 10_000
+    /// Give-ups per call after which the fallback no longer re-engages.
+    public static let maxGiveUpsPerCall: Int = 3
+
     /// Decide whether to (re-)engage the manual capture/decode fallback.
     ///
     /// - Parameters:
