@@ -184,12 +184,12 @@ final class SasCommitTests: XCTestCase {
         return (code, fatals, sent)
     }
 
-    /// callee-first-offer-round-2: ends `handshake_malformed`, no ACCEPT. Fails without the first-round
+    /// callee-first-offer-round-2: ends `peer_incompatible`, no ACCEPT. Fails without the first-round
     /// rule in the `.offer` case.
     func testAFirstOfferWithRoundTwoEndsTheCallWithoutAnAccept() async {
         let r = await receive(offerBundle(round: 2, commit: nil))
         XCTAssertEqual(r.code, "first_round_not_1")
-        XCTAssertEqual(r.fatals, ["handshake_malformed"])
+        XCTAssertEqual(r.fatals, ["peer_incompatible"])
         XCTAssertEqual(r.sent, 0)
     }
 
@@ -197,14 +197,14 @@ final class SasCommitTests: XCTestCase {
     func testARoundOneOfferWithoutACommitmentEndsTheCallWithoutAnAccept() async {
         let r = await receive(offerBundle(round: 1, commit: nil))
         XCTAssertEqual(r.code, "commit_missing")
-        XCTAssertEqual(r.fatals, ["handshake_malformed"])
+        XCTAssertEqual(r.fatals, ["peer_incompatible"])
         XCTAssertEqual(r.sent, 0)
     }
 
     func testARoundOneOfferWithAMalformedCommitmentEndsTheCallWithoutAnAccept() async {
         let r = await receive(offerBundle(round: 1, commit: "AAAA"))
         XCTAssertEqual(r.code, "commit_malformed")
-        XCTAssertEqual(r.fatals, ["handshake_malformed"])
+        XCTAssertEqual(r.fatals, ["peer_incompatible"])
         XCTAssertEqual(r.sent, 0)
     }
 

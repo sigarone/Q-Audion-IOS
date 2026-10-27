@@ -9,6 +9,10 @@ import Foundation
 /// - `sas_commit_mismatch`, `sas_reveal_timeout` (transcript v6): the caller's SAS nonce did not open its
 ///   commitment (or the REVEAL was ill-formed), or no verified REVEAL arrived within `CONFIRM_TIMEOUT` (15 s) of this
 ///   device's first ACCEPT send. Security reasons: the peer is notified like for `kcmac_mismatch`.
+/// - `peer_incompatible`: the other phone runs a Q-Audion version that cannot take part in the current signed
+///   handshake (its bundle is malformed or incomplete, or its OFFER never arrived after the user answered). The
+///   checks are never relaxed: the call ends, the user is told to ask the contact to update, and the history row
+///   carries this reason. On the wire the hangup still carries `handshake_malformed` (`wireReason`).
 /// - `identity_unresolved`, `identity_key_mismatch`: the peer's identity could not be trusted (no pin and
 ///   no server key, or a key that differs from the pin); the call is held pending the SAS and was closed
 ///   before the user confirmed it.
@@ -20,14 +24,21 @@ public enum CallCloseReason: String, CaseIterable, Sendable {
     case identityKeyMismatch = "identity_key_mismatch"
     case sasCommitMismatch = "sas_commit_mismatch"
     case sasRevealTimeout = "sas_reveal_timeout"
+    case peerIncompatible = "peer_incompatible"
 
-    /// The allow-list check: the reason when `wire` is exactly one of the seven tokens, else `nil`.
+    /// The reason a hangup puts on the wire. `peer_incompatible` is a local distinction only: the peer is told
+    /// `handshake_malformed`, the reason every platform already understands.
+    public var wireReason: String {
+        self == .peerIncompatible ? CallCloseReason.handshakeMalformed.rawValue : rawValue
+    }
+
+    /// The allow-list check: the reason when `wire` is exactly one of the eight tokens, else `nil`.
     public static func accepted(_ wire: String?) -> CallCloseReason? {
         guard let wire = wire else { return nil }
         return CallCloseReason(rawValue: wire)
     }
 
-    /// The seven tokens, so an egress redactor can recognise them verbatim and leave them intact.
+    /// The eight tokens, so an egress redactor can recognise them verbatim and leave them intact.
     public static var allTokens: [String] { allCases.map { $0.rawValue } }
 
     /// Key of the user-facing label (Localizable.xcstrings): `call_history.close.<token>`.

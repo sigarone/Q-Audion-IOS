@@ -49,6 +49,10 @@ enum CallCloseReasonLabel {
             return String(localized: "call_history.close.sas_reveal_timeout",
                           defaultValue: "terminata: codice di sicurezza non ricevuto",
                           comment: "Call history row subtitle — the call ended because the other side's security code never arrived")
+        case .peerIncompatible:
+            return String(localized: "call_history.close.peer_incompatible",
+                          defaultValue: "terminata: versione del contatto non compatibile",
+                          comment: "Call history row subtitle — the call ended because the other person's Q-Audion version cannot complete the call setup")
         }
     }
 }

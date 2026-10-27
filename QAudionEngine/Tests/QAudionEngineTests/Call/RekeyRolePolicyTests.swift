@@ -47,7 +47,7 @@ final class RekeyRolePolicyTests: XCTestCase {
             threw = true
         }
         XCTAssertTrue(threw, "the OFFER reached the verification")
-        XCTAssertEqual(fatals.map { $0.1 }, ["handshake_malformed"])
+        XCTAssertEqual(fatals.map { $0.1 }, ["peer_incompatible"])
     }
 
     // MARK: R-E-STRICT

@@ -4,11 +4,11 @@ import XCTest
 /// The allow-list of v5/v6 call close reasons, and which one an ending call reports.
 final class CallCloseReasonTests: XCTestCase {
 
-    func testTheAllowListIsExactlyTheSevenReasons() {
+    func testTheAllowListIsExactlyTheEightReasons() {
         XCTAssertEqual(Set(CallCloseReason.allTokens), [
             "dtls_fp_mismatch", "kcmac_mismatch", "handshake_malformed",
             "identity_unresolved", "identity_key_mismatch",
-            "sas_commit_mismatch", "sas_reveal_timeout",
+            "sas_commit_mismatch", "sas_reveal_timeout", "peer_incompatible",
         ])
         for reason in CallCloseReason.allCases {
             XCTAssertEqual(CallCloseReason.accepted(reason.rawValue), reason)
@@ -56,5 +56,20 @@ final class CallCloseReasonTests: XCTestCase {
         // A hold code that is a fatal token is not a hold reason.
         XCTAssertNil(CallCloseReason.forEnd(fatalReason: nil, heldIdentityCode: "kcmac_mismatch"))
         XCTAssertNil(CallCloseReason.forEnd(fatalReason: "user_hangup", heldIdentityCode: nil))
+    }
+
+    /// An incompatible peer is a fatal reason of its own, distinct from a malformed handshake in the history,
+    /// while the hangup on the wire keeps the reason every platform understands.
+    func testPeerIncompatibleIsADistinctFatalReasonWithTheMalformedWireReason() {
+        XCTAssertEqual(CallCloseReason.forEnd(fatalReason: "peer_incompatible", heldIdentityCode: nil), .peerIncompatible)
+        XCTAssertEqual(
+            CallCloseReason.forEnd(fatalReason: "peer_incompatible", heldIdentityCode: "identity_unresolved"),
+            .peerIncompatible)
+        XCTAssertNil(CallCloseReason.forEnd(fatalReason: nil, heldIdentityCode: "peer_incompatible"))
+        XCTAssertNotEqual(CallCloseReason.peerIncompatible, .handshakeMalformed)
+        XCTAssertEqual(CallCloseReason.peerIncompatible.wireReason, "handshake_malformed")
+        for reason in CallCloseReason.allCases where reason != .peerIncompatible {
+            XCTAssertEqual(reason.wireReason, reason.rawValue)
+        }
     }
 }

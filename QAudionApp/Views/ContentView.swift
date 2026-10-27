@@ -320,6 +320,13 @@ struct ContentView: View {
             snackbarHost.show(.init(text: text, severity: .error))
             appState.groupCallFatalErrorToastText = nil
         }
+        // The contact's Q-Audion version cannot complete the call setup (`CallCloseReason.peerIncompatible`): the call
+        // ended, and this says what to do. Wired here so it still shows once the call screen is gone.
+        .onChange(of: appState.peerIncompatibleToastText) { text in
+            guard let text else { return }
+            snackbarHost.show(.init(text: text, severity: .error, durationSeconds: 8))
+            appState.peerIncompatibleToastText = nil
+        }
         // BLOCK — the server did not add some or one of the members of a group the user created or extended.
         // One generic notice: it names nobody and says nothing about why.
         .onChange(of: appState.groupMembersNotAddedToastText) { text in

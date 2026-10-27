@@ -2040,7 +2040,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if let code = HandshakeSigningPolicy.firstRoundMalformedCode(
                 isFirstOfferOfCall: isFirstOfferOfCall, round: bundle.rekeyRound) {
                 print("[QAudionCallIntegration] OFFER malformed code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — ending the call")
-                reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                 throw IntegrationError.handshakeAborted(code: code)
             }
             let offerCheck = evaluateInbound(
@@ -2052,7 +2052,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             switch offerCheck.verdict {
             case .malformed(let code):
                 print("[QAudionCallIntegration] OFFER malformed code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — ending the call")
-                reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                 throw IntegrationError.handshakeAborted(code: code)
             case .abort(let code):
                 // W-NOBRICK (user directive): a handshake-sig verdict must NEVER hard-drop the
@@ -2083,7 +2083,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // Every non-malformed verdict carries the transcript, the parsed peer fingerprint and
             // the signer key (the policy returns `.malformed` otherwise).
             guard let offerT = offerCheck.transcript, let peerFp = offerCheck.peerFingerprint else {
-                reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                 throw IntegrationError.handshakeAborted(code: "transcript_unbuildable")
             }
             // `offer_binding = SHA-256(OFFER_v6)`: bound into the ACCEPT, and the KCMAC / v4-bootstrap
@@ -2440,7 +2440,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if !isReKeyRound {
                 guard let commitText = bundle.sasCommit,
                       let commitRaw = SasCommit.decodeCanonicalBase64(commitText, expectedLength: SasCommit.commitLength) else {
-                    reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                    reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                     throw IntegrationError.handshakeAborted(code: "commit_missing")
                 }
                 // A2: begin the context and store the ACCEPT hash in ONE step, and keep the serial it returns: every
@@ -2887,7 +2887,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             switch acceptCheck.verdict {
             case .malformed(let code):
                 print("[QAudionCallIntegration] ACCEPT malformed code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — ending the call")
-                reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                 throw IntegrationError.handshakeAborted(code: code)
             case .abort(let code):
                 print("[QAudionCallIntegration] ⚠️ ACCEPT verify code=\(code) peer=\(callerId.prefix(8))… callId=\(callId.prefix(8))… — NOT aborting; proceeding, VERIFY THE SAS")
@@ -2913,7 +2913,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 acceptSigOk = true
             }
             guard let acceptT = acceptCheck.transcript, let peerFp = acceptCheck.peerFingerprint else {
-                reportHandshakeFatal(callId: callId, reason: "handshake_malformed")
+                reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                 throw IntegrationError.handshakeAborted(code: "transcript_unbuildable")
             }
             // `SHA-256(ACCEPT_v6)`: the KDF / SAS / KCMAC binding (F4 — unconditional).
@@ -3642,6 +3642,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         print("[QAudionCallIntegration] peer DTLS fingerprint changed within the call callId=\(callId.prefix(8))… — ending the call")
         reportHandshakeFatal(callId: callId, reason: "dtls_fp_mismatch")
         return false
+    }
+
+    /// Whether the OFFER of `callId` has been processed on this side (the responder's session is initialised).
+    /// The callee's "no valid OFFER after answering" watchdog reads it (`CalleeOfferWatchdog`).
+    public func hasProcessedOffer(callId: String) -> Bool {
+        lock.withLock { sessionInitializedByCall.contains(callId.lowercased()) }
     }
 
     /// The handshake cannot continue and the call must end. Verdict-only: no value leaves here.
