@@ -56,8 +56,13 @@ public enum NativeSenderMuteDecisions {
     ///     (`CallService.audioSrtpFallbackActive`) — the native sender must
     ///     stay released so it does not contend with the fallback's own
     ///     `AVAudioEngine` capture (W-DEADTXRELEASE).
-    public static func shouldMute(peerAnswered: Bool, userMuted: Bool, fallbackActive: Bool) -> Bool {
-        !peerAnswered || userMuted || fallbackActive
+    ///   - relayStartPending: the fallback is engaged but the relay capture is not confirmed
+    ///     running yet (or the start was given up): the native sender stays as it is for the
+    ///     fallback's sake, so the call is never left without a sender.
+    public static func shouldMute(
+        peerAnswered: Bool, userMuted: Bool, fallbackActive: Bool, relayStartPending: Bool = false
+    ) -> Bool {
+        !peerAnswered || userMuted || (fallbackActive && !relayStartPending)
     }
 
     /// What a mute/unmute request should do to the actual

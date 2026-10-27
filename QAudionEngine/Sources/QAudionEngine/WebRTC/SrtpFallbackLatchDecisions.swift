@@ -46,6 +46,10 @@ public enum SrtpFallbackLatchDecisions {
         /// The call generation moved since the callback was wired: the call it was
         /// wired for is over (and possibly another one has started).
         case staleGeneration = 3
+        /// A previous relay-capture start of this call was given up a moment ago.
+        case coolingDown = 4
+        /// This call already gave up its relay-capture start too many times.
+        case giveUpCap = 5
     }
 
     /// Decide whether an engage request may latch the fallback.
@@ -63,13 +67,20 @@ public enum SrtpFallbackLatchDecisions {
         callLive: Bool,
         capturedGeneration: Int,
         currentGeneration: Int,
-        alreadyActive: Bool
+        alreadyActive: Bool,
+        giveUps: Int = 0,
+        msSinceLastGiveUp: Int64? = nil
     ) -> EngageVerdict {
         guard callLive else { return .noCallLive }
         if capturedGeneration >= 0, capturedGeneration != currentGeneration {
             return .staleGeneration
         }
-        return alreadyActive ? .alreadyActive : .engage
+        if alreadyActive { return .alreadyActive }
+        if giveUps >= SrtpFallbackDecisions.maxGiveUpsPerCall { return .giveUpCap }
+        if let since = msSinceLastGiveUp, since < SrtpFallbackDecisions.giveUpCooldownMs {
+            return .coolingDown
+        }
+        return .engage
     }
 
     /// Whether an engage request arrives during a live call.

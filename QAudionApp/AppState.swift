@@ -20134,6 +20134,11 @@ final class AppState: ObservableObject {
                         self?.callService.recoverAudioSrtpFallback()
                     }
                 }
+                self.callService.onAudioSrtpFallbackGaveUp = { [weak controller] in
+                    Task { @MainActor [weak controller] in
+                        controller?.audioSrtpFallbackHandedBack()
+                    }
+                }
                 // R-4 (sovereign-only): reject incoming video when the
                 // policy is on. Read live (not captured) so a mid-session
                 // toggle takes effect on the next inbound track.
@@ -29894,6 +29899,11 @@ extension AppState {
         controller.onAudioSrtpFallbackRecover = { [weak self] in
             Task { @MainActor [weak self] in
                 self?.callService.recoverAudioSrtpFallback()
+            }
+        }
+        callService.onAudioSrtpFallbackGaveUp = { [weak controller] in
+            Task { @MainActor [weak controller] in
+                controller?.audioSrtpFallbackHandedBack()
             }
         }
         // R-4 (sovereign-only): reject incoming video when the policy is

@@ -1882,7 +1882,8 @@ final class CallService: @unchecked Sendable {
     ///   `webRtcController` was just assigned (`AppState`).
     func reapplyNativeSenderMute(site: Int) {
         let intent = NativeSenderMuteDecisions.shouldMute(
-            peerAnswered: peerAnswered, userMuted: isMuted, fallbackActive: audioSrtpFallbackActive)
+            peerAnswered: peerAnswered, userMuted: isMuted,
+            fallbackActive: audioSrtpFallbackActive, relayStartPending: fallbackRelayPending)
         nativeSenderMuteIntent = intent
         // W-CALLERUNMUTELOST (2026-09-27) — see `nativeSenderMuteSource`'s
         // own kdoc: set BEFORE invoking the closure below, on the same
@@ -2850,6 +2851,7 @@ final class CallService: @unchecked Sendable {
     }
 
     func endCall() {
+        cancelFallbackRelayStart()  // explicit: no relay-capture try after the call ends
         // W-MEDIAATACCEPT (option b) — §4.10 (I13): the teardown
         // chokepoint, before any other work below — every hangup/cancel/
         // CallKit-end/reset path converges on `endCall()`, so this single
@@ -4238,6 +4240,9 @@ final class CallService: @unchecked Sendable {
         peerAnswered = false  // W574b — re-arm the pre-answer mic gate for the next call
         capfailRetryArmed = false  // W-CAPFAILRETRY — one retry per call
         if resetSrtpFallback {
+            cancelFallbackRelayStart()  // no relay-capture try outlives its call
+            fallbackRelayGiveUps = 0
+            fallbackRelayLastGiveUpAtMs = nil
             // W-SRTPFBRESET (2026-09-08) — the fallback latch was the ONE piece
             // of per-call audio state this teardown never cleared (set in
             // engageAudioSrtpFallback, cleared only by recoverAudioSrtpFallback,
@@ -4483,7 +4488,7 @@ final class CallService: @unchecked Sendable {
     private var capfailRetryArmed = false
 
     private func scheduleCapfailRetry() {
-        guard !capfailRetryArmed else { return }
+        guard !capfailRetryArmed, !fallbackRelayPending else { return }
         capfailRetryArmed = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self,
@@ -4784,13 +4789,15 @@ final class CallService: @unchecked Sendable {
                 callIdBound: getCallId?() != nil, peerAnswered: peerAnswered),
             capturedGeneration: capturedGeneration,
             currentGeneration: currentCallGeneration(),
-            alreadyActive: audioSrtpFallbackActive)
+            alreadyActive: audioSrtpFallbackActive,
+            giveUps: fallbackRelayGiveUps,
+            msSinceLastGiveUp: fallbackRelayLastGiveUpAtMs.map { Self.nowMs() - $0 })
         switch verdict {
         case .engage:
             break
         case .alreadyActive:
             return
-        case .noCallLive, .staleGeneration:
+        case .noCallLive, .staleGeneration, .coolingDown, .giveUpCap:
             RTLog.warn("call", "audiosrtpfb engage=0 why=\(verdict.rawValue)")
             return
         }
@@ -4817,7 +4824,18 @@ final class CallService: @unchecked Sendable {
         // (site=4); `audioSrtpFallbackActive` is already `true` above, so
         // `shouldMute` forces this to `true` regardless of `peerAnswered`/
         // `isMuted`, same as the unconditional `true` this replaces.
-        reapplyNativeSenderMute(site: 4)
+        // The fallback has two triggers: the ICE-down debounce (1 s) and the
+        // W-DEADTXNET dead-sender sentinel, which fires with ICE up.
+        // Handover: the native sender is NOT muted here any more. Its audio
+        // unit has to be off before the app's own capture can start (one
+        // voice-processing unit per audio session), so the unit stop below is
+        // the unavoidable part of the gap; the sender stays un-muted and is
+        // only muted once the relay capture is confirmed running. The start is
+        // retried (`FallbackRelayStartRetry`, also after a route change) and,
+        // if every try fails, the call is handed back to the native sender.
+        // Device logs of the 2026-10-27 outages (09:23:40 and 09:24:53) showed
+        // `audioIO capfail=1` about 1 s after each engage and no relay capture
+        // before recovery (~6 s): the capture used to be tried only once.
         // W-ADMFALLBACK (2026-09-26) — muting the track never stopped
         // WebRTC's VoiceProcessingIO unit, so the custom AudioCapture started
         // below ran a SECOND VoiceProcessingIO next to it (the 'what' /
@@ -4826,18 +4844,122 @@ final class CallService: @unchecked Sendable {
         // asynchronously on its own audio thread with no completion signal,
         // so AudioCapture starts after a bounded settle instead of at once
         // (conservative: the fork's stop latency is not determinable here).
+        fallbackRelayPending = true
         let unitStopped = NativeAudioSessionGate.setNativeAudioActive(
             false, reason: NativeAudioUnitGateDecisions.ChangeReason.fallbackEngage.rawValue)
+        let settleMs = unitStopped ? Int(NativeAudioUnitGateDecisions.fallbackUnitStopSettleMs) : 0
         if unitStopped {
-            let settleMs = Int(NativeAudioUnitGateDecisions.fallbackUnitStopSettleMs)
             RTLog.info("call", "admgate fbsettle=\(settleMs)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(settleMs)) { [weak self] in
-                guard let self, self.audioSrtpFallbackActive else { return }
-                self.startAudioIOIfReady()
-            }
-            return
         }
-        startAudioIOIfReady()
+        beginFallbackRelayStart(firstDelayMs: settleMs)
+    }
+
+    /// Relay-capture start sequence of the call fallback (see `beginFallbackRelayStart`).
+    private var fallbackRelayStart: FallbackRelayStartRetry?
+    /// Give-ups of the relay-capture start in this call, and when the last one happened
+    /// (wall-clock ms): they gate a re-engage (`SrtpFallbackLatchDecisions.engageVerdict`).
+    private var fallbackRelayGiveUps = 0
+    private var fallbackRelayLastGiveUpAtMs: Int64?
+    /// Monotonic clock for the give-up cool-down (never compared with wall-clock values).
+    private static func nowMs() -> Int64 { Int64(ProcessInfo.processInfo.systemUptime * 1000) }
+    /// Set by AppState: resets the controller-side engaged state after a give-up.
+    public var onAudioSrtpFallbackGaveUp: (() -> Void)?
+    /// `true` from the fallback engage until the relay capture is confirmed or given up:
+    /// the native sender is not forced muted in that window.
+    private var fallbackRelayPending = false
+
+    /// Starts the bounded relay-capture start sequence of the call fallback.
+    private func beginFallbackRelayStart(firstDelayMs: Int) {
+        let engagedGeneration = currentCallGeneration()
+        // A leftover sequence (and its route observer) never survives a new begin.
+        cancelFallbackRelayStart()
+        fallbackRelayPending = true
+        let retry = FallbackRelayStartRetry(
+            observeRouteChanges: { handler in
+                // Delivered on the main queue (`queue: .main`), where the sequence lives.
+                nonisolated(unsafe) let mainQueueHandler = handler
+                let token = NotificationCenter.default.addObserver(
+                    forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+                ) { _ in mainQueueHandler() }
+                return { NotificationCenter.default.removeObserver(token) }
+            },
+            attempt: { [weak self] in
+                guard let self else { return false }
+                // `audioEnginesStarted` is set inline by `performAudioCaptureStart`; that holds
+                // because `CallKitWorkOffloadPolicy.audioEngineBackgroundQueueEnabled` is false.
+                // Turning that switch on would make this result stale: revisit this attempt first.
+                self.startAudioIOIfReady()
+                return self.audioEnginesStarted
+            },
+            isStillWanted: { [weak self] in
+                guard let self else { return false }
+                let wanted = self.audioSrtpFallbackActive
+                    && self.currentCallGeneration() == engagedGeneration
+                    && self.getCallId?() != nil
+                if !wanted { self.finishFallbackRelayStart() }
+                return wanted
+            },
+            onAttemptFailed: { attempt in
+                RTLog.warn("call", "audiosrtpfb retry=\(attempt) ok=0")
+            },
+            onStarted: { [weak self] attempt in
+                guard let self else { return }
+                RTLog.info("call", "audiosrtpfb retry=\(attempt) ok=1")
+                self.finishFallbackRelayStart()
+                // The relay capture owns the mic now: release the native sender.
+                self.reapplyNativeSenderMute(site: 4)
+            },
+            onGaveUp: { [weak self] attempts in
+                guard let self else { return }
+                RTLog.warn("call", "audiosrtpfb giveup=1 tries=\(attempts)")
+                self.finishFallbackRelayStart()
+                self.handBackToNativeSender()
+            })
+        fallbackRelayStart = retry
+        retry.begin(firstDelayMs: firstDelayMs)
+        // `begin` may already have finished (first try ok, or the call is gone).
+        if !retry.isRunning, fallbackRelayStart === retry { finishFallbackRelayStart() }
+    }
+
+    /// Ends the sequence bookkeeping: pending flag and instance (the route observer is
+    /// owned and removed by the sequence itself).
+    private func finishFallbackRelayStart() {
+        fallbackRelayPending = false
+        fallbackRelayStart = nil
+    }
+
+    /// Stops a running sequence without handing anything back (call end, recovery).
+    private func cancelFallbackRelayStart() {
+        fallbackRelayStart?.cancel()
+        finishFallbackRelayStart()
+    }
+
+    /// Every relay-capture try failed: the native sender takes the call back (same
+    /// steps as the recovery path) and the latch is cleared, so the dead-sender
+    /// sentinel can engage again later if audio is still not flowing.
+    private func handBackToNativeSender() {
+        guard audioSrtpFallbackActive else { return }
+        fallbackRelayGiveUps += 1
+        fallbackRelayLastGiveUpAtMs = Self.nowMs()
+        if fallbackRelayGiveUps == SrtpFallbackDecisions.maxGiveUpsPerCall {
+            RTLog.warn("call", "audiosrtpfb capped=1")
+        }
+        for step in FallbackHandBack.steps {
+            switch step {
+            case .clearLatch:
+                audioSrtpFallbackActive = false
+                audioSrtpFallbackTag = nil
+            case .stopCapture:
+                audioCapture?.stop(deactivateSession: false)
+                audioEnginesStarted = false
+            case .unmuteNativeSender:
+                reapplyNativeSenderMute(site: 5)
+            case .restoreNativeUnit:
+                applyNativeAudioUnitGate(reason: .fallbackRecover)
+            case .resetControllerState:
+                onAudioSrtpFallbackGaveUp?()
+            }
+        }
     }
 
     /// Counterpart — fired the instant ICE recovers. Stops the manual
@@ -4845,6 +4967,7 @@ final class CallService: @unchecked Sendable {
     /// and drops the escape hatch so a LATER outage re-engages cleanly.
     public func recoverAudioSrtpFallback() {
         guard audioSrtpFallbackActive else { return }
+        cancelFallbackRelayStart()
         audioSrtpFallbackActive = false
         audioSrtpFallbackTag = nil
         RTLog.warn("call", "audiosrtpfb recover=1")
