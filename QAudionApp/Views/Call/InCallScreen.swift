@@ -51,6 +51,8 @@ struct InCallScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
+    /// Height of the call window, for the pinned code card's limit (differs from the screen in Split View).
+    @State private var windowHeight: CGFloat = 0
     /// Unified call UI — respect the system Reduce Motion setting: when on,
     /// the animated mini-spectrum + crypto-engine comet freeze to a single
     /// representative frame instead of continuously redrawing.
@@ -590,8 +592,21 @@ struct InCallScreen: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             CallMeshBackground()
+                .background(GeometryReader { geo in
+                    Color.clear
+                        .onAppear { windowHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { newHeight in windowHeight = newHeight }
+                })
+            // The dock (and the security-code card above it while the confirmation is outstanding) is a bottom
+            // inset: the column ends above it at rest. While scrolling, content still passes under the inset, as
+            // under any bar.
             scrollContent
-            bottomActionRow
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 10) {
+                        pinnedSasArea
+                        bottomActionRow
+                    }
+                }
             // W534: top-center pill badge "Peer sta condividendo lo
             // schermo" surfaced when the remote side has announced a
             // SCREEN_SHARE:start. Wrapped in the outermost ZStack so
@@ -970,15 +985,21 @@ struct InCallScreen: View {
                 }
 
                 // P0-3 — this one actually gates media (see the field's doc).
-                if awaitingIdentityConfirmation {
+                if awaitingIdentityConfirmation && !sasPinsHoldNotice {
                     Spacer().frame(height: 10)
                     identityHoldBanner.padding(.horizontal, 20)
                 }
 
-                if sasWords.count == 6 {
+                // While the confirmation is outstanding the card is pinned above the dock (`pinnedSasArea`); once
+                // confirmed (or redundant) it sits here.
+                if SasCardPlacement.showsCardInColumn(sasWordCount: sasWords.count, sasVerified: sasVerified,
+                                                      sasCeremonyRedundant: sasCeremonyRedundant,
+                                                      awaitingConfirmation: awaitingIdentityConfirmation) {
                     Spacer().frame(height: 12)
                     sasPanel.padding(.horizontal, 20)
-                } else if sasWaiting {
+                }
+
+                if SasCardPlacement.showsWaitingLine(sasWordCount: sasWords.count, sasWaiting: sasWaiting) {
                     Spacer().frame(height: 12)
                     sasWaitingRow.padding(.horizontal, 20)
                 }
@@ -993,13 +1014,67 @@ struct InCallScreen: View {
                 Spacer().frame(height: 12)
                 transportRow.padding(.horizontal, 20)
 
-                // Reserve room for the pinned 2-row bottom action row.
-                // Old 1-row: 140pt. New 2-row: ~160pt (2×48+10gap+28padding+20bottom).
-                Spacer().frame(height: 170)
+                // The dock is a bottom safe-area inset, so the column only needs a little room at its end.
+                Spacer().frame(height: SasCardPlacement.columnBottomSpacing)
             }
             // A readable column on a wide canvas (the unfolded foldable iPhone, a tablet); unchanged on a phone.
             .qaudionReadableWidth()
         }
+    }
+
+    private var sasIsPinned: Bool {
+        SasCardPlacement.isPinned(sasWordCount: sasWords.count, sasVerified: sasVerified,
+                                  sasCeremonyRedundant: sasCeremonyRedundant,
+                                  awaitingConfirmation: awaitingIdentityConfirmation)
+    }
+
+    private var sasPinsHoldNotice: Bool {
+        SasCardPlacement.pinsHoldNotice(sasWordCount: sasWords.count, sasVerified: sasVerified,
+                                        sasCeremonyRedundant: sasCeremonyRedundant,
+                                        awaitingConfirmation: awaitingIdentityConfirmation)
+    }
+
+    /// The hold notice and the security-code card, pinned above the dock while the confirmation is outstanding. The
+    /// confirm button is outside the scrollable part, so it is always visible and tappable; the notice is one line.
+    /// Only at the largest text sizes does the part with the words scroll, inside a limit taken from the window height.
+    @ViewBuilder
+    private var pinnedSasArea: some View {
+        if sasIsPinned {
+            VStack(spacing: 10) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if sasPinsHoldNotice {
+                            identityHoldLine
+                        }
+                        sasHeaderAndWords
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxHeight: SasCardPlacement.maxScrollableHeight(windowHeight: windowHeight))
+                sasConfirmButton
+            }
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 6).fill(scheme.surface.opacity(0.9)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(scheme.primary.opacity(0.6), lineWidth: 1))
+            .padding(.horizontal, SasCardPlacement.horizontalInset)
+            .qaudionReadableWidth()
+        }
+    }
+
+    /// One-line form of the hold notice for the pinned card (the full text stays in the column form).
+    private var identityHoldLine: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 14, weight: .semibold))
+            Text("AUDIO IN ATTESA DI CONFERMA")
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.6)
+                .lineLimit(2)
+        }
+        .foregroundStyle(extras.riskHigh)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Audio e video in attesa: verifica le parole SAS per continuare la chiamata in sicurezza.")
     }
 
     // MARK: - Presence line (matches Stitch / Android subtitle)
@@ -1219,6 +1294,31 @@ struct InCallScreen: View {
     @ViewBuilder
     private var sasPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
+            sasHeaderAndWords
+            sasConfirmButton
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(scheme.surface.opacity(0.9))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke((sasVerified ? extras.success : scheme.primary).opacity(sasCeremonyRedundant ? 0.3 : 0.6),
+                        lineWidth: 1)
+        )
+        // Reduced visual weight ONLY — every control above stays fully
+        // interactive at this opacity (SwiftUI does not gate hit-testing on
+        // `.opacity`), so tapping "CONFERMA COINCIDONO" still calls
+        // `onConfirmSas` -> `handleConfirmSas` -> `SasVerificationStore
+        // .recordVerified` exactly as it does when S2 is not active. This is
+        // a pure presentation change.
+        .opacity(sasCeremonyRedundant ? 0.6 : 1.0)
+    }
+
+    /// Redundancy hint, header and the six words (shared by the column card and the pinned card).
+    private var sasHeaderAndWords: some View {
+        VStack(alignment: .leading, spacing: 12) {
             if sasCeremonyRedundant {
                 Text("Non necessario: già autenticato di persona")
                     .qaudionStyle(type.labelSmall)
@@ -1255,53 +1355,38 @@ struct InCallScreen: View {
                     sasWordView(sasWords[5])
                 }
             }
-
-            Button(action: onConfirmSas) {
-                // W-L10N-SASCONSOLIDATE — kept as its own key rather than
-                // reusing trust.header.verified: that key's default is
-                // title-case "Verificato" (TrustVerificationCard's own
-                // styling), while THIS button's label is literally ALL-CAPS
-                // in the source text (no .textCase modifier doing it) —
-                // reusing the title-case key would visually downgrade this
-                // button's emphasis. The action label DOES consolidate from
-                // "CONFERMA COINCIDONO" to "CONFERMA", shared with
-                // VideoCallView's SAS mini panel (previously "CONFERMO"
-                // there) — see the l10n plan doc.
-                Text(sasVerified
-                     ? String(localized: "sas.confirm.button_verified", defaultValue: "VERIFICATO", comment: "SAS verification button — disabled state after confirmation, ALL CAPS styling")
-                     : String(localized: "sas.confirm.button", defaultValue: "CONFERMA", comment: "SAS verification panel — button to confirm the 6 SAS words match, ALL CAPS styling"))
-                    .qaudionStyle(type.labelLarge)
-                    .tracking(1.2)
-                    .foregroundStyle(sasVerified ? extras.success : scheme.onPrimary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 999)
-                            .fill(sasVerified
-                                  ? scheme.surfaceVariant
-                                  : scheme.primary.opacity(0.85))
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(sasVerified)
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(scheme.surface.opacity(0.9))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke((sasVerified ? extras.success : scheme.primary).opacity(sasCeremonyRedundant ? 0.3 : 0.6),
-                        lineWidth: 1)
-        )
-        // Reduced visual weight ONLY — every control above stays fully
-        // interactive at this opacity (SwiftUI does not gate hit-testing on
-        // `.opacity`), so tapping "CONFERMA COINCIDONO" still calls
-        // `onConfirmSas` -> `handleConfirmSas` -> `SasVerificationStore
-        // .recordVerified` exactly as it does when S2 is not active. This is
-        // a pure presentation change.
-        .opacity(sasCeremonyRedundant ? 0.6 : 1.0)
+    }
+
+    private var sasConfirmButton: some View {
+        Button(action: onConfirmSas) {
+            // W-L10N-SASCONSOLIDATE — kept as its own key rather than
+            // reusing trust.header.verified: that key's default is
+            // title-case "Verificato" (TrustVerificationCard's own
+            // styling), while THIS button's label is literally ALL-CAPS
+            // in the source text (no .textCase modifier doing it) —
+            // reusing the title-case key would visually downgrade this
+            // button's emphasis. The action label DOES consolidate from
+            // "CONFERMA COINCIDONO" to "CONFERMA", shared with
+            // VideoCallView's SAS mini panel (previously "CONFERMO"
+            // there) — see the l10n plan doc.
+            Text(sasVerified
+                 ? String(localized: "sas.confirm.button_verified", defaultValue: "VERIFICATO", comment: "SAS verification button — disabled state after confirmation, ALL CAPS styling")
+                 : String(localized: "sas.confirm.button", defaultValue: "CONFERMA", comment: "SAS verification panel — button to confirm the 6 SAS words match, ALL CAPS styling"))
+                .qaudionStyle(type.labelLarge)
+                .tracking(1.2)
+                .foregroundStyle(sasVerified ? extras.success : scheme.onPrimary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 999)
+                        .fill(sasVerified
+                              ? scheme.surfaceVariant
+                              : scheme.primary.opacity(0.85))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(sasVerified)
     }
 
     private func sasWordView(_ word: String) -> some View {
