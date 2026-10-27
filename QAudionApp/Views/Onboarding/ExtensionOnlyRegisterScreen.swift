@@ -4,8 +4,7 @@ import QAudionEngine
 /// Extension-only registration — no phone number at all. The server
 /// assigns a PBX extension as the account's identifier; email is REQUIRED
 /// here specifically because there is no phone number to fall back on for
-/// account recovery / support. The invite code is mandatory as well (the
-/// server runs in `registration_mode="invite"`). Matches
+/// account recovery / support. Registration is open: no invite code is asked. Matches
 /// `POST /api/v1/auth/register/extension`.
 ///
 /// 2026-07-29 — new screen; `WelcomeScreen` had no distinct entry point
@@ -23,7 +22,6 @@ struct ExtensionOnlyRegisterScreen: View {
 
     @State private var displayName: String = ""
     @State private var email: String = ""
-    @State private var inviteCode: String = ""
     @State private var ageDeclared = false
     @State private var isSubmitting = false
     @State private var errorText: String?
@@ -40,17 +38,15 @@ struct ExtensionOnlyRegisterScreen: View {
         return !localPart.isEmpty && domainPart.contains(".") && !domainPart.hasPrefix(".") && !domainPart.hasSuffix(".")
     }
 
-    /// The invite code is mandatory (server `registration_mode="invite"`):
-    /// the form is submittable only with a well-formed email AND a code whose
-    /// format and checksum pass the same local check the phone flow uses.
-    /// The age declaration box has to be ticked as well, like on the phone flow.
+    /// The form is submittable only with a well-formed email and the age
+    /// declaration box ticked, like on the phone flow.
     private var canSubmit: Bool {
-        Self.isSubmittable(emailValid: isValidEmail, inviteCode: inviteCode, ageDeclared: ageDeclared)
+        Self.isSubmittable(emailValid: isValidEmail, ageDeclared: ageDeclared)
     }
 
-    /// The form's gate without the view: all three conditions have to hold.
-    static func isSubmittable(emailValid: Bool, inviteCode: String, ageDeclared: Bool) -> Bool {
-        emailValid && InviteCodeInput.isValid(inviteCode) && ageDeclared
+    /// The form's gate without the view: both conditions have to hold.
+    static func isSubmittable(emailValid: Bool, ageDeclared: Bool) -> Bool {
+        emailValid && ageDeclared
     }
 
     var body: some View {
@@ -110,11 +106,6 @@ struct ExtensionOnlyRegisterScreen: View {
 
                     Spacer().frame(height: 16)
 
-                    InviteCodeField(code: $inviteCode, isInvalid: InviteCodeInput.isCompleteButInvalid(inviteCode))
-                        .padding(.horizontal, 24)
-
-                    Spacer().frame(height: 16)
-
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Nome (opzionale)")
                             .font(.caption.weight(.medium))
@@ -166,7 +157,7 @@ struct ExtensionOnlyRegisterScreen: View {
     }
 
     private func submit() async {
-        guard canSubmit, let wireInviteCode = InviteCodeInput.wireValue(inviteCode) else { return }
+        guard canSubmit else { return }
         isSubmitting = true
         errorText = nil
         defer { isSubmitting = false }
@@ -179,7 +170,6 @@ struct ExtensionOnlyRegisterScreen: View {
             let result = try await provider.accountApi.registerExtensionOnly(
                 displayName: trimmedName.isEmpty ? nil : trimmedName,
                 email: trimmedEmail,
-                inviteCode: wireInviteCode,
                 ageDeclared: ageDeclared
             )
             appState.completeOtpAuth(result)
@@ -190,13 +180,16 @@ struct ExtensionOnlyRegisterScreen: View {
     }
 
     private func userFacingMessage(for error: Error) -> String {
-        if let inviteError = error as? BCryptoInviteCodeError {
-            return inviteError.userFacingMessage
-        }
+        Self.userFacingMessage(for: error)
+    }
+
+    /// Pure mapping, exposed for unit tests.
+    static func userFacingMessage(for error: Error) -> String {
         if let bcryptoError = error as? BCryptoError, case .httpError(let statusCode) = bcryptoError {
             switch statusCode {
             case 400: return String(localized: "onboarding.error.email_invalid", defaultValue: "Email mancante o non valida.", comment: "Registration error (HTTP 400): the email is missing or not valid.")
             case 409: return String(localized: "onboarding.error.email_taken", defaultValue: "Questa email risulta già registrata.", comment: "Registration error (HTTP 409): the email is already registered.")
+            case 403: return String(localized: "onboarding.error.registration_unavailable", defaultValue: "Registrazione temporaneamente non disponibile, riprova più tardi.", comment: "Registration error (HTTP 403): the server is not accepting registrations right now.")
             case 429: return String(localized: "onboarding.error.too_many_attempts", defaultValue: "Troppi tentativi. Riprova tra qualche minuto.", comment: "Onboarding error (HTTP 429): rate limit reached.")
             case 503: return String(localized: "onboarding.error.service_unavailable", defaultValue: "Servizio non disponibile al momento. Riprova più tardi.", comment: "Registration error (HTTP 503): the service is temporarily unavailable.")
             default: return String(localized: "onboarding.error.server", defaultValue: "Errore del server (\(statusCode)).", comment: "Onboarding error for any other server answer; %lld is the HTTP status code.")

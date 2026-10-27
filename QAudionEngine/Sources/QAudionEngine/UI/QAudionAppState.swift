@@ -54,36 +54,6 @@ public final class QAudionAppState: ObservableObject {
         }
     }
 
-    /// Register with phone number + password.
-    /// `ageDeclared` is whether the person ticked the age declaration box, handed on to the server as it is. This
-    /// view-model belongs to the engine's own demo UI, which the shipped app never constructs (see the note on the
-    /// Keychain store below) and which has no such box, so its views leave the default: they declare nothing.
-    public func register(phoneNumber: String, password: String, inviteCode: String? = nil, displayName: String? = nil,
-                         ageDeclared: Bool = false) async {
-        do {
-            let tempBackend = BCryptoBackendProvider(config: config)
-            _ = try await tempBackend.accountApi.register(
-                phoneNumber: phoneNumber,
-                password: password,
-                inviteCode: inviteCode,
-                displayName: displayName,
-                ageDeclared: ageDeclared
-            )
-            let phoneHash = try PhoneHash.hash(phoneNumber)
-            // Auto-login after registration
-            let creds = try await tempBackend.accountApi.login(phoneHash: phoneHash, password: password, deviceName: deviceName())
-            saveCredentials(creds)
-            config.accessToken = creds.accessToken
-            config.refreshToken = creds.refreshToken
-            config.userId = creds.userId
-            config.deviceId = creds.deviceId
-            initializeBackend()
-            await MainActor.run { authState = .authenticated }
-        } catch {
-            await MainActor.run { errorMessage = "Registration failed: \(error.localizedDescription)" }
-        }
-    }
-
     /// Login with phone hash + password.
     public func login(phoneNumber: String, password: String) async {
         do {

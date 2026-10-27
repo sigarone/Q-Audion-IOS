@@ -10,8 +10,8 @@ import SwiftUI
 ///   - lands on `WelcomeScreen` (Q-Audion brand, 5 CTAs)
 ///   - "Configurazione rapida (QR)" → `FastSetupOnboardingScreen` (the
 ///     original, still-working QR-provisioning path)
-///   - "Inizia con un codice invito" → `PhoneEntryScreen(mode: .register)`
-///     (invite code + age declaration box, both required) →
+///   - "Crea un account" → `PhoneEntryScreen(mode: .register)`
+///     (phone number + age declaration box, no invite code) →
 ///     `OtpVerificationScreen` (SMS code) → `ProfileSetupScreen`
 ///     (optional display name) → mandatory recovery-phrase reveal
 ///     (`RecoverySeedContainerView(mode: .setup)`)
@@ -50,7 +50,7 @@ struct OnboardingRoot: View {
         case welcome
         case fastSetup
         case phoneEntry(PhoneEntryScreen.Mode)
-        case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, inviteCode: String?, ageDeclared: Bool)
+        case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, ageDeclared: Bool)
         case profileSetup
         case extensionOnlyRegister
         case extensionLogin
@@ -90,16 +90,15 @@ struct OnboardingRoot: View {
                 PhoneEntryScreen(
                     mode: mode,
                     onBack: { route = .welcome },
-                    onContinue: { _, e164, inviteCode, ageDeclared in
-                        route = .otpVerification(e164: e164, mode: mode, inviteCode: inviteCode, ageDeclared: ageDeclared)
+                    onContinue: { _, e164, ageDeclared in
+                        route = .otpVerification(e164: e164, mode: mode, ageDeclared: ageDeclared)
                     }
                 )
-            case .otpVerification(let e164, let mode, let inviteCode, let ageDeclared):
+            case .otpVerification(let e164, let mode, let ageDeclared):
                 OtpVerificationScreen(
                     appState: appState,
                     e164: e164,
                     mode: mode,
-                    inviteCode: inviteCode,
                     ageDeclared: ageDeclared,
                     onBack: { route = .phoneEntry(mode) },
                     onRegistered: { route = .profileSetup },

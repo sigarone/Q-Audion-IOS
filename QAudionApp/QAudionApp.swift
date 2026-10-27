@@ -306,7 +306,7 @@ struct QAudionApp: App {
                     // `objectWillChange` through its parent automatically, so
                     // a view reading `appState.capabilityGate.isUnlocked(...)`
                     // would never re-render when `claims` changes (e.g. right
-                    // after a successful invite-code redemption, or a
+                    // after a server-side entitlement change, or a
                     // background `refresh()` completing). Injecting
                     // `capabilityGate` as its OWN environment object,
                     // alongside `appState`, lets any child view declare

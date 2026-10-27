@@ -340,9 +340,9 @@ jobs:
             -only-testing:QAudionAppTests/RemoteMessageAlertCleanerTests \
             -only-testing:QAudionAppTests/PhonebookImportGateTests \
             -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
-            -only-testing:QAudionAppTests/PhoneEntryScreenInviteTests \
             -only-testing:QAudionAppTests/ProximityPairingTelemetryRedactionTests \
             -only-testing:QAudionAppTests/QuickActionTests \
+            -only-testing:QAudionAppTests/RegistrationUnavailableMappingTests \
             -only-testing:QAudionAppTests/RecoveryEnrollmentStatusTests \
             -only-testing:QAudionAppTests/ReKeyAvatarRingTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \

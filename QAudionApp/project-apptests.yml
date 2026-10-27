@@ -77,9 +77,9 @@ targets:
           - RemoteMessageAlertPolicyTests.swift
           - PersistentCallRecordStoreTests.swift
           - PhonebookImportGateTests.swift
-          - PhoneEntryScreenInviteTests.swift
           - ProximityPairingTelemetryRedactionTests.swift
           - QuickActionTests.swift
+          - RegistrationUnavailableMappingTests.swift
           - RecoveryEnrollmentStatusTests.swift
           - ReKeyAvatarRingTests.swift
           - RuntimeLogSinkTeeTests.swift
