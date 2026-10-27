@@ -56553,6 +56553,90 @@
         }
       }
     },
+    "call_history.close.peer_incompatible": {
+      "extractionState": "manual",
+      "comment": "Call history row subtitle — the call ended because the other person's Q-Audion version cannot complete the call setup",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "terminata: versione del contatto non compatibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ended: contact's version not compatible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beendet: Version des Kontakts nicht kompatibel"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finalizada: versión del contacto no compatible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminé : version du contact non compatible"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encerrada: versão do contato incompatível"
+          }
+        }
+      }
+    },
+    "call.peer_incompatible": {
+      "extractionState": "manual",
+      "comment": "Message shown when a call ended because the other person's Q-Audion version cannot complete the call setup; asks the user to tell them to update the app",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile completare la chiamata: il contatto usa una versione di Q-Audion non compatibile. Chiedigli di aggiornare l'app."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to complete the call: your contact is using a version of Q-Audion that is not compatible. Ask them to update the app."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Anruf konnte nicht abgeschlossen werden: Ihr Kontakt verwendet eine nicht kompatible Version von Q-Audion. Bitten Sie ihn, die App zu aktualisieren."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se ha podido completar la llamada: tu contacto usa una versión de Q-Audion no compatible. Pídele que actualice la app."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de finaliser l'appel : ton contact utilise une version de Q-Audion non compatible. Demande-lui de mettre à jour l'app."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível concluir a chamada: seu contato usa uma versão do Q-Audion incompatível. Peça para ele atualizar o app."
+          }
+        }
+      }
+    },
     "sas.waiting_for_code": {
       "extractionState": "manual",
       "comment": "In-call SAS panel placeholder — the other side's security code has not arrived yet, so there are no words to compare",

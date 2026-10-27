@@ -2020,6 +2020,10 @@ final class AppState: ObservableObject {
     }
     /// The 50 s cap of the hand-over (`GroupHandOverPolicy.capSeconds`).
     var groupPromotionTimeout: DispatchWorkItem?
+    /// The callee's "no OFFER after answering" watchdog task and the call whose `call_accepted` left on an authenticated
+    /// socket. The watchdog is cancelled at call teardown; the delivered id is the link-health evidence it needs.
+    private var calleeOfferWatchdogTask: Task<Void, Never>?
+    private var calleeAcceptDeliveredCallId: String?
     /// The 30 s deadline of the group media (`GroupHandOverPolicy.mediaDeadlineSeconds`).
     var groupPromotionMediaCheck: DispatchWorkItem?
 
@@ -2202,6 +2206,12 @@ final class AppState: ObservableObject {
     /// the group's roster went outside what the peer's promotion token listed (GROUP_CALLS_V2 2.7, Consent). The 1:1 call
     /// stays. Shown by `ContentView` (same shape as `groupCallFatalErrorToastText`).
     @Published var groupPromotionMismatchToastText: String? = nil
+
+    /// One-shot notice that the call ended because the contact runs a Q-Audion version that cannot take part in the
+    /// current handshake (`CallCloseReason.peerIncompatible`): a bundle that is malformed or incomplete, or an OFFER
+    /// that never arrived after the user answered. Tells the user what to do. Shown by `ContentView` (same shape as
+    /// `groupCallFatalErrorToastText`).
+    @Published var peerIncompatibleToastText: String? = nil
 
     /// W-VIDPARITY — re-entrancy guard for `promoteReceiveOnlyToCamera`: a
     /// fast double tap on "Attiva video" must not start two competing
@@ -9501,19 +9511,26 @@ final class AppState: ObservableObject {
         RTLog.error("call", "hsfatal r=\(code)\(stageSuffix)")
         // The reason is the fixed allow-listed token (an unknown one is the malformed class, like the
         // numeric verdict above): telemetry and the call history carry it by name.
+        let localReason: CallCloseReason = CallCloseReason.accepted(reason) ?? .handshakeMalformed
         if !isEndingCall {
-            pendingFatalCloseReason = (CallCloseReason.accepted(reason) ?? .handshakeMalformed).rawValue
+            pendingFatalCloseReason = localReason.rawValue
+            // The contact's version cannot complete the handshake: say what to do, not just that it failed.
+            if localReason == .peerIncompatible {
+                showPeerIncompatibleToast()
+            }
         }
+        // `peer_incompatible` is a local distinction: the peer is told `handshake_malformed`.
+        let wireReason: String = CallCloseReason.accepted(reason)?.wireReason ?? reason
         // R-CERT: the call is over; release its certificate before the (possibly already
         // unbound) teardown.
         CallDtlsContextStore.shared.release(callId: callId)
-        self.callService.sendControlHangup(reason: reason)
+        self.callService.sendControlHangup(reason: wireReason)
         if let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
            let cid = impl.getActiveCallId(),
            let peer = self.callContactId {
             impl.unbindActiveCallId(matching: cid)
             Task {
-                try? await impl.sendCallHangupForId(callId: cid, recipientId: peer, reason: reason)
+                try? await impl.sendCallHangupForId(callId: cid, recipientId: peer, reason: wireReason)
             }
         }
         self.endCall(notifyPeerInBand: false)
@@ -15457,8 +15474,17 @@ final class AppState: ObservableObject {
         endCall(notifyPeerInBand: false)
     }
 
+    /// The message for a call that ended because the contact's version cannot complete the call setup.
+    @MainActor
+    private func showPeerIncompatibleToast() {
+        peerIncompatibleToastText = String(
+            localized: "call.peer_incompatible",
+            defaultValue: "Impossibile completare la chiamata: il contatto usa una versione di Q-Audion non compatibile. Chiedigli di aggiornare l'app.",
+            comment: "Message shown when a call ended because the other person's Q-Audion version cannot complete the call setup; asks the user to tell them to update the app")
+    }
+
     /// R-COMMIT-FIELD — a handshake bundle of the call peer that could not even be decoded: the call ends
-    /// with `handshake_malformed` and a hangup, on every platform alike.
+    /// with `peer_incompatible` (a `handshake_malformed` hangup on the wire).
     @MainActor
     private func handleUndecodableHandshakeBundle(callId: String, senderId: String) {
         guard callContactId == senderId else {
@@ -15470,7 +15496,7 @@ final class AppState: ObservableObject {
             return
         }
         RTLog.error("call", "hsmalformed undecodable=1")
-        handleHandshakeFatal(callId: callId, reason: "handshake_malformed")
+        handleHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
     }
 
     /// T2 / R-ANSWER-FIRST — a `call_incoming` without a `call_id` cannot run the v6 handshake (the SAS
@@ -15480,6 +15506,8 @@ final class AppState: ObservableObject {
     @MainActor
     private func rejectIncomingCallWithoutCallId(senderId: String) {
         RTLog.error("call", "hsmalformed nocallid=1")
+        // Every current build puts the id on `call_incoming`; one without it comes from an old build.
+        showPeerIncompatibleToast()
         TelemetryService.shared.emit(
             kind: "call.handshake_malformed",
             attrs: ["why": "no_call_id"]
@@ -21249,6 +21277,8 @@ extension AppState {
             Task {
                 do {
                     try await calling.sendCallAccepted(callId: acceptedCallId)
+                    // Sent on an authenticated socket: the link was healthy when the user answered.
+                    await MainActor.run { [weak self] in self?.calleeAcceptDeliveredCallId = acceptedCallId }
                 } catch {
                     // W-SIGSWALLOW (2026-09-01) — was `try?`: the one envelope
                     // that tells the caller a human accepted could fail with no
@@ -21281,6 +21311,7 @@ extension AppState {
         // consistent even on the rare non-UUID call_id.
         let ringPlanCallId = canonicalActiveCallId() ?? uuid.uuidString.lowercased()
         self.beginAcceptedRingPlan(ringPlanCallId, trigger: "accept")
+        self.armCalleeOfferWatchdog(callId: ringPlanCallId)
         // W-VIDPRIVACY — start the callee's video-capture pipeline now that
         // the user has actually accepted, gated on their accept-with/without-
         // video choice. Replaces the unconditional start that used to run at
@@ -21446,6 +21477,32 @@ extension AppState {
         let staleLine: String = "endguard ignore=1 id=" + staleId8
         RTLog.warn("call", staleLine)
         return true
+    }
+
+    /// The user answered: if no valid OFFER of this call has been processed `CalleeOfferWatchdog.windowSeconds` later
+    /// AND the link was healthy (our `call_accepted` left on an authenticated socket and the socket is still
+    /// authenticated), the caller runs a version that cannot send the current signed handshake: the call ends as
+    /// `peer_incompatible` with the clear message. With a dead or unproven link a missing OFFER proves nothing about
+    /// the peer, so nothing is decided here and the existing setup timeouts act. A malformed OFFER that did arrive has
+    /// already ended the call. No check is relaxed.
+    @MainActor
+    private func armCalleeOfferWatchdog(callId: String) {
+        calleeOfferWatchdogTask?.cancel()
+        calleeOfferWatchdogTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(CalleeOfferWatchdog.windowSeconds * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            // No integration means no evidence about the OFFER either way: never a verdict.
+            guard let integration = self.responderCallIntegration else { return }
+            let processed: Bool = integration.hasProcessedOffer(callId: callId)
+            let acceptDelivered: Bool = self.calleeAcceptDeliveredCallId?.lowercased() == callId.lowercased()
+            let socketUp: Bool = self.liveProvider?.persistentConnection.state == .authenticated
+            let verdict = CalleeOfferWatchdog.verdict(
+                watchedCallId: callId, activeCallId: self.canonicalActiveCallId(), offerProcessed: processed,
+                linkHealthy: acceptDelivered && socketUp)
+            guard verdict == .endPeerIncompatible else { return }
+            RTLog.error("call", "hsmalformed nooffer=1")
+            self.handleHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
+        }
     }
 
     /// W-GHOSTCALL (2026-09-25) — backstop behind `refuseStaleAnswer`: if, 3 s
@@ -22173,6 +22230,9 @@ extension AppState {
         // ring screen must never outlive the call it was ringing for.
         incomingCallRingVisible = false
         guard let teardownToken = teardownLatch.begin() else { return }
+        calleeOfferWatchdogTask?.cancel()
+        calleeOfferWatchdogTask = nil
+        calleeAcceptDeliveredCallId = nil
         if playsEndedCue { playCallCue(.callEnded) }
         // The call's audio session is going away: no later cue (busy, ended) may use the player on it.
         outgoingAudioSessionReady = false
