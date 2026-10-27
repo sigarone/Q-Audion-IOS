@@ -116,20 +116,6 @@ final class AuthService {
         return creds
     }
 
-    func register(phoneNumber: String, password: String, inviteCode: String?, serverUrl: String,
-                  ageDeclared: Bool) async throws -> String {
-        let backendConfig = BackendConfig.pinned(serverUrl: serverUrl)
-        let provider = BCryptoBackendProvider(config: backendConfig)
-        let userId = try await provider.accountApi.register(
-            phoneNumber: phoneNumber,
-            password: password,
-            inviteCode: inviteCode,
-            displayName: nil,
-            ageDeclared: ageDeclared
-        )
-        return userId
-    }
-
     func saveCredentials(_ creds: AuthCredentials) {
         // SECURITY C-5 + W-USERID-PLAINTEXT — tokens AND userId → Keychain
         // (userId is PII tying local data to a real account, not "just an

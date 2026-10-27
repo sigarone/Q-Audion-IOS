@@ -6,9 +6,9 @@ import QAudionEngine
 ///
 /// 2026-07-29: the server now has a real SMS-OTP register/login flow
 /// (`POST /api/v1/auth/otp/request` + `/otp/verify`). This screen collects
-/// + validates the phone number (unchanged) and, for `.register`, an
-/// invite code — required, `registration_mode = "invite"` on the server
-/// (2026-08-18); `OnboardingRoot` routes `onContinue`'s output to
+/// + validates the phone number (unchanged) and, for `.register`, the age
+/// declaration. Registration is open: no invite code is asked
+/// (2026-10-27); `OnboardingRoot` routes `onContinue`'s output to
 /// `OtpVerificationScreen`, which requests the code and completes the
 /// register/login itself. This screen stays a pure input screen — it does
 /// not touch the network.
@@ -35,16 +35,14 @@ struct PhoneEntryScreen: View {
 
     let mode: Mode
     let onBack: () -> Void
-    /// Receives `(phoneHash, e164, inviteCode, ageDeclared)` once the user
-    /// submits a valid number. `inviteCode` is always nil for `.login`; for
-    /// `.register` it's nil unless the user typed one. `ageDeclared` is true
+    /// Receives `(phoneHash, e164, ageDeclared)` once the user
+    /// submits a valid number. `ageDeclared` is true
     /// only for `.register` with the age declaration box ticked, and false
     /// for `.login`. `OnboardingRoot` routes this to `OtpVerificationScreen`
     /// to request + verify the SMS code and complete registration/login.
-    let onContinue: (_ phoneHash: String, _ e164: String, _ inviteCode: String?, _ ageDeclared: Bool) -> Void
+    let onContinue: (_ phoneHash: String, _ e164: String, _ ageDeclared: Bool) -> Void
 
     @State private var raw: String = "+39 "
-    @State private var inviteCode: String = ""
     @State private var ageDeclared = false
     @State private var validationError: String?
     // W315 — track last submit attempt to give the user feedback that
@@ -65,19 +63,6 @@ struct PhoneEntryScreen: View {
         return String(localized: "onboarding.phone.last_attempt", defaultValue: "Ultimo tentativo: \(stamp)", comment: "Small caption on the phone number screen after an attempt; %@ is the time of day (HH:mm:ss).")
     }
 
-    /// Registration needs a complete invite code whose format and checksum pass
-    /// `InviteCodeInput` (the same check as the interno+email screen); login
-    /// never uses one. Blocking submit here avoids a round trip to find out.
-    static func inviteOk(mode: Mode, inviteCode: String) -> Bool {
-        mode != .register || InviteCodeInput.isValid(inviteCode)
-    }
-
-    /// The `invite_code` handed to the OTP step: the normalised dashed form for
-    /// `.register`, nil for `.login` or when the input is not a valid code.
-    static func inviteWireValue(mode: Mode, inviteCode: String) -> String? {
-        mode == .register ? InviteCodeInput.wireValue(inviteCode) : nil
-    }
-
     /// Registration needs the age declaration box ticked, so the button stays off
     /// until it is; login does not show the box and never needs it.
     static func ageOk(mode: Mode, ageDeclared: Bool) -> Bool {
@@ -91,15 +76,13 @@ struct PhoneEntryScreen: View {
     }
 
     /// The whole gate of the submit button without the view: the number has to be
-    /// valid, and for `.register` the invite code and the age box as well.
-    static func isSubmittable(phoneValid: Bool, mode: Mode, inviteCode: String, ageDeclared: Bool) -> Bool {
-        phoneValid
-            && inviteOk(mode: mode, inviteCode: inviteCode)
-            && ageOk(mode: mode, ageDeclared: ageDeclared)
+    /// valid, and for `.register` the age box as well.
+    static func isSubmittable(phoneValid: Bool, mode: Mode, ageDeclared: Bool) -> Bool {
+        phoneValid && ageOk(mode: mode, ageDeclared: ageDeclared)
     }
 
     private var isValid: Bool {
-        Self.isSubmittable(phoneValid: PhoneHashHelper.isValid(raw), mode: mode, inviteCode: inviteCode, ageDeclared: ageDeclared)
+        Self.isSubmittable(phoneValid: PhoneHashHelper.isValid(raw), mode: mode, ageDeclared: ageDeclared)
     }
 
     var body: some View {
@@ -172,9 +155,6 @@ struct PhoneEntryScreen: View {
 
                     if mode == .register {
                         Spacer().frame(height: 16)
-                        InviteCodeField(code: $inviteCode, isInvalid: InviteCodeInput.isCompleteButInvalid(inviteCode))
-                        .padding(.horizontal, 24)
-                        Spacer().frame(height: 16)
                         AgeDeclarationSection(declared: $ageDeclared)
                             .padding(.horizontal, 24)
                     }
@@ -231,7 +211,7 @@ struct PhoneEntryScreen: View {
 
     private func submit() {
         // Same gate as `.disabled(!isValid)` on the button: without a valid number,
-        // invite code and (for `.register`) the ticked age box nothing may start,
+        // and (for `.register`) the ticked age box nothing may start,
         // even if the button were reachable by some other route.
         guard isValid else { return }
         // W315 — record attempt so the user sees visible feedback that
@@ -241,8 +221,7 @@ struct PhoneEntryScreen: View {
         do {
             let e164 = try PhoneHashHelper.normalizeE164(raw)
             let hash = PhoneHashHelper.sha256Hex(e164)
-            let invite = Self.inviteWireValue(mode: mode, inviteCode: inviteCode)
-            onContinue(hash, e164, invite, Self.ageWireValue(mode: mode, ageDeclared: ageDeclared))
+            onContinue(hash, e164, Self.ageWireValue(mode: mode, ageDeclared: ageDeclared))
         } catch {
             validationError = error.localizedDescription
         }
@@ -250,5 +229,5 @@ struct PhoneEntryScreen: View {
 }
 
 #Preview {
-    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _, _, _ in })
+    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _, _ in })
 }

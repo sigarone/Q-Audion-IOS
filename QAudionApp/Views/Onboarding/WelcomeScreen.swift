@@ -13,7 +13,7 @@ import Vision
 ///   - CTA hierarchy:
 ///       1. **Primary** "Configurazione rapida (QR)" — fast-setup, the
 ///          zero-friction path the admin panel pushes by default
-///       2. **Secondary** "Inizia con un codice invito" — SMS-OTP
+///       2. **Secondary** "Crea un account" — SMS-OTP
 ///          registration (`PhoneEntryScreen` → `OtpVerificationScreen`)
 ///       3. **Text** "Accedi con un account esistente" — SMS-OTP login,
 ///          same phone-entry screen in `.login` mode
@@ -146,7 +146,7 @@ struct WelcomeScreen: View {
                         }
                         QAudionButton(
                             action: onStartRegister,
-                            label: String(localized: "onboarding.welcome.cta_invite", defaultValue: "Inizia con un codice invito", comment: "Welcome screen button: start the registration with an invite code."),
+                            label: String(localized: "onboarding.welcome.cta_register", defaultValue: "Crea un account", comment: "Welcome screen button: start the registration of a new account."),
                             variant: .secondary
                         )
                         QAudionButton(

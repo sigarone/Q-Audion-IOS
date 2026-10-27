@@ -45,9 +45,3 @@ QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Tocca + per inizi
 QAudionEngine/Sources/QAudionEngine/UI/VideoCallView.swift | Muto | engine demo view that the app target does not instantiate
 QAudionEngine/Sources/QAudionEngine/UI/ViewModels/ChatViewModel.swift | Tutto bene, grazie. Ci vediamo alle 18? | engine demo view that the app target does not instantiate
 QAudionEngine/Sources/QAudionEngine/UI/ViewModels/ConversationListViewModel.swift | Tutto bene, grazie. Ci vediamo alle 18? | engine demo view that the app target does not instantiate
-QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Accedi con Telefono | engine demo view that the app target does not instantiate
-QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Accedi | engine demo view that the app target does not instantiate
-QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Anti-deepfake vocale AI | engine demo view that the app target does not instantiate
-QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Identita' sovrana senza numero | engine demo view that the app target does not instantiate
-QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Nessun numero di telefono richiesto.\nLa tua identita' e' protetta da chiavi crittografiche. | engine demo view that the app target does not instantiate
-QAudionEngine/Sources/QAudionEngine/UI/WelcomeView.swift | Non hai un account? Registrati | engine demo view that the app target does not instantiate

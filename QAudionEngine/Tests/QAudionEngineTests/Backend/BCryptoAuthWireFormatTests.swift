@@ -32,7 +32,6 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         let userId = try await api.register(
             phoneNumber: "+14155552671",
             password: "s3cret!",
-            inviteCode: nil,
             displayName: nil,
             ageDeclared: false
         )
@@ -59,29 +58,11 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
         let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self]))
 
-        _ = try await api.register(phoneNumber: "+14155552671", password: "pw", inviteCode: nil, displayName: nil, ageDeclared: false)
+        _ = try await api.register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: false)
 
         let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertNil(json["invite_code"])
         XCTAssertNil(json["display_name"])
-    }
-
-    func testRegisterIncludesInviteCodeAndDisplayNameWhenProvided() async throws {
-        StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self]))
-
-        _ = try await api.register(
-            phoneNumber: "+14155552671",
-            password: "pw",
-            inviteCode: "INVITE-42",
-            displayName: "Alice",
-            ageDeclared: false
-        )
-        let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
-        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertEqual(json["invite_code"] as? String, "INVITE-42")
-        XCTAssertEqual(json["display_name"] as? String, "Alice")
     }
 
     // MARK: - login
@@ -105,7 +86,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         XCTAssertEqual(json["device_name"] as? String, "iPhone")
     }
 
-    // MARK: - register/extension (interno + email, invite code)
+    // MARK: - register/extension (interno + email, optional attribution code)
 
     private func makeRest() -> BCryptoRestClient {
         BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self])
@@ -115,7 +96,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         BCryptoAccountApiImpl(rest: makeRest())
     }
 
-    func testRegisterExtensionOnlySendsInviteCodeEmailAndPlatform() async throws {
+    func testRegisterExtensionOnlySendsEmailAndPlatform() async throws {
         let okJson = #"""
         {"user_id":"u","device_id":"d","access_token":"a","refresh_token":"r","expires_in":900,"extension":1001,"email_pending_verification":true}
         """#
@@ -124,7 +105,6 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         let result = try await makeApi().registerExtensionOnly(
             displayName: "Alice",
             email: "alice@example.com",
-            inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ",
             ageDeclared: false
         )
         XCTAssertEqual(result.userId, "u")
@@ -132,46 +112,24 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
         let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        XCTAssertEqual(json["invite_code"] as? String, "QA1-7K3M9-PXTVY-R2HN5-ZZ")
         XCTAssertEqual(json["email"] as? String, "alice@example.com")
         XCTAssertEqual(json["display_name"] as? String, "Alice")
         XCTAssertEqual(json["platform"] as? String, "ios")
     }
 
     func testRegisterExtensionOnlyOmitsDisplayNameWhenNil() async throws {
-        StubURLProtocol.stubResponse = (403, Data(#"{"error":"invite code required"}"#.utf8))
-        _ = try? await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", ageDeclared: false)
+        StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
+        _ = try? await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false)
 
         let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertNil(json["display_name"])
-        XCTAssertEqual(json["invite_code"] as? String, "QA1-7K3M9-PXTVY-R2HN5-ZZ")
-    }
-
-    func testRegisterExtensionOnly403RequiredThrowsInviteCodeRequired() async {
-        StubURLProtocol.stubResponse = (403, Data(#"{"error":"invite code required"}"#.utf8))
-        do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "", ageDeclared: false)
-            XCTFail("expected BCryptoInviteCodeError")
-        } catch {
-            XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .required))
-        }
-    }
-
-    func testRegisterExtensionOnly403InvalidThrowsInviteCodeInvalid() async {
-        StubURLProtocol.stubResponse = (403, Data(#"{"error":"invalid or expired invite code"}"#.utf8))
-        do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", ageDeclared: false)
-            XCTFail("expected BCryptoInviteCodeError")
-        } catch {
-            XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .invalid))
-        }
     }
 
     func testRegisterExtensionOnlyUnrelated403StaysHttpError() async {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", ageDeclared: false)
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false)
             XCTFail("expected BCryptoError.httpError(403)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 403)
@@ -183,7 +141,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnly429StaysHttpError() async {
         StubURLProtocol.stubResponse = (429, Data(#"{"error":"too many attempts"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", ageDeclared: false)
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false)
             XCTFail("expected BCryptoError.httpError(429)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 429)
@@ -192,35 +150,11 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         }
     }
 
-    func testVerifyOtp403WithOtpBranchMessageThrowsInviteCodeRequired() async {
-        // The OTP register branch words the same condition "invite_code required".
-        StubURLProtocol.stubResponse = (403, Data(#"{"error":"invite_code required"}"#.utf8))
-        do {
-            _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                              deviceName: "iPhone", inviteCode: nil, displayName: nil, ageDeclared: false)
-            XCTFail("expected BCryptoInviteCodeError")
-        } catch {
-            XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .required))
-        }
-    }
-
-    func testVerifyOtp403InvalidThrowsInviteCodeInvalid() async {
-        StubURLProtocol.stubResponse = (403, Data(#"{"error":"invalid or expired invite code"}"#.utf8))
-        do {
-            _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                              deviceName: "iPhone", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", displayName: nil,
-                                              ageDeclared: false)
-            XCTFail("expected BCryptoInviteCodeError")
-        } catch {
-            XCTAssertEqual(error as? BCryptoInviteCodeError, BCryptoInviteCodeError(reason: .invalid))
-        }
-    }
-
     func testVerifyOtpUnrelated403StaysHttpError() async {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
         do {
             _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .login,
-                                              deviceName: "iPhone", inviteCode: nil, displayName: nil, ageDeclared: false)
+                                              deviceName: "iPhone", displayName: nil, ageDeclared: false)
             XCTFail("expected BCryptoError.httpError(403)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 403)
@@ -271,27 +205,25 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnlyTickedSendsDeclarationAndTermsVersion() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co",
-                                                      inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", ageDeclared: true)
+                                                      ageDeclared: true)
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/auth/register/extension")
         let json = try lastBodyJson()
         assertDeclared(json)
         // The declaration does not displace the fields the request already carried.
         XCTAssertEqual(json["email"] as? String, "a@b.co")
-        XCTAssertEqual(json["invite_code"] as? String, "QA1-7K3M9-PXTVY-R2HN5-ZZ")
     }
 
     func testRegisterExtensionOnlyNotTickedSendsNeitherKey() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co",
-                                                      inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ", ageDeclared: false)
+                                                      ageDeclared: false)
         assertNotDeclared(try lastBodyJson())
     }
 
     func testVerifyOtpRegisterTickedSendsDeclarationAndTermsVersion() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                          deviceName: "iPhone", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ",
-                                          displayName: nil, ageDeclared: true)
+                                          deviceName: "iPhone", displayName: nil, ageDeclared: true)
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/auth/otp/verify")
         let json = try lastBodyJson()
         XCTAssertEqual(json["purpose"] as? String, "register")
@@ -302,8 +234,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testVerifyOtpRegisterNotTickedSendsNeitherKey() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                          deviceName: "iPhone", inviteCode: "QA1-7K3M9-PXTVY-R2HN5-ZZ",
-                                          displayName: nil, ageDeclared: false)
+                                          deviceName: "iPhone", displayName: nil, ageDeclared: false)
         assertNotDeclared(try lastBodyJson())
     }
 
@@ -311,7 +242,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testVerifyOtpLoginNeverSendsTheDeclaration() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .login,
-                                          deviceName: "iPhone", inviteCode: nil, displayName: nil, ageDeclared: true)
+                                          deviceName: "iPhone", displayName: nil, ageDeclared: true)
         let json = try lastBodyJson()
         XCTAssertEqual(json["purpose"] as? String, "login")
         assertNotDeclared(json)
@@ -319,8 +250,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     func testRegisterTickedSendsDeclarationAndTermsVersion() async throws {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", inviteCode: nil,
-                                         displayName: nil, ageDeclared: true)
+        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: true)
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/register")
         let json = try lastBodyJson()
         assertDeclared(json)
@@ -329,8 +259,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     func testRegisterNotTickedSendsNeitherKey() async throws {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", inviteCode: nil,
-                                         displayName: nil, ageDeclared: false)
+        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: false)
         assertNotDeclared(try lastBodyJson())
     }
 

@@ -9,8 +9,6 @@ import XCTest
 /// the engine tests.
 final class AgeDeclarationTests: XCTestCase {
 
-    private let validInvite = "QA1-7K3M9-PXTVY-R2HN5-ZZ"
-
     // MARK: - Gates
 
     func testPhoneRegisterNeedsTheBoxTicked() {
@@ -28,28 +26,26 @@ final class AgeDeclarationTests: XCTestCase {
         XCTAssertFalse(PhoneEntryScreen.ageWireValue(mode: .login, ageDeclared: true))
     }
 
-    /// The interno + email form needs the three conditions together: a wrong one keeps the button off even when the
-    /// box is ticked, and an unticked box keeps it off even when the rest is right.
-    func testExtensionFormNeedsEmailInviteAndBox() {
-        XCTAssertTrue(ExtensionOnlyRegisterScreen.isSubmittable(emailValid: true, inviteCode: validInvite, ageDeclared: true))
-        XCTAssertFalse(ExtensionOnlyRegisterScreen.isSubmittable(emailValid: true, inviteCode: validInvite, ageDeclared: false))
-        XCTAssertFalse(ExtensionOnlyRegisterScreen.isSubmittable(emailValid: false, inviteCode: validInvite, ageDeclared: true))
-        XCTAssertFalse(ExtensionOnlyRegisterScreen.isSubmittable(emailValid: true, inviteCode: "QA1-7K3M9", ageDeclared: true))
+    /// The interno + email form needs the two conditions together: a wrong email keeps the button off even when the
+    /// box is ticked, and an unticked box keeps it off even when the email is right. No invite code is asked.
+    func testExtensionFormNeedsEmailAndBox() {
+        XCTAssertTrue(ExtensionOnlyRegisterScreen.isSubmittable(emailValid: true, ageDeclared: true))
+        XCTAssertFalse(ExtensionOnlyRegisterScreen.isSubmittable(emailValid: true, ageDeclared: false))
+        XCTAssertFalse(ExtensionOnlyRegisterScreen.isSubmittable(emailValid: false, ageDeclared: true))
     }
 
-    /// The whole gate of the phone screen's button, not only the age part: for a registration the box is one of three
-    /// conditions, and each of them alone keeps the button off.
-    func testPhoneRegisterButtonNeedsNumberInviteAndBox() {
-        XCTAssertTrue(PhoneEntryScreen.isSubmittable(phoneValid: true, mode: .register, inviteCode: validInvite, ageDeclared: true))
-        XCTAssertFalse(PhoneEntryScreen.isSubmittable(phoneValid: true, mode: .register, inviteCode: validInvite, ageDeclared: false))
-        XCTAssertFalse(PhoneEntryScreen.isSubmittable(phoneValid: false, mode: .register, inviteCode: validInvite, ageDeclared: true))
-        XCTAssertFalse(PhoneEntryScreen.isSubmittable(phoneValid: true, mode: .register, inviteCode: "QA1-7K3M9", ageDeclared: true))
+    /// The whole gate of the phone screen's button, not only the age part: for a registration the box is one of two
+    /// conditions, and each of them alone keeps the button off. Registration needs no invite code.
+    func testPhoneRegisterButtonNeedsNumberAndBox() {
+        XCTAssertTrue(PhoneEntryScreen.isSubmittable(phoneValid: true, mode: .register, ageDeclared: true))
+        XCTAssertFalse(PhoneEntryScreen.isSubmittable(phoneValid: true, mode: .register, ageDeclared: false))
+        XCTAssertFalse(PhoneEntryScreen.isSubmittable(phoneValid: false, mode: .register, ageDeclared: true))
     }
 
-    /// A login shows no box and no invite field: a valid number is all it takes, ticked or not.
+    /// A login shows no box: a valid number is all it takes, ticked or not.
     func testPhoneLoginButtonNeedsOnlyTheNumber() {
-        XCTAssertTrue(PhoneEntryScreen.isSubmittable(phoneValid: true, mode: .login, inviteCode: "", ageDeclared: false))
-        XCTAssertFalse(PhoneEntryScreen.isSubmittable(phoneValid: false, mode: .login, inviteCode: "", ageDeclared: true))
+        XCTAssertTrue(PhoneEntryScreen.isSubmittable(phoneValid: true, mode: .login, ageDeclared: false))
+        XCTAssertFalse(PhoneEntryScreen.isSubmittable(phoneValid: false, mode: .login, ageDeclared: true))
     }
 
     // MARK: - Links

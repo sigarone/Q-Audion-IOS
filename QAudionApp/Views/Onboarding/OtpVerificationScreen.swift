@@ -17,8 +17,6 @@ struct OtpVerificationScreen: View {
     /// since the server itself has to send the SMS.
     let e164: String
     let mode: PhoneEntryScreen.Mode
-    /// Only meaningful for `.register`; always nil for `.login`.
-    let inviteCode: String?
     /// True when the person ticked the age declaration box on `PhoneEntryScreen`
     /// (`.register` only; always false for `.login`). Sent with the code on verify.
     let ageDeclared: Bool
@@ -207,7 +205,6 @@ struct OtpVerificationScreen: View {
                 code: trimmedCode,
                 purpose: purpose,
                 deviceName: deviceName,
-                inviteCode: inviteCode,
                 displayName: nil,
                 ageDeclared: ageDeclared
             )
@@ -244,9 +241,11 @@ struct OtpVerificationScreen: View {
     /// contextual Italian copy; everything else falls back to
     /// `error.localizedDescription`.
     private func userFacingMessage(for error: Error) -> String {
-        if let inviteError = error as? BCryptoInviteCodeError {
-            return inviteError.userFacingMessage
-        }
+        Self.userFacingMessage(for: error, mode: mode)
+    }
+
+    /// Pure mapping, exposed for unit tests.
+    static func userFacingMessage(for error: Error, mode: PhoneEntryScreen.Mode) -> String {
         if let bcryptoError = error as? BCryptoError, case .httpError(let statusCode) = bcryptoError {
             switch statusCode {
             case 404:
@@ -257,6 +256,7 @@ struct OtpVerificationScreen: View {
                 return mode == .register
                     ? String(localized: "onboarding.otp.error.already_registered", defaultValue: "Questo numero risulta già registrato. Prova ad accedere invece.", comment: "Registration error (HTTP 409): the phone number already has an account.")
                     : String(localized: "onboarding.otp.error.code_invalid", defaultValue: "Codice non valido o scaduto.", comment: "Sign-in error (HTTP 409): the SMS code is wrong or expired.")
+            case 403 where mode == .register: return String(localized: "onboarding.error.registration_unavailable", defaultValue: "Registrazione temporaneamente non disponibile, riprova più tardi.", comment: "Registration error (HTTP 403): the server is not accepting registrations right now.")
             case 429:
                 return String(localized: "onboarding.error.too_many_attempts", defaultValue: "Troppi tentativi. Riprova tra qualche minuto.", comment: "Onboarding error (HTTP 429): rate limit reached.")
             case 503:

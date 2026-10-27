@@ -28,11 +28,6 @@ appId: com.qaudion.app
 - tapOn:
     id: "register-email-field"
 - inputRandomEmail
-# Invite code is mandatory; pass a valid one with `maestro test -e INVITE_CODE=...`.
-- tapOn:
-    id: "register-invite-code-field"
-- inputText: ${INVITE_CODE}
-- hideKeyboard
 # The age declaration box is mandatory ("Crea account" stays off until it is ticked) and sits
 # below the name field, so scroll to it first, then to the button.
 - scrollUntilVisible:
