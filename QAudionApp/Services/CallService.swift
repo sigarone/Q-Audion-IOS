@@ -4730,6 +4730,22 @@ final class CallService: @unchecked Sendable {
         applyNativeAudioUnitGate(reason: reason)
     }
 
+    /// The microphone permission arrived while the call was connected (the user allowed it from the in-call strip or
+    /// in the Settings app): the audio unit that was opened without it delivers silence, so capture is started again.
+    /// Native unit: switched off and decided again by the gate. Own engine: stopped and started by the same chokepoint
+    /// as at the call start. Main thread.
+    public func restartCaptureAfterMicrophoneGranted() {
+        if NativeAudioSessionGate.isArmed, !audioSrtpFallbackActive {
+            _ = NativeAudioSessionGate.setNativeAudioActive(
+                false, reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
+            reapplyNativeAudioUnitGate(reasonCode: NativeAudioUnitGateDecisions.ChangeReason.gate.rawValue)
+        } else {
+            audioCapture?.stop(deactivateSession: false)
+            audioEnginesStarted = false
+            startAudioIOIfReady()
+        }
+    }
+
     /// Bounded wait for CallKit's own didActivate after a self-activation of a
     /// CallKit-managed call (see `NativeAudioUnitGateDecisions.callKitActivationWaitMs`).
     private func scheduleNativeUnitCallKitWait() {

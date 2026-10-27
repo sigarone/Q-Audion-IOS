@@ -94145,6 +94145,300 @@
           }
         }
       }
+    },
+    "call.mic.banner.title": {
+      "extractionState": "manual",
+      "comment": "In-call strip title: the microphone permission is missing, so the other person cannot hear you",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microfono non attivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone is off"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Micro désactivé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mikrofon nicht aktiv"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Micrófono desactivado"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microfone desativado"
+          }
+        }
+      }
+    },
+    "call.mic.banner.ask": {
+      "extractionState": "manual",
+      "comment": "In-call strip text: the microphone has not been allowed yet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consenti l'uso del microfono: finché non lo fai, l'altra persona non ti sente."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow microphone access. Until you do, the other person cannot hear you."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autorise l'accès au micro : tant que tu ne le fais pas, l'autre personne ne t'entend pas."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erlauben Sie den Zugriff auf das Mikrofon. Solange Sie das nicht tun, kann die andere Person Sie nicht hören."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permite el acceso al micrófono. Hasta que lo hagas, la otra persona no puede oírte."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permita o acesso ao microfone. Até que você faça isso, a outra pessoa não consegue ouvir você."
+          }
+        }
+      }
+    },
+    "call.mic.banner.denied": {
+      "extractionState": "manual",
+      "comment": "In-call strip text: the microphone was refused, it can be turned on in the Settings app",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'uso del microfono è disattivato per Q-Audion: l'altra persona non ti sente. Attivalo nelle Impostazioni."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone access is turned off for Q-Audion, so the other person cannot hear you. Turn it on in Settings."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'accès au micro est désactivé pour Q-Audion : l'autre personne ne t'entend pas. Active-le dans les Réglages."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Mikrofonzugriff ist für Q-Audion ausgeschaltet, daher kann die andere Person Sie nicht hören. Schalten Sie ihn in den Einstellungen ein."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El acceso al micrófono está desactivado para Q-Audion, así que la otra persona no puede oírte. Actívalo en Ajustes."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O acesso ao microfone está desativado para o Q-Audion, então a outra pessoa não consegue ouvir você. Ative-o em Ajustes."
+          }
+        }
+      }
+    },
+    "call.mic.banner.allow": {
+      "extractionState": "manual",
+      "comment": "In-call strip button: shows the system microphone request",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Consenti"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autoriser"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erlauben"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permitir"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permitir"
+          }
+        }
+      }
+    },
+    "call.mic.banner.settings": {
+      "extractionState": "manual",
+      "comment": "In-call strip button: opens the Settings app on the Q-Audion page",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri Impostazioni"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Settings"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir les Réglages"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einstellungen öffnen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir Ajustes"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir Ajustes"
+          }
+        }
+      }
+    },
+    "call.mic.primer.title": {
+      "extractionState": "manual",
+      "comment": "First-use screen title before the system microphone request",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il microfono per le chiamate"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone for calls"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le micro pour les appels"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Mikrofon für Anrufe"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El micrófono para las llamadas"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O microfone para as chamadas"
+          }
+        }
+      }
+    },
+    "call.mic.primer.body": {
+      "extractionState": "manual",
+      "comment": "First-use screen text before the system microphone request",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per chiamare e rispondere serve il microfono. Nel prossimo passaggio iOS ti chiederà il permesso: scegli Consenti."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calls need the microphone. On the next step iOS will ask for permission: choose Allow."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les appels ont besoin du micro. À l'étape suivante, iOS te demandera l'autorisation : choisis Autoriser."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für Anrufe wird das Mikrofon benötigt. Im nächsten Schritt fragt iOS nach der Erlaubnis: Wählen Sie „Erlauben“."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las llamadas necesitan el micrófono. En el siguiente paso iOS te pedirá permiso: elige Permitir."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As chamadas precisam do microfone. Na próxima etapa o iOS vai pedir permissão: escolha Permitir."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
