@@ -547,6 +547,8 @@ final class AppState: ObservableObject {
     @Published var isInCall: Bool = false {
         didSet {
             guard oldValue != isInCall else { return }
+            // The microphone strip in the call screen follows the call state at once.
+            MicrophonePermissionMonitor.shared.callStateChanged()
             // A call never starts reduced and never stays reduced once it is over (same choke point as the rest
             // below, so none of the dozen `isInCall = ...` sites has to remember it).
             callScreenMinimized = CallMinimizePolicy.next(
@@ -4241,6 +4243,13 @@ final class AppState: ObservableObject {
                 }
             }
         }
+        // Microphone permission: the monitor knows whether a call is live and restarts the capture when the permission
+        // arrives during one (allowed from the call screen, or in the Settings app).
+        MicrophonePermissionMonitor.shared.isInCall = { [weak self] in self?.isInCall ?? false }
+        MicrophonePermissionMonitor.shared.onGrantedDuringCall = { [weak self] in
+            self?.callService.restartCaptureAfterMicrophoneGranted()
+        }
+
         // W-NOCALLKIT cold-start: drain any notification action that fired before
         // this handler was wired (app-killed launch via Answer/Decline tap).
         NotificationCenterService.shared.flushPendingIncomingAction()
@@ -18916,6 +18925,20 @@ final class AppState: ObservableObject {
             }
             return
         }
+        // The microphone was never asked for (first use): the request comes BEFORE the call is placed, so the far end
+        // never connects to a phone whose microphone is still waiting for an answer. The start gate is already held
+        // here, so a second tap or another start path is refused while the request is on screen. Refused: the call
+        // goes on and the call screen explains it. A start from the car (CarPlay, Siri) shows nothing on the phone:
+        // the in-call strip offers the request instead.
+        if origin == .phone {
+            await MicrophonePermissionMonitor.shared.askBeforeCallIfNeeded(source: .dial)
+            // The wait let the world move: a call may have been committed meanwhile.
+            guard !isInCall else {
+                callStartGate.end()
+                RTLog.warn("call", "startCall ignored — a call went live while the microphone request was shown")
+                return
+            }
+        }
         // Rebuilds the engine when logout() released it and nothing has made a
         // new one yet (report bea72b22), instead of aborting every call.
         guard let engine = ensureCallEngine(reason: "startCall") else {
@@ -21155,6 +21178,9 @@ extension AppState {
             return true
         }
         self.answeredCallKitId = uuid
+        // First use: the request is shown now when the app is on screen (from the lock screen nothing can be shown; the
+        // call screen offers it later). The capture restarts by itself when the answer arrives during the call.
+        Task { @MainActor in await MicrophonePermissionMonitor.shared.askBeforeCallIfNeeded(source: .answer) }
         // Numeric diagnostics of a call: once per answered incoming 1:1 call (every accept path converges here, the
         // refused and duplicate answers have already returned above). Read now, on the main actor, no hop.
         let answerApp = UIApplication.shared

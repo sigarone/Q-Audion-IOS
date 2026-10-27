@@ -857,6 +857,8 @@ APP_VOCAB = frozenset("""
     shown
 
     alone promo
+
+    micperm st ask
 """.split())
 # GROUP CALL PROMOTION AND ADMISSION (2026-10-23) -- "alone" (the line right above) is for the lone-call timer of a group call:
 #   grp alone phase=<1-4> ms=<n>        (1 armed, 2 cancelled, 3 left, 4 ended; ms = the timer's length)

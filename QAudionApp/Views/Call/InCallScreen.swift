@@ -953,6 +953,9 @@ struct InCallScreen: View {
                     cryptoEngineMeterRow.padding(.horizontal, 20)
                 }
 
+                // The microphone is not allowed: the other person cannot hear this phone (button: allow / Settings).
+                MicrophonePermissionBanner().padding(.horizontal, 20)
+
                 // D11 / W-NOBRICK — non-blocking security advisory. Shown when the
                 // peer's identity key changed and is NOT in the server-published
                 // per-device set. Advisory ONLY: it never gates audio/video; the
