@@ -532,6 +532,8 @@ struct QAudionApp: App {
             // on cold launch, see AppState.initialize()'s own call).
             appState.drainSiriOutbox()
             appState.refreshSiriMessageCache()
+            // Back in front (with or without a chat already open): the generic message alerts are not needed.
+            appState.clearGenericMessageAlerts(for: .sceneActive)
             // Pending phone-number transfers: read again on a return to the foreground (a locked
             // app reads after the unlock, see the `isLocked` observer).
             if !lockService.isLocked { appState.refreshPhoneTransferNotice(throttled: true) }
