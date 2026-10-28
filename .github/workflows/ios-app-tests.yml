@@ -334,6 +334,7 @@ jobs:
             -only-testing:QAudionAppTests/MeshConsentPresentationTests \
             -only-testing:QAudionAppTests/MeshConsentTests \
             -only-testing:QAudionAppTests/MeshReachTests \
+            -only-testing:QAudionAppTests/MessageSoundSettingsTests \
             -only-testing:QAudionAppTests/MissedCallsBadgeTests \
             -only-testing:QAudionAppTests/NoticeServiceTests \
             -only-testing:QAudionAppTests/RemoteMessageAlertPolicyTests \
