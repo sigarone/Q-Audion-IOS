@@ -836,10 +836,13 @@ jobs:
               for key in missing:
                   print("::error::the App Store profile of the main app lacks the entitlement " + key)
               sys.exit(1)
-          # A list entitlement (the App Groups) must carry every value of the file, not only the key.
-          for key, value in required.items():
+          # The App Groups must carry every value of the file, not only the key. Other list entitlements
+          # (associated domains, for one) are granted in App Store profiles as a wildcard, so only the key counts there.
+          for key in ("com.apple.security.application-groups",):
+              value = required.get(key)
               if isinstance(value, list):
-                  absent = sorted(str(v) for v in value if v not in profile.get(key, []))
+                  granted = profile.get(key, [])
+                  absent = [] if "*" in granted else sorted(str(v) for v in value if v not in granted)
                   if absent:
                       for v in absent:
                           print("::error::the App Store profile of the main app lacks " + key + " value " + v)
