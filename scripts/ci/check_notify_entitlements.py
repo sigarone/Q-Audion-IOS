@@ -9,7 +9,8 @@ The app entitlements files (QAudion.entitlements, QAudionVPN.entitlements, QAudi
     app already has) and which also lists $(AppIdentifierPrefix)com.qaudion.notify;
   * the App Group group.com.bcrypto.qaudion.notify;
   * com.apple.developer.default-data-protection = NSFileProtectionComplete;
-  * com.apple.developer.usernotifications.communication = true (sender photo and name in message notifications).
+  * com.apple.developer.usernotifications.communication = true (sender photo and name in message notifications);
+  * com.apple.developer.devicecheck.appattest-environment = production.
 The notification service extension (QAudionNotificationService/QAudionNotificationService.entitlements) must carry
 exactly the notify App Group and the notify keychain group, and nothing else.
 Exits 1 with one line per violation.
@@ -46,6 +47,8 @@ def check(rel, data):
         problems.append(f"{rel}: com.apple.developer.default-data-protection is not NSFileProtectionComplete")
     if data.get("com.apple.developer.usernotifications.communication") is not True:
         problems.append(f"{rel}: com.apple.developer.usernotifications.communication is not true")
+    if data.get("com.apple.developer.devicecheck.appattest-environment") != "production":
+        problems.append(f"{rel}: com.apple.developer.devicecheck.appattest-environment is not production")
     return problems
 
 

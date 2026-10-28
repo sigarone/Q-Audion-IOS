@@ -98,6 +98,7 @@ final class AppState: ObservableObject {
                 CarPlayBridge.shared.signInDidChange()
                 LocationShareIntentRouter.shortcutParametersChanged()
                 QuickActions.refresh()
+                attestationSignInDidChange()
             }
         }
     }
@@ -491,6 +492,36 @@ final class AppState: ObservableObject {
     /// reconfigurable, this property must be reset to nil between logins so
     /// the next registration pins against the new host.
     private lazy var voipPushSession: URLSession = PinnedURLSession.make(for: serverUrl)
+
+    /// Device attestation: one attempt per sign-in, in the background, never in the way of sign-in or calls.
+    private lazy var appAttestCoordinator = AppAttestCoordinator(
+        service: SystemAppAttestService(),
+        transport: AppAttestHTTPTransport(
+            serverUrl: serverUrl,
+            bearer: { TokenVault.loadAccessToken() },
+            session: voipPushSession),
+        store: AppAttestKeychainStore(),
+        report: { RTLog.info("attest", "verdict=\($0.code)") })
+
+    private func attestationSignInDidChange() {
+        if isAuthenticated {
+            startDeviceAttestation()
+        } else {
+            let coordinator = appAttestCoordinator
+            Task { await coordinator.accountLeft() }
+        }
+    }
+
+    private func startDeviceAttestation() {
+        let coordinator = appAttestCoordinator
+        Task { [weak self] in
+            // The account id is set just before or after the flag flips: read it when the task runs.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self, self.isAuthenticated,
+                  let account = self.currentUserId ?? self.authService.loadUserId(), !account.isEmpty else { return }
+            await coordinator.attestIfNeeded(account: account)
+        }
+    }
 
     // MARK: - Contacts cache (W-CC)
     /// In-memory snapshot of ContactsStore, refreshed at app start and on
