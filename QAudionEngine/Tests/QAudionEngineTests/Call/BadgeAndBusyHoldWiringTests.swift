@@ -301,9 +301,8 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
             service, from: "willPresent notification: UNNotification", to: "private func isCallInFlight() -> Bool {")
         XCTAssertTrue(present.contains("MissedCallAlertPolicy.foreground("))
         XCTAssertTrue(present.contains("isMissedCall: isMissedCall,"))
-        XCTAssertTrue(present.contains(
-            "let isMissedCall: Bool = notification.request.content.categoryIdentifier == Category.missedCall.rawValue"))
-        XCTAssertTrue(present.contains("var callInFlight: Bool = false if isMissedCall { callInFlight = await self.isCallInFlight() }"),
+        XCTAssertTrue(present.contains("let isMissedCall: Bool = categoryId == Category.missedCall.rawValue"))
+        XCTAssertTrue(present.contains("let callInFlight: Bool = isMissedCall ? isCallInFlight() : false"),
                       "only a missed call needs the call state")
         XCTAssertFalse(present.contains("return [.banner, .sound, .list, .badge]"), "no bare chime path")
         let schedule = try slice(service, from: "func scheduleLocal(category: Category,", to: "func postIncomingCall(")
@@ -313,6 +312,26 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
         XCTAssertFalse(schedule.contains("content.sound = NotificationsGate.inAppSoundEnabled ? .default : nil"),
                        "the content's sound goes through the policy")
         XCTAssertTrue(schedule.contains("content.categoryIdentifier = category.rawValue"), "the category is unchanged")
+    }
+
+    /// Both notification delegate callbacks hand their result back to UIKit on the main actor, where UIKit requires
+    /// it; the `async` form of a `nonisolated` method would return on a background executor.
+    func testNotificationDelegateCompletesOnTheMainActor() throws {
+        let service = try code("QAudionApp/Services/NotificationCenterService.swift")
+        XCTAssertFalse(service.contains("willPresent notification: UNNotification ) async"), "no async willPresent")
+        XCTAssertFalse(service.contains("didReceive response: UNNotificationResponse ) async"), "no async didReceive")
+        let present = try body(
+            of: "willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void ) {",
+            in: service)
+        XCTAssertTrue(present.contains(
+            "Task { @MainActor in completionHandler(self.foregroundPresentation(categoryId: categoryId, blocked: blocked)) }"))
+        XCTAssertEqual(occurrences(of: "completionHandler(", in: present), 1, "one answer, from the main actor")
+        let receive = try body(
+            of: "didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void ) {",
+            in: service)
+        XCTAssertTrue(receive.contains(
+            "Task { @MainActor in self.handleResponse(category: categoryFinal, actionId: actionFinal, info: infoFinal) completionHandler() }"))
+        XCTAssertEqual(occurrences(of: "completionHandler(", in: receive), 1, "one answer, from the main actor")
     }
 
     /// AppState wires "a call is in flight" with the app's own definition (`noCallInFlight`).
