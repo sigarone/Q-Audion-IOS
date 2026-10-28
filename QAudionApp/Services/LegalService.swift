@@ -57,27 +57,6 @@ enum LegalService {
     }
 }
 
-// MARK: - Emergency notice
-
-/// The emergency notice (art. 16.3 summary), shown once before the first outgoing call. `AppState.startCall` asks
-/// `confirmBeforeFirstCall()` before it places a call from the phone; the logic (and its timings) is
-/// `EmergencyNoticeCoordinator` in the engine. The root view shows `pendingText` in an alert.
-typealias EmergencyNoticeCenter = EmergencyNoticeCoordinator
-
-extension EmergencyNoticeCoordinator {
-    static let shared = EmergencyNoticeCoordinator(
-        isSceneActive: { UIApplication.shared.applicationState == .active })
-
-    /// Reads the notice text with whatever the app has at the moment of the call.
-    func configure(apiProvider: @escaping @MainActor () -> LegalApi?) {
-        configure(textProvider: {
-            guard let api = apiProvider() else { return nil }
-            let lang = LegalService.documentLanguage
-            return { try? await api.fetchTerms(lang: lang).document.emergencyNotice }
-        })
-    }
-}
-
 // MARK: - Withdrawal receipt
 
 /// The receipt of a withdrawal, shown above the rest of the app until the person closes it. The account is gone from

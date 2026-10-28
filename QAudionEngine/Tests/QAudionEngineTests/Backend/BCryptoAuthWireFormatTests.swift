@@ -176,10 +176,8 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     /// A complete acceptance, as the registration screens build it.
     static let sampleAcceptance = TermsAcceptance(
-        version: "2026-10-28", lang: "it", sha256: String(repeating: "ab", count: 32),
-        terms: true, deviations: true,
-        groups: ["g1": true, "g2": true, "g3": true, "g4": true, "g5": true, "g6": true],
-        professional: false)
+        version: "2026-10-29", lang: "it", sha256: String(repeating: "ab", count: 32),
+        terms: true, specific: true)
 
     private func jsonBool(_ value: Any?, file: StaticString = #filePath, line: UInt = #line) -> Bool? {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
@@ -197,17 +195,14 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         guard let acceptance = json["terms_acceptance"] as? [String: Any] else {
             return XCTFail("terms_acceptance is missing", file: file, line: line)
         }
-        XCTAssertEqual(acceptance["version"] as? String, "2026-10-28", file: file, line: line)
+        XCTAssertEqual(acceptance["version"] as? String, "2026-10-29", file: file, line: line)
         XCTAssertEqual(acceptance["lang"] as? String, "it", file: file, line: line)
         XCTAssertEqual(acceptance["sha256"] as? String, String(repeating: "ab", count: 32), file: file, line: line)
         XCTAssertEqual(jsonBool(acceptance["terms"], file: file, line: line), true, file: file, line: line)
-        XCTAssertEqual(jsonBool(acceptance["deviations"], file: file, line: line), true, file: file, line: line)
-        XCTAssertEqual(jsonBool(acceptance["professional"], file: file, line: line), false, file: file, line: line)
-        let groups = acceptance["groups"] as? [String: Any]
-        XCTAssertEqual(Set(groups?.keys.map { $0 } ?? []), ["g1", "g2", "g3", "g4", "g5", "g6"], file: file, line: line)
-        for id in ["g1", "g2", "g3", "g4", "g5", "g6"] {
-            XCTAssertEqual(jsonBool(groups?[id], file: file, line: line), true, file: file, line: line)
-        }
+        XCTAssertEqual(jsonBool(acceptance["specific"], file: file, line: line), true, file: file, line: line)
+        XCTAssertNil(acceptance["deviations"], file: file, line: line)
+        XCTAssertNil(acceptance["groups"], file: file, line: line)
+        XCTAssertNil(acceptance["professional"], file: file, line: line)
     }
 
     /// Nothing ticked: neither `age_declaration` (never `false`, the server refuses it) nor an acceptance.

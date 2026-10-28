@@ -1,7 +1,8 @@
 import Foundation
 
-/// The text of art. 21.1-bis, shown on its own before the account is created.
-public struct LegalDeviations: Codable, Equatable, Sendable {
+/// The specific-approval text (art. 21.1-bis features and the clauses of arts. 1341-1342 c.c.), shown behind
+/// a "Mostra" link next to its box.
+public struct LegalSpecificApproval: Codable, Equatable, Sendable {
     public let id: String
     public let title: String
     public let text: String
@@ -13,21 +14,6 @@ public struct LegalDeviations: Codable, Equatable, Sendable {
     }
 }
 
-/// One of the six groups of clauses that get a specific approval (artt. 1341-1342 c.c.).
-public struct LegalGroup: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
-    public let title: String
-    public let clauses: String
-    public let text: String
-
-    public init(id: String, title: String, clauses: String, text: String) {
-        self.id = id
-        self.title = title
-        self.clauses = clauses
-        self.text = text
-    }
-}
-
 /// The legal document as the server serves it (`GET /api/v1/legal/terms`). The server is the only source
 /// of these texts: the app never carries a copy.
 public struct LegalTermsDocument: Codable, Equatable, Sendable {
@@ -35,25 +21,24 @@ public struct LegalTermsDocument: Codable, Equatable, Sendable {
     public let lang: String
     public let title: String
     public let bodyMarkdown: String
-    public let deviations: LegalDeviations
-    public let groups: [LegalGroup]
+    public let specificApproval: LegalSpecificApproval
     public let emergencyNotice: String
     public let withdrawalInfo: String
 
-    public init(version: String, lang: String, title: String, bodyMarkdown: String, deviations: LegalDeviations,
-                groups: [LegalGroup], emergencyNotice: String, withdrawalInfo: String) {
+    public init(version: String, lang: String, title: String, bodyMarkdown: String,
+                specificApproval: LegalSpecificApproval, emergencyNotice: String, withdrawalInfo: String) {
         self.version = version
         self.lang = lang
         self.title = title
         self.bodyMarkdown = bodyMarkdown
-        self.deviations = deviations
-        self.groups = groups
+        self.specificApproval = specificApproval
         self.emergencyNotice = emergencyNotice
         self.withdrawalInfo = withdrawalInfo
     }
 
     enum CodingKeys: String, CodingKey {
-        case version, lang, title, deviations, groups
+        case version, lang, title
+        case specificApproval = "specific_approval"
         case bodyMarkdown = "body_markdown"
         case emergencyNotice = "emergency_notice"
         case withdrawalInfo = "withdrawal_info"

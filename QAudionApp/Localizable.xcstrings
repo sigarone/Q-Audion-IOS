@@ -95054,135 +95054,51 @@
         }
       }
     },
-    "legal.step.progress": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, step counter; first %lld is the current step, second %lld the number of steps.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Passo %lld di %lld"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Step %lld of %lld"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Schritt %lld von %lld"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Étape %lld sur %lld"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paso %lld de %lld"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Etapa %lld de %lld"
-          }
-        }
-      }
-    },
-    "legal.deviations.checkbox": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, step 1: box that accepts the listed features expressly and separately.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Accetto in modo espresso e separato le caratteristiche indicate"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "I expressly and separately accept the features described"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ich akzeptiere die beschriebenen Merkmale ausdrücklich und gesondert"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "J'accepte expressément et séparément les caractéristiques indiquées"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Acepto de forma expresa y por separado las características indicadas"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aceito de forma expressa e separada as características indicadas"
-          }
-        }
-      }
-    },
     "legal.terms.checkbox": {
       "extractionState": "manual",
-      "comment": "Terms acceptance, step 2: box that accepts the Terms and Conditions.",
+      "comment": "Terms acceptance: box that accepts the Terms and Conditions and the Privacy Policy.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ho letto e accetto i Termini e condizioni"
+            "value": "Ho letto e accetto i Termini e condizioni e l'Informativa privacy"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "I have read and accept the Terms and Conditions"
+            "value": "I have read and accept the Terms and Conditions and the Privacy Policy"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ich habe die Nutzungsbedingungen gelesen und akzeptiere sie"
+            "value": "Ich habe die Nutzungsbedingungen und die Datenschutzerklärung gelesen und akzeptiere sie"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "J'ai lu et j'accepte les Conditions générales"
+            "value": "J'ai lu et j'accepte les Conditions générales et la Politique de confidentialité"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "He leído y acepto los Términos y condiciones"
+            "value": "He leído y acepto los Términos y condiciones y la Política de privacidad"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Li e aceito os Termos e condições"
+            "value": "Li e aceito os Termos e condições e a Política de Privacidade"
           }
         }
       }
     },
     "legal.terms.read": {
       "extractionState": "manual",
-      "comment": "Terms acceptance, step 2: button that opens the full text of the Terms.",
+      "comment": "Terms acceptance: link that opens the full text of the Terms.",
       "localizations": {
         "it": {
           "stringUnit": {
@@ -95222,338 +95138,128 @@
         }
       }
     },
-    "legal.professional.question": {
+    "legal.privacy.read": {
       "extractionState": "manual",
-      "comment": "Terms acceptance, step 2: yes/no question, default no.",
+      "comment": "Terms acceptance: link that opens the Privacy Policy.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uso il servizio per la mia attività professionale"
+            "value": "Leggi l'Informativa privacy"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "I use the service for my professional activity"
+            "value": "Read the Privacy Policy"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ich nutze den Dienst für meine berufliche Tätigkeit"
+            "value": "Datenschutzerklärung lesen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "J'utilise le service pour mon activité professionnelle"
+            "value": "Lire la Politique de confidentialité"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uso el servicio para mi actividad profesional"
+            "value": "Leer la Política de privacidad"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uso o serviço para minha atividade profissional"
+            "value": "Ler a Política de Privacidade"
           }
         }
       }
     },
-    "legal.professional.yes": {
+    "legal.specific.checkbox": {
       "extractionState": "manual",
-      "comment": "Terms acceptance, professional question: yes.",
+      "comment": "Terms acceptance: box that accepts art. 21.1-bis features and gives the specific approval of the listed clauses (arts. 1341-1342 of the Italian Civil Code).",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sì"
+            "value": "Accetto espressamente le caratteristiche del servizio indicate all'art. 21.1-bis e approvo specificamente, ai sensi degli artt. 1341 e 1342 c.c., le clausole elencate"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Yes"
+            "value": "I expressly accept the service features set out in art. 21.1-bis and specifically approve, under arts. 1341 and 1342 of the Italian Civil Code, the clauses listed"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ja"
+            "value": "Ich akzeptiere ausdrücklich die in Art. 21.1-bis genannten Merkmale des Dienstes und genehmige die aufgeführten Klauseln gemäß Art. 1341 und 1342 des italienischen Zivilgesetzbuchs ausdrücklich"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Oui"
+            "value": "J'accepte expressément les caractéristiques du service indiquées à l'art. 21.1-bis et j'approuve spécifiquement, au sens des art. 1341 et 1342 du Code civil italien, les clauses énumérées"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sí"
+            "value": "Acepto expresamente las características del servicio indicadas en el art. 21.1-bis y apruebo específicamente, conforme a los arts. 1341 y 1342 del Código Civil italiano, las cláusulas enumeradas"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sim"
+            "value": "Aceito expressamente as características do serviço indicadas no art. 21.1-bis e aprovo especificamente, nos termos dos arts. 1341 e 1342 do Código Civil italiano, as cláusulas listadas"
           }
         }
       }
     },
-    "legal.professional.no": {
+    "legal.specific.show": {
       "extractionState": "manual",
-      "comment": "Terms acceptance, professional question: no.",
+      "comment": "Terms acceptance: link next to the specific-approval box that shows the listed clauses.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "No"
+            "value": "Mostra"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No"
+            "value": "Show"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nein"
+            "value": "Anzeigen"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Non"
+            "value": "Afficher"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "No"
+            "value": "Mostrar"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Não"
-          }
-        }
-      }
-    },
-    "legal.groups.heading": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, step 3: heading.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Approvazione specifica"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Specific approval"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Besondere Zustimmung"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Approbation spécifique"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aprobación específica"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aprovação específica"
-          }
-        }
-      }
-    },
-    "legal.groups.intro": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, step 3: why each group needs its own box (arts. 1341-1342 of the Italian Civil Code).",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ai sensi degli artt. 1341 e 1342 del Codice civile, approva in modo specifico ogni gruppo di clausole qui sotto."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Under arts. 1341 and 1342 of the Italian Civil Code, specifically approve each group of clauses below."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gemäß Art. 1341 und 1342 des italienischen Zivilgesetzbuchs genehmigen Sie bitte jede der folgenden Klauselgruppen ausdrücklich."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conformément aux art. 1341 et 1342 du Code civil italien, approuve spécifiquement chaque groupe de clauses ci-dessous."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conforme a los arts. 1341 y 1342 del Código Civil italiano, aprueba de forma específica cada grupo de cláusulas siguiente."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nos termos dos arts. 1341 e 1342 do Código Civil italiano, aprove especificamente cada grupo de cláusulas abaixo."
-          }
-        }
-      }
-    },
-    "legal.group.approve": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, step 3: box of one group of clauses.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Approvo in modo specifico"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "I specifically approve"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ich genehmige ausdrücklich"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "J'approuve spécifiquement"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apruebo de forma específica"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aprovo especificamente"
-          }
-        }
-      }
-    },
-    "legal.group.show": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, step 3: expands the text of a group of clauses.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostra il testo"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show text"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Text anzeigen"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Afficher le texte"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar el texto"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrar o texto"
-          }
-        }
-      }
-    },
-    "legal.group.hide": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, step 3: collapses the text of a group of clauses.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nascondi il testo"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hide text"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Text ausblenden"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Masquer le texte"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ocultar el texto"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ocultar o texto"
+            "value": "Mostrar"
           }
         }
       }
@@ -95596,48 +95302,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "O texto em italiano prevalece (art. 34)."
-          }
-        }
-      }
-    },
-    "legal.action.accept": {
-      "extractionState": "manual",
-      "comment": "Terms acceptance, last step: button that completes the acceptance.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Accetta e continua"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Accept and continue"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Akzeptieren und fortfahren"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Accepter et continuer"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aceptar y continuar"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aceitar e continuar"
           }
         }
       }
@@ -96814,48 +96478,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Chamadas de emergência"
-          }
-        }
-      }
-    },
-    "legal.emergency.ack": {
-      "extractionState": "manual",
-      "comment": "Emergency calls notice: button that acknowledges it before the first call.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ho capito"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "I understand"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verstanden"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "J'ai compris"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Entendido"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Entendi"
           }
         }
       }

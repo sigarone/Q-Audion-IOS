@@ -3,60 +3,28 @@ import Foundation
 /// Every label of the terms acceptance, withdrawal and legal screens. The legal texts themselves are never here: they
 /// come from the server (`GET /api/v1/legal/terms`). Each string lives in the String Catalog (it, en, de, fr, es, pt-BR).
 enum LegalStrings {
-    static var progressFormat: String {
-        String(localized: "legal.step.progress", defaultValue: "Passo %lld di %lld", comment: "Terms acceptance, step counter; first %lld is the current step, second %lld the number of steps.")
-    }
-
-    static var deviationsCheckbox: String {
-        String(localized: "legal.deviations.checkbox", defaultValue: "Accetto in modo espresso e separato le caratteristiche indicate", comment: "Terms acceptance, step 1: box that accepts the listed features expressly and separately.")
-    }
-
     static var termsCheckbox: String {
-        String(localized: "legal.terms.checkbox", defaultValue: "Ho letto e accetto i Termini e condizioni", comment: "Terms acceptance, step 2: box that accepts the Terms and Conditions.")
+        String(localized: "legal.terms.checkbox", defaultValue: "Ho letto e accetto i Termini e condizioni e l'Informativa privacy", comment: "Terms acceptance: box that accepts the Terms and Conditions and the Privacy Policy.")
     }
 
     static var readTerms: String {
-        String(localized: "legal.terms.read", defaultValue: "Leggi i Termini e condizioni", comment: "Terms acceptance, step 2: button that opens the full text of the Terms.")
+        String(localized: "legal.terms.read", defaultValue: "Leggi i Termini e condizioni", comment: "Terms acceptance: link that opens the full text of the Terms.")
     }
 
-    static var professionalQuestion: String {
-        String(localized: "legal.professional.question", defaultValue: "Uso il servizio per la mia attività professionale", comment: "Terms acceptance, step 2: yes/no question, default no.")
+    static var readPrivacy: String {
+        String(localized: "legal.privacy.read", defaultValue: "Leggi l'Informativa privacy", comment: "Terms acceptance: link that opens the Privacy Policy.")
     }
 
-    static var yes: String {
-        String(localized: "legal.professional.yes", defaultValue: "Sì", comment: "Terms acceptance, professional question: yes.")
+    static var specificCheckbox: String {
+        String(localized: "legal.specific.checkbox", defaultValue: "Accetto espressamente le caratteristiche del servizio indicate all'art. 21.1-bis e approvo specificamente, ai sensi degli artt. 1341 e 1342 c.c., le clausole elencate", comment: "Terms acceptance: box that accepts art. 21.1-bis features and gives the specific approval of the listed clauses (arts. 1341-1342 of the Italian Civil Code).")
     }
 
-    static var no: String {
-        String(localized: "legal.professional.no", defaultValue: "No", comment: "Terms acceptance, professional question: no.")
-    }
-
-    static var groupsHeading: String {
-        String(localized: "legal.groups.heading", defaultValue: "Approvazione specifica", comment: "Terms acceptance, step 3: heading.")
-    }
-
-    static var groupsIntro: String {
-        String(localized: "legal.groups.intro", defaultValue: "Ai sensi degli artt. 1341 e 1342 del Codice civile, approva in modo specifico ogni gruppo di clausole qui sotto.", comment: "Terms acceptance, step 3: why each group needs its own box (arts. 1341-1342 of the Italian Civil Code).")
-    }
-
-    static var groupApprove: String {
-        String(localized: "legal.group.approve", defaultValue: "Approvo in modo specifico", comment: "Terms acceptance, step 3: box of one group of clauses.")
-    }
-
-    static var showText: String {
-        String(localized: "legal.group.show", defaultValue: "Mostra il testo", comment: "Terms acceptance, step 3: expands the text of a group of clauses.")
-    }
-
-    static var hideText: String {
-        String(localized: "legal.group.hide", defaultValue: "Nascondi il testo", comment: "Terms acceptance, step 3: collapses the text of a group of clauses.")
+    static var showSpecific: String {
+        String(localized: "legal.specific.show", defaultValue: "Mostra", comment: "Terms acceptance: link next to the specific-approval box that shows the listed clauses.")
     }
 
     static var italianPrevails: String {
         String(localized: "legal.lang.prevails", defaultValue: "Il testo in lingua italiana prevale (art. 34).", comment: "Note under the legal texts when they are shown in English: the Italian text prevails (art. 34).")
-    }
-
-    static var acceptAndContinue: String {
-        String(localized: "legal.action.accept", defaultValue: "Accetta e continua", comment: "Terms acceptance, last step: button that completes the acceptance.")
     }
 
     static var loading: String {
@@ -185,14 +153,6 @@ enum LegalStrings {
 
     static var emergencyTitle: String {
         String(localized: "legal.emergency.title", defaultValue: "Chiamate di emergenza", comment: "Emergency calls notice: title.")
-    }
-
-    static var emergencyAck: String {
-        String(localized: "legal.emergency.ack", defaultValue: "Ho capito", comment: "Emergency calls notice: button that acknowledges it before the first call.")
-    }
-
-    static func progress(_ step: Int, of total: Int) -> String {
-        String(format: LegalStrings.progressFormat, step, total)
     }
 
     static func edition(_ version: String) -> String {

@@ -5,7 +5,7 @@ import Foundation
 ///
 /// The server never blocks an endpoint over this (a call must not break): the app asks `GET /legal/status` at
 /// launch and on return to the foreground, and when `acceptance_required` is true it shows a blocking screen
-/// with the same three steps as at registration.
+/// with the same screen as at registration.
 ///
 /// Rules, each pinned by `TermsGateModelTests`:
 ///  - the screen is up only while the status says it is required, the document is loaded and NO call is active
