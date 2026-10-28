@@ -154,7 +154,7 @@ enum AvatarSendCopy {
                 url: copyURL, data: cached, longSide: size.longSide, shortSide: size.shortSide, generated: false, isCopy: true)
         }
         do {
-            try prepared.data.write(to: copyURL, options: [.atomic])
+            try prepared.data.write(to: copyURL, options: FileProtection.atomicWriteOptions)
         } catch {
             // The copy could not be saved, and the sender reads a file: fall back to the local file, as before this existed.
             return Prepared(

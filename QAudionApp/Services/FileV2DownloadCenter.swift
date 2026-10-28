@@ -137,7 +137,7 @@ final class FileV2DownloadCenter: ObservableObject {
         let key = job.key
         let receiver = FileV2Receiver(server: server)
         do {
-            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
             try await receiver.download(job.descriptor, to: destination) { done, total in
                 Task { @MainActor in
                     FileV2DownloadCenter.shared.setProgress(key, done: done, total: total)
@@ -183,7 +183,7 @@ final class FileV2DownloadCenter: ObservableObject {
 
     private func runThumbnail(_ thumbnail: FileV2Descriptor, key: String, destination: URL, server: FileV2Server) async {
         do {
-            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
             try await FileV2Receiver(server: server).download(thumbnail, to: destination)
             thumbnailReady.insert(key)
         } catch let failure as FileV2Failure {

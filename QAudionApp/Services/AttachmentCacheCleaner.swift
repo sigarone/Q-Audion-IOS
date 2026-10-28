@@ -118,7 +118,9 @@ enum AttachmentCacheCleaner {
             // removeItem on the directory + recreate so future writes
             // still find a directory present (avoid first-write failure).
             try fm.removeItem(at: dir)
-            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try fm.createDirectory(
+                at: dir, withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
         } catch {
             print("[AttachmentCacheCleaner] failed to clear \(name): \(error)")
         }

@@ -92,6 +92,25 @@ final class MessageSoundSettingsTests: XCTestCase {
         XCTAssertEqual(MessageSoundStore(defaults: defaults).load(legacyInAppSound: true).soundId, MessageSoundCatalog.systemId)
     }
 
+    func testDefaultStoreLivesInTheNotificationGroup() {
+        XCTAssertEqual(MessageSoundStore.appGroupId, "group.com.bcrypto.qaudion.notify")
+        let shared = MessageSoundStore.sharedDefaults
+        let keys = [MessageSoundStore.keyEnabled, MessageSoundStore.keySoundId, MessageSoundStore.keyHaptic]
+        let before = keys.map { shared.object(forKey: $0) }
+        addTeardownBlock {
+            for (key, value) in zip(keys, before) {
+                if let value { shared.set(value, forKey: key) } else { shared.removeObject(forKey: key) }
+            }
+        }
+        MessageSoundStore().save(MessageSoundSettings(soundEnabled: false, soundId: "nota", hapticEnabled: false))
+        XCTAssertEqual(MessageSoundStore.current.soundId, "nota")
+        XCTAssertFalse(MessageSoundStore.current.hapticEnabled)
+        // Nothing is written to the standard domain when the group suite exists (it falls back only when the suite is nil).
+        if UserDefaults(suiteName: MessageSoundStore.appGroupId) != nil {
+            XCTAssertNil(UserDefaults.standard.object(forKey: MessageSoundStore.keySoundId))
+        }
+    }
+
     // MARK: - qa_msg.wav in Library/Sounds
 
     private func tempDir() throws -> URL {

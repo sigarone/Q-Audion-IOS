@@ -151,6 +151,6 @@ public final class WipeReplayCache: @unchecked Sendable {
             return PersistedEntry(deviceId: key.deviceId, nonceBase64: key.nonce.base64EncodedString(), lastSeenMs: ts)
         }
         guard let data = try? JSONEncoder().encode(entries) else { return }
-        try? data.write(to: url, options: .atomic)
+        try? data.write(to: url, options: FileProtection.atomicWriteOptions)
     }
 }

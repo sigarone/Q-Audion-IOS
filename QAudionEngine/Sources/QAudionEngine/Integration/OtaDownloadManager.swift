@@ -10,7 +10,7 @@ public final class OtaDownloadManager {
         guard OtaDownloadManager.isValidModelName(name) else { throw OtaError.invalidModelName }
         let encodedName = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
         let data = try await rest.get("/api/v1/models/\(encodedName)")
-        try data.write(to: localPath)
+        try data.write(to: localPath, options: FileProtection.plainWriteOptions)
     }
 
     // Internal (not private) only so OtaDownloadManagerTests can pin the allow-list table.

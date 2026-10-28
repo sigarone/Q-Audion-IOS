@@ -76,8 +76,15 @@ enum MessageSoundPolicy {
     }
 }
 
-/// Persistence in `UserDefaults`, in the style of `NotificationsGate`.
+/// Persistence in `UserDefaults`, in the style of `NotificationsGate`. The values live in the notification App Group so
+/// the notification extension reads the same choices.
 struct MessageSoundStore {
+
+    /// App Group shared with the notification extension.
+    static let appGroupId = "group.com.bcrypto.qaudion.notify"
+
+    /// The group's defaults; `.standard` only when the group is not available (simulator or unsigned test builds).
+    static var sharedDefaults: UserDefaults { UserDefaults(suiteName: appGroupId) ?? .standard }
 
     static let keyEnabled = "qaudion.notifications.message_sound_enabled"
     static let keySoundId = "qaudion.notifications.message_sound_id"
@@ -85,7 +92,7 @@ struct MessageSoundStore {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    init(defaults: UserDefaults = MessageSoundStore.sharedDefaults) { self.defaults = defaults }
 
     /// The stored choices. Until the user changes the on/off switch it follows the older "Suoni in-app" switch
     /// (`legacyInAppSound`), so someone who had sounds off keeps messages silent.
@@ -216,8 +223,11 @@ enum MessageAlertSoundFile {
     private static func write(_ data: Data, to target: URL, in directory: URL) -> Bool {
         if let existing = try? Data(contentsOf: target), existing == data { return true }
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try data.write(to: target, options: .atomic)
+            // The system reads this file when the notification sounds, also with the phone locked: readable after the first unlock.
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+            try data.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             return true
         } catch {
             return false

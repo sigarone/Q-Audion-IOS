@@ -260,11 +260,11 @@ final class ChatFileAttachmentReceiver {
                 for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let dir = base.appendingPathComponent("file_attachments", isDirectory: true)
             if !FileManager.default.fileExists(atPath: dir.path) {
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
             }
             let safeName = Self.sanitiseFilename(envelope.filename)
             outURL = dir.appendingPathComponent("\(envelope.fileId)__\(safeName)")
-            try plaintext.write(to: outURL, options: [.atomic])
+            try plaintext.write(to: outURL, options: FileProtection.atomicWriteOptions)
         } catch {
             throw ReceiveError.writeFailed(String(describing: error))
         }

@@ -120,6 +120,9 @@
 	     Siri, chiama X su Q-Audion" request. The string MUST be the literal
 	     Intents class name, not a custom identifier — this is Apple's own
 	     convention for every INStartCallIntent-based VoIP app. -->
+	<!-- Keychain access group of the notification key (see NotifyKeychain); the build expands the team prefix. -->
+	<key>QANotifyKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)com.qaudion.notify</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INStartCallIntent</string>

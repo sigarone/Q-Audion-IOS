@@ -169,6 +169,8 @@ public final class QAudionDatabase {
     private static func openFileBacked(directoryURL: URL) throws -> DatabaseQueue {
         var dbURL = directoryURL.appendingPathComponent(fileName)
 
+        // The folder first, so the -wal/-shm/-journal files SQLite creates later start with the same class.
+        FileProtection.prepareDirectory(directoryURL)
         // Apply iOS Data Protection so the file is encrypted when device is locked.
         if !FileManager.default.fileExists(atPath: dbURL.path) {
             FileManager.default.createFile(atPath: dbURL.path, contents: nil, attributes: [
@@ -208,6 +210,10 @@ public final class QAudionDatabase {
             sidecarExclude.isExcludedFromBackup = true
             try? sidecarURL.setResourceValues(sidecarExclude)
         }
+
+        // WAL and shm exist by now (opening in WAL mode creates them): same class as the main file, so the
+        // database stays usable while the phone is locked after the first unlock.
+        FileProtection.applyToDatabaseFiles(atPath: dbURL.path)
 
         do {
             try migrator.migrate(queue)

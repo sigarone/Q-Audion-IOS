@@ -151,6 +151,11 @@ jobs:
       - name: Simulator picker, tests
         run: python3 -I scripts/ci/test_resolve_simulator.py
 
+      - name: Notification entitlements and keychain groups, source gate and its tests
+        run: |
+          python3 -I scripts/ci/test_check_notify_entitlements.py
+          python3 -I scripts/ci/check_notify_entitlements.py .
+
       - name: iOS 27 SDK app-level rules
         run: |
           python3 -I scripts/ci/test_check_sdk27_requirements.py

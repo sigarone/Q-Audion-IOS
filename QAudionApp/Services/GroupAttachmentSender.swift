@@ -224,7 +224,7 @@ final class GroupAttachmentSender {
         let dir = FileManager.default.temporaryDirectory
         let ext = Self.fileExtension(forMime: mime, filename: filename)
         let url = dir.appendingPathComponent("grpattach-\(id.base64EncodedString().prefix(16))\(ext)")
-        try? data.write(to: url, options: [.atomic])
+        try? data.write(to: url, options: FileProtection.atomicWriteOptions)
         return url.path
     }
 

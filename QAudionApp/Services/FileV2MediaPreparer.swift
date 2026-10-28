@@ -89,7 +89,7 @@ enum FileV2MediaPreparer {
         let url = directory.appendingPathComponent("\(key).\(cleaned.fileExtension)")
         do {
             try? FileManager.default.removeItem(at: url)
-            try cleaned.data.write(to: url, options: [.atomic])
+            try cleaned.data.write(to: url, options: FileProtection.atomicWriteOptions)
         } catch {
             throw PrepareError.unreadable
         }
@@ -132,6 +132,7 @@ enum FileV2MediaPreparer {
         do {
             try? FileManager.default.removeItem(at: url)
             try FileManager.default.copyItem(at: recording.fileURL, to: url)
+            FileProtection.apply(to: url)
         } catch {
             throw PrepareError.unreadable
         }
@@ -191,9 +192,10 @@ enum FileV2MediaPreparer {
         let ext = sourceURL.pathExtension.isEmpty ? "mov" : sourceURL.pathExtension.lowercased()
         let destination = directory.appendingPathComponent("video." + ext)
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: sourceURL, to: destination)
+            FileProtection.apply(to: destination)
         } catch {
             throw PrepareError.unreadable
         }
@@ -283,18 +285,19 @@ enum FileV2MediaPreparer {
     private static func writeThumbnail(_ data: Data, key: String) -> URL? {
         let url = FileV2LocalFiles.thumbnailURL(base: FileV2DownloadCenter.cachesBase, rowKey: key)
         do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
+            try data.write(to: url, options: FileProtection.atomicWriteOptions)
             return url
         } catch {
             return nil
         }
     }
 
+    // Prepared copies keep the after-first-unlock class: the upload continues in the background while the phone is locked.
     private static func cachesSubdirectory(_ name: String) throws -> URL {
         do {
             let directory = FileV2DownloadCenter.cachesBase.appendingPathComponent(name, isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
             return directory
         } catch {
             throw PrepareError.unreadable

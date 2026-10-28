@@ -301,7 +301,7 @@ public final class FileV2Decryptor: @unchecked Sendable {
         try verifySourceHeader(try readExactly(FileV2.headerLength, at: 0, from: input) ?? Data())
         guard length == blobLength else { throw FileV2Error.sizeMismatch }
 
-        guard fileManager.createFile(atPath: destination.path, contents: nil) else {
+        guard fileManager.createFile(atPath: destination.path, contents: nil, attributes: FileProtection.lockedAccessAttributes) else {
             throw FileV2Error.invalidArgument("cannot create destination")
         }
         var finished = false

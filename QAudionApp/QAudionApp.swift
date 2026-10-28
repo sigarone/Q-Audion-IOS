@@ -131,6 +131,12 @@ struct QAudionApp: App {
     @State private var currentLanguageCode = AppLanguageManager.effectiveLanguageCode
 
     init() {
+        // The app's default Data Protection class is "complete" (see QAudion.entitlements): name the class of the few folders
+        // that receive files while the phone is locked (after the first unlock) first.
+        // Only the Siri bridge and notification containers are read while locked; the vpn and share containers keep the default.
+        FileProtection.prepareAppContainer(groupIdentifiers: [
+            "group.com.bcrypto.qaudion.siri", "group.com.bcrypto.qaudion.notify",
+        ])
         #if SCREENSHOT_DEMO
         ScreenshotDemo.seedEarly()
         #endif

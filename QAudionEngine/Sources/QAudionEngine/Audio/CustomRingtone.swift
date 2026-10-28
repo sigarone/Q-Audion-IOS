@@ -190,8 +190,8 @@ public enum CustomRingtoneConverter {
 
         let fm = FileManager.default
         let temp = destination.deletingLastPathComponent().appendingPathComponent(".converting-\(UUID().uuidString).caf")
-        do { try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true) }
-        catch { throw CustomRingtone.ImportError.writeFailed }
+        // The system reads this folder when a call rings with the phone locked: readable after the first unlock.
+        guard FileProtection.prepareDirectory(destination.deletingLastPathComponent()) else { throw CustomRingtone.ImportError.writeFailed }
         defer { try? fm.removeItem(at: temp) }
 
         let settings: [String: Any] = [
@@ -271,6 +271,7 @@ public enum CustomRingtoneConverter {
                 try fm.moveItem(at: temp, to: destination)
             }
         } catch { throw CustomRingtone.ImportError.writeFailed }
+        FileProtection.apply(to: destination)
         return seconds
     }
 }
