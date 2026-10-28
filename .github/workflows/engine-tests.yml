@@ -43,12 +43,78 @@ jobs:
   # WebRTC/SwiftUI-iOS-only code — both real engineering efforts, not a CI
   # config tweak, and neither can be verified without macOS/Xcode access.
 
+  # `ios-simulator-tests` below is a required status check of main. A job
+  # skipped by its own `if:` reports as skipped, which counts as passed for a
+  # required check (a workflow-level `paths:` filter would leave the check
+  # pending forever, so the filter lives here). This job decides, for a pull
+  # request only, whether the macOS job is needed; push, tag and manual runs
+  # always run it. It skips the macOS job only when EVERY file of the pull
+  # request is on the list below of paths that nothing in that job reads;
+  # anything else, a path not listed, an unreadable file list or a failure of
+  # this job runs it.
+  #
+  # Why a list of what is irrelevant and not a list of what matters: the engine
+  # tests read repository files outside QAudionEngine/ (QAudionApp/ sources in
+  # the wiring tests, tools/kat/ vectors, scripts/ship-ios-logs.py,
+  # WIRE_SPEC.md, .github/workflows/wire-spec-lock.yml), so a short list of
+  # triggers would miss the next test that reads a new path.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Decide whether the iOS Simulator job is needed
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -u
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Event ${EVENT}: the job always runs."
+            exit 0
+          fi
+          if ! FILES=$(gh api "repos/${REPO}/pulls/${PR}/files?per_page=100" --paginate --jq '.[] | .filename, (.previous_filename // empty)'); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not list the files of the pull request: running the job"
+            exit 0
+          fi
+          COUNT=$(printf '%s\n' "$FILES" | grep -c . || true)
+          # The API lists at most 3000 files; an empty or full list is not trusted.
+          if [ "$COUNT" -eq 0 ] || [ "$COUNT" -ge 3000 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "File list of ${COUNT} entries is empty or possibly truncated: running the job."
+            exit 0
+          fi
+          RUN=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              .github/workflows/engine-tests.yml|.github/workflows/wire-spec-lock.yml)
+                RUN=true; echo "needed: $f" ;;
+              .github/workflows/*|docs/*|maestro/*|.jules/*|QAudionAppTests/*|QAudionIntents/*|QAudionPacketTunnel/*)
+                echo "not read by this job: $f" ;;
+              *)
+                RUN=true; echo "needed: $f" ;;
+            esac
+          done <<< "$FILES"
+          echo "run=${RUN}" >> "$GITHUB_OUTPUT"
+          echo "Decision: run=${RUN} (${COUNT} entries)"
+
   # iOS Simulator job — runs xcodebuild test targeting arm64 simulator.
   # This uses the ios-arm64-simulator slice of QaudionCryptoCore.xcframework
   # (v0.1.2) so RatchetNative.available = true and RatchetNativeRoundTripTests
   # run fully (not skipped). WebRTC's iOS-simulator slice is present, so this
   # job does NOT share the macOS-slice-missing issue.
   ios-simulator-tests:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
     steps:
