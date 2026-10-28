@@ -371,19 +371,16 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     }
 
     // MARK: - UNUserNotificationCenterDelegate
+    //
+    // Both callbacks take the completion-handler form and call the handler on the main actor: UIKit requires its
+    // completion handler on the main thread, and the `async` form of a `nonisolated` method returns on a
+    // background executor, where the compiler-generated bridge would call it.
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        // W405: foreground presentation respects the user's preferences.
-        // Banner suppressed if banners disabled; sound suppressed if
-        // in-app sound disabled or in quiet hours.
-        //
-        // W-MISSEDQUIET (2026-10-04): a missed-call notification that arrives while a call is in flight is shown
-        // quietly (banner / list, no sound). Every other notification, and a missed call outside a call, is
-        // presented exactly as before. The decision is `MissedCallAlertPolicy.foreground`.
-        //
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
         // BLOCK — an alert about a private message or call of a contact the user blocked (one the server pushed
         // before the block, or a local banner scheduled earlier) is not shown while the app is in front: no
         // banner, no list entry, no sound, no badge. In the background or with the app killed the system shows
@@ -391,13 +388,26 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         // of a blocked creator is suppressed like a private one; a group message alert carries a group id and is
         // not filtered (`BlockPolicy`).
         let alertInfo: [AnyHashable: Any] = notification.request.content.userInfo
-        if BlockPolicy.suppressesNotification(userInfo: alertInfo, blocked: BlockedContactsStore.loadBlockedIds()) {
+        let blocked = BlockPolicy.suppressesNotification(userInfo: alertInfo, blocked: BlockedContactsStore.loadBlockedIds())
+        let categoryId: String = notification.request.content.categoryIdentifier
+        Task { @MainActor in
+            completionHandler(self.foregroundPresentation(categoryId: categoryId, blocked: blocked))
+        }
+    }
+
+    /// W405: foreground presentation respects the user's preferences. Banner suppressed if banners disabled; sound
+    /// suppressed if in-app sound disabled or in quiet hours.
+    ///
+    /// W-MISSEDQUIET (2026-10-04): a missed-call notification that arrives while a call is in flight is shown
+    /// quietly (banner / list, no sound). Every other notification, and a missed call outside a call, is
+    /// presented exactly as before. The decision is `MissedCallAlertPolicy.foreground`.
+    private func foregroundPresentation(categoryId: String, blocked: Bool) -> UNNotificationPresentationOptions {
+        if blocked {
             RTLog.info("call", "block drop=1 kind=notif")
             return []
         }
-        let isMissedCall: Bool = notification.request.content.categoryIdentifier == Category.missedCall.rawValue
-        var callInFlight: Bool = false
-        if isMissedCall { callInFlight = await self.isCallInFlight() }
+        let isMissedCall: Bool = categoryId == Category.missedCall.rawValue
+        let callInFlight: Bool = isMissedCall ? isCallInFlight() : false
         let presentation = MissedCallAlertPolicy.foreground(
             bannersEnabled: NotificationsGate.bannersEnabled,
             quietNow: NotificationsGate.isQuietNow,
@@ -409,7 +419,7 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         if presentation.sound { options.insert(.sound) }
         if presentation.list { options.insert(.list) }
         if presentation.badge { options.insert(.badge) }
-        if notification.request.content.categoryIdentifier == Category.messageDelivered.rawValue {
+        if categoryId == Category.messageDelivered.rawValue {
             // A message alert names the system sound (the server's push) or the chosen one (the app's own banner).
             // In front, the app plays the user's choice itself and tells the system to stay silent.
             options.remove(.sound)
@@ -417,9 +427,7 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             let quiet = NotificationsGate.isQuietNow
             let play = MessageSoundPolicy.foreground(settings, quietNow: quiet, masterHaptics: HapticFeedback.masterEnabled)
             // The message sound has its own switch; the banner switch still decides whether anything shows at all.
-            let showsBanner: Bool = presentation.banner
-            await MainActor.run {
-                guard showsBanner else { return }
+            if presentation.banner {
                 MessageSoundPlayer.shared.play(play.sound)
                 if play.vibrate { MessageSoundPlayer.shared.vibrate() }
             }
@@ -427,15 +435,16 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         return options
     }
 
-    /// W-MISSEDQUIET — `callInFlightProvider`, read on the main actor (`willPresent` is not isolated).
+    /// W-MISSEDQUIET — `callInFlightProvider`, read on the main actor.
     private func isCallInFlight() -> Bool {
         callInFlightProvider?() ?? false
     }
 
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
         let category = Category(rawValue: response.notification.request.content.categoryIdentifier)
         let actionId = response.actionIdentifier  // ANSWER_CALL / DECLINE_CALL / default tap
         // Convert userInfo to a Sendable [String: String] dictionary by JSON-stringifying
@@ -452,39 +461,44 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         let categoryFinal = category
         let infoFinal = sendableInfo
         let actionFinal = actionId
-        await MainActor.run {
-            if categoryFinal != .incomingCall,
-               actionFinal == UNNotificationDefaultActionIdentifier,
-               PhoneTransferNotice.isPendingPush(userInfo: infoFinal) {
-                if let handler = self.onPhoneTransferPendingTap {
-                    handler()
-                } else {
-                    self.pendingPhoneTransferTap = true
-                }
-            } else if categoryFinal == .incomingCall {
-                // W-NOCALLKIT — explicit buttons answer/decline; a plain tap on the
-                // notification body opens the in-app ring UI WITHOUT answering.
-                let action: CallAction
-                if actionFinal == CallAction.decline.rawValue {
-                    action = .decline
-                } else if actionFinal == CallAction.answer.rawValue {
-                    action = .answer
-                } else {
-                    action = .open  // UNNotificationDefaultActionIdentifier / dismiss
-                }
-                if let handler = self.onIncomingCallAction {
-                    handler(action, infoFinal)
-                } else {
-                    // Cold launch: handler not wired yet — latch for the drain.
-                    self.pendingIncomingAction = (action, infoFinal)
-                }
-            } else if let cat = categoryFinal {
-                if cat == .messageDelivered, RemoteMessageAlertPolicy.isGenericTap(userInfo: infoFinal) {
-                    // Generic alert pushed by the server: the alerts of the burst go; the messages arrive over the socket.
-                    Task { await self.clearRemoteMessageAlerts(for: .alertTapped) }
-                }
-                self.onNotificationTap?(cat, infoFinal)
+        Task { @MainActor in
+            self.handleResponse(category: categoryFinal, actionId: actionFinal, info: infoFinal)
+            completionHandler()
+        }
+    }
+
+    private func handleResponse(category categoryFinal: Category?, actionId actionFinal: String, info infoFinal: [String: String]) {
+        if categoryFinal != .incomingCall,
+           actionFinal == UNNotificationDefaultActionIdentifier,
+           PhoneTransferNotice.isPendingPush(userInfo: infoFinal) {
+            if let handler = self.onPhoneTransferPendingTap {
+                handler()
+            } else {
+                self.pendingPhoneTransferTap = true
             }
+        } else if categoryFinal == .incomingCall {
+            // W-NOCALLKIT — explicit buttons answer/decline; a plain tap on the
+            // notification body opens the in-app ring UI WITHOUT answering.
+            let action: CallAction
+            if actionFinal == CallAction.decline.rawValue {
+                action = .decline
+            } else if actionFinal == CallAction.answer.rawValue {
+                action = .answer
+            } else {
+                action = .open  // UNNotificationDefaultActionIdentifier / dismiss
+            }
+            if let handler = self.onIncomingCallAction {
+                handler(action, infoFinal)
+            } else {
+                // Cold launch: handler not wired yet — latch for the drain.
+                self.pendingIncomingAction = (action, infoFinal)
+            }
+        } else if let cat = categoryFinal {
+            if cat == .messageDelivered, RemoteMessageAlertPolicy.isGenericTap(userInfo: infoFinal) {
+                // Generic alert pushed by the server: the alerts of the burst go; the messages arrive over the socket.
+                Task { await self.clearRemoteMessageAlerts(for: .alertTapped) }
+            }
+            self.onNotificationTap?(cat, infoFinal)
         }
     }
 }
