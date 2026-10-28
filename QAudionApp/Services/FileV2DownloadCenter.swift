@@ -141,6 +141,7 @@ final class FileV2DownloadCenter: ObservableObject {
             try await receiver.download(job.descriptor, to: destination) { done, total in
                 Task { @MainActor in
                     FileV2DownloadCenter.shared.setProgress(key, done: done, total: total)
+                    LiveActivities.transferProgress(key: key, sending: false, done: done, total: total)
                 }
             }
             job.onFinished(destination)
@@ -201,9 +202,11 @@ final class FileV2DownloadCenter: ObservableObject {
     private func finish(_ key: String) {
         states.removeValue(forKey: key)
         tasks.removeValue(forKey: key)
+        LiveActivities.transferEnded(key: key)
     }
 
     private func fail(_ key: String, _ text: String, file: URL) {
+        LiveActivities.transferEnded(key: key)
         try? FileManager.default.removeItem(at: file)
         tasks.removeValue(forKey: key)
         states[key] = .failed(text)

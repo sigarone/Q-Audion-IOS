@@ -161,6 +161,10 @@
 	<array>
 		<string>arm64</string>
 	</array>
+	<!-- Live Activities (QAudionLiveActivity extension): a live location share and a large file transfer. Updated locally only;
+	     the app never asks ActivityKit for a push token. -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>voip</string>

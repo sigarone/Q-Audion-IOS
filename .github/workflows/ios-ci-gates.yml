@@ -65,6 +65,7 @@ on:
       - 'QAudionAppTests/**'
       - 'QAudionEngine/**'
       - 'QAudionIntents/**'
+      - 'QAudionLiveActivity/**'
       - 'QAudionPacketTunnel/**'
       - 'scripts/ci/**'
       - 'scripts/symbolicate.py'

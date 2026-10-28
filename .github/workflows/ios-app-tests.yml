@@ -54,6 +54,7 @@ on:
       - 'QAudionEngine/**'
       - 'QAudionIntents/**'
       - 'QAudionShare/**'
+      - 'QAudionLiveActivity/**'
       - 'QAudionPacketTunnel/**'
       - 'scripts/ci/assert-no-vpn.sh'
       - 'scripts/ci/test-assert-no-vpn.sh'
@@ -71,6 +72,7 @@ on:
       - 'QAudionEngine/**'
       - 'QAudionIntents/**'
       - 'QAudionShare/**'
+      - 'QAudionLiveActivity/**'
       - 'QAudionPacketTunnel/**'
       - 'scripts/ci/assert-no-vpn.sh'
       - 'scripts/ci/test-assert-no-vpn.sh'
@@ -204,6 +206,21 @@ jobs:
           ls "$APP/PlugIns"
           sh scripts/ci/assert-no-vpn.sh "$APP"
 
+      # The Live Activity widget extension is part of the default build: embedded, a widget extension, with its privacy manifest
+      # and a live-activities flag in the app.
+      - name: The Live Activity extension is embedded
+        run: |
+          set -e
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          EXT="$APP/PlugIns/QAudionLiveActivity.appex"
+          test -d "$EXT"
+          plutil -lint "$EXT/Info.plist"
+          test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$EXT/Info.plist")" = "com.apple.widgetkit-extension"
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$EXT/Info.plist")" = "com.qaudion.app.live-activity"
+          test -f "$EXT/PrivacyInfo.xcprivacy"
+          test "$(plutil -extract NSSupportsLiveActivities raw -o - "$APP/Info.plist")" = "true"
+          echo "live activity extension embedded"
+
       # The earbud hardware stack is a compile-time switch (QAUDION_EARBUD) and the default
       # spec does not compile it: the sources first (python, no build needed), the gate's own
       # self-test, then the gate on the app just built. A Debug build keeps the object file
@@ -328,6 +345,7 @@ jobs:
             -only-testing:QAudionAppTests/KmsSweepStatusTests \
             -only-testing:QAudionAppTests/LegalLinksTests \
             -only-testing:QAudionAppTests/LocationAppTests \
+            -only-testing:QAudionAppTests/LiveActivityPolicyTests \
             -only-testing:QAudionAppTests/LocationShareCenterEndTests \
             -only-testing:QAudionAppTests/LocationShareCenterTests \
             -only-testing:QAudionAppTests/LocationShareIntentTests \

@@ -88,15 +88,23 @@ enum FileV2OutboundRunner {
         deliver: @escaping @MainActor (String) async throws -> Void
     ) async -> FileV2Failure? {
         inFlight.insert(key)
-        defer { inFlight.remove(key) }
+        // A large file also shows as a Live Activity (progress, local updates only); it ends with the send, whatever the outcome.
+        defer {
+            inFlight.remove(key)
+            LiveActivities.transferEnded(key: key)
+        }
         let server = FileV2AppServices.makeServer(appState: appState)
+        let reportProgress: @MainActor (Int64, Int64) -> Void = { done, total in
+            onProgress(done, total)
+            LiveActivities.transferProgress(key: key, sending: true, done: done, total: total)
+        }
 
         await gate.acquire()
-        var failure = await attempt(request, server: server, onProgress: onProgress, deliver: deliver)
+        var failure = await attempt(request, server: server, onProgress: reportProgress, deliver: deliver)
         if let first = failure, isNoRoomOnServer(first), inFlight.count == 1 {
             if let deleted = try? await FileV2UnfinishedCleanup.run(server: server), deleted > 0 {
                 RTLog.info("chat", "filev2 cleanup deleted=\(deleted)")
-                failure = await attempt(request, server: server, onProgress: onProgress, deliver: deliver)
+                failure = await attempt(request, server: server, onProgress: reportProgress, deliver: deliver)
             }
         }
         await gate.release()
