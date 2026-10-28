@@ -589,7 +589,12 @@ RE_IPV6_COMPRESSED = re.compile(
     r"(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?"
     r"|::[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})(?![\w:])")
 RE_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-RE_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+# The local part must START a run of [\w.+-] characters (the lookbehind): with
+# "\b" instead, every word boundary inside a long dotted token ("a.b.c.d...",
+# 20 000 characters, no "@") was a fresh start that scanned to the end of the
+# token, which is quadratic. A match from the start of the run covers the same
+# text, so what gets redacted is the same or slightly more (a leading . + - too).
+RE_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+\b")
 RE_PHONE = re.compile(r"(?<!\d)\+?\d[\d\s().\-/]{6,}\d(?!\d)")
 RE_JWT_DOTTED = re.compile(r"\b[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]{4,}){1,}\b")
 RE_SPACED_HEX = re.compile(r"\b(?:[0-9a-fA-F]{4,8}\s){2,}[0-9a-fA-F]{4,8}\b")
@@ -631,18 +636,25 @@ SERVER_DROP_SUBSTRINGS = [
 # W-KEYWORDS 2026-09-24 (red-team finding 3, ported from ship-ios-logs.py): the words
 # derived key / raw key, and secret / slat / salt / *key(s) followed within a few non-word
 # characters by an opening bracket, drop the WHOLE line whatever the group holds.
+# "keys?" and not "\w*keys?": the pattern is only used with .search(), so a word
+# that ends in key matches at its "key" anyway, and the leading \w* made the
+# scan quadratic on a long token with no bracket (seconds per 20 000 characters).
 RE_KEY_MATERIAL = re.compile(
-    r"(?:derived|raw)[\s_\-]*key|(?:secret|slat|salt|\w*keys?)\W{0,8}[\[({<]")
+    r"(?:derived|raw)[\s_\-]*key|(?:secret|slat|salt|keys?)\W{0,8}[\[({<]")
 
 
 def _strip_format_chars(s):
     """Drop Unicode format characters (category Cf: zero-width space / joiner /
     word joiner, soft hyphen, bidi marks, BOM). NFKC keeps them, so
     "sec<U+200B>ret [..]" slipped past the DROP-list and the key-material rule
-    above; they mean nothing in a log line, so both are matched without them."""
-    if s.isascii():
+    above; they mean nothing in a log line, so both are matched without them.
+    Control characters that are not whitespace (NUL, the other C0 controls,
+    DEL, C1: category Cc) are dropped for the same reason ("sa<NUL>lt (..)");
+    tab and newline stay, they separate tokens."""
+    if s.isascii() and s.isprintable():
         return s
-    return "".join(c for c in s if unicodedata.category(c) != "Cf")
+    return "".join(c for c in s
+                   if c.isspace() or unicodedata.category(c) not in ("Cf", "Cc"))
 
 
 RE_RESIDUAL_B64 = re.compile(r"[A-Za-z0-9+/=_\-]{12,}")
@@ -1292,7 +1304,13 @@ _RE_RAW_STATUS = re.compile(r"\bstatus=([0-9]{1,3})\b")
 _RE_RAW_CODE = re.compile(r"\bcode=(exited|killed|dumped)\b")
 _RE_RAW_RESULT = re.compile(r"Failed with result '([a-z-]+)'")
 _RE_RAW_RESTARTS = re.compile(r"restart counter is at ([0-9]{1,9})\b")
-_RE_RAW_MEMPEAK = re.compile(r"([0-9]+(?:\.[0-9]+)?)([BKMGT]) memory peak\b")
+# (?<![0-9]) + bounded digit runs: a match starts at the start of a digit run and
+# reads at most 15 + 9 digits. Without them every digit of a long run was a fresh
+# start that scanned the rest of the run (quadratic), and a run of 309+ digits
+# made float() return inf, so int(inf) raised OverflowError out of the
+# classifier. systemd prints "401.5M"; nothing real is near 15 digits.
+_RE_RAW_MEMPEAK = re.compile(
+    r"(?<![0-9])([0-9]{1,15}(?:\.[0-9]{1,9})?)([BKMGT]) memory peak\b")
 _MEM_UNIT_MB = {"B": 1.0 / 1048576, "K": 1.0 / 1024, "M": 1.0, "G": 1024.0,
                 "T": 1048576.0}
 
@@ -2958,7 +2976,10 @@ def run_selftest():
                       hd + " state=active ".join(_bl) + " ok"):
             _kk, _bb = redact_body(_line, True, {})
             _got = [b for b in _bl if b in _bb.split()] if _kk else []
-            if len(_got) > MAX_UNKNOWN_WORDS or any(len(b) >= 10 for b in _got):
+            # the bound is a LITERAL on purpose (3 unknown words per body on
+            # this leg): reading MAX_UNKNOWN_WORDS here would make the check
+            # pass whatever value the cap is raised to.
+            if len(_got) > 3 or any(len(b) >= 10 for b in _got):
                 failures.append("LEAK[freeword/%d]: %d letter block(s) survived"
                                 % (_k11, len(_got)))
     for _blk in ("aBcDeFgHiJk", "1abcdefghij"):
@@ -2966,7 +2987,7 @@ def run_selftest():
         if _kk and _blk in _bb:
             failures.append("LEAK[freeword/shape]: %r survived" % _blk)
     _kk, _bb = redact_body(hd + "x=abcdefghi y=jklmnopqr z=stuvwxyza w=bcdefghij", True, {})
-    if _kk and sum(1 for v in ("abcdefghi", "jklmnopqr", "stuvwxyza", "bcdefghij") if v in _bb) > MAX_UNKNOWN_WORDS:
+    if _kk and sum(1 for v in ("abcdefghi", "jklmnopqr", "stuvwxyza", "bcdefghij") if v in _bb) > 3:    # literal, see above
         failures.append("LEAK[freeword/kv]: kv value carriers survived")
     for _ip6 in ("2001:db8::1", "fe80::1", "::1", "2001:db8:85a3::8a2e:370:7334"):
         for _tpl in ("ip=%s seq=12", "peer %s state=active"):
@@ -2976,6 +2997,36 @@ def run_selftest():
     _kk, _bb = redact_body(hd + "seq=12 rtt=35ms", True, {})
     if not _kk or "[summary]" in _bb or "seq=12" not in _bb:
         failures.append("REGRESS[freeword]: plain structured call line altered: %r" % _bb)
+    # 36a-bis. the unknown-word cap itself. Bounds are LITERALS (cap is 3 on this
+    #     leg): 4 readable unknown words in one body must not all ship, 3 do.
+    _cw = ("apple", "river", "tiger", "maple")
+    _kk, _bb = redact_body(hd + "state=active " + " ok ".join(_cw) + " ok", True, {})
+    if _kk and sum(1 for w in _cw if w in _bb) > 3:
+        failures.append("LEAK[unknown-word cap]: %d readable unknown words shipped "
+                        "in one body (cap is 3)" % sum(1 for w in _cw if w in _bb))
+    _kk, _bb = redact_body(hd + "state=active " + " ok ".join(_cw[:3]) + " ok", True, {})
+    if not _kk or sum(1 for w in _cw[:3] if w in _bb) != 3:
+        failures.append("REGRESS[unknown-word cap]: 3 readable unknown words no longer ship")
+    # 36c. control characters inside a drop-list / key-material word must not
+    #      defeat it; and a long single token must not stall the cron shipper.
+    for _tail in ("sec\x00ret [ok]", "sa\x00lt (7)", "raw\x01key ok",
+                  "ss\x01id 12345", "pass\x7fword ok"):
+        _kk, _bb = redact_body(hd + _tail, True, {})
+        if _kk and _bb:
+            failures.append("LEAK[control-char]: line was not dropped: %r" % _tail)
+    _t0 = time.time()
+    for _tok in ("A" * 20000, "key" * 6000, "ab." * 10000, "1" * 20000):
+        redact_body(hd + _tok, True, {})
+    # a huge number in a systemd "memory peak" line: bounded scan, no OverflowError.
+    try:
+        _classify_ops_raw("u.service: Consumed 1s CPU time, " + "9" * 20000
+                          + "M memory peak, 0B memory swap peak.")
+    except Exception as _e:
+        failures.append("ROBUST[mempeak]: %s on a 20 000-digit number"
+                        % type(_e).__name__)
+    if time.time() - _t0 > 5.0:
+        failures.append("PERF[regex]: four 20 000-character tokens took %.1f s"
+                        % (time.time() - _t0))
 
     # 37. W-HOSTKEY: prod VPS host key pinned, RejectPolicy, no trust-on-first-use.
     _selftest_hostkey_pin(failures)

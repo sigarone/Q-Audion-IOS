@@ -508,7 +508,12 @@ RE_IPV6_COMPRESSED = re.compile(
 # positive allow-list gate below. Accepting `x` as the last octet closes
 # that the same way LogRedactor.swift's mirror of this regex now does.
 RE_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}(?:\d{1,3}|x)\b")
-RE_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+# The local part must START a run of [\w.+-] characters (the lookbehind): with
+# "\b" instead, every word boundary inside a long dotted token ("a.b.c.d...",
+# 20 000 characters, no "@") was a fresh start that scanned to the end of the
+# token, which is quadratic. A match from the start of the run covers the same
+# text, so what gets redacted is the same or slightly more (a leading . + - too).
+RE_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+\b")
 RE_PHONE = re.compile(r"(?<!\d)\+?\d[\d\s().\-/]{6,}\d(?!\d)")
 # JWT / dotted-token: 2+ base64url segments joined by dots.
 RE_JWT_DOTTED = re.compile(r"\b[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]{4,}){1,}\b")
@@ -583,7 +588,11 @@ SAS_DROP_SUBSTRINGS = [
 KEYBYTES_MIN_RUN = 8
 _KB_N = KEYBYTES_MIN_RUN - 1
 RE_KEY_WORDS = re.compile(r"(?:derived|raw)[\s_\-]*key")
-RE_SECRET_GROUP = re.compile(r"(?:secret|slat|salt|\w*keys?)\W{0,8}[\[({<]")
+# "keys?" and not "\w*keys?": the pattern is only used with .search(), so a
+# word that ends in key matches at its "key" anyway (session_key [..] and
+# key [..] both match), and the leading \w* made the scan quadratic on a long
+# token with no bracket (seconds per 20 000 characters).
+RE_SECRET_GROUP = re.compile(r"(?:secret|slat|salt|keys?)\W{0,8}[\[({<]")
 RE_INDEXED_KV = re.compile(r"(?<![a-z0-9_.\-])([a-z][a-z_.\-]{0,23}?)\d{1,3}[=:]")
 INDEXED_KV_MAX = 5      # 6+ same-stem indexed kv tokens in one body -> DROP
 RE_DEC_BYTE_LIST_BARE = re.compile(
@@ -600,10 +609,14 @@ def _strip_format_chars(s):
     word joiner, soft hyphen, bidi marks, BOM). NFKC keeps them, so
     "sec<U+200B>ret [..]" slipped past every key-material rule below and past
     the SAS / plaintext DROP-list; they mean nothing in a log line, so those
-    rules are matched without them."""
-    if s.isascii():
+    rules are matched without them.
+    Control characters that are not whitespace (NUL, the other C0 controls,
+    DEL, C1: category Cc) are dropped for the same reason ("sa<NUL>lt (..)");
+    tab and newline stay, they separate tokens."""
+    if s.isascii() and s.isprintable():
         return s
-    return "".join(c for c in s if unicodedata.category(c) != "Cf")
+    return "".join(c for c in s
+                   if c.isspace() or unicodedata.category(c) not in ("Cf", "Cc"))
 
 
 def _has_indexed_kv_run(low):
@@ -2326,8 +2339,8 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
         if needle in low:
             return False, ""
 
-    # 3 -- SDP / ICE / DTLS whole-record drop.
-    if _is_sdp_line(norm):
+    # 3 -- SDP / ICE / DTLS whole-record drop (same cleaned text as above).
+    if _is_sdp_line(_strip_format_chars(norm)):
         return False, ""
 
     # 4 -- untrusted tag: never ship the body.
@@ -3684,7 +3697,10 @@ def run_selftest():
             for _line in ("state=active " + " active ".join(_bl) + " ice=connected",
                           "ice=connected " + " retry=1 ".join(_bl) + " node=helsinki"):
                 _got = [b for b in _bl if b in _body(_line).split()]
-                if len(_got) > MAX_UNKNOWN_WORDS or any(len(b) >= 10 for b in _got):
+                # the bound is a LITERAL on purpose (2 unknown words per body on
+                # this leg): reading MAX_UNKNOWN_WORDS here would make the check
+                # pass whatever value the cap is raised to.
+                if len(_got) > 2 or any(len(b) >= 10 for b in _got):
                     failures.append("LEAK[freeword/%s/%d]: %d block(s) survived"
                                     % (_lab, _k, len(_got)))
     for _blk in ("aBcDeFgHiJk", "kXqJmZvBnRt", "1abcdefghij", "abcd\u0435fghijk"):
@@ -3693,8 +3709,20 @@ def run_selftest():
     _c = ["".join(chr(97 + (i * 7 + j * 3) % 26) for j in range(9)) for i in range(4)]
     for _mk, _lab in (("%s=true", "key"), ("x=%s", "value"), ("%s:", "emptyvalue")):
         _b = _body("state=active " + " ".join(_mk % c for c in _c))
-        if sum(1 for c in _c if c in _b) > MAX_UNKNOWN_WORDS:
+        if sum(1 for c in _c if c in _b) > 2:    # literal, see above
             failures.append("LEAK[freeword/kv-%s]: carrier tokens survived" % _lab)
+    # 26a-bis. the unknown-word cap itself. Letter blocks are mostly stopped by the
+    #     lexical rules before the cap is reached; words that READ like words are
+    #     stopped only by the cap. Bounds are LITERALS (cap is 2 on this leg): 3
+    #     readable unknown words used as key=true carriers must not all ship, 2 do.
+    _cw = ("apple", "river", "tiger")
+    _b = _body("state=active " + " ".join("%s=true" % w for w in _cw))
+    if sum(1 for w in _cw if w in _b) > 2:
+        failures.append("LEAK[unknown-word cap]: %d readable unknown words shipped "
+                        "in one body (cap is 2)" % sum(1 for w in _cw if w in _b))
+    _b = _body("state=active " + " ".join("%s=true" % w for w in _cw[:2]))
+    if sum(1 for w in _cw[:2] if w in _b) != 2:
+        failures.append("REGRESS[unknown-word cap]: 2 readable unknown words no longer ship")
     # 26b. kv-precision side channels (any key) + the legit forms that stay.
     for _line, _sec in (("chunk0=v1-abcdefgh state=active", "v1-abcdefgh"),
                         ("netSeq=192.168.1 state=active", "192.168.1"),
@@ -3741,6 +3769,22 @@ def run_selftest():
                           ("activationCount", "1", True), ("userId", "3", False)):
         if _kv_is_benign(_k, _v) != _want:
             failures.append("KV-IDENTITY: _kv_is_benign(%r, %r) != %r" % (_k, _v, _want))
+    # 26e. control characters inside a drop-list / key-material word must not
+    #      defeat it; and a long single token must not stall the cron shipper
+    #      (the key-material and e-mail regexes were quadratic).
+    for _line in ("state=active sec\x00ret [ok] ice=connected",
+                  "state=active sa\x00lt (7) ice=connected",
+                  "state=active raw\x01key ok ice=connected",
+                  "state=active ice=connected ss\x01id 12345",
+                  "state=active m\x7fsg=ok ice=connected"):
+        if _body(_line):
+            failures.append("LEAK[control-char]: line was not dropped: %r" % _line)
+    _t0 = time.time()
+    for _tok in ("A" * 20000, "key" * 6000, "ab." * 10000, "1" * 20000):
+        _body("state=active " + _tok)
+    if time.time() - _t0 > 5.0:
+        failures.append("PERF[regex]: four 20 000-character tokens took %.1f s"
+                        % (time.time() - _t0))
 
     # 27. W-HOSTKEY: prod VPS host key pinned, RejectPolicy, no trust-on-first-use.
     _selftest_hostkey_pin(failures)

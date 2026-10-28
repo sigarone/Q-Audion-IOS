@@ -325,6 +325,33 @@ check(red("state=active ch\u200bat: ice=connected") == "", "DROPLIST: 'chat<ZWSP
 check(red("state=active ice=connected role=caller") != "", "DROPLIST: plain telemetry dropped")
 
 # ---------------------------------------------------------------------------
+# Control characters that are not whitespace (NUL, C0, DEL, C1) inside a
+# DROP-list or key-material word: removed from the matching copy like the format
+# characters above, so the whole line is still dropped. Tab and newline are
+# whitespace and stay separators.
+# ---------------------------------------------------------------------------
+CONTROL_CHARS = ["\x00", "\x01", "\x1b", "\x7f", "\x9f"]
+for word in DROP_WORDS:
+    survived = []
+    for pos in range(1, len(word)):
+        # NUL at every position; every other control character in the middle
+        for cc in (CONTROL_CHARS if pos == len(word) // 2 else CONTROL_CHARS[:1]):
+            split = word[:pos] + cc + word[pos:]
+            for tpl in DROP_TEMPLATES:
+                if red(tpl % split) != "":
+                    survived.append(tpl % split)
+    check(not survived, "CONTROL: %r split by a control character was not dropped: %r"
+          % (word, survived[:1]))
+for line in ("state=active sec\x00ret [ok] ice=connected",
+             "state=active sa\x00lt (ABCDEF) ice=connected",
+             "state=active raw\x01key computed ice=connected",
+             "state=active de\x7frived_key ok ice=connected",
+             "state=active session_ke\x9fy [ok] ice=connected"):
+    check(red(line) == "", "CONTROL: key-material line was not dropped: %r" % line)
+check(red("state=active\tice=connected role=caller") != "",
+      "CONTROL: a tab-separated telemetry line was dropped")
+
+# ---------------------------------------------------------------------------
 # Compressed IPv6 addresses ('::' form): the full-form rule cannot match them.
 # Documentation-range addresses only (RFC 3849), never real ones.
 # ---------------------------------------------------------------------------
@@ -924,6 +951,31 @@ for tag in ("group", "bugreport", "call"):
 check(red("grp hb ice send=connected recv=connected", "group") != "grp hb ice send=connected recv=connected",
       "GRPDIAG: a state word under a non-enum key shipped verbatim (re-check the numeric heartbeat format)")
 drop_caches()
+
+# ---------------------------------------------------------------------------
+# Long single tokens. The key-material rule and the e-mail rule used to restart a
+# scan at every position of a long token (seconds per 20 000 characters, more for
+# "keykeykey..."), which stalls the shipper on one bad line. Each shape must run
+# through the whole redactor in well under a second; the bound is generous so a
+# slow CI machine does not flake.
+# ---------------------------------------------------------------------------
+import time  # noqa: E402
+for lab, tok in (("letters", "A" * 20000), ("lower", "a" * 20000),
+                 ("digits", "1" * 20000), ("hex", "ab" * 10000),
+                 ("underscore", "a_" * 10000), ("key", "key" * 6000),
+                 ("keys", "keys_" * 4000), ("dotted", "ab." * 7000)):
+    t0 = time.time()
+    red("state=active " + tok)
+    dt = time.time() - t0
+    check(dt < 1.5, "PERF: a 20 000-character %r token took %.1f s" % (lab, dt))
+# the rules still match what they matched before
+for line in ("state=active session_key [ok] ice=connected",
+             "state=active rootkeys: (ok) ice=connected",
+             "state=active key=<ok> ice=connected"):
+    check(red(line) == "", "PERF: key-material line no longer dropped: %r" % line)
+for addr in ("user@example.com", "first.last+tag@example.org", ".lead@example.net"):
+    body = red("state=active from %s ice=connected" % addr)
+    check("example" not in body, "EMAIL: %r survived in %r" % (addr, body))
 
 # ---------------------------------------------------------------------------
 print("checks=%d failures=%d  (%s)" % (checks, len(failures), os.path.basename(TARGET)))
