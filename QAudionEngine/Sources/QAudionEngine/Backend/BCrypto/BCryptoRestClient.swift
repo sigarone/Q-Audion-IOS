@@ -483,6 +483,8 @@ public final class BCryptoRestClient {
         // `BCryptoError.paymentRequired`'s own doc for why this is a bare
         // status check, no response-body parsing.
         if status == 402 { throw BCryptoError.paymentRequired }
+        // A registration refused over the Terms keeps its reason: the screens send the person back to the steps.
+        if status == 400, let refusal = BCryptoTermsRefusal(responseBody: data) { throw refusal }
         throw BCryptoError.httpError(status)
     }
 
@@ -796,6 +798,34 @@ public struct BCryptoRateLimitedError: Error, Sendable, Equatable {
               secs.isFinite, secs > 0 else { return nil }
         return Int(min(secs, 3600).rounded(.up))
     }
+}
+
+/// `400 {"code":"terms_acceptance_required","reason":"missing|incomplete|stale"}`: the registration (or the acceptance)
+/// was refused because the acceptance was absent, incomplete or made on an old edition. A separate type, not a case of
+/// `BCryptoError` (that enum is switched exhaustively across the app); every other 400 stays `httpError(400)`.
+public struct BCryptoTermsRefusal: Error, Equatable, Sendable {
+    public enum Reason: String, Sendable {
+        case missing
+        case incomplete
+        case stale
+        /// The code is right but the reason is absent or new.
+        case unspecified
+    }
+
+    public static let code = "terms_acceptance_required"
+    public let reason: Reason
+
+    public init(reason: Reason) { self.reason = reason }
+
+    /// Nil unless the body is the JSON object with this exact `code`.
+    public init?(responseBody: Data) {
+        guard let object = (try? JSONSerialization.jsonObject(with: responseBody)) as? [String: Any],
+              object["code"] as? String == Self.code else { return nil }
+        reason = (object["reason"] as? String).flatMap(Reason.init(rawValue:)) ?? .unspecified
+    }
+
+    /// The refusal inside whatever error a registration call threw, if it is one.
+    public static func from(_ error: Error) -> BCryptoTermsRefusal? { error as? BCryptoTermsRefusal }
 }
 
 public enum BCryptoError: Error {

@@ -20,6 +20,8 @@ struct OtpVerificationScreen: View {
     /// True when the person ticked the age declaration box on `PhoneEntryScreen`
     /// (`.register` only; always false for `.login`). Sent with the code on verify.
     let ageDeclared: Bool
+    /// What the person accepted in the three steps before the registration (nil for a login). Sent with the code.
+    let termsAcceptance: TermsAcceptance?
     let onBack: () -> Void
     /// Fired after a successful REGISTER verify. Credentials are already
     /// saved (via `appState.completeOtpAuth`) but deliberately NOT yet
@@ -37,6 +39,11 @@ struct OtpVerificationScreen: View {
     @State private var errorText: String?
     @State private var resendRemaining: Int = 0
     @State private var resendTask: Task<Void, Never>?
+    /// The server refused the acceptance (edition moved, boxes missing): the steps are shown again and the new
+    /// acceptance replaces the one handed in. The number and the code typed stay where they are.
+    @State private var acceptanceRefused = false
+    @State private var renewedAcceptance: TermsAcceptance?
+    @State private var showingTerms = false
 
     /// Only the last 4 digits, so the confirmation copy doesn't itself
     /// re-expose the full number to anyone glancing at the screen.
@@ -140,6 +147,24 @@ struct OtpVerificationScreen: View {
         .onDisappear {
             resendTask?.cancel()
         }
+        .fullScreenCover(isPresented: $showingTerms, onDismiss: {
+            // The same registration goes on with the fresh acceptance and the code already typed.
+            guard renewedAcceptance != nil else { return }
+            Task { await verify() }
+        }) {
+            TermsAcceptanceLoaderView(
+                api: LegalService.anonymousApi(serverUrl: appState.serverUrl),
+                onAccepted: { acceptance in
+                    renewedAcceptance = acceptance
+                    showingTerms = false
+                },
+                onCancel: { showingTerms = false })
+        }
+    }
+
+    /// What the verify request carries: the acceptance handed in, or the one made again after a refusal.
+    private var effectiveAcceptance: TermsAcceptance? {
+        acceptanceRefused ? renewedAcceptance : termsAcceptance
     }
 
     private var canVerify: Bool {
@@ -199,6 +224,7 @@ struct OtpVerificationScreen: View {
         let purpose: OtpPurpose = (mode == .register) ? .register : .login
         let deviceName = UIDevice.current.name
         let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let termsAcceptance = effectiveAcceptance
         do {
             let result = try await provider.accountApi.verifyOtp(
                 phoneNumber: e164,
@@ -206,7 +232,8 @@ struct OtpVerificationScreen: View {
                 purpose: purpose,
                 deviceName: deviceName,
                 displayName: nil,
-                ageDeclared: ageDeclared
+                ageDeclared: ageDeclared,
+                termsAcceptance: termsAcceptance
             )
             appState.completeOtpAuth(result)
             if mode == .register {
@@ -217,6 +244,12 @@ struct OtpVerificationScreen: View {
             }
         } catch {
             errorText = userFacingMessage(for: error)
+            if mode == .register, BCryptoTermsRefusal.from(error) != nil {
+                // The acceptance is no longer valid: it is dropped and the steps come back with a fresh document.
+                acceptanceRefused = true
+                renewedAcceptance = nil
+                showingTerms = true
+            }
         }
     }
 
@@ -246,6 +279,7 @@ struct OtpVerificationScreen: View {
 
     /// Pure mapping, exposed for unit tests.
     static func userFacingMessage(for error: Error, mode: PhoneEntryScreen.Mode) -> String {
+        if BCryptoTermsRefusal.from(error) != nil { return LegalStrings.termsUpdatedReview }
         if let bcryptoError = error as? BCryptoError, case .httpError(let statusCode) = bcryptoError {
             switch statusCode {
             case 404:

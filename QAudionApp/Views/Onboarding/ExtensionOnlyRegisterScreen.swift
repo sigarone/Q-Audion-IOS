@@ -23,6 +23,8 @@ struct ExtensionOnlyRegisterScreen: View {
     @State private var displayName: String = ""
     @State private var email: String = ""
     @State private var ageDeclared = false
+    @State private var showingTerms = false
+    @State private var acceptedTerms: TermsAcceptance?
     @State private var isSubmitting = false
     @State private var errorText: String?
 
@@ -136,7 +138,10 @@ struct ExtensionOnlyRegisterScreen: View {
                     Spacer().frame(height: 24)
 
                     Button {
-                        Task { await submit() }
+                        // The three acceptance steps come first; the account is created when they are done.
+                        guard canSubmit else { return }
+                        acceptedTerms = nil
+                        showingTerms = true
                     } label: {
                         Text(isSubmitting
                                 ? String(localized: "onboarding.register.creating", defaultValue: "Creazione account…", comment: "Label of the registration submit button while the account is being created.")
@@ -154,9 +159,21 @@ struct ExtensionOnlyRegisterScreen: View {
                 .qaudionReadableWidth()
             }
         }
+        .fullScreenCover(isPresented: $showingTerms, onDismiss: {
+            guard let acceptance = acceptedTerms else { return }
+            Task { await submit(acceptance: acceptance) }
+        }) {
+            TermsAcceptanceLoaderView(
+                api: LegalService.anonymousApi(serverUrl: appState.serverUrl),
+                onAccepted: { acceptance in
+                    acceptedTerms = acceptance
+                    showingTerms = false
+                },
+                onCancel: { showingTerms = false })
+        }
     }
 
-    private func submit() async {
+    private func submit(acceptance: TermsAcceptance) async {
         guard canSubmit else { return }
         isSubmitting = true
         errorText = nil
@@ -170,12 +187,19 @@ struct ExtensionOnlyRegisterScreen: View {
             let result = try await provider.accountApi.registerExtensionOnly(
                 displayName: trimmedName.isEmpty ? nil : trimmedName,
                 email: trimmedEmail,
-                ageDeclared: ageDeclared
+                ageDeclared: ageDeclared,
+                termsAcceptance: acceptance
             )
             appState.completeOtpAuth(result)
             onRegistered()
         } catch {
             errorText = userFacingMessage(for: error)
+            if BCryptoTermsRefusal.from(error) != nil {
+                // The acceptance is no longer valid: the steps come back with a fresh document, the form stays filled,
+                // and the registration is sent again once they are done.
+                acceptedTerms = nil
+                showingTerms = true
+            }
         }
     }
 
@@ -185,6 +209,7 @@ struct ExtensionOnlyRegisterScreen: View {
 
     /// Pure mapping, exposed for unit tests.
     static func userFacingMessage(for error: Error) -> String {
+        if BCryptoTermsRefusal.from(error) != nil { return LegalStrings.termsUpdatedReview }
         if let bcryptoError = error as? BCryptoError, case .httpError(let statusCode) = bcryptoError {
             switch statusCode {
             case 400: return String(localized: "onboarding.error.email_invalid", defaultValue: "Email mancante o non valida.", comment: "Registration error (HTTP 400): the email is missing or not valid.")

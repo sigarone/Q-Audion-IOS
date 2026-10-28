@@ -5,14 +5,14 @@ public final class BCryptoAccountApiImpl: AccountApi {
     public init(rest: BCryptoRestClient) { self.rest = rest }
 
     public func register(phoneNumber: String, password: String, displayName: String?,
-                         ageDeclared: Bool) async throws -> String {
+                         ageDeclared: Bool, termsAcceptance: TermsAcceptance?) async throws -> String {
         let phoneHash = try PhoneHash.hash(phoneNumber)
         var dict: [String: Any] = [
             "phone_number": phoneHash,
             "password": password,
         ]
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
-        AgeDeclaration.add(to: &dict, declared: ageDeclared)
+        AgeDeclaration.add(to: &dict, declared: ageDeclared, acceptance: termsAcceptance)
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/register", body: body)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -185,7 +185,8 @@ public final class BCryptoAccountApiImpl: AccountApi {
     }
 
     public func verifyOtp(phoneNumber: String, code: String, purpose: OtpPurpose, deviceName: String,
-                           displayName: String?, ageDeclared: Bool) async throws -> OtpAuthResult {
+                           displayName: String?, ageDeclared: Bool,
+                           termsAcceptance: TermsAcceptance?) async throws -> OtpAuthResult {
         var dict: [String: Any] = [
             "phone_number": phoneNumber,
             "code": code,
@@ -195,17 +196,18 @@ public final class BCryptoAccountApiImpl: AccountApi {
         ]
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
         // The declaration belongs to a registration only: a login never carries it.
-        AgeDeclaration.add(to: &dict, declared: ageDeclared && purpose == .register)
+        AgeDeclaration.add(to: &dict, declared: ageDeclared && purpose == .register,
+                           acceptance: purpose == .register ? termsAcceptance : nil)
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/otp/verify", body: body)
         return try JSONDecoder().decode(OtpAuthResult.self, from: data)
     }
 
     public func registerExtensionOnly(displayName: String?, email: String,
-                                      ageDeclared: Bool) async throws -> OtpAuthResult {
+                                      ageDeclared: Bool, termsAcceptance: TermsAcceptance?) async throws -> OtpAuthResult {
         var dict: [String: Any] = ["email": email, "platform": "ios"]
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
-        AgeDeclaration.add(to: &dict, declared: ageDeclared)
+        AgeDeclaration.add(to: &dict, declared: ageDeclared, acceptance: termsAcceptance)
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/register/extension", body: body)
         do {

@@ -226,6 +226,10 @@ struct AboutSettingsScreen: View {
                     // W173: 1-tap mailto to support — pre-fills the
                     // subject with the build identifier so triage is
                     // faster. Plain UIApplication.shared.open call.
+                    // The emergency calls notice stays readable here as well as in Settings > Legal.
+                    section(LocalizedStringKey("legal.emergency.title")) {
+                        EmergencyNoticeCard(appState: appState)
+                    }
                     section("ASSISTENZA") {
                         Button {
                             #if canImport(UIKit)

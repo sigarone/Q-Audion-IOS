@@ -35,15 +35,25 @@ struct PhoneEntryScreen: View {
 
     let mode: Mode
     let onBack: () -> Void
-    /// Receives `(phoneHash, e164, ageDeclared)` once the user
+    /// Receives `(phoneHash, e164, ageDeclared, termsAcceptance)` once the user
     /// submits a valid number. `ageDeclared` is true
     /// only for `.register` with the age declaration box ticked, and false
-    /// for `.login`. `OnboardingRoot` routes this to `OtpVerificationScreen`
-    /// to request + verify the SMS code and complete registration/login.
-    let onContinue: (_ phoneHash: String, _ e164: String, _ ageDeclared: Bool) -> Void
+    /// for `.login`. `termsAcceptance` is what the person accepted in the three steps that
+    /// come before a registration, and nil for `.login`. `OnboardingRoot` routes this to
+    /// `OtpVerificationScreen` to request + verify the SMS code and complete registration/login.
+    let onContinue: (_ phoneHash: String, _ e164: String, _ ageDeclared: Bool, _ termsAcceptance: TermsAcceptance?) -> Void
+
+    /// The number checked at submit, held while the acceptance steps are up.
+    private struct PendingNumber {
+        let hash: String
+        let e164: String
+    }
 
     @State private var raw: String = "+39 "
     @State private var ageDeclared = false
+    @State private var showingTerms = false
+    @State private var pendingNumber: PendingNumber?
+    @State private var acceptedTerms: TermsAcceptance?
     @State private var validationError: String?
     // W315 — track last submit attempt to give the user feedback that
     // their tap was registered (server flow is stubbed today).
@@ -207,6 +217,19 @@ struct PhoneEntryScreen: View {
                 .qaudionReadableWidth()
             }
         }
+        .fullScreenCover(isPresented: $showingTerms, onDismiss: {
+            // Moves on only after the steps are gone, and only with a complete acceptance.
+            guard let acceptance = acceptedTerms, let number = pendingNumber else { return }
+            onContinue(number.hash, number.e164, true, acceptance)
+        }) {
+            TermsAcceptanceLoaderView(
+                api: LegalService.anonymousApi(serverUrl: PinnedServerHost.url),
+                onAccepted: { acceptance in
+                    acceptedTerms = acceptance
+                    showingTerms = false
+                },
+                onCancel: { showingTerms = false })
+        }
     }
 
     private func submit() {
@@ -221,7 +244,14 @@ struct PhoneEntryScreen: View {
         do {
             let e164 = try PhoneHashHelper.normalizeE164(raw)
             let hash = PhoneHashHelper.sha256Hex(e164)
-            onContinue(hash, e164, Self.ageWireValue(mode: mode, ageDeclared: ageDeclared))
+            if Self.ageWireValue(mode: mode, ageDeclared: ageDeclared) {
+                // A registration goes through the three acceptance steps before anything is requested.
+                pendingNumber = PendingNumber(hash: hash, e164: e164)
+                acceptedTerms = nil
+                showingTerms = true
+            } else {
+                onContinue(hash, e164, false, nil)
+            }
         } catch {
             validationError = error.localizedDescription
         }
@@ -229,5 +259,5 @@ struct PhoneEntryScreen: View {
 }
 
 #Preview {
-    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _, _ in })
+    PhoneEntryScreen(mode: .register, onBack: {}, onContinue: { _, _, _, _ in })
 }

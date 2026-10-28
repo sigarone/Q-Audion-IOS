@@ -1,4 +1,5 @@
 import SwiftUI
+import QAudionEngine
 
 /// Top-level onboarding navigator. Replaces the old `LoginView` /
 /// `RegisterView` duo as the entry point when the user is not yet
@@ -50,7 +51,7 @@ struct OnboardingRoot: View {
         case welcome
         case fastSetup
         case phoneEntry(PhoneEntryScreen.Mode)
-        case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, ageDeclared: Bool)
+        case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, ageDeclared: Bool, termsAcceptance: TermsAcceptance?)
         case profileSetup
         case extensionOnlyRegister
         case extensionLogin
@@ -90,16 +91,17 @@ struct OnboardingRoot: View {
                 PhoneEntryScreen(
                     mode: mode,
                     onBack: { route = .welcome },
-                    onContinue: { _, e164, ageDeclared in
-                        route = .otpVerification(e164: e164, mode: mode, ageDeclared: ageDeclared)
+                    onContinue: { _, e164, ageDeclared, termsAcceptance in
+                        route = .otpVerification(e164: e164, mode: mode, ageDeclared: ageDeclared, termsAcceptance: termsAcceptance)
                     }
                 )
-            case .otpVerification(let e164, let mode, let ageDeclared):
+            case .otpVerification(let e164, let mode, let ageDeclared, let termsAcceptance):
                 OtpVerificationScreen(
                     appState: appState,
                     e164: e164,
                     mode: mode,
                     ageDeclared: ageDeclared,
+                    termsAcceptance: termsAcceptance,
                     onBack: { route = .phoneEntry(mode) },
                     onRegistered: { route = .profileSetup },
                     onLoggedIn: { route = .welcome }  // ContentView switches to HomeView on its own

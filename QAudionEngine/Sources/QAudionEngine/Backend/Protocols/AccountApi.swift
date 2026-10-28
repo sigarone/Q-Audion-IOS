@@ -6,9 +6,9 @@ public protocol AccountApi {
     /// `phone_number` key (Android contract: server treats the hash as an
     /// opaque identifier). Server returns userId.
     /// `ageDeclared` is true when the person ticked the age declaration: the body then carries `age_declaration`
-    /// and `terms_version` (see ``AgeDeclaration``); when false it carries neither.
+    /// and, with `termsAcceptance`, `terms_acceptance` (see ``AgeDeclaration``).
     func register(phoneNumber: String, password: String, displayName: String?,
-                  ageDeclared: Bool) async throws -> String
+                  ageDeclared: Bool, termsAcceptance: TermsAcceptance?) async throws -> String
     /// Login with phone hash + password + device name. Returns auth credentials.
     /// The hash value travels on the wire under the `phone_number` key to match
     /// the Android/server contract (`LoginRequest`).
@@ -94,19 +94,20 @@ public protocol AccountApi {
     /// `displayName` is only meaningful when `purpose == .register` (optional even then). `deviceName`
     /// mirrors the same field on ``login(phoneHash:password:deviceName:)``.
     /// `ageDeclared` is true when the person ticked the age declaration on the register screen: the body then
-    /// carries `age_declaration` and `terms_version` (see ``AgeDeclaration``). It only applies to
+    /// carries `age_declaration` and `terms_acceptance` (see ``AgeDeclaration``). They only apply to
     /// `purpose == .register`: a login never carries them, whatever the value.
     /// Matches `POST /api/v1/auth/otp/verify`.
     func verifyOtp(phoneNumber: String, code: String, purpose: OtpPurpose, deviceName: String,
-                    displayName: String?, ageDeclared: Bool) async throws -> OtpAuthResult
+                    displayName: String?, ageDeclared: Bool,
+                    termsAcceptance: TermsAcceptance?) async throws -> OtpAuthResult
 
     /// Extension-only registration — no phone number at all, just a PBX
     /// extension the server assigns. Email is REQUIRED (no phone means no
     /// other recovery/support channel for the account). `ageDeclared` is true when the person ticked the
-    /// age declaration: the body then carries `age_declaration` and `terms_version` (see ``AgeDeclaration``);
-    /// when false it carries neither. Matches `POST /api/v1/auth/register/extension`.
+    /// age declaration: the body then carries `age_declaration`, and `terms_acceptance` when there is one
+    /// (see ``AgeDeclaration``). Matches `POST /api/v1/auth/register/extension`.
     func registerExtensionOnly(displayName: String?, email: String,
-                               ageDeclared: Bool) async throws -> OtpAuthResult
+                               ageDeclared: Bool, termsAcceptance: TermsAcceptance?) async throws -> OtpAuthResult
 
     /// Authenticated — request a verification link/token for the email on
     /// the current account. Matches `POST /api/v1/auth/email/verify-request`.
