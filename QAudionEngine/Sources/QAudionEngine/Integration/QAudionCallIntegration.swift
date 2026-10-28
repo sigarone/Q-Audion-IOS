@@ -175,6 +175,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// round-1 ACCEPT.
     private var sasRevealTimers: [String: Task<Void, Never>] = [:]
 
+    /// The timed re-send loop of the callee's round-1 ACCEPT (one per call), armed with the REVEAL timer.
+    private var acceptResendTimers: [String: Task<Void, Never>] = [:]
+
+    /// Offsets from the first send of the round-1 ACCEPT at which its byte-identical copy goes again while the
+    /// REVEAL has not verified. Settable so tests can run the schedule in milliseconds.
+    var acceptResendDelaysMs: [Int] = ConfirmTimeout.acceptResendDelaysMs
+
     /// The dedup key (`<callId>#<ciphertext fingerprint>`) of the round-1 ACCEPT the caller bound, so a
     /// byte-identical duplicate is recognised and answered with a REVEAL re-send, and any other round-1
     /// ACCEPT is dropped.
@@ -4522,6 +4529,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         boundRound1AcceptKeyByCall.removeAll()
         let orphanedRevealTimers = Array(sasRevealTimers.values)
         sasRevealTimers.removeAll()
+        let orphanedAcceptResendTimers = Array(acceptResendTimers.values)
+        acceptResendTimers.removeAll()
+        orphanedAcceptResendTimers.forEach { $0.cancel() }
         // W529 / W531: clear handshake retry state so the next call
         // starts with a fresh stash.
         lastSentOfferWire = nil
@@ -4587,6 +4597,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         switch sasCommit.calleeMarkAcceptSent(callId: callId, token: token, nowMs: SasCommit.monotonicNowMs()) {
         case .first:
             armSasRevealTimer(callId: callId)
+            armAcceptResendTimer(callId: callId)
             return true
         case .notFirst:
             return true
@@ -4606,6 +4617,39 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let previous: Task<Void, Never>? = lock.withLock {
             let old = sasRevealTimers[id]
             sasRevealTimers[id] = task
+            return old
+        }
+        previous?.cancel()
+    }
+
+    /// Re-send the cached round-1 ACCEPT, byte-identical, at `acceptResendDelaysMs` after its first send while the
+    /// REVEAL has not verified. The copies have their own cap (the length of the schedule) and take NO unit of the
+    /// shared per-call re-send budget, which stays whole for the re-authentication and duplicate-ACCEPT re-sends;
+    /// the loop ends when the REVEAL verified or the call ended.
+    private func armAcceptResendTimer(callId: String) {
+        let id = callId.lowercased()
+        let delays = acceptResendDelaysMs
+        let task = Task { [weak self] in
+            var elapsedMs = 0
+            for at in delays {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, at - elapsedMs)) * 1_000_000)
+                elapsedMs = at
+                guard !Task.isCancelled, let self else { return }
+                guard self.sasCommit.isWaitingForReveal(callId: id) else { return }
+                let wire: String? = self.lock.withLock { self.sentAcceptsByCall[id]?[1] }
+                guard let wire else { return }
+                guard let sender = self.lock.withLock({ self.retrySenderClosure }) else { return }
+                do {
+                    try await sender(wire)
+                    print("[QAudionCallIntegration] ACCEPT re-sent on a timer at=\(at)ms callId=\(id.prefix(8))…")
+                } catch {
+                    print("[QAudionCallIntegration] ACCEPT timed re-send failed at=\(at)ms callId=\(id.prefix(8))…")
+                }
+            }
+        }
+        let previous: Task<Void, Never>? = lock.withLock {
+            let old = acceptResendTimers[id]
+            acceptResendTimers[id] = task
             return old
         }
         previous?.cancel()
@@ -4657,6 +4701,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     private func cancelSasRevealTimer(callId: String) {
         let timer: Task<Void, Never>? = lock.withLock { sasRevealTimers.removeValue(forKey: callId.lowercased()) }
         timer?.cancel()
+        let resendTimer: Task<Void, Never>? = lock.withLock { acceptResendTimers.removeValue(forKey: callId.lowercased()) }
+        resendTimer?.cancel()
     }
 
     /// What the app does with a REVEAL this device received from the call peer.
