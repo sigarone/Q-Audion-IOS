@@ -33,7 +33,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
             phoneNumber: "+14155552671",
             password: "s3cret!",
             displayName: nil,
-            ageDeclared: false
+            ageDeclared: false, termsAcceptance: nil
         )
         XCTAssertEqual(userId, "u-123")
 
@@ -58,7 +58,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
         let api = BCryptoAccountApiImpl(rest: BCryptoRestClient(config: BackendConfig(serverUrl: "https://test.local"), testURLProtocolClasses: [StubURLProtocol.self]))
 
-        _ = try await api.register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: false)
+        _ = try await api.register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: false, termsAcceptance: nil)
 
         let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -105,7 +105,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         let result = try await makeApi().registerExtensionOnly(
             displayName: "Alice",
             email: "alice@example.com",
-            ageDeclared: false
+            ageDeclared: false, termsAcceptance: nil
         )
         XCTAssertEqual(result.userId, "u")
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/auth/register/extension")
@@ -119,7 +119,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     func testRegisterExtensionOnlyOmitsDisplayNameWhenNil() async throws {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
-        _ = try? await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false)
+        _ = try? await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false, termsAcceptance: nil)
 
         let body = try XCTUnwrap(StubURLProtocol.lastRequestBody)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -129,7 +129,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnlyUnrelated403StaysHttpError() async {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false)
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false, termsAcceptance: nil)
             XCTFail("expected BCryptoError.httpError(403)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 403)
@@ -141,7 +141,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testRegisterExtensionOnly429StaysHttpError() async {
         StubURLProtocol.stubResponse = (429, Data(#"{"error":"too many attempts"}"#.utf8))
         do {
-            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false)
+            _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co", ageDeclared: false, termsAcceptance: nil)
             XCTFail("expected BCryptoError.httpError(429)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 429)
@@ -154,7 +154,7 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         StubURLProtocol.stubResponse = (403, Data(#"{"error":"forbidden"}"#.utf8))
         do {
             _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .login,
-                                              deviceName: "iPhone", displayName: nil, ageDeclared: false)
+                                              deviceName: "iPhone", displayName: nil, ageDeclared: false, termsAcceptance: nil)
             XCTFail("expected BCryptoError.httpError(403)")
         } catch BCryptoError.httpError(let status) {
             XCTAssertEqual(status, 403)
@@ -174,38 +174,53 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
     }
 
-    /// What the server accepts in `terms_version`: 1 to 32 letters, digits, `.`, `_` and `-`.
-    private func isAcceptedTermsVersion(_ value: String) -> Bool {
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-        return (1...32).contains(value.count) && value.unicodeScalars.allSatisfy { allowed.contains($0) }
-    }
+    /// A complete acceptance, as the registration screens build it.
+    static let sampleAcceptance = TermsAcceptance(
+        version: "2026-10-28", lang: "it", sha256: String(repeating: "ab", count: 32),
+        terms: true, deviations: true,
+        groups: ["g1": true, "g2": true, "g3": true, "g4": true, "g5": true, "g6": true],
+        professional: false)
 
-    /// Ticked box: both keys travel, `age_declaration` as the JSON boolean `true` and `terms_version` in a form the
-    /// server reads.
-    private func assertDeclared(_ json: [String: Any], file: StaticString = #filePath, line: UInt = #line) {
-        let declaration = json["age_declaration"]
-        XCTAssertNotNil(declaration, "age_declaration is missing", file: file, line: line)
-        if let number = declaration as? NSNumber {
-            XCTAssertTrue(CFGetTypeID(number) == CFBooleanGetTypeID(), "age_declaration is not a JSON boolean", file: file, line: line)
-            XCTAssertTrue(number.boolValue, "age_declaration is not true", file: file, line: line)
-        } else {
-            XCTFail("age_declaration is not a boolean", file: file, line: line)
+    private func jsonBool(_ value: Any?, file: StaticString = #filePath, line: UInt = #line) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            XCTFail("not a JSON boolean: \(String(describing: value))", file: file, line: line)
+            return nil
         }
-        let version = json["terms_version"] as? String
-        XCTAssertNotNil(version, "terms_version is missing", file: file, line: line)
-        XCTAssertTrue(isAcceptedTermsVersion(version ?? ""), "terms_version is not in the form the server accepts", file: file, line: line)
+        return number.boolValue
     }
 
-    /// Box not ticked: neither key is sent. Not `age_declaration: false`, which the server refuses with a 400.
+    /// Ticked box: `age_declaration` is the JSON boolean `true` and `terms_acceptance` carries the whole
+    /// acceptance. The old `terms_version` key is gone.
+    private func assertDeclared(_ json: [String: Any], file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(jsonBool(json["age_declaration"], file: file, line: line), true, file: file, line: line)
+        XCTAssertNil(json["terms_version"], "terms_version must not be sent any more", file: file, line: line)
+        guard let acceptance = json["terms_acceptance"] as? [String: Any] else {
+            return XCTFail("terms_acceptance is missing", file: file, line: line)
+        }
+        XCTAssertEqual(acceptance["version"] as? String, "2026-10-28", file: file, line: line)
+        XCTAssertEqual(acceptance["lang"] as? String, "it", file: file, line: line)
+        XCTAssertEqual(acceptance["sha256"] as? String, String(repeating: "ab", count: 32), file: file, line: line)
+        XCTAssertEqual(jsonBool(acceptance["terms"], file: file, line: line), true, file: file, line: line)
+        XCTAssertEqual(jsonBool(acceptance["deviations"], file: file, line: line), true, file: file, line: line)
+        XCTAssertEqual(jsonBool(acceptance["professional"], file: file, line: line), false, file: file, line: line)
+        let groups = acceptance["groups"] as? [String: Any]
+        XCTAssertEqual(Set(groups?.keys.map { $0 } ?? []), ["g1", "g2", "g3", "g4", "g5", "g6"], file: file, line: line)
+        for id in ["g1", "g2", "g3", "g4", "g5", "g6"] {
+            XCTAssertEqual(jsonBool(groups?[id], file: file, line: line), true, file: file, line: line)
+        }
+    }
+
+    /// Nothing ticked: neither `age_declaration` (never `false`, the server refuses it) nor an acceptance.
     private func assertNotDeclared(_ json: [String: Any], file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertNil(json["age_declaration"], "age_declaration must be absent", file: file, line: line)
+        XCTAssertNil(json["terms_acceptance"], "terms_acceptance must be absent", file: file, line: line)
         XCTAssertNil(json["terms_version"], "terms_version must be absent", file: file, line: line)
     }
 
-    func testRegisterExtensionOnlyTickedSendsDeclarationAndTermsVersion() async throws {
+    func testRegisterExtensionOnlyTickedSendsDeclarationAndTermsAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co",
-                                                      ageDeclared: true)
+                                                      ageDeclared: true, termsAcceptance: Self.sampleAcceptance)
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/auth/register/extension")
         let json = try lastBodyJson()
         assertDeclared(json)
@@ -213,17 +228,17 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         XCTAssertEqual(json["email"] as? String, "a@b.co")
     }
 
-    func testRegisterExtensionOnlyNotTickedSendsNeitherKey() async throws {
+    func testRegisterExtensionOnlyNotTickedSendsNoDeclarationAndNoAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().registerExtensionOnly(displayName: nil, email: "a@b.co",
-                                                      ageDeclared: false)
+                                                      ageDeclared: false, termsAcceptance: nil)
         assertNotDeclared(try lastBodyJson())
     }
 
-    func testVerifyOtpRegisterTickedSendsDeclarationAndTermsVersion() async throws {
+    func testVerifyOtpRegisterTickedSendsDeclarationAndTermsAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                          deviceName: "iPhone", displayName: nil, ageDeclared: true)
+                                          deviceName: "iPhone", displayName: nil, ageDeclared: true, termsAcceptance: Self.sampleAcceptance)
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/auth/otp/verify")
         let json = try lastBodyJson()
         XCTAssertEqual(json["purpose"] as? String, "register")
@@ -231,10 +246,10 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         XCTAssertEqual(json["code"] as? String, "123456")
     }
 
-    func testVerifyOtpRegisterNotTickedSendsNeitherKey() async throws {
+    func testVerifyOtpRegisterNotTickedSendsNoDeclarationAndNoAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .register,
-                                          deviceName: "iPhone", displayName: nil, ageDeclared: false)
+                                          deviceName: "iPhone", displayName: nil, ageDeclared: false, termsAcceptance: nil)
         assertNotDeclared(try lastBodyJson())
     }
 
@@ -242,24 +257,24 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
     func testVerifyOtpLoginNeverSendsTheDeclaration() async throws {
         StubURLProtocol.stubResponse = (200, Data(okAuthJson.utf8))
         _ = try await makeApi().verifyOtp(phoneNumber: "+14155552671", code: "123456", purpose: .login,
-                                          deviceName: "iPhone", displayName: nil, ageDeclared: true)
+                                          deviceName: "iPhone", displayName: nil, ageDeclared: true, termsAcceptance: Self.sampleAcceptance)
         let json = try lastBodyJson()
         XCTAssertEqual(json["purpose"] as? String, "login")
         assertNotDeclared(json)
     }
 
-    func testRegisterTickedSendsDeclarationAndTermsVersion() async throws {
+    func testRegisterTickedSendsDeclarationAndTermsAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: true)
+        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: true, termsAcceptance: Self.sampleAcceptance)
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/register")
         let json = try lastBodyJson()
         assertDeclared(json)
         XCTAssertEqual(json["password"] as? String, "pw")
     }
 
-    func testRegisterNotTickedSendsNeitherKey() async throws {
+    func testRegisterNotTickedSendsNoDeclarationAndNoAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(#"{"user_id":"u-123"}"#.utf8))
-        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: false)
+        _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: false, termsAcceptance: nil)
         assertNotDeclared(try lastBodyJson())
     }
 
@@ -267,11 +282,11 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
 
     private let okSovereignJson = #"{"user_id":"u-1","challenge":"00ff"}"#
 
-    func testRegisterSovereignTickedSendsDeclarationAndTermsVersion() async throws {
+    func testRegisterSovereignTickedSendsDeclarationAndTermsAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(okSovereignJson.utf8))
         let manager = SovereignIdentityManager()
         let identity = manager.generateIdentity(serverUrl: "https://test.local", displayName: "Anna")
-        let result = try await manager.registerWithServer(identity: identity, rest: makeRest(), ageDeclared: true)
+        let result = try await manager.registerWithServer(identity: identity, rest: makeRest(), ageDeclared: true, termsAcceptance: Self.sampleAcceptance)
         XCTAssertEqual(result.userId, "u-1")
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/register/sovereign")
         let json = try lastBodyJson()
@@ -282,17 +297,17 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         XCTAssertEqual((json["signing_pub_key"] as? String)?.count, 64)
     }
 
-    func testRegisterSovereignNotTickedSendsNeitherKey() async throws {
+    func testRegisterSovereignNotTickedSendsNoDeclarationAndNoAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(okSovereignJson.utf8))
         let manager = SovereignIdentityManager()
         let identity = manager.generateIdentity(serverUrl: "https://test.local", displayName: nil)
-        _ = try await manager.registerWithServer(identity: identity, rest: makeRest(), ageDeclared: false)
+        _ = try await manager.registerWithServer(identity: identity, rest: makeRest(), ageDeclared: false, termsAcceptance: nil)
         XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/register/sovereign")
         assertNotDeclared(try lastBodyJson())
     }
 
     /// A caller that says nothing about the declaration (the engine's demo UI) declares nothing.
-    func testRegisterSovereignWithoutTheArgumentSendsNeitherKey() async throws {
+    func testRegisterSovereignWithoutTheArgumentSendsNoDeclarationAndNoAcceptance() async throws {
         StubURLProtocol.stubResponse = (200, Data(okSovereignJson.utf8))
         let manager = SovereignIdentityManager()
         let identity = manager.generateIdentity(serverUrl: "https://test.local", displayName: nil)

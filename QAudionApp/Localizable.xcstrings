@@ -74961,48 +74961,6 @@
         }
       }
     },
-    "Dichiaro di avere almeno %lld anni e accetto i Termini e condizioni d'uso.": {
-      "extractionState": "manual",
-      "comment": "Registration screens, age declaration box. %lld is the minimum age (18).",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dichiaro di avere almeno %lld anni e accetto i Termini e condizioni d'uso."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "I declare that I am at least %lld years old and I accept the Terms and Conditions of Use."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ich erkläre, dass ich mindestens %lld Jahre alt bin, und akzeptiere die Nutzungsbedingungen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Declaro que tengo al menos %lld años y acepto los Términos y condiciones de uso."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Je déclare avoir au moins %lld ans et j'accepte les Conditions générales d'utilisation."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Declaro que tenho pelo menos %lld anos e aceito os Termos e condições de uso."
-          }
-        }
-      }
-    },
     "DISPOSITIVI ATTIVI · %lld": {
       "extractionState": "manual",
       "localizations": {
@@ -95080,6 +95038,2022 @@
           "stringUnit": {
             "state": "translated",
             "value": "Compartilhamento"
+          }
+        }
+      }
+    },
+    "legal.step.progress": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step counter; first %lld is the current step, second %lld the number of steps.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passo %lld di %lld"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Step %lld of %lld"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schritt %lld von %lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Étape %lld sur %lld"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paso %lld de %lld"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etapa %lld de %lld"
+          }
+        }
+      }
+    },
+    "legal.deviations.checkbox": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 1: box that accepts the listed features expressly and separately.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accetto in modo espresso e separato le caratteristiche indicate"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I expressly and separately accept the features described"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich akzeptiere die beschriebenen Merkmale ausdrücklich und gesondert"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J'accepte expressément et séparément les caractéristiques indiquées"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acepto de forma expresa y por separado las características indicadas"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aceito de forma expressa e separada as características indicadas"
+          }
+        }
+      }
+    },
+    "legal.terms.checkbox": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 2: box that accepts the Terms and Conditions.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ho letto e accetto i Termini e condizioni"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I have read and accept the Terms and Conditions"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich habe die Nutzungsbedingungen gelesen und akzeptiere sie"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J'ai lu et j'accepte les Conditions générales"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "He leído y acepto los Términos y condiciones"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Li e aceito os Termos e condições"
+          }
+        }
+      }
+    },
+    "legal.terms.read": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 2: button that opens the full text of the Terms.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leggi i Termini e condizioni"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the Terms and Conditions"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nutzungsbedingungen lesen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lis les Conditions générales"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lee los Términos y condiciones"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leia os Termos e condições"
+          }
+        }
+      }
+    },
+    "legal.professional.question": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 2: yes/no question, default no.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uso il servizio per la mia attività professionale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I use the service for my professional activity"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich nutze den Dienst für meine berufliche Tätigkeit"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J'utilise le service pour mon activité professionnelle"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uso el servicio para mi actividad profesional"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uso o serviço para minha atividade profissional"
+          }
+        }
+      }
+    },
+    "legal.professional.yes": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, professional question: yes.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sì"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yes"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ja"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oui"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sí"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sim"
+          }
+        }
+      }
+    },
+    "legal.professional.no": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, professional question: no.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nein"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não"
+          }
+        }
+      }
+    },
+    "legal.groups.heading": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 3: heading.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approvazione specifica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Specific approval"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Besondere Zustimmung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approbation spécifique"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprobación específica"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprovação específica"
+          }
+        }
+      }
+    },
+    "legal.groups.intro": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 3: why each group needs its own box (arts. 1341-1342 of the Italian Civil Code).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ai sensi degli artt. 1341 e 1342 del Codice civile, approva in modo specifico ogni gruppo di clausole qui sotto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Under arts. 1341 and 1342 of the Italian Civil Code, specifically approve each group of clauses below."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gemäß Art. 1341 und 1342 des italienischen Zivilgesetzbuchs genehmigen Sie bitte jede der folgenden Klauselgruppen ausdrücklich."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conformément aux art. 1341 et 1342 du Code civil italien, approuve spécifiquement chaque groupe de clauses ci-dessous."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conforme a los arts. 1341 y 1342 del Código Civil italiano, aprueba de forma específica cada grupo de cláusulas siguiente."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nos termos dos arts. 1341 e 1342 do Código Civil italiano, aprove especificamente cada grupo de cláusulas abaixo."
+          }
+        }
+      }
+    },
+    "legal.group.approve": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 3: box of one group of clauses.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approvo in modo specifico"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I specifically approve"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich genehmige ausdrücklich"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J'approuve spécifiquement"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apruebo de forma específica"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprovo especificamente"
+          }
+        }
+      }
+    },
+    "legal.group.show": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 3: expands the text of a group of clauses.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostra il testo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show text"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text anzeigen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher le texte"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar el texto"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mostrar o texto"
+          }
+        }
+      }
+    },
+    "legal.group.hide": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, step 3: collapses the text of a group of clauses.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nascondi il testo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide text"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text ausblenden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masquer le texte"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ocultar el texto"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ocultar o texto"
+          }
+        }
+      }
+    },
+    "legal.lang.prevails": {
+      "extractionState": "manual",
+      "comment": "Note under the legal texts when they are shown in English: the Italian text prevails (art. 34).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il testo in lingua italiana prevale (art. 34)."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Italian text prevails (art. 34)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der italienische Text ist maßgeblich (Art. 34)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le texte italien fait foi (art. 34)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prevalece el texto en italiano (art. 34)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O texto em italiano prevalece (art. 34)."
+          }
+        }
+      }
+    },
+    "legal.action.accept": {
+      "extractionState": "manual",
+      "comment": "Terms acceptance, last step: button that completes the acceptance.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accetta e continua"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accept and continue"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akzeptieren und fortfahren"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accepter et continuer"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aceptar y continuar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aceitar e continuar"
+          }
+        }
+      }
+    },
+    "legal.loading": {
+      "extractionState": "manual",
+      "comment": "Shown while the legal text is loaded from the server.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Caricamento dei Termini…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading the Terms…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nutzungsbedingungen werden geladen …"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chargement des Conditions…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cargando los Términos…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Carregando os Termos…"
+          }
+        }
+      }
+    },
+    "legal.load_failed": {
+      "extractionState": "manual",
+      "comment": "Shown when the legal text could not be loaded from the server.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile caricare i Termini. Controlla la connessione e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Terms could not be loaded. Check your connection and try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Nutzungsbedingungen konnten nicht geladen werden. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de charger les Conditions. Vérifie ta connexion et réessaie."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudieron cargar los Términos. Comprueba tu conexión e inténtalo de nuevo."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível carregar os Termos. Verifique sua conexão e tente novamente."
+          }
+        }
+      }
+    },
+    "legal.retry": {
+      "extractionState": "manual",
+      "comment": "Button that repeats a failed load.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riprova"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try again"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneut versuchen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réessayer"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reintentar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentar novamente"
+          }
+        }
+      }
+    },
+    "legal.gate.title": {
+      "extractionState": "manual",
+      "comment": "Blocking screen for an existing account that must accept the updated Terms: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termini aggiornati"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updated Terms"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktualisierte Bedingungen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conditions mises à jour"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Términos actualizados"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termos atualizados"
+          }
+        }
+      }
+    },
+    "legal.gate.message": {
+      "extractionState": "manual",
+      "comment": "Blocking screen for an existing account that must accept the updated Terms: explanation.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per continuare a usare Q-Audion devi accettare i Termini e condizioni aggiornati. Le chiamate in corso non vengono mai interrotte."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To keep using Q-Audion you need to accept the updated Terms and Conditions. Calls in progress are never interrupted."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um Q-Audion weiter nutzen zu können, müssen Sie die aktualisierten Nutzungsbedingungen akzeptieren. Laufende Anrufe werden nie unterbrochen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pour continuer à utiliser Q-Audion, tu dois accepter les Conditions générales mises à jour. Les appels en cours ne sont jamais interrompus."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para seguir usando Q-Audion debes aceptar los Términos y condiciones actualizados. Las llamadas en curso nunca se interrumpen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para continuar usando o Q-Audion, você precisa aceitar os Termos e condições atualizados. As chamadas em andamento nunca são interrompidas."
+          }
+        }
+      }
+    },
+    "legal.gate.submit_failed": {
+      "extractionState": "manual",
+      "comment": "Error under the acceptance screen: the acceptance was not sent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile registrare l'accettazione. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your acceptance could not be recorded. Please try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Zustimmung konnte nicht gespeichert werden. Bitte versuchen Sie es erneut."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ton acceptation n'a pas pu être enregistrée. Réessaie."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo registrar tu aceptación. Inténtalo de nuevo."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível registrar seu aceite. Tente novamente."
+          }
+        }
+      }
+    },
+    "legal.gate.edition_changed": {
+      "extractionState": "manual",
+      "comment": "Error under the acceptance screen: the Terms changed while the screen was open.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I Termini sono stati aggiornati nel frattempo. Leggi il nuovo testo e accetta di nuovo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Terms were updated in the meantime. Read the new text and accept again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Bedingungen wurden in der Zwischenzeit aktualisiert. Lesen Sie den neuen Text und akzeptieren Sie erneut."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les Conditions ont été mises à jour entre-temps. Lis le nouveau texte et accepte de nouveau."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los Términos se han actualizado mientras tanto. Lee el nuevo texto y acepta de nuevo."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Os Termos foram atualizados nesse meio-tempo. Leia o novo texto e aceite novamente."
+          }
+        }
+      }
+    },
+    "legal.withdraw.row": {
+      "extractionState": "manual",
+      "comment": "Settings > Account: row that opens the withdrawal from the contract (art. 54-bis Italian Consumer Code).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recedi dal contratto qui"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Withdraw from the contract here"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vertrag hier widerrufen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se rétracter du contrat ici"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desistir del contrato aquí"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desistir do contrato aqui"
+          }
+        }
+      }
+    },
+    "legal.withdraw.row_subtitle": {
+      "extractionState": "manual",
+      "comment": "Settings > Account: caption of the withdrawal row.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art. 54-bis Codice del Consumo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art. 54-bis Italian Consumer Code"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art. 54-bis italienisches Verbraucherschutzgesetz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art. 54-bis du Code italien de la consommation"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art. 54-bis del Código de Consumo italiano"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Art. 54-bis do Código do Consumidor italiano"
+          }
+        }
+      }
+    },
+    "legal.withdraw.title": {
+      "extractionState": "manual",
+      "comment": "Withdrawal screen: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recesso dal contratto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Withdrawal from the contract"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vertragswiderruf"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rétractation du contrat"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desistimiento del contrato"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desistência do contrato"
+          }
+        }
+      }
+    },
+    "legal.withdraw.confirm": {
+      "extractionState": "manual",
+      "comment": "Withdrawal screen: button that sends the withdrawal.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conferma recesso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm withdrawal"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Widerruf bestätigen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmer la rétractation"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmar desistimiento"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmar desistência"
+          }
+        }
+      }
+    },
+    "legal.withdraw.warning": {
+      "extractionState": "manual",
+      "comment": "Withdrawal screen: what confirming does.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confermando, il contratto termina e il tuo account viene eliminato in modo permanente dal server e da questo dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By confirming, the contract ends and your account is permanently deleted from the server and from this device."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit der Bestätigung endet der Vertrag und Ihr Konto wird dauerhaft vom Server und von diesem Gerät gelöscht."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En confirmant, le contrat prend fin et ton compte est supprimé définitivement du serveur et de cet appareil."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al confirmar, el contrato termina y tu cuenta se elimina de forma permanente del servidor y de este dispositivo."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ao confirmar, o contrato termina e sua conta é excluída permanentemente do servidor e deste dispositivo."
+          }
+        }
+      }
+    },
+    "legal.withdraw.sending": {
+      "extractionState": "manual",
+      "comment": "Withdrawal screen: shown while the withdrawal is sent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invio del recesso…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sending your withdrawal…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Widerruf wird gesendet …"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoi de la rétractation…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviando el desistimiento…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviando a desistência…"
+          }
+        }
+      }
+    },
+    "legal.withdraw.failed": {
+      "extractionState": "manual",
+      "comment": "Withdrawal screen: the request failed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il recesso non è stato registrato. Riprova tra qualche istante o scrivi a info@bcrypto.com."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your withdrawal was not recorded. Try again in a moment or write to info@bcrypto.com."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihr Widerruf wurde nicht erfasst. Versuchen Sie es gleich noch einmal oder schreiben Sie an info@bcrypto.com."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ta rétractation n'a pas été enregistrée. Réessaie dans un instant ou écris à info@bcrypto.com."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se registró tu desistimiento. Inténtalo de nuevo en unos instantes o escribe a info@bcrypto.com."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sua desistência não foi registrada. Tente novamente em instantes ou escreva para info@bcrypto.com."
+          }
+        }
+      }
+    },
+    "legal.withdraw.session_ended": {
+      "extractionState": "manual",
+      "comment": "Withdrawal screen: the session is no longer valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sessione non è più valida. Se il recesso è stato registrato, l'account è già stato eliminato. In caso di dubbio scrivi a info@bcrypto.com."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The session is no longer valid. If your withdrawal was recorded, the account has already been deleted. If in doubt, write to info@bcrypto.com."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Sitzung ist nicht mehr gültig. Wenn Ihr Widerruf erfasst wurde, ist das Konto bereits gelöscht. Im Zweifel schreiben Sie an info@bcrypto.com."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La session n'est plus valide. Si ta rétractation a été enregistrée, le compte est déjà supprimé. En cas de doute, écris à info@bcrypto.com."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sesión ya no es válida. Si tu desistimiento se registró, la cuenta ya se ha eliminado. En caso de duda, escribe a info@bcrypto.com."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A sessão não é mais válida. Se sua desistência foi registrada, a conta já foi excluída. Em caso de dúvida, escreva para info@bcrypto.com."
+          }
+        }
+      }
+    },
+    "legal.receipt.title": {
+      "extractionState": "manual",
+      "comment": "Receipt screen after a withdrawal: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ricevuta di recesso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Withdrawal receipt"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Widerrufsbestätigung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reçu de rétractation"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recibo de desistimiento"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recibo de desistência"
+          }
+        }
+      }
+    },
+    "legal.receipt.keep": {
+      "extractionState": "manual",
+      "comment": "Receipt screen after a withdrawal: why to save it.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conserva questa ricevuta: è la conferma del recesso su supporto durevole."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep this receipt: it is the confirmation of your withdrawal on a durable medium."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bewahren Sie diese Bestätigung auf: Sie ist der Nachweis Ihres Widerrufs auf einem dauerhaften Datenträger."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conserve ce reçu : il confirme ta rétractation sur un support durable."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conserva este recibo: es la confirmación de tu desistimiento en un soporte duradero."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guarde este recibo: ele é a confirmação da sua desistência em suporte durável."
+          }
+        }
+      }
+    },
+    "legal.receipt.save": {
+      "extractionState": "manual",
+      "comment": "Receipt screen: saves the receipt as a text file.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sichern"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guardar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar"
+          }
+        }
+      }
+    },
+    "legal.receipt.share": {
+      "extractionState": "manual",
+      "comment": "Receipt screen: shares the receipt as a text file.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teilen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partager"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhar"
+          }
+        }
+      }
+    },
+    "legal.settings.title": {
+      "extractionState": "manual",
+      "comment": "Settings: title of the legal section and its screen.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legal"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rechtliches"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mentions légales"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legal"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jurídico"
+          }
+        }
+      }
+    },
+    "legal.settings.subtitle": {
+      "extractionState": "manual",
+      "comment": "Settings: caption of the legal row.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termini, accettazione, avviso emergenze"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terms, acceptance, emergency notice"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bedingungen, Zustimmung, Notrufhinweis"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conditions, acceptation, avis d'urgence"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Términos, aceptación, aviso de emergencias"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termos, aceite, aviso de emergências"
+          }
+        }
+      }
+    },
+    "legal.settings.terms": {
+      "extractionState": "manual",
+      "comment": "Settings > Legal: opens the Terms and Conditions.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termini e condizioni"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terms and Conditions"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nutzungsbedingungen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conditions générales"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Términos y condiciones"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Termos e condições"
+          }
+        }
+      }
+    },
+    "legal.settings.acceptance": {
+      "extractionState": "manual",
+      "comment": "Settings > Legal: opens the copy of what the user accepted.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copia della tua accettazione"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy of your acceptance"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopie Ihrer Zustimmung"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copie de ton acceptation"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copia de tu aceptación"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cópia do seu aceite"
+          }
+        }
+      }
+    },
+    "legal.settings.emergency": {
+      "extractionState": "manual",
+      "comment": "Settings > Legal: opens the emergency calls notice.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avviso sulle chiamate di emergenza"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emergency calls notice"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hinweis zu Notrufen"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avertissement sur les appels d'urgence"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aviso sobre llamadas de emergencia"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aviso sobre chamadas de emergência"
+          }
+        }
+      }
+    },
+    "legal.settings.edition": {
+      "extractionState": "manual",
+      "comment": "Settings > Legal: edition of the Terms; %@ is the version date.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edizione %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edition %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ausgabe %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Édition %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edición %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edição %@"
+          }
+        }
+      }
+    },
+    "legal.acceptance.none": {
+      "extractionState": "manual",
+      "comment": "Settings > Legal: no acceptance on record for the account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna accettazione registrata per questo account."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No acceptance is on record for this account."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für dieses Konto ist keine Zustimmung erfasst."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune acceptation n'est enregistrée pour ce compte."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay ninguna aceptación registrada para esta cuenta."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não há nenhum aceite registrado para esta conta."
+          }
+        }
+      }
+    },
+    "legal.acceptance.failed": {
+      "extractionState": "manual",
+      "comment": "Settings > Legal: the copy could not be loaded.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile leggere la copia. Riprova tra qualche istante."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The copy could not be read. Try again in a moment."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Kopie konnte nicht gelesen werden. Versuchen Sie es gleich noch einmal."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La copie n'a pas pu être lue. Réessaie dans un instant."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo leer la copia. Inténtalo de nuevo en unos instantes."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível ler a cópia. Tente novamente em instantes."
+          }
+        }
+      }
+    },
+    "legal.emergency.title": {
+      "extractionState": "manual",
+      "comment": "Emergency calls notice: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiamate di emergenza"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Emergency calls"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notrufe"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appels d'urgence"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Llamadas de emergencia"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chamadas de emergência"
+          }
+        }
+      }
+    },
+    "legal.emergency.ack": {
+      "extractionState": "manual",
+      "comment": "Emergency calls notice: button that acknowledges it before the first call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ho capito"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I understand"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verstanden"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "J'ai compris"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entendido"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entendi"
+          }
+        }
+      }
+    },
+    "Dichiaro di avere almeno %lld anni.": {
+      "extractionState": "manual",
+      "comment": "Registration screens, age declaration box. %lld is the minimum age (18).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dichiaro di avere almeno %lld anni."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I declare that I am at least %lld years old."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich erkläre, dass ich mindestens %lld Jahre alt bin."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je déclare avoir au moins %lld ans."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declaro que tengo al menos %lld años."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Declaro que tenho pelo menos %lld anos."
+          }
+        }
+      }
+    },
+    "legal.terms.updated_review": {
+      "extractionState": "manual",
+      "comment": "Registration error: the Terms changed while the person was registering; the steps are shown again.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I Termini sono stati aggiornati: leggili di nuovo, per favore."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Terms have been updated, please review them again."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les Conditions ont été mises à jour : merci de les relire."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Bedingungen wurden aktualisiert. Bitte lesen Sie sie noch einmal."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los Términos se han actualizado: léelos de nuevo, por favor."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Os Termos foram atualizados: leia-os novamente, por favor."
+          }
+        }
+      }
+    },
+    "legal.receipt.unsaved.title": {
+      "extractionState": "manual",
+      "comment": "Receipt screen, closing without saving: title of the question.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non hai salvato la ricevuta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You have not saved the receipt"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu n'as pas enregistré le reçu"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie haben die Quittung nicht gespeichert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No has guardado el recibo"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você não salvou o recibo"
+          }
+        }
+      }
+    },
+    "legal.receipt.unsaved.message": {
+      "extractionState": "manual",
+      "comment": "Receipt screen, closing without saving: why saving first is better.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se chiudi senza salvarla, non ne resta una copia sul telefono."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you close without saving it, no copy stays on this phone."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si tu fermes sans l'enregistrer, aucune copie ne reste sur ce téléphone."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn Sie schließen, ohne zu speichern, bleibt keine Kopie auf diesem Telefon."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si cierras sin guardarlo, no queda ninguna copia en este teléfono."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se você fechar sem salvar, nenhuma cópia permanece neste telefone."
+          }
+        }
+      }
+    },
+    "legal.receipt.unsaved.close": {
+      "extractionState": "manual",
+      "comment": "Receipt screen, closing without saving: button that closes anyway.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiudi senza salvare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close without saving"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer sans enregistrer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ohne Speichern schließen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cerrar sin guardar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fechar sem salvar"
           }
         }
       }

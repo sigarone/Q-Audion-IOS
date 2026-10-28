@@ -728,6 +728,17 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // Terms, the copy of what the user accepted, and the emergency calls notice.
+            NavigationLink {
+                LazyView { LegalSettingsScreen(appState: appState) }
+            } label: {
+                SettingsRow(icon: "scroll",
+                            iconColor: scheme.primary,
+                            title: LocalizedStringKey("legal.settings.title"),
+                            subtitle: LocalizedStringKey("legal.settings.subtitle"))
+            }
+            .buttonStyle(.plain)
+
             // App Store 5.1.1(i) — the privacy policy must be reachable
             // from inside the app, not only from the store listing. Same
             // page family entered in App Store Connect (App Information >

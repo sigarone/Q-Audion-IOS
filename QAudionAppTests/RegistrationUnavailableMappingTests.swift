@@ -22,6 +22,13 @@ final class RegistrationUnavailableMappingTests: XCTestCase {
         XCTAssertEqual(ExtensionOnlyRegisterScreen.userFacingMessage(for: forbidden), unavailable)
     }
 
+    func testATermsRefusalMapsToTheUpdatedTermsMessageOnBothPaths() {
+        let refusal = BCryptoTermsRefusal(reason: .stale)
+        XCTAssertEqual(OtpVerificationScreen.userFacingMessage(for: refusal, mode: .register), LegalStrings.termsUpdatedReview)
+        XCTAssertEqual(ExtensionOnlyRegisterScreen.userFacingMessage(for: refusal), LegalStrings.termsUpdatedReview)
+        XCTAssertNotEqual(ExtensionOnlyRegisterScreen.userFacingMessage(for: BCryptoError.httpError(400)), LegalStrings.termsUpdatedReview)
+    }
+
     func testOtherStatusesDoNotMapToRegistrationUnavailable() {
         for status in [400, 409, 429, 503, 500] {
             let error = BCryptoError.httpError(status)

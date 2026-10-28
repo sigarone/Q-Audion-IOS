@@ -485,7 +485,11 @@ struct AccountSettingsScreen: View {
     @Environment(\.qaudionType) private var type
     @Environment(\.qaudionSnackbar) private var snackbar
 
+    /// Needed by the withdrawal screen, which talks to the legal endpoints on its own.
+    private let appState: AppState
+
     init(appState: AppState) {
+        self.appState = appState
         self._container = StateObject(
             wrappedValue: AccountSettingsContainer(appState: appState)
         )
@@ -565,6 +569,8 @@ struct AccountSettingsScreen: View {
                     saveButton
                     Spacer().frame(height: 12)
                     logoutButton
+                    Spacer().frame(height: 12)
+                    withdrawRow
                     Spacer().frame(height: 12)
                     deleteAccountButton
                     Spacer().frame(height: 24)
@@ -963,6 +969,20 @@ struct AccountSettingsScreen: View {
     /// below it since it's the more severe of the two. The link under it
     /// opens the public deletion page (same URL as the App Store Connect
     /// "account deletion" field) so what gets erased is documented.
+    /// Art. 54-bis Codice del Consumo: the withdrawal from the contract, next to the other account actions.
+    private var withdrawRow: some View {
+        NavigationLink {
+            LazyView { WithdrawalScreen(appState: appState) }
+        } label: {
+            SettingsRow(icon: "doc.badge.arrow.up",
+                        iconColor: scheme.primary,
+                        title: LocalizedStringKey("legal.withdraw.row"),
+                        subtitle: LocalizedStringKey("legal.withdraw.row_subtitle"))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("account-withdraw-row")
+    }
+
     private var deleteAccountButton: some View {
         VStack(spacing: 8) {
             deleteAccountTrigger

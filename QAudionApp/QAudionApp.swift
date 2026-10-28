@@ -323,6 +323,8 @@ struct QAudionApp: App {
                     // own injection since both come from the exact same
                     // `AppState` instance.
                     .environmentObject(appState.capabilityGate)
+                    // Terms re-acceptance, withdrawal receipt and the emergency notice (see `LegalRootModifier`).
+                    .legalRoot(appState: appState)
                     // W441: hide app content from app-switcher snapshots when
                     // screenshot protection is on (iOS 15+ system API).
                     .privacySensitive(screenshotProtectionEnabled)

@@ -73,13 +73,15 @@ public final class QAudionAppState: ObservableObject {
     }
 
     /// Sovereign identity registration. `ageDeclared` is handed on to the server as it is, like in `register`.
-    public func registerSovereign(displayName: String?, ageDeclared: Bool = false) async {
+    public func registerSovereign(displayName: String?, ageDeclared: Bool = false,
+                                  termsAcceptance: TermsAcceptance? = nil) async {
         do {
             let mgr = SovereignIdentityManager()
             let identity = mgr.generateIdentity(serverUrl: config.serverUrl, displayName: displayName)
             let tempBackend = BCryptoBackendProvider(config: config)
             let (userId, challenge) = try await mgr.registerWithServer(identity: identity, rest: tempBackend.getRestClient(),
-                                                                       ageDeclared: ageDeclared)
+                                                                       ageDeclared: ageDeclared,
+                                                                       termsAcceptance: termsAcceptance)
             // Sign challenge
             let challengeData = Data(hex: challenge)
             let updatedIdentity = SovereignIdentityManager.SovereignIdentity(
