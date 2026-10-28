@@ -299,6 +299,8 @@ let package = Package(
                 .copy("Resources/cross_platform_vectors.json"),
                 .copy("Video/Resources/sframe-video-kat.json"),
                 .copy("Crypto/Resources/psk-mix-v1-kat.json"),
+                // Sealed sender envelope of message alerts (WIRE_SPEC section 15), copied byte for byte from the server.
+                .copy("Crypto/Resources/notify_envelope_v1.json"),
                 // W-GRPAUDIOKEY (2026-08-27) — group-call SFU-outage
                 // fallback-audio session/frame-key derivation, byte-for-byte
                 // shared cross-platform with Desktop/Android (see

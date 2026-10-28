@@ -109,10 +109,22 @@ struct MessageSoundStore {
         defaults.set(settings.hapticEnabled, forKey: Self.keyHaptic)
     }
 
+    #if !QAUDION_NOTIFICATION_SERVICE
+    // The notification extension compiles this file without the app's `NotificationsGate`.
+
     /// The choices as the notification code reads them.
     static var current: MessageSoundSettings {
         MessageSoundStore().load(legacyInAppSound: NotificationsGate.inAppSoundEnabled)
     }
+
+    /// Writes the resolved choices into the group defaults when the user never set them, so the notification extension
+    /// (which cannot see the older in-app sound switch) plays what the app would.
+    func persistResolvedIfAbsent() {
+        guard defaults.object(forKey: Self.keyEnabled) == nil else { return }
+        // Only a legacy "off" differs from what the extension assumes (on); anything else keeps following the old switch.
+        if !NotificationsGate.inAppSoundEnabled { save(load(legacyInAppSound: false)) }
+    }
+    #endif
 }
 
 /// Plays a bundled message sound through the system sound service: it follows the ringer switch and the system
@@ -234,6 +246,7 @@ enum MessageAlertSoundFile {
         }
     }
 
+    #if !QAUDION_NOTIFICATION_SERVICE
     /// Brings the real `Library/Sounds` in line with the stored choices. Call at launch and after every change.
     static func syncCurrent() {
         guard let directory = soundsDirectory() else { return }
@@ -243,4 +256,5 @@ enum MessageAlertSoundFile {
             return Bundle.main.url(forResource: base, withExtension: ext)
         }
     }
+    #endif
 }

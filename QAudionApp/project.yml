@@ -135,6 +135,9 @@ targets:
       # INStartCallIntent. See QAudionIntents/IntentHandler.swift.
       - target: QAudionIntents
         embed: true
+      # Notification service extension: shows the sender name and photo of a message alert.
+      - target: QAudionNotificationService
+        embed: true
       # Live Activities (location share, large file transfer): the widget extension drawing them.
       - target: QAudionLiveActivity
         embed: true
@@ -246,3 +249,43 @@ targets:
       - sdk: SwiftUI.framework
       - sdk: ActivityKit.framework
       - sdk: AppIntents.framework
+
+  # ------------------------------------------------------------------ #
+  # QAudionNotificationService -- notification service extension        #
+  # Opens the sealed sender envelope (`qn`) of a message alert with the #
+  # notification key of the notify keychain group, reads names and      #
+  # avatars from the notify App Group, and rewrites the notification.   #
+  # It compiles only the small Foundation/CryptoKit files it needs (no  #
+  # QAudionEngine package, no WebRTC). Bundle:                          #
+  # com.qaudion.app.notification-service                                #
+  # ------------------------------------------------------------------ #
+  QAudionNotificationService:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../QAudionNotificationService
+      - path: ../QAudionApp/Notify/NotifyPreferences.swift
+      - path: ../QAudionApp/Notify/NotificationContentBuilder.swift
+      - path: ../QAudionApp/Services/MessageSoundSettings.swift
+      - path: ../QAudionEngine/Sources/QAudionEngine/Notify/NotifyEnvelope.swift
+      - path: ../QAudionEngine/Sources/QAudionEngine/Notify/NotifyRubrica.swift
+      - path: ../QAudionEngine/Sources/QAudionEngine/Notify/NotifyContentPlan.swift
+      - path: ../QAudionEngine/Sources/QAudionEngine/Crypto/NotifyKeychain.swift
+      - path: ../QAudionEngine/Sources/QAudionEngine/Persistence/FileProtection.swift
+    settings:
+      base:
+        INFOPLIST_FILE: ../QAudionNotificationService/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../QAudionNotificationService/QAudionNotificationService.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.notification-service
+        PRODUCT_NAME: QAudionNotificationService
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: 5G22P9239N
+        CODE_SIGN_STYLE: Automatic
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        # MessageSoundSettings.swift leaves out what needs the app's own gates when this is set.
+        OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_NOTIFICATION_SERVICE
+    dependencies:
+      - sdk: UserNotifications.framework
+      - sdk: Intents.framework

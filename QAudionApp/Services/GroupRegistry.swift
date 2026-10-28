@@ -145,6 +145,8 @@ public final class GroupRegistry: ObservableObject {
             return
         }
         UserDefaults.standard.set(sealed, forKey: Self.storageKey)
+        // Group names the notification extension shows.
+        NotifyRubricaSync.shared.schedule()
     }
 
     // MARK: - Public API

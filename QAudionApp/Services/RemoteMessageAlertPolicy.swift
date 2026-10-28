@@ -18,6 +18,9 @@ enum RemoteMessageAlertPolicy {
         let identifier: String
         let category: String
         let thread: String
+        /// Rewritten by the notification extension (it carries the `qaEnriched` marker): it replaced the generic text
+        /// and thread but is still the server's alert, so it goes with the generic ones.
+        var enriched: Bool = false
     }
 
     /// True for the generic alert pushed by the server.
@@ -29,19 +32,22 @@ enum RemoteMessageAlertPolicy {
     /// the user has seen the messages.
     static func identifiersToRemove(from delivered: [Delivered]) -> [String] {
         delivered
-            .filter { isRemoteMessageAlert(category: $0.category, thread: $0.thread) }
+            .filter { isRemoteMessageAlert(category: $0.category, thread: $0.thread)
+                || ($0.enriched && $0.category == messageCategory) }
             .map(\.identifier)
     }
 
     /// Maps a delivered notification's content to the fields the policy looks at.
     static func delivered(identifier: String, content: UNNotificationContent) -> Delivered {
-        Delivered(identifier: identifier, category: content.categoryIdentifier, thread: content.threadIdentifier)
+        Delivered(identifier: identifier, category: content.categoryIdentifier, thread: content.threadIdentifier,
+                  enriched: content.userInfo[NotificationContentBuilder.enrichedKey] as? String == "1")
     }
 
     /// A tap on a message alert that names neither a 1:1 conversation nor a group is the generic alert: the app
     /// opens on its chat list.
     static func isGenericTap(userInfo: [String: String]) -> Bool {
         userInfo["conversationId"] == nil && userInfo["groupId"] == nil
+            && NotificationContentBuilder.conversationTarget(userInfo: userInfo) == nil
     }
 
     /// Moments at which the generic alert is no longer needed.

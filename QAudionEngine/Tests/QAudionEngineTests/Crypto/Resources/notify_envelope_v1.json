@@ -1,0 +1,55 @@
+{
+  "description": "qaudion-notify-v1 envelope vectors (WIRE_SPEC.md section 15). blob = base64(0x01 || eph_pub || nonce || AES-256-GCM(key, nonce, plaintext, aad = \"qaudion-notify-v1\" || eph_pub)), key = HKDF-SHA256(ikm = X25519(eph_priv, device_pub), salt = eph_pub || device_pub, info = \"qaudion-notify-v1\", L = 32). The negative case is the dm blob with the lowest bit of the last byte (GCM tag) flipped: opening must fail.",
+  "cases": [
+    {
+      "name": "dm",
+      "kind": "dm",
+      "sender_id": "3f0c1d2e-7a4b-4c5d-8e9f-0a1b2c3d4e5f",
+      "t": 1793145600,
+      "device_priv": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+      "device_pub": "d89e3bad79437dbed9f843418304f460ff05c7fe81fe4a9577a804cb9367ff66",
+      "eph_priv": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "nonce": "000102030405060708090a0b",
+      "plaintext": "{\"v\":1,\"k\":\"dm\",\"s\":\"3f0c1d2e-7a4b-4c5d-8e9f-0a1b2c3d4e5f\",\"t\":1793145600}                                                                                                                                                                                      ",
+      "blob": "AXmmMe7eG/nJjxIDLN6t0OegeTmPx4a4jMhG7ImvhaUaAAECAwQFBgcICQoLaIRaLttfXjpA02Ewcm57lNColWI21uTFZ+uXhT2OUqZ7VtUEMPKa+3Dgn1jAI1N+jRAPDIgQyYFHHgK4ynqVLPCkAbFZ0Kc68sUY6FHKWwJk3F6+h6WHOuwx7aKZXF5Dxc37DTFF/Eik2MRqc4U+tDufWXtPr5lzE4sVKMZzc/P97yQSYlDengVTyW7nKUoaWRENz/toGmFOcgMBLMtxosIzl/Bg7wbYAE0VpPoFB0xgJnJm0z/pxtyJ8L+wQ1Zo9mAikEtp5sstZ0rwj9GMeY0DGaTvWZ1rJDl2QmxBV/NGS7WgTg5B7xVydoa8zwItGZbKBsQBXAUpI03fU4URgopImvTNJu5GRDE8Z1Vksa4="
+    },
+    {
+      "name": "dm_tag_bit_flipped",
+      "kind": "dm",
+      "sender_id": "3f0c1d2e-7a4b-4c5d-8e9f-0a1b2c3d4e5f",
+      "t": 1793145600,
+      "device_priv": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+      "device_pub": "d89e3bad79437dbed9f843418304f460ff05c7fe81fe4a9577a804cb9367ff66",
+      "eph_priv": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "nonce": "000102030405060708090a0b",
+      "plaintext": "{\"v\":1,\"k\":\"dm\",\"s\":\"3f0c1d2e-7a4b-4c5d-8e9f-0a1b2c3d4e5f\",\"t\":1793145600}                                                                                                                                                                                      ",
+      "blob": "AXmmMe7eG/nJjxIDLN6t0OegeTmPx4a4jMhG7ImvhaUaAAECAwQFBgcICQoLaIRaLttfXjpA02Ewcm57lNColWI21uTFZ+uXhT2OUqZ7VtUEMPKa+3Dgn1jAI1N+jRAPDIgQyYFHHgK4ynqVLPCkAbFZ0Kc68sUY6FHKWwJk3F6+h6WHOuwx7aKZXF5Dxc37DTFF/Eik2MRqc4U+tDufWXtPr5lzE4sVKMZzc/P97yQSYlDengVTyW7nKUoaWRENz/toGmFOcgMBLMtxosIzl/Bg7wbYAE0VpPoFB0xgJnJm0z/pxtyJ8L+wQ1Zo9mAikEtp5sstZ0rwj9GMeY0DGaTvWZ1rJDl2QmxBV/NGS7WgTg5B7xVydoa8zwItGZbKBsQBXAUpI03fU4URgopImvTNJu5GRDE8Z1Vksa8=",
+      "negative": true
+    },
+    {
+      "name": "grp",
+      "kind": "grp",
+      "sender_id": "9b8a7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+      "group_id": "c1d2e3f4-a5b6-4789-8abc-def012345678",
+      "t": 1793145661,
+      "device_priv": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "device_pub": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254",
+      "eph_priv": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+      "nonce": "a0a1a2a3a4a5a6a7a8a9aaab",
+      "plaintext": "{\"v\":1,\"k\":\"grp\",\"s\":\"9b8a7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d\",\"g\":\"c1d2e3f4-a5b6-4789-8abc-def012345678\",\"t\":1793145661}                                                                                                                                          ",
+      "blob": "ATktF0o4s7G+r68f6CSHCEHF+lMbxur9tkAsEkZkSIwcoKGio6Slpqeoqaqri9C9xQwPlsGoWRAN6qgK2BJLSdUCpet0jJvE4qWnqs2OQHqQGfg3bjm1p6ha0V49oThTGQDhGzOlI+qmTO4Ff6PkOk99MXAsg/VuNsonBWZu5wTmbWTqo1DzBHMpAtDW257whbx/QekTUKUOQnOJnZOl+/0jmSd8JqTfPWiyKYouuiw3r5aRCZ4JhXq62xb6co9WvDY7f1adKRFp/PQahrsR0lAwtH+MXJFQuGnQR3ctKTcdIOyo8zhh05q1Kdc6TIPgZyVyETPq0TyK51xb0VXjlr/fZ8CuHoHALXBLPx4+EQ+mkVrd8KiOxJ2nzrmiaYJyu160Kv4JbGPzrLMs4aOHkgBPExeQEqTxAk7PeL0="
+    },
+    {
+      "name": "unicode_sender",
+      "kind": "dm",
+      "sender_id": "u-èé-日本-🔒",
+      "t": 1793200000,
+      "device_priv": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+      "device_pub": "34e42d4af5ef94a07a3a84201b889d4cd1a743cb27b11b6a10438a8feb8e5847",
+      "eph_priv": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+      "nonce": "f0f1f2f3f4f5f6f7f8f9fafb",
+      "plaintext": "{\"v\":1,\"k\":\"dm\",\"s\":\"u-èé-日本-🔒\",\"t\":1793200000}                                                                                                                                                                                                        ",
+      "blob": "AWdd1XTtd4kxCz0udoHzeQtGbHc7FSH+zzZXeVg3HqUv8PHy8/T19vf4+fr7HpiH+MGYATRzB+1XKEZKbUZwYfdxooaG1DyqHePYDteWTZ2US3VncGwoGNurbPvOP0F8L8oCJer+3Og3Y8EfQS4tz+U96cUUdFhFFvkpMlkkyAhDDrj5JV1dYtoBLGFWysNvhn117NMaBgDat/Wg1feljSy91TORwIFNF1lax8cuPM6LzaAECTDwVhxi16PEmk9AiFOlZkoisuJ1DmnApD3+AJBa1qUAPLuL4ugYmzljlQHNf/j1COCjZL/zpoCLJcgjsYUWIubiCWldBmV46eL2J3+ALE7nE7VhcXx2qWyHYffKCbqtzTh04C1wNYdpWzE43R6wx79QKWG7Z8nFIgR1zoFixoEsdzOZxguFnao="
+    }
+  ]
+}

@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: Verify WIRE_SPEC.md matches the canonical hash
         run: |
-          EXPECTED=780d5a9ee8f0e2a7eed5dfc3672bc0bf115ea63855c6778c5273e02b52359498
+          EXPECTED=8d3b0c8b7a969105cbe2c8ce1b61c008e22ce185a2b5fd13febf49fdc6455c5b
           ACTUAL=$(sha256sum WIRE_SPEC.md | cut -d' ' -f1)
           echo "expected $EXPECTED"
           echo "actual   $ACTUAL"

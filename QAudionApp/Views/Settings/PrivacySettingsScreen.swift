@@ -232,6 +232,9 @@ struct PrivacySettingsScreen: View {
             set: { newValue in
                 siriMessagingConsentToggleState = newValue
                 SiriMessagingConsent.setEnabled(newValue)
+                // The photo and name in message notifications follow this same consent; switching it off also
+                // removes what was donated to Siri.
+                NotifyDonations.consentChanged(to: newValue)
                 // Turning ON: the cache populates on the next foreground/
                 // launch pass (AppState.refreshSiriMessageCache, already
                 // wired there) — this screen holds no AppState reference to

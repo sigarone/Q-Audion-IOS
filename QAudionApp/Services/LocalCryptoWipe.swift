@@ -63,6 +63,9 @@ enum LocalCryptoWipe {
         // entry here would make the next account's first sweep skip
         // publishing if it happened to reuse the same device id.
         UserDefaults.standard.removeObject(forKey: "com.qaudion.identity.published_fingerprint")
+        // The notification key and the list of names and avatars of the notification extension.
+        NotifyKeychain.production()?.delete()
+        if let directory = NotifyRubricaFiles.defaultDirectory() { NotifyRubricaFiles.clear(in: directory) }
         // The decrypted attachment copies on disk (caches and temporary files) of the account that is leaving.
         AttachmentCacheCleaner.clearAllCaches()
         print("[LocalCryptoWipe] wipeAll completed")

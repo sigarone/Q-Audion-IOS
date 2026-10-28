@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The notify App Group (list of names and avatars, message sound choices) and the keychain group of the
+	     notification key. Nothing else: no ratchet, no message database, no other group. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.bcrypto.qaudion.notify</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.qaudion.notify</string>
+	</array>
+</dict>
+</plist>

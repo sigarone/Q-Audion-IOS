@@ -567,6 +567,10 @@ jobs:
             plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$SHARE_PLIST"
             plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$SHARE_PLIST"
           fi
+          # The notification service extension (always part of the build).
+          NOTIFY_SVC_PLIST="../QAudionNotificationService/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$NOTIFY_SVC_PLIST"
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$NOTIFY_SVC_PLIST"
 
           # The Live Activity widget extension (part of every build).
           LIVE_PLIST="../QAudionLiveActivity/Info.plist"
@@ -1104,6 +1108,60 @@ jobs:
           else
             echo "Default build (no share extension): skipping the share extension signing files."
           fi
+          # -- Notification service extension: App Groups (always part of the build) ----------
+          # The App ID com.qaudion.app.notification-service, with the App Group group.com.bcrypto.qaudion.notify
+          # assigned, is set up in the Apple Developer portal. This step creates the identifier when it is
+          # missing, enables the App Groups capability and renews the profile so it carries the group.
+          NOTIFY_SVC_BID="com.qaudion.app.notification-service"
+          NOTIFY_SVC_TMP=$(mktemp)
+          app-store-connect fetch-signing-files "$NOTIFY_SVC_BID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier 2>&1 | tee "$NOTIFY_SVC_TMP" || true
+          NOTIFY_SVC_PLAIN=$(sed 's/\x1b\[[0-9;]*m//g' "$NOTIFY_SVC_TMP")
+          rm -f "$NOTIFY_SVC_TMP"
+
+          NOTIFY_SVC_BID_RES=$(printf '%s\n' "$NOTIFY_SVC_PLAIN" \
+            | grep -oE 'Created Bundle ID [A-Z0-9]{10}|Bundle ID [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$NOTIFY_SVC_BID_RES" ]; then
+            NOTIFY_SVC_BID_RES=$(printf '%s\n' "$NOTIFY_SVC_PLAIN" \
+              | grep -F "$NOTIFY_SVC_BID" \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          if [ -z "$NOTIFY_SVC_BID_RES" ]; then
+            echo "::error::could not resolve the Bundle ID resource of $NOTIFY_SVC_BID -- create the App ID $NOTIFY_SVC_BID (App Groups capability, group group.com.bcrypto.qaudion.notify) in the Apple Developer portal; the archive would fail without it"
+            exit 1
+          fi
+          NOTIFY_SVC_PROF_RES=$(printf '%s\n' "$NOTIFY_SVC_PLAIN" \
+            | grep -oE 'Created Profile [A-Z0-9]{10}' \
+            | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+          if [ -z "$NOTIFY_SVC_PROF_RES" ]; then
+            NOTIFY_SVC_PROF_RES=$(printf '%s\n' "$NOTIFY_SVC_PLAIN" \
+              | grep -E '^- IOS_APP_STORE' \
+              | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+          fi
+          echo "Notification service Bundle ID res-id: $NOTIFY_SVC_BID_RES"
+          echo "Enabling APP_GROUPS on $NOTIFY_SVC_BID_RES..."
+          app-store-connect bundle-ids enable-capabilities \
+            "$NOTIFY_SVC_BID_RES" --capability "App Groups" 2>&1 \
+            && echo "  APP_GROUPS: done" \
+            || echo "  APP_GROUPS: WARN (may already be enabled)"
+          if [ -n "$NOTIFY_SVC_PROF_RES" ]; then
+            echo "Deleting stale profile $NOTIFY_SVC_PROF_RES (it may predate the capability)..."
+            app-store-connect profiles delete "$NOTIFY_SVC_PROF_RES" 2>&1 \
+              && echo "  Profile deleted." \
+              || echo "  Profile delete WARN (may already be gone)"
+          fi
+          echo "Re-creating notification service signing files with capabilities..."
+          app-store-connect fetch-signing-files "$NOTIFY_SVC_BID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier
 
           # -- Live Activity widget extension (part of every build) ----------------
           # No capability and no App Group: the identifier and its App Store profile are all it needs. The step creates the
@@ -1336,7 +1394,7 @@ jobs:
           # Privacy manifests that must be in the shipped bundle: the app and the
           # Intents extension, plus the packet-tunnel extension only in a build
           # with VPN support (the default build does not contain that extension).
-          MANIFESTS="$APP/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionLiveActivity.appex/PrivacyInfo.xcprivacy"
+          MANIFESTS="$APP/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionLiveActivity.appex/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionNotificationService.appex/PrivacyInfo.xcprivacy"
           if [ "$VPN_BUILD" = "true" ]; then
             MANIFESTS="$MANIFESTS $APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"
           fi

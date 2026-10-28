@@ -39,6 +39,9 @@
 	<!-- Time Sensitive Notifications: the no-CallKit incoming call alert uses interruption level time-sensitive. -->
 	<key>com.apple.developer.usernotifications.time-sensitive</key>
 	<true/>
+	<!-- Communication Notifications: the notification extension shows the sender photo and name (INSendMessageIntent). -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
 	<!-- Keychain Sharing. The FIRST entry is the group of every item the app already has (the default group is the
 	     first entry); the second group holds the notification key and is shared with the notification extension
 	     only (see NotifyKeychain). -->
