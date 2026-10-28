@@ -96,34 +96,73 @@ struct TermsDocumentSheet: View {
     }
 }
 
-// MARK: - The three steps
+/// The specific-approval text in a sheet, behind the "Mostra" link.
+struct SpecificApprovalSheet: View {
+    let approval: LegalSpecificApproval
+    @Environment(\.dismiss) private var dismiss
 
-/// Deviations, then terms plus the professional question, then the six groups. Every box starts off, and the
-/// continue button is on only when the boxes of the step are. The legal text is the server's; the labels are the app's.
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                ScrollView {
+                    Text(verbatim: approval.text)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .qaudionReadableWidth()
+                }
+            }
+            .navigationTitle(Text(verbatim: approval.title))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Chiudi") { dismiss() }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - The acceptance screen
+
+/// One screen: the Terms and Privacy box, the specific-approval box with its "Mostra" link, and the emergency
+/// notice as one small line. Both boxes start off and the continue button is on only when both are. The legal
+/// text is the server's; the labels are the app's.
 struct TermsAcceptanceFlowView: View {
     let fetch: LegalTermsFetch
     @Binding var draft: TermsAcceptanceDraft
     let isBusy: Bool
     let errorText: String?
-    /// Back from the first step (leave the flow); nil hides the button there.
+    /// Back (leave the screen); nil hides the button.
     let onBackFromFirst: (() -> Void)?
     let onFinish: (TermsAcceptance) -> Void
 
     @State private var showingTerms = false
-    @State private var expandedGroups: Set<String> = []
+    @State private var showingSpecific = false
 
     private var document: LegalTermsDocument { fetch.document }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    switch draft.step {
-                    case .deviations: deviationsStep
-                    case .terms: termsStep
-                    case .groups: groupsStep
+                    Text(verbatim: document.title)
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    if document.lang != "it" {
+                        Text(verbatim: LegalStrings.italianPrevails)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.55))
                     }
+                    termsBox
+                    specificBox
+                    Text(verbatim: document.emergencyNotice)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.6))
+                        .accessibilityIdentifier("terms-emergency-notice")
                     if let errorText {
                         Text(verbatim: errorText)
                             .font(.caption)
@@ -133,38 +172,62 @@ struct TermsAcceptanceFlowView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
                 .qaudionReadableWidth()
-                .id(draft.step)
             }
             footer
         }
         .sheet(isPresented: $showingTerms) {
             TermsDocumentSheet(document: document)
         }
+        .sheet(isPresented: $showingSpecific) {
+            SpecificApprovalSheet(approval: document.specificApproval)
+        }
     }
 
-    // MARK: header and footer
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(verbatim: LegalStrings.progress(draft.step.rawValue + 1, of: TermsAcceptanceDraft.Step.allCases.count))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.7))
-            if document.lang != "it" {
-                Text(verbatim: LegalStrings.italianPrevails)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.55))
+    private var termsBox: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LegalCheckboxRow(isOn: $draft.termsAccepted, text: LegalStrings.termsCheckbox,
+                             identifier: "terms-checkbox")
+            HStack(spacing: 16) {
+                Button {
+                    showingTerms = true
+                } label: {
+                    Text(verbatim: LegalStrings.readTerms)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
+                .accessibilityIdentifier("terms-read")
+                Link(destination: LegalLinks.appPrivacy()) {
+                    Text(verbatim: LegalStrings.readPrivacy)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
+                .accessibilityIdentifier("terms-read-privacy")
             }
+            .padding(.leading, 32)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
+    }
+
+    private var specificBox: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LegalCheckboxRow(isOn: $draft.specificAccepted, text: LegalStrings.specificCheckbox,
+                             identifier: "terms-specific-checkbox")
+            Button {
+                showingSpecific = true
+            } label: {
+                Text(verbatim: LegalStrings.showSpecific)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.blue)
+            }
+            .padding(.leading, 32)
+            .accessibilityIdentifier("terms-specific-show")
+        }
     }
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if draft.step != .deviations || onBackFromFirst != nil {
+            if let onBackFromFirst {
                 Button {
-                    if !draft.back() { onBackFromFirst?() }
+                    onBackFromFirst()
                 } label: {
                     Text("Indietro")
                         .font(.body.weight(.semibold))
@@ -176,135 +239,26 @@ struct TermsAcceptanceFlowView: View {
                 .accessibilityIdentifier("terms-back")
             }
             Button {
-                if draft.isLastStep {
-                    if let acceptance = draft.acceptance(for: fetch) { onFinish(acceptance) }
-                } else {
-                    draft.advance(document: document)
-                }
+                if let acceptance = draft.acceptance(for: fetch) { onFinish(acceptance) }
             } label: {
-                Text(verbatim: draft.isLastStep ? LegalStrings.acceptAndContinue : String(localized: "Continua"))
+                Text("Continua")
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: 52)
-                    .foregroundStyle(canContinue ? .black : .white.opacity(0.4))
-                    .background(canContinue ? Color.white : Color.white.opacity(0.1))
+                    .foregroundStyle(draft.canContinue ? .black : .white.opacity(0.4))
+                    .background(draft.canContinue ? Color.white : Color.white.opacity(0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(!canContinue || isBusy)
+            .disabled(!draft.canContinue || isBusy)
             .accessibilityIdentifier("terms-continue")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
     }
-
-    private var canContinue: Bool { draft.canContinue(document: document) }
-
-    // MARK: step 1
-
-    private var deviationsStep: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(verbatim: document.deviations.title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-            Text(verbatim: document.deviations.text)
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.85))
-            LegalCheckboxRow(isOn: $draft.deviationsAccepted, text: LegalStrings.deviationsCheckbox,
-                             identifier: "terms-deviations-checkbox")
-        }
-    }
-
-    // MARK: step 2
-
-    private var termsStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(verbatim: document.title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-            Button {
-                showingTerms = true
-            } label: {
-                Label {
-                    Text(verbatim: LegalStrings.readTerms)
-                } icon: {
-                    Image(systemName: "doc.text")
-                }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.blue)
-            }
-            .accessibilityIdentifier("terms-read")
-            LegalCheckboxRow(isOn: $draft.termsAccepted, text: LegalStrings.termsCheckbox,
-                             identifier: "terms-checkbox")
-            VStack(alignment: .leading, spacing: 8) {
-                Text(verbatim: LegalStrings.professionalQuestion)
-                    .font(.footnote)
-                    .foregroundStyle(.white)
-                Picker(selection: $draft.professional) {
-                    Text(verbatim: LegalStrings.no).tag(false)
-                    Text(verbatim: LegalStrings.yes).tag(true)
-                } label: {
-                    Text(verbatim: LegalStrings.professionalQuestion)
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("terms-professional")
-            }
-        }
-    }
-
-    // MARK: step 3
-
-    private var groupsStep: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(verbatim: LegalStrings.groupsHeading)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-            Text(verbatim: LegalStrings.groupsIntro)
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.75))
-            ForEach(document.groups) { group in
-                groupCard(group)
-            }
-        }
-    }
-
-    private func groupCard(_ group: LegalGroup) -> some View {
-        let expanded = expandedGroups.contains(group.id)
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(verbatim: group.title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-            if !group.clauses.isEmpty {
-                Text(verbatim: group.clauses)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            Button {
-                if expanded { expandedGroups.remove(group.id) } else { expandedGroups.insert(group.id) }
-            } label: {
-                Text(verbatim: expanded ? LegalStrings.hideText : LegalStrings.showText)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.blue)
-            }
-            .accessibilityIdentifier("terms-group-expand-\(group.id)")
-            if expanded {
-                Text(verbatim: group.text)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.85))
-            }
-            LegalCheckboxRow(
-                isOn: Binding(
-                    get: { draft.isGroupAccepted(group.id) },
-                    set: { draft.setGroup(group.id, accepted: $0) }),
-                text: LegalStrings.groupApprove,
-                identifier: "terms-group-checkbox-\(group.id)")
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.06)))
-    }
 }
 
 // MARK: - Loader
 
-/// Loads the document and runs the three steps in front of a registration. `onAccepted` gets the acceptance to put in
+/// Loads the document and runs the acceptance screen in front of a registration. `onAccepted` gets the acceptance to put in
 /// the registration request; `onCancel` leaves without one.
 struct TermsAcceptanceLoaderView: View {
     let api: LegalApi
@@ -372,7 +326,7 @@ struct TermsAcceptanceLoaderView: View {
 
 // MARK: - Blocking screen for an existing account
 
-/// An existing account whose acceptance is missing or old. Same three steps, a delete-account action on the same
+/// An existing account whose acceptance is missing or old. Same screen, a delete-account action on the same
 /// screen, and the model takes the screen down by itself while a call is active or ringing.
 struct TermsGateScreen: View {
     @ObservedObject var model: TermsGateModel

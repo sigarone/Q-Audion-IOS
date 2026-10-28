@@ -19080,17 +19080,6 @@ final class AppState: ObservableObject {
                 return
             }
         }
-        // The emergency calls notice, once, before the first call placed from the phone. The start gate is held
-        // here as well, so a second tap while the notice is up is refused. A call is never held for a text that cannot
-        // be read, and a start from the car shows nothing on the phone.
-        if origin == .phone {
-            await EmergencyNoticeCenter.shared.confirmBeforeFirstCall()
-            if isInCall {
-                callStartGate.end()
-                RTLog.warn("call", "startCall ignored — a call went live while the emergency notice was shown")
-                return
-            }
-        }
         // Rebuilds the engine when logout() released it and nothing has made a
         // new one yet (report bea72b22), instead of aborting every call.
         guard let engine = ensureCallEngine(reason: "startCall") else {

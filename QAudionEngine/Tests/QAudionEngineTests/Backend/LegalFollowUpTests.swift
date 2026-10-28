@@ -1,8 +1,7 @@
 import XCTest
 @testable import QAudionEngine
 
-/// The refusal of a registration over the Terms, the platform fields of the acceptance, the notice that never
-/// holds a call, and the receipt kept on disk.
+/// The refusal of a registration over the Terms, the platform fields of the acceptance, and the receipt kept on disk.
 final class LegalFollowUpTests: XCTestCase {
 
     override func setUp() {
@@ -51,8 +50,8 @@ final class LegalFollowUpTests: XCTestCase {
     // MARK: platform and version
 
     func testTheAcceptanceSendsThePlatformAndTheAppVersion() throws {
-        let acceptance = TermsAcceptance(version: "2026-10-28", lang: "it", sha256: "aa", terms: true, deviations: true,
-                                         groups: ["g1": true], professional: false, appVersion: "1.0.1241.2000")
+        let acceptance = TermsAcceptance(version: "2026-10-29", lang: "it", sha256: "aa", terms: true, specific: true,
+                                         appVersion: "1.0.1241.2000")
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: acceptance.jsonData()) as? [String: Any])
         XCTAssertEqual(json["platform"] as? String, "ios")
         XCTAssertEqual(json["app_version"] as? String, "1.0.1241.2000")
@@ -64,70 +63,6 @@ final class LegalFollowUpTests: XCTestCase {
         XCTAssertEqual(TermsAcceptance.appVersionString(short: nil, build: nil), "unknown")
         XCTAssertEqual(TermsAcceptance.appVersionString(short: String(repeating: "9", count: 100), build: "1").count, 64)
         XCTAssertFalse(TermsAcceptance.currentAppVersion.isEmpty)
-    }
-
-    // MARK: emergency notice
-
-    @MainActor
-    private func coordinator(flag: FakeFlag = FakeFlag(), sceneActive: Bool = true, text: String? = "No emergency calls.",
-                             answerTimeout: Double = 0.2) -> EmergencyNoticeCoordinator {
-        let result = EmergencyNoticeCoordinator(
-            flag: flag, isSceneActive: { sceneActive }, answerTimeoutSeconds: answerTimeout, fetchTimeoutSeconds: 0.2)
-        result.configure(textProvider: { { text } })
-        return result
-    }
-
-    @MainActor
-    func testAnInactiveSceneNeverHoldsTheCall() async {
-        let flag = FakeFlag()
-        let center = coordinator(flag: flag, sceneActive: false)
-        await center.confirmBeforeFirstCall()
-        XCTAssertNil(center.pendingText)
-        XCTAssertFalse(flag.acknowledged)
-    }
-
-    @MainActor
-    func testAnUnansweredAlertLetsTheCallGoAheadAndLeavesTheFlagUnset() async {
-        let flag = FakeFlag()
-        let center = coordinator(flag: flag)
-        await center.confirmBeforeFirstCall()
-        XCTAssertNil(center.pendingText, "the alert goes away with the timeout")
-        XCTAssertFalse(flag.acknowledged)
-    }
-
-    @MainActor
-    func testTheTapOnTheAlertReleasesTheCallAndSetsTheFlag() async {
-        let flag = FakeFlag()
-        let center = coordinator(flag: flag, answerTimeout: 5)
-        let call = Task { @MainActor in await center.confirmBeforeFirstCall() }
-        while center.pendingText == nil { await Task.yield() }
-        center.acknowledge()
-        await call.value
-        XCTAssertTrue(flag.acknowledged)
-        XCTAssertNil(center.pendingText)
-    }
-
-    @MainActor
-    func testASecondStartWaitsForTheSameAnswerAndAlsoCannotHang() async {
-        let center = coordinator()
-        let first = Task { @MainActor in await center.confirmBeforeFirstCall() }
-        while center.pendingText == nil { await Task.yield() }
-        let second = Task { @MainActor in await center.confirmBeforeFirstCall() }
-        await first.value
-        await second.value
-        XCTAssertNil(center.pendingText)
-    }
-
-    @MainActor
-    func testAnUnreadableTextOrAnAcknowledgedFlagProceedsAtOnce() async {
-        let unreadable = coordinator(text: nil)
-        await unreadable.confirmBeforeFirstCall()
-        XCTAssertNil(unreadable.pendingText)
-        let flag = FakeFlag()
-        flag.acknowledged = true
-        let done = coordinator(flag: flag)
-        await done.confirmBeforeFirstCall()
-        XCTAssertNil(done.pendingText)
     }
 
     // MARK: receipt
@@ -152,10 +87,6 @@ final class LegalFollowUpTests: XCTestCase {
         XCTAssertEqual(ReceiptClosePolicy.decide(saved: false), .askToSave)
         XCTAssertEqual(ReceiptClosePolicy.decide(saved: true), .close)
     }
-}
-
-private final class FakeFlag: EmergencyNoticeFlagStore {
-    var acknowledged = false
 }
 
 private final class FollowUpStubURLProtocol: URLProtocol {

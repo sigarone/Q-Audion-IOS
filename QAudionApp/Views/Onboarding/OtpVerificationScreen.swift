@@ -20,7 +20,7 @@ struct OtpVerificationScreen: View {
     /// True when the person ticked the age declaration box on `PhoneEntryScreen`
     /// (`.register` only; always false for `.login`). Sent with the code on verify.
     let ageDeclared: Bool
-    /// What the person accepted in the three steps before the registration (nil for a login). Sent with the code.
+    /// What the person accepted on the acceptance screen before the registration (nil for a login). Sent with the code.
     let termsAcceptance: TermsAcceptance?
     let onBack: () -> Void
     /// Fired after a successful REGISTER verify. Credentials are already
@@ -39,7 +39,7 @@ struct OtpVerificationScreen: View {
     @State private var errorText: String?
     @State private var resendRemaining: Int = 0
     @State private var resendTask: Task<Void, Never>?
-    /// The server refused the acceptance (edition moved, boxes missing): the steps are shown again and the new
+    /// The server refused the acceptance (edition moved, boxes missing): the screen is shown again and the new
     /// acceptance replaces the one handed in. The number and the code typed stay where they are.
     @State private var acceptanceRefused = false
     @State private var renewedAcceptance: TermsAcceptance?
@@ -245,7 +245,7 @@ struct OtpVerificationScreen: View {
         } catch {
             errorText = userFacingMessage(for: error)
             if mode == .register, BCryptoTermsRefusal.from(error) != nil {
-                // The acceptance is no longer valid: it is dropped and the steps come back with a fresh document.
+                // The acceptance is no longer valid: it is dropped and the screen comes back with a fresh document.
                 acceptanceRefused = true
                 renewedAcceptance = nil
                 showingTerms = true

@@ -4,22 +4,20 @@ import XCTest
 // MARK: - Fixtures
 
 private enum LegalFixtures {
-    static func document(version: String = "2026-10-28", lang: String = "it") -> LegalTermsDocument {
+    static func document(version: String = "2026-10-29", lang: String = "it") -> LegalTermsDocument {
         LegalTermsDocument(
             version: version, lang: lang, title: "Terms", bodyMarkdown: "body",
-            deviations: LegalDeviations(id: "deviations", title: "Deviations", text: "dev text"),
-            groups: (1...6).map { LegalGroup(id: "g\($0)", title: "Group \($0)", clauses: "art. \($0)", text: "text \($0)") },
+            specificApproval: LegalSpecificApproval(id: "specific", title: "Specific approval", text: "specific text"),
             emergencyNotice: "Emergency calls are not supported.", withdrawalInfo: "You can withdraw.")
     }
 
-    static func fetch(version: String = "2026-10-28", lang: String = "it") -> LegalTermsFetch {
+    static func fetch(version: String = "2026-10-29", lang: String = "it") -> LegalTermsFetch {
         LegalTermsFetch(document: document(version: version, lang: lang), sha256: String(repeating: "cd", count: 32))
     }
 
     static let documentJSON = """
-    {"version":"2026-10-28","lang":"en","title":"Terms",
-     "body_markdown":"# Terms","deviations":{"id":"deviations","title":"D","text":"d"},
-     "groups":[{"id":"g1","title":"T","clauses":"arts. 1","text":"x"}],
+    {"version":"2026-10-29","lang":"en","title":"Terms",
+     "body_markdown":"# Terms","specific_approval":{"id":"specific","title":"S","text":"s text"},
      "emergency_notice":"No emergency calls.","withdrawal_info":"Withdraw here."}
     """
 }
@@ -52,107 +50,66 @@ private final class FakeLegalApi: LegalApi, @unchecked Sendable {
     }
 }
 
-private func needsAcceptance(_ version: String = "2026-10-28") -> LegalStatus {
+private func needsAcceptance(_ version: String = "2026-10-29") -> LegalStatus {
     LegalStatus(currentVersion: version, acceptedVersion: "2026-08-05", acceptanceRequired: true)
 }
 
 private func notRequired() -> LegalStatus {
-    LegalStatus(currentVersion: "2026-10-28", acceptedVersion: "2026-10-28", acceptanceRequired: false)
+    LegalStatus(currentVersion: "2026-10-29", acceptedVersion: "2026-10-29", acceptanceRequired: false)
 }
 
 // MARK: - Acceptance state machine
 
 final class TermsAcceptanceDraftTests: XCTestCase {
 
-    func testEveryBoxStartsOffAndTheProfessionalAnswerIsNo() {
+    func testBothBoxesStartOff() {
         let draft = TermsAcceptanceDraft()
-        XCTAssertEqual(draft.step, .deviations)
-        XCTAssertFalse(draft.deviationsAccepted)
         XCTAssertFalse(draft.termsAccepted)
-        XCTAssertFalse(draft.professional)
-        let doc = LegalFixtures.document()
-        XCTAssertTrue(doc.groups.allSatisfy { !draft.isGroupAccepted($0.id) })
-        XCTAssertFalse(draft.canContinue(document: doc))
+        XCTAssertFalse(draft.specificAccepted)
+        XCTAssertFalse(draft.canContinue)
         XCTAssertNil(draft.acceptance(for: LegalFixtures.fetch()))
     }
 
-    func testEachStepContinuesOnlyWithItsOwnBoxes() {
-        let doc = LegalFixtures.document()
+    func testContinueNeedsBothBoxes() {
         var draft = TermsAcceptanceDraft()
-        XCTAssertFalse(draft.advance(document: doc), "step 1 needs the deviations box")
-        XCTAssertEqual(draft.step, .deviations)
-        draft.deviationsAccepted = true
-        XCTAssertTrue(draft.advance(document: doc))
-        XCTAssertEqual(draft.step, .terms)
-        XCTAssertFalse(draft.advance(document: doc), "step 2 needs the terms box")
         draft.termsAccepted = true
-        XCTAssertTrue(draft.advance(document: doc))
-        XCTAssertEqual(draft.step, .groups)
-        XCTAssertTrue(draft.isLastStep)
-        XCTAssertFalse(draft.advance(document: doc), "there is no step after the groups")
-    }
-
-    func testTheGroupsStepNeedsAllSixBoxes() {
-        let doc = LegalFixtures.document()
-        var draft = TermsAcceptanceDraft()
-        draft.deviationsAccepted = true
-        draft.advance(document: doc)
-        draft.termsAccepted = true
-        draft.advance(document: doc)
-        for group in doc.groups.dropLast() { draft.setGroup(group.id, accepted: true) }
-        XCTAssertFalse(draft.canContinue(document: doc), "five of six is not enough")
+        XCTAssertFalse(draft.canContinue, "the Terms box alone is not enough")
         XCTAssertNil(draft.acceptance(for: LegalFixtures.fetch()))
-        draft.setGroup("g6", accepted: true)
-        XCTAssertTrue(draft.canContinue(document: doc))
-        draft.setGroup("g3", accepted: false)
-        XCTAssertFalse(draft.canContinue(document: doc), "unticking one box closes the gate again")
+        draft.specificAccepted = true
+        XCTAssertTrue(draft.canContinue)
+        draft.termsAccepted = false
+        XCTAssertFalse(draft.canContinue, "unticking a box closes the gate again")
+        draft = TermsAcceptanceDraft()
+        draft.specificAccepted = true
+        XCTAssertFalse(draft.canContinue, "the specific box alone is not enough")
     }
 
-    func testBackKeepsTheBoxesAndStopsAtTheFirstStep() {
-        let doc = LegalFixtures.document()
-        var draft = TermsAcceptanceDraft()
-        draft.deviationsAccepted = true
-        draft.advance(document: doc)
-        XCTAssertTrue(draft.back())
-        XCTAssertEqual(draft.step, .deviations)
-        XCTAssertTrue(draft.deviationsAccepted)
-        XCTAssertFalse(draft.back())
-    }
-
-    func testTheAcceptanceCarriesTheDocumentTheScreenShowedAndTheProfessionalAnswer() throws {
+    func testTheAcceptanceCarriesTheDocumentTheScreenShowed() throws {
         let fetch = LegalFixtures.fetch(lang: "en")
         var draft = TermsAcceptanceDraft()
-        draft.deviationsAccepted = true
         draft.termsAccepted = true
-        draft.professional = true
-        for group in fetch.document.groups { draft.setGroup(group.id, accepted: true) }
+        draft.specificAccepted = true
         let acceptance = try XCTUnwrap(draft.acceptance(for: fetch))
-        XCTAssertEqual(acceptance.version, "2026-10-28")
+        XCTAssertEqual(acceptance.version, "2026-10-29")
         XCTAssertEqual(acceptance.lang, "en")
         XCTAssertEqual(acceptance.sha256, fetch.sha256)
         XCTAssertTrue(acceptance.terms)
-        XCTAssertTrue(acceptance.deviations)
-        XCTAssertTrue(acceptance.professional)
-        XCTAssertEqual(Set(acceptance.groups.keys), ["g1", "g2", "g3", "g4", "g5", "g6"])
-        XCTAssertTrue(acceptance.groups.values.allSatisfy { $0 })
+        XCTAssertTrue(acceptance.specific)
     }
 
     func testTheRequestBodyIsJsonWithRealBooleans() throws {
         let fetch = LegalFixtures.fetch()
         var draft = TermsAcceptanceDraft()
-        draft.deviationsAccepted = true
         draft.termsAccepted = true
-        for group in fetch.document.groups { draft.setGroup(group.id, accepted: true) }
+        draft.specificAccepted = true
         let data = try XCTUnwrap(draft.acceptance(for: fetch)).jsonData()
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(Set(json.keys), ["version", "lang", "sha256", "terms", "deviations", "groups", "professional", "platform", "app_version"])
-        for key in ["terms", "deviations", "professional"] {
+        XCTAssertEqual(Set(json.keys), ["version", "lang", "sha256", "terms", "specific", "platform", "app_version"])
+        for key in ["terms", "specific"] {
             let number = try XCTUnwrap(json[key] as? NSNumber)
             XCTAssertTrue(CFGetTypeID(number) == CFBooleanGetTypeID(), "\(key) is not a JSON boolean")
+            XCTAssertTrue(number.boolValue)
         }
-        XCTAssertEqual((json["professional"] as? NSNumber)?.boolValue, false)
-        let groups = try XCTUnwrap(json["groups"] as? [String: Any])
-        XCTAssertEqual(groups.count, 6)
     }
 
     func testTheLanguageIsItalianOnlyForAnItalianApp() {
@@ -174,9 +131,8 @@ final class TermsGateModelTests: XCTestCase {
     }
 
     private func tickEverything(_ model: TermsGateModel) {
-        model.draft.deviationsAccepted = true
+        model.draft.specificAccepted = true
         model.draft.termsAccepted = true
-        for group in LegalFixtures.document().groups { model.draft.setGroup(group.id, accepted: true) }
     }
 
     func testNothingIsShownWhenTheStatusSaysItIsNotRequired() async {
@@ -196,7 +152,7 @@ final class TermsGateModelTests: XCTestCase {
         await model.refresh()
         XCTAssertEqual(model.requirement, .required)
         XCTAssertTrue(model.isPresented)
-        XCTAssertEqual(model.fetch?.document.version, "2026-10-28")
+        XCTAssertEqual(model.fetch?.document.version, "2026-10-29")
     }
 
     func testAnActiveOrRingingCallDefersTheScreen() async {
@@ -216,12 +172,12 @@ final class TermsGateModelTests: XCTestCase {
         api.statusResults = [.success(needsAcceptance())]
         let model = makeModel(api)
         await model.refresh()
-        model.draft.deviationsAccepted = true
+        model.draft.specificAccepted = true
         model.setCallBusy(true)
         XCTAssertFalse(model.isPresented)
         model.setCallBusy(false)
         XCTAssertTrue(model.isPresented)
-        XCTAssertTrue(model.draft.deviationsAccepted)
+        XCTAssertTrue(model.draft.specificAccepted)
     }
 
     func testAnUnreadableStatusNeverBlocks() async {
@@ -250,7 +206,7 @@ final class TermsGateModelTests: XCTestCase {
         tickEverything(model)
         await model.submit()
         XCTAssertEqual(api.accepted.count, 1)
-        XCTAssertEqual(api.accepted.first?.version, "2026-10-28")
+        XCTAssertEqual(api.accepted.first?.version, "2026-10-29")
         XCTAssertEqual(model.requirement, .notRequired)
         XCTAssertFalse(model.isPresented)
     }
@@ -260,7 +216,7 @@ final class TermsGateModelTests: XCTestCase {
         api.statusResults = [.success(needsAcceptance())]
         let model = makeModel(api)
         await model.refresh()
-        model.draft.deviationsAccepted = true
+        model.draft.specificAccepted = true
         await model.submit()
         XCTAssertTrue(api.accepted.isEmpty)
         XCTAssertTrue(model.isPresented)
@@ -268,7 +224,7 @@ final class TermsGateModelTests: XCTestCase {
 
     func testAStaleEditionReadsTheServerAgainAndStartsOver() async {
         let api = FakeLegalApi()
-        api.statusResults = [.success(needsAcceptance("2026-10-28")), .success(needsAcceptance("2026-12-01"))]
+        api.statusResults = [.success(needsAcceptance("2026-10-29")), .success(needsAcceptance("2026-12-01"))]
         api.acceptResults = [.failure(LegalApiError.versionStale)]
         let model = makeModel(api)
         await model.refresh()
@@ -277,7 +233,7 @@ final class TermsGateModelTests: XCTestCase {
         await model.submit()
         XCTAssertEqual(model.problem, .editionChanged)
         XCTAssertEqual(model.fetch?.document.version, "2026-12-01")
-        XCTAssertFalse(model.draft.deviationsAccepted, "the boxes are cleared for the new text")
+        XCTAssertFalse(model.draft.specificAccepted, "the boxes are cleared for the new text")
         XCTAssertTrue(model.isPresented)
     }
 
@@ -379,35 +335,6 @@ private actor AsyncGate {
     }
 }
 
-// MARK: - Emergency notice
-
-final class EmergencyNoticePolicyTests: XCTestCase {
-
-    func testTheNoticeIsShownBeforeTheFirstCall() {
-        XCTAssertEqual(EmergencyNoticePolicy.decide(acknowledged: false, noticeText: "No emergency calls."),
-                       .show("No emergency calls."))
-    }
-
-    func testOnceAcknowledgedTheCallGoesAhead() {
-        XCTAssertEqual(EmergencyNoticePolicy.decide(acknowledged: true, noticeText: "No emergency calls."), .proceed)
-    }
-
-    func testACallIsNeverHeldBackForATextTheAppDoesNotHave() {
-        XCTAssertEqual(EmergencyNoticePolicy.decide(acknowledged: false, noticeText: nil), .proceed)
-        XCTAssertEqual(EmergencyNoticePolicy.decide(acknowledged: false, noticeText: "  \n"), .proceed)
-    }
-
-    func testTheFlagIsPersistedInUserDefaults() throws {
-        let suite = "emergency-notice-test-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let flag = UserDefaultsEmergencyNoticeFlag(defaults: defaults)
-        XCTAssertFalse(flag.acknowledged)
-        flag.acknowledged = true
-        XCTAssertTrue(UserDefaultsEmergencyNoticeFlag(defaults: defaults).acknowledged)
-    }
-}
-
 // MARK: - Markdown blocks
 
 final class LegalMarkdownTests: XCTestCase {
@@ -462,7 +389,7 @@ final class BCryptoLegalApiTests: XCTestCase {
         XCTAssertEqual(fetch.document.bodyMarkdown, "# Terms")
         XCTAssertEqual(fetch.document.emergencyNotice, "No emergency calls.")
         XCTAssertEqual(fetch.document.withdrawalInfo, "Withdraw here.")
-        XCTAssertEqual(fetch.document.groups.first?.clauses, "arts. 1")
+        XCTAssertEqual(fetch.document.specificApproval.text, "s text")
         XCTAssertEqual(fetch.sha256, BCryptoLegalApi.sha256Hex(bytes))
         XCTAssertEqual(fetch.sha256.count, 64)
     }
@@ -479,23 +406,22 @@ final class BCryptoLegalApiTests: XCTestCase {
     }
 
     func testStatusDecodesAnEmptyAcceptedVersion() async throws {
-        LegalStubURLProtocol.stubResponse = (200, Data(#"{"current_version":"2026-10-28","accepted_version":"","acceptance_required":true}"#.utf8))
+        LegalStubURLProtocol.stubResponse = (200, Data(#"{"current_version":"2026-10-29","accepted_version":"","acceptance_required":true}"#.utf8))
         let status = try await makeApi().status()
-        XCTAssertEqual(status, LegalStatus(currentVersion: "2026-10-28", acceptedVersion: "", acceptanceRequired: true))
-        LegalStubURLProtocol.stubResponse = (200, Data(#"{"current_version":"2026-10-28","acceptance_required":false}"#.utf8))
+        XCTAssertEqual(status, LegalStatus(currentVersion: "2026-10-29", acceptedVersion: "", acceptanceRequired: true))
+        LegalStubURLProtocol.stubResponse = (200, Data(#"{"current_version":"2026-10-29","acceptance_required":false}"#.utf8))
         let second = try await makeApi().status()
         XCTAssertFalse(second.acceptanceRequired)
     }
 
     func testAcceptPostsTheBodyAndMapsA409ToStale() async throws {
         LegalStubURLProtocol.stubResponse = (204, Data())
-        let acceptance = TermsAcceptance(version: "2026-10-28", lang: "it", sha256: "aa", terms: true, deviations: true,
-                                         groups: ["g1": true], professional: false)
+        let acceptance = TermsAcceptance(version: "2026-10-29", lang: "it", sha256: "aa", terms: true, specific: true)
         try await makeApi().accept(acceptance)
         XCTAssertEqual(LegalStubURLProtocol.lastRequestURL, "https://test.local/api/v1/legal/accept")
         XCTAssertEqual(LegalStubURLProtocol.lastMethod, "POST")
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(LegalStubURLProtocol.lastBody)) as? [String: Any])
-        XCTAssertEqual(json["version"] as? String, "2026-10-28")
+        XCTAssertEqual(json["version"] as? String, "2026-10-29")
 
         LegalStubURLProtocol.stubResponse = (409, Data(#"{"code":"terms_version_stale"}"#.utf8))
         do {

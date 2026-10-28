@@ -3,7 +3,7 @@ import QAudionEngine
 
 /// Age declaration shown on every screen that creates an account: a box stating that the person is at least
 /// `AgeDeclaration.minimumAge`, with links to the Terms and to the Privacy Policy. The acceptance of the Terms is not
-/// this box: it comes right after, in three steps of its own (`TermsAcceptanceLoaderView`). The screen keeps its submit
+/// this box: it comes right after, on a screen of its own (`TermsAcceptanceLoaderView`). The screen keeps its submit
 /// button off until the box is ticked, and sends the declaration to the server only when it is.
 /// Nothing is verified here: the declaration is what the person states.
 struct AgeDeclarationSection: View {

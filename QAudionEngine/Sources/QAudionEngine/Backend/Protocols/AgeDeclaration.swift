@@ -5,7 +5,7 @@ import Foundation
 /// The server reads two optional keys on the self-service registration endpoints (`/auth/otp/verify` with
 /// purpose `register`, `/auth/register/extension`, `/register`, `/register/sovereign`): `age_declaration`, true when
 /// the box was ticked, and `terms_acceptance`, the object built by ``TermsAcceptance`` (version and digest of the
-/// document shown, one flag per box, the professional answer). A registration without a valid `terms_acceptance`
+/// document shown, one flag per box). A registration without a valid `terms_acceptance`
 /// is refused with `400 terms_acceptance_required`. The client sends `age_declaration` only as `true`, never as
 /// `false`. Nothing here verifies the age, it is what the person declares.
 public enum AgeDeclaration {

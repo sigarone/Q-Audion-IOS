@@ -49,9 +49,31 @@ final class LegalWiringTests: XCTestCase {
         XCTAssertTrue(screen.contains("terms-gate-delete-account"))
     }
 
-    func testTheFirstPhoneCallAsksForTheEmergencyNotice() throws {
+    /// No pop-up before the first call: nothing about the emergency notice is awaited in `startCall`.
+    func testNoCallWaitsForTheEmergencyNotice() throws {
         let app = try code("QAudionApp/AppState.swift")
-        XCTAssertTrue(app.contains("if origin == .phone { await EmergencyNoticeCenter.shared.confirmBeforeFirstCall()"))
+        XCTAssertFalse(app.contains("EmergencyNotice"))
+        XCTAssertFalse(app.contains("confirmBeforeFirstCall"))
+        let root = try code("QAudionApp/Views/Legal/LegalRootModifier.swift")
+        XCTAssertFalse(root.contains("EmergencyNotice"))
+        XCTAssertFalse(root.contains(".alert("))
+    }
+
+    /// The notice stays readable in Settings > Legal and in About.
+    func testTheEmergencyNoticeStaysInSettingsAndAbout() throws {
+        XCTAssertTrue(try code("QAudionApp/Views/Legal/LegalSettingsViews.swift").contains("EmergencyNoticeCard(appState: appState)"))
+        XCTAssertTrue(try code("QAudionApp/Views/Settings/AboutSettingsScreen.swift").contains("EmergencyNoticeCard(appState: appState)"))
+    }
+
+    /// One screen, two boxes, no professional question.
+    func testTheAcceptanceIsOneScreenWithTwoBoxes() throws {
+        let screen = try code("QAudionApp/Views/Legal/TermsAcceptanceViews.swift")
+        XCTAssertTrue(screen.contains("isOn: $draft.termsAccepted"))
+        XCTAssertTrue(screen.contains("isOn: $draft.specificAccepted"))
+        XCTAssertTrue(screen.contains("SpecificApprovalSheet(approval: document.specificApproval)"))
+        XCTAssertTrue(screen.contains("document.emergencyNotice"))
+        XCTAssertFalse(screen.contains("professional"))
+        XCTAssertFalse(screen.contains("draft.step"))
     }
 
     func testEveryRegistrationPathSendsTheAcceptance() throws {
@@ -70,13 +92,6 @@ final class LegalWiringTests: XCTestCase {
         XCTAssertTrue(ext.contains("if BCryptoTermsRefusal.from(error) != nil {"))
         XCTAssertTrue(ext.contains("acceptedTerms = nil showingTerms = true"))
         XCTAssertTrue(ext.contains("guard let acceptance = acceptedTerms else { return } Task { await submit(acceptance: acceptance) }"))
-    }
-
-    func testTheEmergencyNoticeNeverHoldsTheStartGateForever() throws {
-        let service = try code("QAudionApp/Services/LegalService.swift")
-        XCTAssertTrue(service.contains("UIApplication.shared.applicationState == .active"))
-        let app = try code("QAudionApp/AppState.swift")
-        XCTAssertTrue(app.contains("if isInCall { callStartGate.end() RTLog.warn(\"call\", \"startCall ignored — a call went live while the emergency notice was shown\") return }"))
     }
 
     func testTheReceiptIsKeptOnDiskAndClosingUnsavedAsks() throws {

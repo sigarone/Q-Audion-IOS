@@ -138,7 +138,7 @@ struct ExtensionOnlyRegisterScreen: View {
                     Spacer().frame(height: 24)
 
                     Button {
-                        // The three acceptance steps come first; the account is created when they are done.
+                        // The acceptance screen comes first; the account is created when they are done.
                         guard canSubmit else { return }
                         acceptedTerms = nil
                         showingTerms = true
@@ -195,7 +195,7 @@ struct ExtensionOnlyRegisterScreen: View {
         } catch {
             errorText = userFacingMessage(for: error)
             if BCryptoTermsRefusal.from(error) != nil {
-                // The acceptance is no longer valid: the steps come back with a fresh document, the form stays filled,
+                // The acceptance is no longer valid: the screen comes back with a fresh document, the form stays filled,
                 // and the registration is sent again once they are done.
                 acceptedTerms = nil
                 showingTerms = true

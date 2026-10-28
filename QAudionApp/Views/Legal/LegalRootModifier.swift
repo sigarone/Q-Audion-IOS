@@ -5,12 +5,10 @@ import QAudionEngine
 /// What the root view adds for the legal layer, in one place:
 ///  - the blocking re-acceptance screen of an existing account (an overlay, not a presentation, so a call that
 ///    starts takes it down at once and never has to wait for it to slide away);
-///  - the receipt of a withdrawal, above everything, until it is closed;
-///  - the emergency notice before the first outgoing call.
+///  - the receipt of a withdrawal, above everything, until it is closed.
 struct LegalRootModifier: ViewModifier {
     let appState: AppState
     @StateObject private var gate: TermsGateModel
-    @ObservedObject private var emergency = EmergencyNoticeCenter.shared
     @ObservedObject private var receipts = WithdrawalReceiptStore.shared
     @Environment(\.scenePhase) private var scenePhase
     private let callBusy: AnyPublisher<Bool, Never>
@@ -45,20 +43,6 @@ struct LegalRootModifier: ViewModifier {
                 WithdrawalReceiptScreen(receipt: receipt) { receipts.close() }
                     .transition(.opacity)
                     .zIndex(11)
-            }
-        }
-        .alert(
-            LegalStrings.emergencyTitle,
-            isPresented: Binding(get: { emergency.pendingText != nil }, set: { _ in }),
-            actions: {
-                Button(LegalStrings.emergencyAck) { emergency.acknowledge() }
-            },
-            message: {
-                Text(verbatim: emergency.pendingText ?? "")
-            })
-        .onAppear {
-            EmergencyNoticeCenter.shared.configure { [weak weakState = appState] in
-                weakState.map { AppStateLegalApi(appState: $0) }
             }
         }
         .onReceive(callBusy) { busy in gate.setCallBusy(busy) }
