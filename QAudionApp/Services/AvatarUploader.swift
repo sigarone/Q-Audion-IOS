@@ -128,7 +128,7 @@ final class AvatarUploader {
             cacheDir = base.appendingPathComponent("qaudion/avatars", isDirectory: true)
             if !FileManager.default.fileExists(atPath: cacheDir.path) {
                 try FileManager.default.createDirectory(
-                    at: cacheDir, withIntermediateDirectories: true)
+                    at: cacheDir, withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
             }
             Self.excludeFromBackup(cacheDir)
         } catch {
@@ -136,7 +136,7 @@ final class AvatarUploader {
         }
         let selfURL = cacheDir.appendingPathComponent("self.jpg")
         do {
-            try jpegData.write(to: selfURL, options: [.atomic])
+            try jpegData.write(to: selfURL, options: FileProtection.atomicWriteOptions)
         } catch {
             throw Error.uploadFailed("local cache write: \(error.localizedDescription)")
         }

@@ -128,7 +128,7 @@ final class GroupAttachmentReceiver {
         let safeId = String(att.id.prefix(16)).replacingOccurrences(of: "/", with: "_")
         let url = dir.appendingPathComponent("grpattach-\(safeId)\(ext)")
         do {
-            try plaintext.write(to: url, options: [.atomic])
+            try plaintext.write(to: url, options: FileProtection.atomicWriteOptions)
         } catch {
             throw ReceiveError.writeFailed(error.localizedDescription)
         }

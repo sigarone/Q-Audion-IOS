@@ -134,7 +134,7 @@ final class ChatVoiceNoteReceiver {
             cacheDir = base.appendingPathComponent("voicenotes", isDirectory: true)
             if !FileManager.default.fileExists(atPath: cacheDir.path) {
                 try FileManager.default.createDirectory(
-                    at: cacheDir, withIntermediateDirectories: true
+                    at: cacheDir, withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes
                 )
             }
         } catch {
@@ -160,7 +160,7 @@ final class ChatVoiceNoteReceiver {
         }
         let outURL = cacheDir.appendingPathComponent(String(safe) + "." + ext)
         do {
-            try plaintextBytes.write(to: outURL, options: [.atomic])
+            try plaintextBytes.write(to: outURL, options: FileProtection.atomicWriteOptions)
         } catch {
             throw Error.writeFailed(error.localizedDescription)
         }

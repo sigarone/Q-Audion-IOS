@@ -256,7 +256,7 @@ public final class FileV2Encryptor: @unchecked Sendable {
         defer { try? input.close() }
         guard try input.seekToEnd() == plaintextSize else { throw cancelForContentChange() }
 
-        guard fileManager.createFile(atPath: destination.path, contents: nil) else {
+        guard fileManager.createFile(atPath: destination.path, contents: nil, attributes: FileProtection.lockedAccessAttributes) else {
             throw FileV2Error.invalidArgument("cannot create destination")
         }
         var finished = false

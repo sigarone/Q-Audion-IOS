@@ -30,7 +30,25 @@
 		     carries NO ratchet/session material — see that file's own
 		     security-design doc comment. -->
 		<string>group.com.bcrypto.qaudion.siri</string>
+		<!-- Notification App Group: message sound settings now, and the notification extension's shared data
+		     (contact names, avatars) later. Holds no key material. -->
+		<string>group.com.bcrypto.qaudion.notify</string>
 	</array>
+	<!-- Time Sensitive Notifications: the no-CallKit incoming call alert uses interruption level time-sensitive. -->
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
+	<!-- Keychain Sharing. The FIRST entry is the group of every item the app already has (the default group is the
+	     first entry); the second group holds the notification key and is shared with the notification extension
+	     only (see NotifyKeychain). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.qaudion.app</string>
+		<string>$(AppIdentifierPrefix)com.qaudion.notify</string>
+	</array>
+	<!-- Data Protection: files are complete-protected by default. Whatever must stay usable while the phone is locked
+	     (after the first unlock) names its class explicitly: see FileProtection. -->
+	<key>com.apple.developer.default-data-protection</key>
+	<string>NSFileProtectionComplete</string>
 	<!-- Universal Links — parity with the Android App Link intent-filter
 	     for the same host/path (email-verify-landing). Requires
 	     https://voip.bcrypto.com/.well-known/apple-app-site-association

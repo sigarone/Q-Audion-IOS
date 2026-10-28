@@ -370,7 +370,7 @@ final class AvatarAnnounceCoordinator {
         let downloaded = directory.appendingPathComponent("avatar.jpg")
         defer { try? FileManager.default.removeItem(at: directory) }
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
             let server = FileV2AppServices.makeServer(appState: appState)
             try await FileV2Receiver(server: server).download(descriptor, to: downloaded)
             let data = try Data(contentsOf: downloaded)
@@ -389,7 +389,7 @@ final class AvatarAnnounceCoordinator {
         return AvatarInboundApplier(
             decodes: { UIImage(data: $0) != nil },
             readCurrent: { try? Data(contentsOf: fileURL) },
-            write: { try $0.write(to: fileURL, options: [.atomic]) },
+            write: { try $0.write(to: fileURL, options: FileProtection.atomicWriteOptions) },
             cachedVersion: { ContactsStore().load().first(where: { $0.userId == senderId })?.avatarVersion ?? -1 },
             setLocalPath: { ContactsStore().setAvatarLocalPath(userId: senderId, path: fileURL, version: $0) },
             notify: { Self.postChatRefresh(senderId: senderId) },
@@ -490,7 +490,7 @@ final class AvatarAnnounceCoordinator {
             let plaintext = try await AvatarAnnounceReceiver(appState: appState)
                 .downloadAndDecrypt(envelope: envelope, senderId: senderId)
             let fileURL = try Self.peerAvatarFileURL(senderId: senderId)
-            try plaintext.write(to: fileURL, options: [.atomic])
+            try plaintext.write(to: fileURL, options: FileProtection.atomicWriteOptions)
             let applied = ContactsStore().setAvatarLocalPath(
                 userId: senderId, path: fileURL, version: version)
             guard applied else {
@@ -538,7 +538,7 @@ final class AvatarAnnounceCoordinator {
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
         ).appendingPathComponent("qaudion/avatars", isDirectory: true)
-        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true, attributes: FileProtection.lockedAccessAttributes)
         AvatarUploader.excludeFromBackup(cacheDir)
         let safeName = UUID(uuidString: senderId) != nil
             ? senderId

@@ -200,7 +200,7 @@ public final class SiriMessageBridgeStore {
             let sealedBox = try AES.GCM.seal(plaintext, using: key)
             guard let combined = sealedBox.combined else { return }
             let url = containerURL.appendingPathComponent(fileName)
-            try combined.write(to: url, options: .atomic)
+            try combined.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             try FileManager.default.setAttributes(
                 [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
                 ofItemAtPath: url.path)
@@ -244,7 +244,7 @@ public final class SiriMessageBridgeStore {
         let key = SymmetricKey(size: .bits256)
         let raw = key.withUnsafeBytes { Data($0) }
         do {
-            try raw.write(to: keyURL, options: .atomic)
+            try raw.write(to: keyURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             try FileManager.default.setAttributes(
                 [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
                 ofItemAtPath: keyURL.path)

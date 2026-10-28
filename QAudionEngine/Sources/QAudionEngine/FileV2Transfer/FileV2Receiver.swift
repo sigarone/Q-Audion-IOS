@@ -71,7 +71,7 @@ public final class FileV2Receiver: @unchecked Sendable {
 
         let fileManager = FileManager.default
         try? fileManager.removeItem(at: destination)
-        guard fileManager.createFile(atPath: destination.path, contents: nil) else {
+        guard fileManager.createFile(atPath: destination.path, contents: nil, attributes: FileProtection.lockedAccessAttributes) else {
             throw FileV2Failure.transfer(.noSpace)
         }
         var finished = false

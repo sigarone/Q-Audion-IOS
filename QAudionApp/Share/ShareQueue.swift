@@ -233,7 +233,7 @@ public struct ShareQueueStore {
     public func setRecentsHidden(_ hidden: Bool) {
         guard let root else { return }
         let url = root.appendingPathComponent(Self.recentsHiddenName)
-        if hidden { try? Data().write(to: url, options: [.atomic]) } else { try? fm.removeItem(at: url) }
+        if hidden { try? Data().write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]) } else { try? fm.removeItem(at: url) }
     }
 
     public var recentsHidden: Bool {
@@ -325,7 +325,7 @@ public struct ShareQueueStore {
     /// moved files, or `nil` when the move failed (the entry is then left in place).
     public func take(_ entry: ShareEntry, from folder: URL, into destination: URL) -> ShareHandoffPlan? {
         do {
-            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            try fm.createDirectory(at: destination, withIntermediateDirectories: true, attributes: Self.protection)
             for item in entry.items {
                 guard let name = item.fileName else { continue }
                 guard !Self.isSymbolicLink(folder.appendingPathComponent(name)) else { throw ShareQueueError.writeFailed }

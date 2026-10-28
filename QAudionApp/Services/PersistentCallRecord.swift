@@ -270,7 +270,8 @@ public final class PersistentCallRecordStore: ObservableObject {
         let dir = appSupport.appendingPathComponent("qaudion", isDirectory: true)
         // Create directory if needed; ignore errors (idempotent).
         try? FileManager.default.createDirectory(
-            at: dir, withIntermediateDirectories: true, attributes: nil
+            at: dir, withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUnlessOpen]
         )
         return dir.appendingPathComponent("call_history.enc")
     }
@@ -489,13 +490,14 @@ public final class PersistentCallRecordStore: ObservableObject {
             let sealedBox = try AES.GCM.seal(plaintext, using: key)
             guard let combined = sealedBox.combined else { return false }
             try? FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
+                at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.completeUnlessOpen])
             // The file about to be replaced becomes the single backup, unless it still holds records
             // the user has deleted: then it is not copied anywhere, and the copies that exist are
             // removed BEFORE the write, so an interrupted process cannot leave them behind.
             let copiesRemoved = removedByUserNotYetOnDisk ? removeCopiesOfRemovedHistory() : false
             if !removedByUserNotYetOnDisk { backUpCurrentFile() }
-            try combined.write(to: fileURL, options: .atomic)
+            try combined.write(to: fileURL, options: [.atomic, .completeFileProtectionUnlessOpen])
             if copiesRemoved {
                 removedByUserNotYetOnDisk = false
                 clearedByUserNotYetOnDisk = false

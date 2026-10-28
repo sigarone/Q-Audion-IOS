@@ -302,7 +302,8 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         }
         content.userInfo = info as [AnyHashable: Any]
         content.threadIdentifier = Category.incomingCall.rawValue
-        // Break through Focus/DnD (no special entitlement needed for time-sensitive).
+        // Break through Focus/DnD. Needs the Time Sensitive Notifications entitlement
+        // (com.apple.developer.usernotifications.time-sensitive, in the entitlements files).
         if #available(iOS 15.0, *) {
             content.interruptionLevel = .timeSensitive
         }

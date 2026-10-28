@@ -159,7 +159,7 @@ final class ChatAttachAnnounceReceiver {
         let safeId = String(envelope.att.id.prefix(16)).replacingOccurrences(of: "/", with: "_")
         let url = tempDir.appendingPathComponent("attach-\(safeId)\(ext)")
         do {
-            try plaintext.write(to: url, options: [.atomic])
+            try plaintext.write(to: url, options: FileProtection.atomicWriteOptions)
         } catch {
             throw ReceiveError.writeFailed(error.localizedDescription)
         }

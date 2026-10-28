@@ -95,8 +95,10 @@ enum DeviceContactLookup {
         let safeName = userId.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? UUID().uuidString
         let fileUrl = dir.appendingPathComponent("\(safeName).jpg")
         do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try data.write(to: fileUrl, options: .atomic)
+            let afterFirstUnlock = FileProtectionType.completeUntilFirstUserAuthentication
+            try FileManager.default.createDirectory(
+                at: dir, withIntermediateDirectories: true, attributes: [.protectionKey: afterFirstUnlock])
+            try data.write(to: fileUrl, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             return fileUrl
         } catch {
             return nil

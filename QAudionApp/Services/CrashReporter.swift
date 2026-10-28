@@ -276,7 +276,11 @@ enum CrashReporter {
             full += "\nbreadcrumbs:\n" + crumbs.joined(separator: "\n")
         }
         guard let data = full.data(using: .utf8) else { return }
-        try? data.write(to: URL(fileURLWithPath: reportPath))
+        // Created with the after-first-unlock class: the default (complete) class would lose the report of a crash
+        // that happens while the phone is locked.
+        FileManager.default.createFile(
+            atPath: reportPath, contents: data,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
         let crashKey = "qaudion.crash_count"
         let count = UserDefaults.standard.integer(forKey: crashKey) + 1
         UserDefaults.standard.set(count, forKey: crashKey)
