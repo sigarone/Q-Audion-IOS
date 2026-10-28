@@ -930,13 +930,24 @@ final class GroupMediaSessionTests: XCTestCase {
         let ok = await h.waitUntil { h.server.pluginRequests.contains("start") }
         XCTAssertTrue(ok, "Bob's subscription is answered although the batch that named Carol was refused")
         XCTAssertTrue(h.subscriber.acceptedStreams.last?.contains(where: { $0.feedId == bob }) == true)
-        XCTAssertTrue(h.rejoinReasons().isEmpty, "a vanished feed is not a broken media path")
         let joins = h.server.bodies(for: "join").filter { ($0["ptype"] as? String) == "subscriber" }
         XCTAssertGreaterThanOrEqual(joins.count, 2, "the refused batch, then Bob on his own")
+        // The feeds are retried one after the other, so Carol's own attempt may still be
+        // on its way when Bob's `start` is seen: count only once it has been sent.
+        let carolAloneRequests: () -> Int = {
+            (h.server.bodies(for: "subscribe") + h.server.bodies(for: "join")).filter { body in
+                guard let streams = body["streams"] as? [[String: Any]], !streams.isEmpty else { return false }
+                return streams.allSatisfy { ($0["feed"] as? String) == self.carol }
+            }.count
+        }
+        let carolTried = await h.waitUntil { carolAloneRequests() > 0 }
+        XCTAssertTrue(carolTried, "Carol is asked for on her own")
         // Carol is not asked for again until a `publishers` event names her.
         let subscribesBefore = h.server.pluginRequests.filter { $0 == "subscribe" }.count
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(h.server.pluginRequests.filter { $0 == "subscribe" }.count, subscribesBefore)
+        XCTAssertEqual(carolAloneRequests(), 1)
+        XCTAssertTrue(h.rejoinReasons().isEmpty, "a vanished feed is not a broken media path")
         h.session.close()
     }
 
