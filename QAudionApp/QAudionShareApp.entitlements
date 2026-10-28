@@ -19,6 +19,9 @@
 	     via QAudionApp.swift's .onContinueUserActivity. -->
 	<key>com.apple.developer.siri</key>
 	<true/>
+	<!-- App Attest: device attestation. -->
+	<key>com.apple.developer.devicecheck.appattest-environment</key>
+	<string>production</string>
 	<key>aps-environment</key>
 	<string>production</string>
 	<!-- App Groups: one entry per feature-scoped extension. -->

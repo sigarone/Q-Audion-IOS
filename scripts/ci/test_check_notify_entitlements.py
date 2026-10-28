@@ -24,6 +24,7 @@ GOOD = {
     "com.apple.security.application-groups": ["group.com.bcrypto.qaudion.notify"],
     "com.apple.developer.default-data-protection": "NSFileProtectionComplete",
     "com.apple.developer.usernotifications.communication": True,
+    "com.apple.developer.devicecheck.appattest-environment": "production",
 }
 EXT_FILE = "QAudionNotificationService/QAudionNotificationService.entitlements"
 EXT_GOOD = {
@@ -66,6 +67,8 @@ class Check(unittest.TestCase):
             lambda d: d.__setitem__("com.apple.security.application-groups", []),
             lambda d: d.__setitem__("com.apple.developer.default-data-protection", "NSFileProtectionNone"),
             lambda d: d.pop("com.apple.developer.usernotifications.communication"),
+            lambda d: d.pop("com.apple.developer.devicecheck.appattest-environment"),
+            lambda d: d.__setitem__("com.apple.developer.devicecheck.appattest-environment", "development"),
         ]
         for mutate in mutations:
             result = run(self.tree(second=self.mutated(mutate)))
