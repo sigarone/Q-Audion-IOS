@@ -1268,8 +1268,8 @@ struct InCallScreen: View {
 
     // MARK: - SAS panel
 
-    /// W-NFCBADGE — when S2 (`.nfcAuthenticated`) is this call's live verdict,
-    /// the SAS ceremony is redundant (physical NFC proximity already exceeds
+    /// When the live verdict does not require the code (S2 `.nfcAuthenticated`,
+    /// S8 `.pskConfirmed`: `sasRequired == false`), the SAS ceremony is redundant (physical NFC proximity already exceeds
     /// what a verbal compare proves — see `AssuranceStateUI.Presentation
     /// .sasRequired`'s own doc, `false` for exactly this state) but stays
     /// FULLY visible and functional: same words, same button, same
@@ -1277,7 +1277,7 @@ struct InCallScreen: View {
     /// visual WEIGHT changes (a de-emphasizing opacity + a small explanatory
     /// hint), never the availability.
     private var sasCeremonyRedundant: Bool {
-        assurancePresentation?.isPhysicalPresenceProof == true
+        SasCardPlacement.isRedundant(sasRequired: assurancePresentation?.sasRequired)
     }
 
     /// Shown instead of the SAS panel while the callee waits for the caller's REVEAL (normally well under
@@ -1323,7 +1323,9 @@ struct InCallScreen: View {
     private var sasHeaderAndWords: some View {
         VStack(alignment: .leading, spacing: 12) {
             if sasCeremonyRedundant {
-                Text("Non necessario: già autenticato di persona")
+                Text(assurancePresentation?.isPhysicalPresenceProof == true
+                     ? String(localized: "Non necessario: già autenticato di persona")
+                     : String(localized: "sas.hint.contact_already_verified", defaultValue: "Contatto già verificato: il confronto del codice è facoltativo", comment: "SAS card hint shown when the contact's key was already confirmed, so comparing the words is optional"))
                     .qaudionStyle(type.labelSmall)
                     .foregroundStyle(scheme.onSurfaceVariant.opacity(0.85))
             }
