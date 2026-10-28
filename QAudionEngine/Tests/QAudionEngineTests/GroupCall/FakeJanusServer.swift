@@ -30,6 +30,8 @@ final class FakeJanusServer: JanusSocket, @unchecked Sendable {
     /// request names whose replies are swallowed (timeout tests).
     var swallow: Set<String> = []
     var swallowOnce: Set<String> = []
+    /// Delay before answering a request, decided from its plugin body (nil: answered at once).
+    var replyDelay: (([String: Any]) -> TimeInterval?)?
     var claimError: Int?
     var requireToken: String?
 
@@ -76,6 +78,10 @@ final class FakeJanusServer: JanusSocket, @unchecked Sendable {
         lock.lock()
         _requests.append(object)
         lock.unlock()
+        if let body = object["body"] as? [String: Any], let delay = replyDelay?(body) {
+            queue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.respond(to: object) }
+            return
+        }
         queue.async { [weak self] in self?.respond(to: object) }
     }
 

@@ -548,7 +548,9 @@ final class GroupMediaSessionTests: XCTestCase {
     }
 
     func testALayerSwitchJanusNeverConfirmsIsSentAgainThreeTimesThenGivenUp() async throws {
-        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], layerPolicy: unconfirmedPolicy(confirmAfterMs: 120))
+        // A window comfortably longer than a `configure` round trip on a loaded machine: two
+        // re-sends falling due while one request is still in flight go out as one.
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], layerPolicy: unconfirmedPolicy(confirmAfterMs: 200))
         h.server.subscriberStreams = bobStreams()
         try await h.session.start(publishVideo: true)
         _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
@@ -565,6 +567,33 @@ final class GroupMediaSessionTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(attempts, [1, 2, 3])
+        h.session.close()
+    }
+
+    func testAReSendThatFallsDueWhileTheSwitchIsStillInFlightIsSentAfterIt() async throws {
+        let h = SessionHarness(publishersOnJoin: [FakeJanusServer.publisher(id: bob)], layerPolicy: unconfirmedPolicy(confirmAfterMs: 150))
+        h.server.subscriberStreams = bobStreams()
+        // The first `configure` for substream 2 is answered after 250 ms (under the 400 ms
+        // request timeout): the first re-send falls due while it is still in flight.
+        let delayed = NSLock()
+        var delayedOnce = false
+        h.server.replyDelay = { body in
+            guard (body["request"] as? String) == "configure",
+                  (body["streams"] as? [[String: Any]])?.first?["substream"] as? Int == 2 else { return nil }
+            return delayed.withLock { () -> TimeInterval? in
+                if delayedOnce { return nil }
+                delayedOnce = true
+                return 0.25
+            }
+        }
+        try await h.session.start(publishVideo: true)
+        _ = await h.waitUntil { h.server.pluginRequests.contains("start") }
+        h.session.setTile(pseudonym: bob, tile: .fullscreen, visible: true)
+        let gaveUp = await h.waitUntil(6) { self.telemetryCount(h, kind: GroupTelemetry.Kind.layerUnconfirmed, to: 2) == 1 }
+        XCTAssertTrue(gaveUp)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(telemetryCount(h, kind: GroupTelemetry.Kind.layerResend, to: 2), 3)
+        XCTAssertEqual(configuresSent(h, substream: 2), 4, "every reported re-send is put on the wire")
         h.session.close()
     }
 

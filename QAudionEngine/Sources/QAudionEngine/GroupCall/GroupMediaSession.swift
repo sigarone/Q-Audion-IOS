@@ -263,6 +263,10 @@ public final class GroupMediaSession: @unchecked Sendable {
     private var subscriberStreams: [String: VideoRoomStream] = [:]
     private var desiredLayers: [String: (substream: Int, temporal: Int)] = [:]
     private var appliedLayers: [String: (substream: Int, temporal: Int)] = [:]
+    /// Bumped whenever a key's applied layer is forgotten. A `configure` already in flight
+    /// then does not record its layer as applied: a re-send of that very layer, queued
+    /// behind it, would otherwise find nothing left to send.
+    private var layerGeneration: [String: Int] = [:]
     private var lastStats: [String: GroupInboundVideoStat] = [:]
     /// Diagnosis heartbeat: when it last ran, and the cumulative counters it last saw
     /// (per remote audio mid, and our own outbound ones) to print deltas.
@@ -527,8 +531,16 @@ public final class GroupMediaSession: @unchecked Sendable {
     private func forgetSubscriptionsLocked(of id: String) {
         let prefix = id + "|"
         subscribed = subscribed.filter { !$0.hasPrefix(prefix) }
+        for key in Set(desiredLayers.keys).union(appliedLayers.keys) where key.hasPrefix(prefix) {
+            layerGeneration[key, default: 0] += 1
+        }
         desiredLayers = desiredLayers.filter { !$0.key.hasPrefix(prefix) }
         appliedLayers = appliedLayers.filter { !$0.key.hasPrefix(prefix) }
+    }
+
+    private func forgetAppliedLayerLocked(_ key: String) {
+        appliedLayers[key] = nil
+        layerGeneration[key, default: 0] += 1
     }
 
     private func registerVideoStreamsLocked() {
@@ -690,7 +702,7 @@ public final class GroupMediaSession: @unchecked Sendable {
                 if let feed = stream.feedId, let feedMid = stream.feedMid,
                    targets.contains(Self.key(feed: feed, mid: feedMid)) {
                     subscriberStreams[mid] = nil
-                    appliedLayers[Self.key(feed: feed, mid: feedMid)] = nil
+                    forgetAppliedLayerLocked(Self.key(feed: feed, mid: feedMid))
                 }
             }
         }
@@ -711,7 +723,7 @@ public final class GroupMediaSession: @unchecked Sendable {
                         // its feed): forget the mapping so the receiver is reported as gone.
                         if let old = subscriberStreams.removeValue(forKey: stream.mid),
                            let feed = old.feedId, let feedMid = old.feedMid {
-                            appliedLayers[Self.key(feed: feed, mid: feedMid)] = nil
+                            forgetAppliedLayerLocked(Self.key(feed: feed, mid: feedMid))
                         }
                         lastStats[stream.mid] = nil
                     } else if stream.feedId != nil {
@@ -752,7 +764,7 @@ public final class GroupMediaSession: @unchecked Sendable {
                 changed = true
             case .configure(let key, let substream, let temporal, let from, let reason):
                 desiredLayers[key] = (substream: substream, temporal: temporal)
-                appliedLayers[key] = nil
+                forgetAppliedLayerLocked(key)
                 reports.append(GroupTelemetry.layer(mid: Self.publisherMid(of: key),
                                                     from: from, to: substream, reason: reason))
             }
@@ -760,7 +772,7 @@ public final class GroupMediaSession: @unchecked Sendable {
         var resent = false
         for item in confirmations.resend {
             // Forgetting that it was applied makes the next apply send the very same layer.
-            appliedLayers[item.key] = nil
+            forgetAppliedLayerLocked(item.key)
             resent = true
             reports.append(GroupTelemetry.layerResend(mid: Self.publisherMid(of: item.key), to: item.substream, attempt: item.attempt))
         }
@@ -785,12 +797,13 @@ public final class GroupMediaSession: @unchecked Sendable {
 
     private func applyDesiredLayers() async {
         guard let handle = currentSubHandle() else { return }
-        let (pendingKeys, sent, configs) = lock.withLock {
-            () -> ([String], [String: (substream: Int, temporal: Int)], [VideoRoomLayerConfig]) in
+        let (pendingKeys, sent, generations, configs) = lock.withLock {
+            () -> ([String], [String: (substream: Int, temporal: Int)], [String: Int], [VideoRoomLayerConfig]) in
             var pendingKeys: [String] = []
             // What is actually put on the wire: a layer change that lands while this request
             // is in flight must not be recorded as applied (it would never be sent).
             var sent: [String: (substream: Int, temporal: Int)] = [:]
+            var generations: [String: Int] = [:]
             var configs: [VideoRoomLayerConfig] = []
             for (key, layer) in desiredLayers {
                 if let applied = appliedLayers[key], applied.substream == layer.substream, applied.temporal == layer.temporal { continue }
@@ -802,14 +815,17 @@ public final class GroupMediaSession: @unchecked Sendable {
                 configs.append(VideoRoomLayerConfig(mid: entry.key, substream: layer.substream, temporal: layer.temporal))
                 pendingKeys.append(key)
                 sent[key] = layer
+                generations[key] = layerGeneration[key, default: 0]
             }
-            return (pendingKeys, sent, configs)
+            return (pendingKeys, sent, generations, configs)
         }
         guard !configs.isEmpty else { return }
         do {
             _ = try await withTimeoutRetry { try await self.room.configureSubscriber(handle: handle, layers: configs) }
             lock.withLock {
-                for key in pendingKeys { appliedLayers[key] = sent[key] }
+                for key in pendingKeys where layerGeneration[key, default: 0] == generations[key] {
+                    appliedLayers[key] = sent[key]
+                }
             }
         } catch JanusClientError.plugin(let code, _) where code == 428 {
             // The stream vanished under the request: the roster events tidy up.
