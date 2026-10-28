@@ -143,6 +143,11 @@ on:
         required: false
         type: boolean
         default: false
+      share:
+        description: 'Build WITH the share extension (compile condition QAUDION_SHARE, spec QAudionApp/project-share.yml, extension com.qaudion.app.share, App Group group.com.bcrypto.qaudion.share). Needs the App ID and the App Group set up in the Apple Developer portal. Cannot be combined with vpn or earbud. Ignored on a tag push -- workflow_dispatch only.'
+        required: false
+        type: boolean
+        default: false
       dev_tools:
         description: 'DEV BUILD (internal testing only): compile in QAUDION_DEV_TOOLS (Settings "SVILUPPATORE" section + other TestFlight-facing surfaces) and skip the store-readiness TestFlight-strings gate. Never submit a build made with this on for App Store review. Ignored on a tag push -- workflow_dispatch only.'
         required: false
@@ -203,6 +208,9 @@ jobs:
       # stack" note at the top). 'true' only for a workflow_dispatch with earbud=true; a tag
       # push is always 'false'.
       EARBUD_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.earbud == 'true' && 'true' || 'false' }}
+      # The share extension in this build (QAudionApp/project-share.yml). 'true' only for a workflow_dispatch with
+      # share=true; a tag push is always 'false'.
+      SHARE_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.share == 'true' && 'true' || 'false' }}
       # age public key (X25519) the dSYM artifacts are encrypted to. PUBLIC by design: it can
       # only encrypt. The matching private key is kept off GitHub. Rotating it means a new
       # key pair and a new value here; artifacts already uploaded stay readable only with
@@ -424,7 +432,14 @@ jobs:
       - name: Generate Xcode project
         working-directory: QAudionApp
         run: |
-          if [ "$VPN_BUILD" = "true" ] && [ "$EARBUD_BUILD" = "true" ]; then
+          if [ "$SHARE_BUILD" = "true" ] && { [ "$VPN_BUILD" = "true" ] || [ "$EARBUD_BUILD" = "true" ]; }; then
+            echo "::error::share cannot be combined with vpn or earbud (there is no combined spec)"
+            exit 1
+          fi
+          if [ "$SHARE_BUILD" = "true" ]; then
+            echo "::warning::SHARE BUILD -- generated from project-share.yml (QAUDION_SHARE compiled in, share extension embedded)."
+            xcodegen generate --spec project-share.yml
+          elif [ "$VPN_BUILD" = "true" ] && [ "$EARBUD_BUILD" = "true" ]; then
             echo "::warning::VPN + EARBUD BUILD -- generated from project-vpn-earbud.yml (QAUDION_VPN and QAUDION_EARBUD compiled in). Internal testing only."
             xcodegen generate --spec project-vpn-earbud.yml
           elif [ "$VPN_BUILD" = "true" ]; then
@@ -545,6 +560,13 @@ jobs:
           INTENTS_PLIST="../QAudionIntents/Info.plist"
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$INTENTS_PLIST"
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$INTENTS_PLIST"
+
+          # The share extension, in a build that contains it.
+          if [ "$SHARE_BUILD" = "true" ]; then
+            SHARE_PLIST="../QAudionShare/Info.plist"
+            plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$SHARE_PLIST"
+            plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$SHARE_PLIST"
+          fi
 
           plutil -extract CFBundleShortVersionString raw -o - Info.plist
           plutil -extract CFBundleVersion             raw -o - Info.plist
@@ -814,11 +836,21 @@ jobs:
               for key in missing:
                   print("::error::the App Store profile of the main app lacks the entitlement " + key)
               sys.exit(1)
+          # A list entitlement (the App Groups) must carry every value of the file, not only the key.
+          for key, value in required.items():
+              if isinstance(value, list):
+                  absent = sorted(str(v) for v in value if v not in profile.get(key, []))
+                  if absent:
+                      for v in absent:
+                          print("::error::the App Store profile of the main app lacks " + key + " value " + v)
+                      sys.exit(1)
           print("Main app profile carries all %d entitlements of the entitlements file." % len(required))
           PROFCHECK
           }
           if [ "$VPN_BUILD" = "true" ]; then
             verify_profile_entitlements QAudionApp/QAudionVPN.entitlements
+          elif [ "$SHARE_BUILD" = "true" ]; then
+            verify_profile_entitlements QAudionApp/QAudionShareApp.entitlements
           else
             verify_profile_entitlements QAudionApp/QAudion.entitlements
           fi
@@ -1000,6 +1032,69 @@ jobs:
               --strict-match-identifier
           else
             echo "WARNING: could not resolve Intents Extension Bundle ID resource -- archive may fail."
+          fi
+
+          # -- Share extension: App Groups (only in a build that contains it) ------
+          # Same enable-capabilities / delete-stale-profile sequence as the Intents extension above. The App Group
+          # group.com.bcrypto.qaudion.share itself, and its assignment to com.qaudion.app and com.qaudion.app.share,
+          # are set up in the Apple Developer portal: this API step enables the capability and renews the profile so
+          # it carries the group.
+          if [ "$SHARE_BUILD" = "true" ]; then
+            SHARE_BID="com.qaudion.app.share"
+            SHARE_FETCH_TMP=$(mktemp)
+            app-store-connect fetch-signing-files "$SHARE_BID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier 2>&1 | tee "$SHARE_FETCH_TMP" || true
+            SHARE_PLAIN=$(sed 's/\x1b\[[0-9;]*m//g' "$SHARE_FETCH_TMP")
+            rm -f "$SHARE_FETCH_TMP"
+
+            SHARE_BID_RES=$(printf '%s\n' "$SHARE_PLAIN" \
+              | grep -oE 'Created Bundle ID [A-Z0-9]{10}|Bundle ID [A-Z0-9]{10}' \
+              | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+            if [ -z "$SHARE_BID_RES" ]; then
+              SHARE_BID_RES=$(printf '%s\n' "$SHARE_PLAIN" \
+                | grep -F "com.qaudion.app.share" \
+                | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+            fi
+            echo "Share Extension Bundle ID res-id: ${SHARE_BID_RES:-UNKNOWN}"
+
+            SHARE_PROF_RES=$(printf '%s\n' "$SHARE_PLAIN" \
+              | grep -oE 'Created Profile [A-Z0-9]{10}' \
+              | grep -oE '[A-Z0-9]{10}' | head -1 || echo "")
+            if [ -z "$SHARE_PROF_RES" ]; then
+              SHARE_PROF_RES=$(printf '%s\n' "$SHARE_PLAIN" \
+                | grep -E '^- IOS_APP_STORE' \
+                | grep -oE '\([A-Z0-9]{10}\)' | tr -d '()' | head -1 || echo "")
+            fi
+            echo "Share Extension Profile res-id: ${SHARE_PROF_RES:-UNKNOWN}"
+
+            if [ -z "$SHARE_BID_RES" ]; then
+              echo "::error::could not resolve the Bundle ID resource of $SHARE_BID -- the archive would fail"
+              exit 1
+            fi
+            echo "Enabling APP_GROUPS on $SHARE_BID_RES..."
+            app-store-connect bundle-ids enable-capabilities \
+              "$SHARE_BID_RES" --capability "App Groups" 2>&1 \
+              && echo "  APP_GROUPS: done" \
+              || echo "  APP_GROUPS: WARN (may already be enabled)"
+            if [ -n "$SHARE_PROF_RES" ]; then
+              echo "Deleting stale profile $SHARE_PROF_RES (it may predate the capability)..."
+              app-store-connect profiles delete "$SHARE_PROF_RES" 2>&1 \
+                && echo "  Profile deleted." \
+                || echo "  Profile delete WARN (may already be gone)"
+            fi
+            echo "Re-creating share extension signing files with capabilities..."
+            app-store-connect fetch-signing-files "$SHARE_BID" \
+              --type IOS_APP_STORE \
+              --create \
+              --platform IOS \
+              --certificate-key "@file:$CERT_KEY_PATH" \
+              --strict-match-identifier
+          else
+            echo "Default build (no share extension): skipping the share extension signing files."
           fi
 
           keychain add-certificates
@@ -1215,6 +1310,9 @@ jobs:
           MANIFESTS="$APP/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy"
           if [ "$VPN_BUILD" = "true" ]; then
             MANIFESTS="$MANIFESTS $APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"
+          fi
+          if [ "$SHARE_BUILD" = "true" ]; then
+            MANIFESTS="$MANIFESTS $APP/PlugIns/QAudionShare.appex/PrivacyInfo.xcprivacy"
           fi
           MANIFEST_COUNT=$(echo $MANIFESTS | wc -w | tr -d ' ')
           for MANIFEST in $MANIFESTS; do

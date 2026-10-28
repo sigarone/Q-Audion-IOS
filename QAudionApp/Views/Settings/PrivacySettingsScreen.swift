@@ -143,7 +143,11 @@ struct PrivacySettingsScreen: View {
     private var appLockEnabled: Binding<Bool> {
         Binding(
             get: { PrivacyGate.appLockEnabled },
-            set: { PrivacyGate.setAppLockEnabled($0) }
+            set: {
+                PrivacyGate.setAppLockEnabled($0)
+                // The share sheet shows no chat names while the lock is on.
+                AppState.shared.refreshShareRecentChats()
+            }
         )
     }
 

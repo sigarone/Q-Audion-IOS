@@ -339,6 +339,10 @@ struct QAudionApp: App {
                 appState.phoneTransferNotice.setLocked(locked)
                 if !locked { appState.refreshPhoneTransferNotice() }
             }
+            // A share waiting behind the app lock is picked up once the app unlocks.
+            .onChange(of: lockService.isLocked) { locked in
+                if !locked { appState.takeShareQueue() }
+            }
             // The car screen lists nothing while the app lock is up.
             .onChange(of: lockService.isLocked) { _ in
                 CarPlayBridge.shared.lockDidChange()
@@ -534,6 +538,9 @@ struct QAudionApp: App {
             // on cold launch, see AppState.initialize()'s own call).
             appState.drainSiriOutbox()
             appState.refreshSiriMessageCache()
+            // Items shared into the app from another app, and the chats the share extension offers.
+            appState.takeShareQueue()
+            appState.refreshShareRecentChats()
             // Back in front (with or without a chat already open): the generic message alerts are not needed.
             appState.clearGenericMessageAlerts(for: .sceneActive)
             // Pending phone-number transfers: read again on a return to the foreground (a locked

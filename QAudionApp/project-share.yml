@@ -1,0 +1,47 @@
+# XcodeGen spec for the build WITH the share extension (QAUDION_SHARE).
+#
+# QAudionApp/project.yml is the default spec and has no share extension. This file includes it and adds the
+# QAUDION_SHARE compilation condition to the app (it then keeps the list of recent chats for the extension) and the
+# QAudionShare extension, embedded in the app. Sources: ../QAudionShare, plus ShareQueue.swift compiled directly into
+# the extension (Foundation only, no engine).
+#
+# Generate with:  cd QAudionApp && xcodegen generate --spec project-share.yml
+#
+# Signing needs the App ID com.qaudion.app.share with the App Groups capability and the group
+# group.com.bcrypto.qaudion.share, and the group on com.qaudion.app too. ios-testflight.yml (dispatch with share=true)
+# creates the identifier and its profile and regenerates the main profile; the group assignment itself is done in the
+# Apple Developer portal.
+
+include:
+  - project.yml
+
+targets:
+  QAudionApp:
+    settings:
+      base:
+        OTHER_SWIFT_FLAGS: $(inherited) -DQAUDION_SHARE
+        # QAudion.entitlements plus the share App Group; the default entitlements do not carry that group.
+        CODE_SIGN_ENTITLEMENTS: QAudionShareApp.entitlements
+    dependencies:
+      - target: QAudionShare
+        embed: true
+
+  QAudionShare:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../QAudionShare
+      - path: ../QAudionApp/Share/ShareQueue.swift
+    settings:
+      base:
+        INFOPLIST_FILE: ../QAudionShare/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../QAudionShare/QAudionShare.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.share
+        PRODUCT_NAME: QAudionShare
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: 5G22P9239N
+        CODE_SIGN_STYLE: Automatic
+        SKIP_INSTALL: YES
+        # Extension code must not use APIs that are unavailable to extensions.
+        APPLICATION_EXTENSION_API_ONLY: YES

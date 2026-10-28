@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- A dedicated App Group, shared with the main app. The share queue and the list of recent
+	     chats live in its container; nothing that protects a message is stored there. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.bcrypto.qaudion.share</string>
+	</array>
+</dict>
+</plist>

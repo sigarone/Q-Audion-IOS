@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Entitlements of the build WITH the share extension (QAUDION_SHARE): QAudion.entitlements plus the
+	     App Group shared with the extension. Selected by project-share.yml; the default and tag builds do not
+	     use this file and do not depend on that group. -->
+	<key>com.apple.developer.nfc.readersession.formats</key>
+	<array>
+		<string>TAG</string>
+	</array>
+	<!-- CarPlay Communication app (managed capability, enabled on the App ID): the in-car scene of
+	     QAudionApp/CarPlay. -->
+	<key>com.apple.developer.carplay-communication</key>
+	<true/>
+	<!-- CarPlay/Siri state-of-the-art plan S1 — self-service capability.
+	     Lets the QAudionIntents Intents Extension handle "Hey Siri, chiama X su
+	     Q-Audion" (INStartCallIntent) and hands off to AppState.startCall
+	     via QAudionApp.swift's .onContinueUserActivity. -->
+	<key>com.apple.developer.siri</key>
+	<true/>
+	<key>aps-environment</key>
+	<string>production</string>
+	<!-- App Groups: one entry per feature-scoped extension. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<!-- CarPlay/Siri state-of-the-art plan S2 — dedicated App Group for
+		     SiriMessageBridgeStore.swift (QAudionApp/Siri/), shared with
+		     QAudionIntents. Deliberately SEPARATE from the vpn group
+		     (this project's per-feature App Group convention) and
+		     carries NO ratchet/session material — see that file's own
+		     security-design doc comment. -->
+		<string>group.com.bcrypto.qaudion.siri</string>
+		<string>group.com.bcrypto.qaudion.share</string>
+	</array>
+	<!-- Universal Links — parity with the Android App Link intent-filter
+	     for the same host/path (email-verify-landing). Requires
+	     https://voip.bcrypto.com/.well-known/apple-app-site-association
+	     to list this app's Team ID + bundle ID (cmd/bcrypto-lite/main.go). -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:voip.bcrypto.com</string>
+	</array>
+</dict>
+</plist>

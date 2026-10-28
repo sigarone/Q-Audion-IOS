@@ -84,6 +84,7 @@ targets:
           - RecoveryEnrollmentStatusTests.swift
           - ReKeyAvatarRingTests.swift
           - RuntimeLogSinkTeeTests.swift
+          - ShareQueueTests.swift
           - SiriIntentPolicyTests.swift
           - TrustEvaluationModelTests.swift
           - VoiceDisplayFormatTests.swift

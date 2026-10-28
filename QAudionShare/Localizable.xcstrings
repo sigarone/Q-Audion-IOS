@@ -1,0 +1,510 @@
+{
+  "sourceLanguage": "it",
+  "strings": {
+    "share.title": {
+      "extractionState": "manual",
+      "comment": "Title of the share sheet of the app.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invia con Q-Audion"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send with Q-Audion"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer avec Q-Audion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit Q-Audion senden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviar con Q-Audion"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviar com o Q-Audion"
+          }
+        }
+      }
+    },
+    "share.cancel": {
+      "extractionState": "manual",
+      "comment": "Button that closes the share sheet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annulla"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annuler"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abbrechen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar"
+          }
+        }
+      }
+    },
+    "share.choose": {
+      "extractionState": "manual",
+      "comment": "Share sheet: header of the list of chats.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli la chat"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the chat"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisis la discussion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chat auswählen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige el chat"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolha o chat"
+          }
+        }
+      }
+    },
+    "share.empty": {
+      "extractionState": "manual",
+      "comment": "Share sheet: no chat to choose from yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri Q-Audion e inizia una conversazione: poi potrai condividere qui."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Q-Audion and start a conversation: then you can share here."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre Q-Audion et démarre une conversation : tu pourras ensuite partager ici."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnen Sie Q-Audion und beginnen Sie eine Unterhaltung: Danach können Sie hier teilen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre Q-Audion e inicia una conversación: después podrás compartir aquí."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abra o Q-Audion e inicie uma conversa: depois você poderá compartilhar aqui."
+          }
+        }
+      }
+    },
+    "share.working": {
+      "extractionState": "manual",
+      "comment": "Share sheet: the items are being copied.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparazione…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Préparation…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird vorbereitet …"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparando…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparando…"
+          }
+        }
+      }
+    },
+    "share.done": {
+      "extractionState": "manual",
+      "comment": "Share sheet: the items are ready, the app sends them.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fatto. Apri Q-Audion per finire l'invio."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done. Open Q-Audion to finish sending."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "C'est fait. Ouvre Q-Audion pour terminer l'envoi."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fertig. Öffnen Sie Q-Audion, um den Versand abzuschließen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listo. Abre Q-Audion para terminar el envío."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronto. Abra o Q-Audion para concluir o envio."
+          }
+        }
+      }
+    },
+    "share.notice.body": {
+      "extractionState": "manual",
+      "comment": "Local notification after sharing into Q-Audion: the app finishes the sending.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tocca per finire l'invio in Q-Audion."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap to finish sending in Q-Audion."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Touche pour terminer l'envoi dans Q-Audion."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tippen Sie, um den Versand in Q-Audion abzuschließen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toca para terminar el envío en Q-Audion."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toque para concluir o envio no Q-Audion."
+          }
+        }
+      }
+    },
+    "share.error.queue_full": {
+      "extractionState": "manual",
+      "comment": "Share sheet error: too many shares are waiting for the app.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ci sono già condivisioni in attesa. Apri Q-Audion per concluderle."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shares are already waiting. Open Q-Audion to finish them."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Des partages sont déjà en attente. Ouvre Q-Audion pour les terminer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es warten bereits Freigaben. Öffnen Sie Q-Audion, um sie abzuschließen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ya hay elementos compartidos en espera. Abre Q-Audion para terminarlos."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Já há compartilhamentos em espera. Abra o Q-Audion para concluí-los."
+          }
+        }
+      }
+    },
+    "share.error.too_large": {
+      "extractionState": "manual",
+      "comment": "Share sheet error: a shared item is above the size limit.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un elemento è troppo grande per essere condiviso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An item is too large to be shared."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un élément est trop volumineux pour être partagé."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Element ist zu groß zum Teilen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un elemento es demasiado grande para compartirlo."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um item é grande demais para ser compartilhado."
+          }
+        }
+      }
+    },
+    "share.error.nothing": {
+      "extractionState": "manual",
+      "comment": "Share sheet error: none of the shared items is something the app can send.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non c'è nulla che Q-Audion possa condividere."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is nothing Q-Audion can share."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il n'y a rien que Q-Audion puisse partager."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es gibt nichts, was Q-Audion teilen kann."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay nada que Q-Audion pueda compartir."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não há nada que o Q-Audion possa compartilhar."
+          }
+        }
+      }
+    },
+    "share.error.generic": {
+      "extractionState": "manual",
+      "comment": "Share sheet error: the copy of the shared items failed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile preparare la condivisione."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The share could not be prepared."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le partage n'a pas pu être préparé."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Freigabe konnte nicht vorbereitet werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo preparar el contenido para compartir."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível preparar o compartilhamento."
+          }
+        }
+      }
+    },
+    "share.locked": {
+      "extractionState": "manual",
+      "comment": "Share sheet: the app lock is on, so no chat names are shown; the user opens the app instead.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri Q-Audion per scegliere la chat: con il blocco app attivo qui non si mostrano i nomi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Q-Audion to choose the chat: while the app lock is on, names are not shown here."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre Q-Audion pour choisir la discussion : tant que le verrouillage de l'app est actif, les noms ne s'affichent pas ici."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnen Sie Q-Audion, um den Chat zu wählen: Bei aktiver App-Sperre werden hier keine Namen angezeigt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre Q-Audion para elegir el chat: con el bloqueo de la app activado, aquí no se muestran los nombres."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abra o Q-Audion para escolher a conversa: com o bloqueio do app ativado, os nomes não aparecem aqui."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}
