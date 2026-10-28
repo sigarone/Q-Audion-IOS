@@ -3930,6 +3930,9 @@ final class AppState: ObservableObject {
         // message-receive paths have fresh data without a synchronous disk
         // decode. The notification observer keeps it current across the session.
         refreshContactsCache()
+        MessageSoundStore().persistResolvedIfAbsent()
+        NotifyDonations.syncConsent()
+        NotifyRubricaSync.shared.schedule()
         LocationShareIntentRouter.installObservers()
         contactsCacheObserver = NotificationCenter.default.addObserver(
             forName: .contactsDidChange,
@@ -3940,6 +3943,8 @@ final class AppState: ObservableObject {
             // MainActor to satisfy the @MainActor isolation of cachedContacts.
             Task { @MainActor [weak self] in
                 self?.refreshContactsCache()
+                // Names and avatars the notification extension shows.
+                NotifyRubricaSync.shared.schedule()
                 // I5: a contact added mid-session (QR scan, NFC pair, phonebook
                 // import) was never subscribed — this handler used to stop at
                 // refreshContactsCache, so BCryptoPresenceManager's own
@@ -4211,6 +4216,20 @@ final class AppState: ObservableObject {
             // The generic alert names no conversation: the app opens on its chat list.
             if RemoteMessageAlertPolicy.isGenericTap(userInfo: info) {
                 DispatchQueue.main.async { self?.chatListOpenRequest += 1 }
+                return
+            }
+            // A notification rewritten by the notification extension names its conversation by peer or group id
+            // (local only): the chat is found in the store.
+            if info["conversationId"] == nil, let target = NotificationContentBuilder.conversationTarget(userInfo: info) {
+                let convs = ConversationStore().loadConversations()
+                let match = convs.first { conv in
+                    target.isGroup
+                        ? conv.kind == .group && NotifyRubrica.groupKey(conv.peerUserId) == target.id
+                        : conv.kind != .group && NotifyRubrica.personKey(conv.peerUserId) == target.id
+                }
+                DispatchQueue.main.async {
+                    if let match { self?.pendingDeepLinkConversationId = match.id } else { self?.chatListOpenRequest += 1 }
+                }
                 return
             }
             guard let convIdStr = info["conversationId"],
@@ -6882,6 +6901,8 @@ final class AppState: ObservableObject {
                 if let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
                     await MainActor.run {
                         if self?.pendingApnsTokenHex == hex { self?.pendingApnsTokenHex = nil }
+                        // The server has the alert token: the notification key can follow.
+                        self?.registerNotifyKeyAfterAlertToken()
                     }
                 } else {
                     let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
@@ -6953,6 +6974,9 @@ final class AppState: ObservableObject {
                 let (_, resp) = try await session.data(for: req)
                 if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                     print("[AppState] APNs notice register HTTP \(http.statusCode)")
+                } else if resp is HTTPURLResponse {
+                    // The server has the alert token: the notification key can follow.
+                    await MainActor.run { self?.registerNotifyKeyAfterAlertToken() }
                 }
             } catch {
                 print("[AppState] APNs notice register error: \(error.localizedDescription)")
@@ -6961,6 +6985,12 @@ final class AppState: ObservableObject {
                 self?.noticeTokenInFlight.finish(ticket: ticket)
             }
         }
+    }
+
+    /// Sends the notification key (WIRE_SPEC 15) after the server accepted an APNs alert token.
+    private func registerNotifyKeyAfterAlertToken() {
+        NotifyKeyService.shared.alertTokenRegistered(
+            serverUrl: serverUrl, bearer: authService.loadToken(), session: voipPushSession)
     }
 
     // MARK: - W-BGK: Background WS keepalive
@@ -18313,6 +18343,8 @@ final class AppState: ObservableObject {
         // The notice push token request of the account that left must not stand in for the next
         // account's: after the next sign-in the same token is registered again.
         noticeTokenInFlight.reset()
+        // The notification key, the list of names and the avatars belong to the account that left.
+        NotifyKeyService.shared.wipeLocal()
         // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
         // account deletion).
         phoneTransferNotice.reset()
@@ -18383,6 +18415,9 @@ final class AppState: ObservableObject {
 
     func logout() {
         endLiveCallsForSessionEnd()
+        // The notification key goes from the server with the bearer of the session that is ending.
+        NotifyKeyService.shared.accountLeft(
+            serverUrl: serverUrl, bearer: authService.loadToken(), session: voipPushSession)
         authService.clearToken()
         // The per-user flag overlay belongs to the account that just left. Not
         // clearing it hands the next account on this device whatever was

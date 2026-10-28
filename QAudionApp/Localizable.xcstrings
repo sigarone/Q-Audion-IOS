@@ -1,6 +1,18 @@
 {
   "sourceLanguage": "it",
   "strings": {
+    "notification.message.new_body": {
+      "extractionState": "manual",
+      "comment": "Body of a message notification once the sender is known. No message text is ever shown.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Nuovo messaggio" } },
+        "en": { "stringUnit": { "state": "translated", "value": "New message" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Nouveau message" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Neue Nachricht" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Nuevo mensaje" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Nova mensagem" } }
+      }
+    },
     "MSG_NEW_BODY": {
       "extractionState": "manual",
       "comment": "Body of the generic push alert for a new message received while the app has no live connection. Resolved by the system from the loc-key; keep it generic.",

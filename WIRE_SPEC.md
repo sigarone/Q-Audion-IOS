@@ -3884,7 +3884,108 @@ placeholder it writes in their place.
 The behaviours that depend on the state of a platform (storage, backups, notifications, accessibility, forwarding, the
 end triggers of §14.6.1) are requirements of the platform behaviour tests.
 
-Latest: 2026-10-23 (third review round of §14: the outcome of a write is put on the step that seals the frame in the
+## 15. Notification envelope (message alerts) — cross-platform contract
+
+An offline iPhone is woken by a standard APNs alert whose text is generic (no sender, no text). A device that has
+registered a notification key also receives, in the same alert, one sealed blob that only its own notification
+extension can open: it names the sender (and the group, for a group message) so the extension can replace the generic
+text. Apple sees the blob and nothing else. The blob is an addition to the generic alert, never a replacement: a
+device without a key, or whose extension cannot open the blob, shows the generic alert.
+
+### 15.1 Constants
+
+| Name | Value |
+|---|---|
+| Algorithm string | `x25519-hkdf-sha256-aes256gcm-v1` |
+| HKDF info and AEAD label | `qaudion-notify-v1` (UTF-8 bytes) |
+| Blob version byte | `0x01` |
+| Ephemeral public key length | 32 bytes |
+| Nonce length | 12 bytes |
+| GCM tag length | 16 bytes |
+| Top-level APNs key of the blob | `qn` (the only key outside `aps`) |
+
+### 15.2 Device key (iOS)
+
+1. Each installation generates one X25519 key pair. The private key stays in the keychain, access group
+   `$(AppIdentifierPrefix)com.qaudion.notify`, accessibility `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
+   `kSecAttrSynchronizable = false`; only the app and its notification extension have that group. In the app's
+   `keychain-access-groups` the FIRST entry stays `$(AppIdentifierPrefix)com.qaudion.app` (the default group of the
+   entries that already exist), the notify group comes after it.
+2. Registration: `PUT /api/v1/account/notify-key`, bearer of the device, body
+   `{"pub":"<base64 standard, padded, 32 bytes>","alg":"x25519-hkdf-sha256-aes256gcm-v1"}`. Success is
+   `200 {"ok":true}`. The server stores the key on the device record that carries the `ios-apns-alert` token, and only on the node that holds that record: a `PUT` without a local record that has an alert token is refused with `409 {"error":"no_alert_token"}` and changes nothing, and a `DELETE` without a local record is a `204` no-op. The client therefore registers the key only after a successful alert-token registration and registers it again after every alert-token registration.
+   `DELETE` on the same path removes it (idempotent, `200`). Rotation: the client may generate and register a new key at
+   any time; the server keeps only the last one.
+3. The server refuses with `400` a body that is not one JSON object with exactly the members `pub` and `alg` (no
+   other member, nothing after the object), an `alg` other than the string above, a `pub` that is not standard padded
+   base64 or does not decode to exactly 32 bytes, and a key that is a low-order point (X25519 against it gives the
+   all-zero value, which includes the all-zero key). A body over 1 KiB is refused with `413`. `401` without a valid
+   bearer, `405` for any other method. A refusal never echoes the key.
+4. Logout, revocation of the device, the wipe of its push record, and the clearing of a stale alert token remove the key
+   together with the push record or the token, so a key never outlives the token it served.
+
+### 15.3 Plaintext
+
+Compact JSON, members in exactly this order, no other member, followed by trailing spaces (0x20) up to EXACTLY 256 bytes so the blob has one fixed length for 1:1 and group messages and for any id length. Trailing spaces are valid JSON and a receiver parses them away. If the JSON before padding is longer than 256 bytes no envelope is built and the device gets the generic alert:
+
+- 1:1 message: `{"v":1,"k":"dm","s":"<senderUserID>","t":<unix seconds>}`
+- group message: `{"v":1,"k":"grp","s":"<senderUserID>","g":"<groupID>","t":<unix seconds>}`
+
+No message text, no names. Strings are JSON strings (a receiver parses; it does not compare bytes). `t` is the server
+time in whole seconds when the alert is built.
+
+### 15.4 Sealing (server, per recipient device that has a key)
+
+1. `eph_priv`: 32 random bytes, new for every blob; `eph_pub = X25519(eph_priv, base point)`.
+2. `shared = X25519(eph_priv, device_pub)`. If the result is all zero, no envelope is sent for that device (the generic
+   alert is).
+3. `key = HKDF-SHA256(ikm = shared, salt = eph_pub || device_pub, info = "qaudion-notify-v1", L = 32)`.
+4. `nonce`: 12 random bytes.
+5. `ct = AES-256-GCM(key, nonce, plaintext, aad = "qaudion-notify-v1" || eph_pub)`, with the 16-byte tag appended.
+6. `blob = 0x01 || eph_pub (32) || nonce (12) || ct`, encoded as base64 standard with padding.
+
+The server reads the 32 bytes of `eph_priv` first and then the 12 bytes of `nonce` from its random source (the known-answer
+vectors fix both). A sealing error is never fatal for the message: the device gets the generic alert.
+
+### 15.5 Opening (notification extension)
+
+Reject a blob that is not base64, is shorter than 1 + 32 + 12 + 16 bytes, or whose first byte is not `0x01`. Compute
+`shared = X25519(device_priv, eph_pub)` (an error or an all-zero result rejects), derive `key` as in 15.4 with
+`device_pub` taken from the device's own private key, and open with the nonce and the aad of 15.4. Any failure keeps the
+generic alert untouched. The extension MUST NOT log the blob, the key or the plaintext.
+
+### 15.6 APNs payload
+
+Push type `alert`, priority 10, the same expiration as the generic alert. The generic alert keeps the constant `apns-collapse-id` `msg`; an alert WITH an envelope has no `apns-collapse-id` (each message is its own notification, the device groups them by thread). The body is
+the generic alert with two additions and nothing else:
+
+```
+{"aps":{"alert":{"title-loc-key":<as the generic alert>,"loc-key":<as the generic alert>},
+        "sound":<as the generic alert>,"interruption-level":"active","thread-id":<as the generic alert>,
+        "category":<as the generic alert>,"mutable-content":1},
+ "qn":"<blob>"}
+```
+
+A device without a registered key receives the generic alert unchanged (no `mutable-content`, no `qn`). The per-sender
+and per-recipient limiter, the block check and the fan-out caps are the same for both forms.
+
+### 15.7 Threat model
+
+Apple (and anyone on the path) sees only `qn`. Integrity holds against anyone who does not know `device_pub`, that is
+the server and the device. The server already knows the sender because it routes the message: the envelope does not
+change what the server knows.
+
+### 15.8 Vectors
+
+`internal/push/testdata/notify_envelope_v1.json` in the server repository: at least three positive cases (a 1:1
+message, a group message, a sender id with non-ASCII characters) with `device_priv`, `device_pub`, `eph_priv`, `nonce`,
+`plaintext` (the padded 256 bytes) and the expected `blob`, and one negative case (the 1:1 blob with one bit of the tag flipped) that MUST fail
+to open. A client copies the file into its tests, recomputes the public keys, opens every positive blob with
+`device_priv` and compares the plaintext byte for byte, and checks that the negative blob is refused.
+
+Latest: 2026-10-28 (new §15 notification envelope: a device key registered with PUT /account/notify-key (local alert-token record required), a sealed sender
+blob `qn` of fixed padded length next to the generic message alert (no collapse id on the envelope form), known-answer vectors in internal/push/testdata).
+Previous: 2026-10-23 (third review round of §14: the outcome of a write is put on the step that seals the frame in the
 `sender_sequences` (`"write":"fails"` on a `tick` or a `stop`, applied by the harness during that step, so that a client that
 advances its counter only after a successful write is caught; there is no separate `send_failed` event), a share has exactly
 one sealer inside its process and the copies that a platform hands to a new process (Intent extras of a restarted service,

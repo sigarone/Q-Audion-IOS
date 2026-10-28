@@ -8,7 +8,10 @@ The app entitlements files (QAudion.entitlements, QAudionVPN.entitlements, QAudi
   * keychain-access-groups whose FIRST entry is $(AppIdentifierPrefix)com.qaudion.app (the group of every item the
     app already has) and which also lists $(AppIdentifierPrefix)com.qaudion.notify;
   * the App Group group.com.bcrypto.qaudion.notify;
-  * com.apple.developer.default-data-protection = NSFileProtectionComplete.
+  * com.apple.developer.default-data-protection = NSFileProtectionComplete;
+  * com.apple.developer.usernotifications.communication = true (sender photo and name in message notifications).
+The notification service extension (QAudionNotificationService/QAudionNotificationService.entitlements) must carry
+exactly the notify App Group and the notify keychain group, and nothing else.
 Exits 1 with one line per violation.
 """
 
@@ -22,6 +25,7 @@ FILES = [
     "QAudionApp/QAudionVPN.entitlements",
     "QAudionApp/QAudionShareApp.entitlements",
 ]
+EXTENSION_FILE = "QAudionNotificationService/QAudionNotificationService.entitlements"
 APP_GROUP = "$(AppIdentifierPrefix)com.qaudion.app"
 NOTIFY_GROUP = "$(AppIdentifierPrefix)com.qaudion.notify"
 NOTIFY_APP_GROUP = "group.com.bcrypto.qaudion.notify"
@@ -40,6 +44,20 @@ def check(rel, data):
         problems.append(f"{rel}: the App Group {NOTIFY_APP_GROUP} is missing")
     if data.get("com.apple.developer.default-data-protection") != "NSFileProtectionComplete":
         problems.append(f"{rel}: com.apple.developer.default-data-protection is not NSFileProtectionComplete")
+    if data.get("com.apple.developer.usernotifications.communication") is not True:
+        problems.append(f"{rel}: com.apple.developer.usernotifications.communication is not true")
+    return problems
+
+
+def check_extension(rel, data):
+    problems = []
+    if data.get("keychain-access-groups") != [NOTIFY_GROUP]:
+        problems.append(f"{rel}: keychain-access-groups must be exactly [{NOTIFY_GROUP}]")
+    if data.get("com.apple.security.application-groups") != [NOTIFY_APP_GROUP]:
+        problems.append(f"{rel}: application-groups must be exactly [{NOTIFY_APP_GROUP}]")
+    extra = sorted(set(data) - {"keychain-access-groups", "com.apple.security.application-groups"})
+    if extra:
+        problems.append(f"{rel}: unexpected entitlements {extra}")
     return problems
 
 
@@ -52,6 +70,12 @@ def main():
             continue
         with open(path, "rb") as f:
             problems.extend(check(rel, plistlib.load(f)))
+    ext_path = os.path.join(ROOT, EXTENSION_FILE)
+    if not os.path.isfile(ext_path):
+        problems.append(f"{EXTENSION_FILE} not found")
+    else:
+        with open(ext_path, "rb") as f:
+            problems.extend(check_extension(EXTENSION_FILE, plistlib.load(f)))
     for line in problems:
         print(line)
     return 1 if problems else 0

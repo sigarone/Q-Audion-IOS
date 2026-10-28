@@ -120,6 +120,7 @@ final class ConversationListContainer: ObservableObject {
         )
         store.upsertConversation(convs[idx])
         loadFromStore()
+        NotifyRubricaSync.shared.schedule()
     }
 
     func deleteConversation(conversationId: UUID) {
@@ -131,6 +132,7 @@ final class ConversationListContainer: ObservableObject {
         }
         store.deleteConversation(id: conversationId)
         loadFromStore()
+        NotifyRubricaSync.shared.schedule()
     }
 
     /// What deleting a conversation tells the rest of the app, with its peer: the location shares end. A seam (internal) for the tests.

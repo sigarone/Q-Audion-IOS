@@ -74,6 +74,7 @@ targets:
           - MeshConsentTests.swift
           - MeshReachTests.swift
           - MessageSoundSettingsTests.swift
+          - NotificationContentBuilderTests.swift
           - MissedCallsBadgeTests.swift
           - NoticeServiceTests.swift
           - RemoteMessageAlertPolicyTests.swift
