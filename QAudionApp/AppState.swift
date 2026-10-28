@@ -83,6 +83,16 @@ final class AppState: ObservableObject {
                 // first call of the new session (report bea72b22).
                 ensureCallEngine(reason: "login")
                 requestSiriAuthorizationIfNeeded()
+                // A share queued while the app was closed is picked up once the session is there (the profile, and with it
+                // the account id, may arrive a moment later: one tick).
+                DispatchQueue.main.async { [weak self] in
+                    self?.takeShareQueue()
+                    self?.refreshShareRecentChats()
+                }
+            }
+            if !isAuthenticated && oldValue {
+                // The session ended (sign-out, remote wipe, account lock): the share container goes with it.
+                wipeShareContainer()
             }
             if isAuthenticated != oldValue {
                 CarPlayBridge.shared.signInDidChange()
@@ -373,6 +383,13 @@ final class AppState: ObservableObject {
     /// The "Share location" app intent (Siri, Shortcuts, Action button) asked for the share sheet of a chat. The chat screen of
     /// that peer shows the sheet and clears this; a request nobody picked up expires (`LocationShareIntentPolicy.isFresh`).
     @Published var pendingLocationShareRequest: LocationShareRequest?
+
+    /// Something shared into the app from another app (the share extension): the chat it is meant for and what to put in it.
+    /// The chat of that peer takes it once (`ChatDetailScreen.presentSharedItems`); nothing is sent before the user confirms.
+    @Published var pendingShareHandoff: ShareHandoff?
+    /// The temporary folder of a share whose files the chat screen still holds (a send sheet that is open, files waiting for
+    /// their own sheet). The sweep of old `shared-*` folders leaves it alone; the chat clears it when the share is finished.
+    var activeShareFolder: URL?
 
     /// A Home Screen quick action (long press on the icon) or the "Nuovo messaggio" app intent asked for the new-conversation sheet or
     /// for the contact picker of location sharing. The chat list takes it once (`QuickActionPolicy.take`); a request nobody picked up expires.

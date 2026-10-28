@@ -35,8 +35,10 @@ import os
 import re
 import sys
 
-SCAN_DIRS = ("QAudionApp", "QAudionEngine/Sources", "QAudionIntents", "QAudionPacketTunnel")
+SCAN_DIRS = ("QAudionApp", "QAudionEngine/Sources", "QAudionIntents", "QAudionPacketTunnel", "QAudionShare")
 CATALOG = "QAudionApp/Localizable.xcstrings"
+# A target with a catalog of its own (the share extension bundles its own strings).
+OWN_CATALOGS = {"QAudionShare/": "QAudionShare/Localizable.xcstrings"}
 ALLOWLIST = "scripts/ci/hardcoded_italian_allowlist.txt"
 LANGS = ("it", "en", "fr", "de", "es", "pt-BR")
 
@@ -490,6 +492,17 @@ def check(root):
     except (OSError, ValueError, KeyError) as e:
         print("cannot read %s: %s" % (CATALOG, e), file=sys.stderr)
         return None
+    own_cats = {}
+    for prefix, rel_cat in OWN_CATALOGS.items():
+        path = os.path.join(root, rel_cat)
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    own_cats[prefix] = Catalog(json.load(f)["strings"])
+            except (OSError, ValueError, KeyError) as e:
+                print("cannot read %s: %s" % (rel_cat, e), file=sys.stderr)
+                return None
+    main_cat = cat
     allow = load_allowlist(root, problems)
     used = set()
     sources = {}
@@ -517,6 +530,7 @@ def check(root):
         if not grew:
             break
     for rel, src in sources.items():
+        cat = next((c for prefix, c in own_cats.items() if rel.startswith(prefix)), main_cat)
         lits, braces = tokenize(src)
         src_lines = src.split("\n")
         skips = skip_ranges(src) + preview_ranges(src, braces)

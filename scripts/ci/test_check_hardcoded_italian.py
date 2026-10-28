@@ -195,6 +195,55 @@ enum Tab {
         catalog["Riprova"] = broken
         self.check('struct V: View { var body: some View { Text("Riprova") } }\n', False, "lacks de", catalog=catalog)
 
+    # ---- a target with a catalog of its own (the share extension) -----------------------------------------------
+    SHARE_TEXT = "Invia al contatto scelto"
+    SHARE_CATALOG = {SHARE_TEXT: entry(SHARE_TEXT, "Send to the chosen contact")}
+
+    def check_share(self, source, expect_ok, needle=None, rel="QAudionShare/Sample.swift", share_catalog=None):
+        tree = Tree()
+        try:
+            if share_catalog is not None:
+                tree.write("QAudionShare/Localizable.xcstrings", json.dumps({"sourceLanguage": "it", "strings": share_catalog}))
+            tree.swift(source, rel)
+            code, err = tree.run()
+        finally:
+            tree.close()
+        if expect_ok:
+            self.assertEqual(code, 0, err)
+        else:
+            self.assertEqual(code, 1, err)
+            if needle:
+                self.assertIn(needle, err)
+
+    def test_extension_text_is_checked_against_its_own_catalog(self):
+        self.check_share('struct V: View { var body: some View { Text("Invia al contatto scelto") } }\n', True,
+                         share_catalog=self.SHARE_CATALOG)
+
+    def test_extension_text_in_the_app_catalog_only_is_reported(self):
+        # The extension bundles only its own strings: a phrase that is in the app catalog alone is not localized there.
+        self.check_share('struct V: View { var body: some View { Text("Impossibile avviare la chiamata") } }\n', False,
+                         "has no catalog entry", share_catalog=self.SHARE_CATALOG)
+
+    def test_extension_catalog_does_not_cover_the_app(self):
+        tree = Tree()
+        try:
+            tree.write("QAudionShare/Localizable.xcstrings", json.dumps({"sourceLanguage": "it", "strings": self.SHARE_CATALOG}))
+            tree.swift('struct V: View { var body: some View { Text("Invia al contatto scelto") } }\n', "QAudionApp/Views/Sample.swift")
+            code, err = tree.run()
+        finally:
+            tree.close()
+        self.assertEqual(code, 1, err)
+        self.assertIn("has no catalog entry", err)
+
+    def test_extension_without_its_own_catalog_uses_the_app_catalog(self):
+        self.check_share('struct V: View { var body: some View { Text("Impossibile avviare la chiamata") } }\n', True)
+
+    def test_extension_catalog_missing_a_language_is_reported(self):
+        broken = json.loads(json.dumps(self.SHARE_CATALOG[self.SHARE_TEXT]))
+        del broken["localizations"]["pt-BR"]
+        self.check_share('struct V: View { var body: some View { Text("Invia al contatto scelto") } }\n', False, "lacks pt-BR",
+                         share_catalog={self.SHARE_TEXT: broken})
+
     def test_multi_line_literal_call(self):
         self.check('''
 func f() {

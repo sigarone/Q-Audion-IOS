@@ -212,6 +212,8 @@ struct ChatDetailScreen: View {
     /// document picker, voice-note finish) routes through this instead
     /// of calling `container.send*` directly.
     @State private var pendingAttachmentSend: PendingAttachmentSend? = nil
+    /// Files shared into the app after the first one, sent one by one with the same send sheet.
+    @State private var sharedFilesBacklog: [URL] = []
 
     // MARK: - Init
 
@@ -522,6 +524,7 @@ struct ChatDetailScreen: View {
                 // before this sheet ever appeared, and cancelling here must
                 // not orphan that temp file — mirror
                 // VoiceNoteRecorder.cancel()'s exact best-effort idiom.
+                if pendingAttachmentSend != nil { discardSharedBacklog() }
                 FileV2PickedMovie.discardTemporaryFiles(of: pendingAttachmentSend)
                 pendingAttachmentSend = nil
             }
@@ -532,8 +535,10 @@ struct ChatDetailScreen: View {
                     guard let pending = pendingAttachmentSend else { return }
                     pendingAttachmentSend = nil
                     performAttachmentSend(pending, overrideSeconds: overrideSeconds, exportBlocked: exportBlocked)
+                    advanceSharedBacklog()
                 },
                 onCancel: {
+                    discardSharedBacklog()
                     FileV2PickedMovie.discardTemporaryFiles(of: pendingAttachmentSend)
                     pendingAttachmentSend = nil
                 }
@@ -1686,8 +1691,68 @@ struct ChatDetailScreen: View {
         )
         }
         .sheet(isPresented: $showingLocationSheet) { locationShareSheetView }
-        .onAppear { presentRequestedLocationSheet() }
+        .onAppear { presentRequestedLocationSheet(); presentSharedItems() }
         .onChange(of: appState.pendingLocationShareRequest) { _ in presentRequestedLocationSheet() }
+        .onChange(of: appState.pendingShareHandoff) { _ in presentSharedItems() }
+    }
+
+    // MARK: - Items shared into the app
+
+    /// Something was shared into the app for this chat: the text goes into the composer and the files into the usual send
+    /// sheet, where the user confirms. Nothing is sent from here.
+    private func presentSharedItems() {
+        guard let handoff = appState.pendingShareHandoff,
+              ShareHandoffPolicy.applies(handoff, peerUserId: container.viewModel.conversation.peerUserId,
+                                         accountId: appState.currentUserId ?? "", now: Date()),
+              container.viewModel.conversation.kind == .oneToOne else { return }
+        appState.pendingShareHandoff = nil
+        // The files stay in use after the handoff is taken (send sheet, backlog): the sweep must not remove them.
+        appState.activeShareFolder = handoff.folder
+        if let text = handoff.plan.text {
+            container.composerText = container.composerText.isEmpty ? text : container.composerText + "\n" + text
+        }
+        // Pictures are loaded one by one up to a size budget; larger ones go through the file path instead of memory.
+        var images: [Data] = []
+        var oversizedImages: [URL] = []
+        var loadedBytes = 0
+        for url in handoff.plan.images {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
+            if size <= ShareLimits.maxInlineImageBytes, loadedBytes + size <= ShareLimits.maxInlineImageTotal,
+               let data = try? Data(contentsOf: url) {
+                images.append(data)
+                loadedBytes += size
+                try? FileManager.default.removeItem(at: url)
+            } else {
+                oversizedImages.append(url)
+            }
+        }
+        var pending: PendingAttachmentSend?
+        if !handoff.plan.videos.isEmpty {
+            pending = .media(images: images, videos: handoff.plan.videos)
+        } else if images.count == 1, let only = images.first {
+            pending = .image(only)
+        } else if !images.isEmpty {
+            pending = .multiImage(images)
+        }
+        var files = handoff.plan.files + oversizedImages
+        if pending == nil, !files.isEmpty { pending = .file(files.removeFirst()) }
+        sharedFilesBacklog = files
+        guard let pending else { appState.activeShareFolder = nil; return }
+        // A beat after the chat appeared: a sheet raised during the push transition can be swallowed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { pendingAttachmentSend = pending }
+    }
+
+    /// After a shared file was sent, the next one gets its own send sheet.
+    private func advanceSharedBacklog() {
+        guard !sharedFilesBacklog.isEmpty else { appState.activeShareFolder = nil; return }
+        let next = sharedFilesBacklog.removeFirst()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { pendingAttachmentSend = .file(next) }
+    }
+
+    private func discardSharedBacklog() {
+        for url in sharedFilesBacklog { try? FileManager.default.removeItem(at: url) }
+        sharedFilesBacklog.removeAll()
+        appState.activeShareFolder = nil
     }
 
     /// The "Share location" app intent opened this chat: shows the share sheet, where the user confirms with a tap. Nothing is

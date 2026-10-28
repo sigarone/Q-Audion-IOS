@@ -11,7 +11,8 @@ sign. This script checks, on any machine with Python 3 and in a second, that:
      not conditional, so a leftover `#if QAUDION_CARPLAY` would silently compile code out;
   2. the app's Info.plist declares the scene: UIApplicationSupportsMultipleScenes on and the role
      CPTemplateApplicationSceneSessionRoleApplication with the scene delegate class CarPlaySceneDelegate;
-  3. both entitlements files the app is signed with (QAudion.entitlements, QAudionVPN.entitlements) carry
+  3. every entitlements file the app is signed with (QAudion.entitlements, QAudionVPN.entitlements,
+     QAudionShareApp.entitlements) carries
      com.apple.developer.carplay-communication = true, and no other entitlements file (the extensions') does;
   4. the Intents extension's Info.plist has no CarPlay scene role;
   5. the CarPlay framework is used by the scene only (QAudionApp/CarPlay/CarPlayScene.swift): the bridge, the list
@@ -41,7 +42,8 @@ ROLE = "CPTemplateApplicationSceneSessionRoleApplication"
 SCENE_FILE = "QAudionApp/CarPlay/CarPlayScene.swift"
 
 # Entitlements files the app itself is signed with; each must carry the CarPlay entitlement.
-APP_ENTITLEMENTS = ("QAudionApp/QAudion.entitlements", "QAudionApp/QAudionVPN.entitlements")
+APP_ENTITLEMENTS = ("QAudionApp/QAudion.entitlements", "QAudionApp/QAudionVPN.entitlements",
+                    "QAudionApp/QAudionShareApp.entitlements")
 
 SKIP_DIRS = {".git", "graphify-out", ".build", "build", "DerivedData", "node_modules", ".cache"}
 

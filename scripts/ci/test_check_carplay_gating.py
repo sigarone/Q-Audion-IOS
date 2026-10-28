@@ -34,6 +34,7 @@ FILES = [
     "QAudionApp/Info.plist",
     "QAudionApp/QAudion.entitlements",
     "QAudionApp/QAudionVPN.entitlements",
+    "QAudionApp/QAudionShareApp.entitlements",
     "QAudionApp/Localizable.xcstrings",
     "QAudionApp/CarPlay/CarPlayScene.swift",
     "QAudionApp/CarPlay/CarPlayListModel.swift",
@@ -133,7 +134,8 @@ class GateOnACopy(unittest.TestCase):
         self.assertEqual(self.problems(), [])
 
     def test_app_entitlements_without_the_carplay_key(self):
-        for rel in ("QAudionApp/QAudion.entitlements", "QAudionApp/QAudionVPN.entitlements"):
+        for rel in ("QAudionApp/QAudion.entitlements", "QAudionApp/QAudionVPN.entitlements",
+                    "QAudionApp/QAudionShareApp.entitlements"):
             tree = Tree()
             self.addCleanup(tree.cleanup)
             text = tree.read(rel)

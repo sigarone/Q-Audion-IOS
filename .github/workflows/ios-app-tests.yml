@@ -53,6 +53,7 @@ on:
       - 'QAudionAppTests/**'
       - 'QAudionEngine/**'
       - 'QAudionIntents/**'
+      - 'QAudionShare/**'
       - 'QAudionPacketTunnel/**'
       - 'scripts/ci/assert-no-vpn.sh'
       - 'scripts/ci/test-assert-no-vpn.sh'
@@ -69,6 +70,7 @@ on:
       - 'QAudionAppTests/**'
       - 'QAudionEngine/**'
       - 'QAudionIntents/**'
+      - 'QAudionShare/**'
       - 'QAudionPacketTunnel/**'
       - 'scripts/ci/assert-no-vpn.sh'
       - 'scripts/ci/test-assert-no-vpn.sh'
@@ -347,6 +349,7 @@ jobs:
             -only-testing:QAudionAppTests/RecoveryEnrollmentStatusTests \
             -only-testing:QAudionAppTests/ReKeyAvatarRingTests \
             -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
+            -only-testing:QAudionAppTests/ShareQueueTests \
             -only-testing:QAudionAppTests/SiriIntentPolicyTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -only-testing:QAudionAppTests/VoiceDisplayFormatTests \
@@ -402,6 +405,70 @@ jobs:
 
   # The variant WITH VPN support. Device destination, unsigned: libwg-go.a (built
   # by the QAudionPacketTunnel script phase, needs Go) has no Simulator slice.
+  # The build with the share extension (QAudionApp/project-share.yml: QAUDION_SHARE, QAudionShare extension), compiled
+  # for the simulator without signing so the extension does not rot while the default build leaves it out.
+  share-variant-build:
+    if: github.event_name != 'push'
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    env:
+      XCODE_PROJECT: QAudionApp.xcodeproj
+      XCODE_VERSION: '27'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      - name: Restore SPM packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project (share spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-share.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build the app with the share extension
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-share \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/share-build.log" | tail -40
+
+      - name: The extension is embedded in the app
+        run: |
+          APP=/tmp/dd-ios-share/Build/Products/Debug-iphoneos/QAudionApp.app
+          test -n "$APP" && test -d "$APP/PlugIns/QAudionShare.appex"
+          plutil -lint "$APP/PlugIns/QAudionShare.appex/Info.plist"
+          test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$APP/PlugIns/QAudionShare.appex/Info.plist")" = "com.apple.share-services"
+          echo "share extension embedded"
+
   vpn-variant-build:
     # Not on push to main: that run exists to write the SPM cache (the other
     # job does it) and this variant was already built on the pull request.
@@ -462,6 +529,14 @@ jobs:
           rest = {k: v for k, v in vpn.items() if k != ne}
           rest[groups] = [g for g in rest[groups] if g != vpn_group]
           assert rest == default, "entitlements differ beyond the VPN additions: %r vs %r" % (rest, default)
+          share = plistlib.load(open("QAudionApp/QAudionShareApp.entitlements", "rb"))
+          share_group = "group.com.bcrypto.qaudion.share"
+          assert share_group not in default.get(groups, []), "default entitlements must not carry the share App Group"
+          assert share_group not in vpn.get(groups, []), "VPN entitlements must not carry the share App Group"
+          assert share_group in share.get(groups, []), "share entitlements lack the share App Group"
+          share_rest = dict(share)
+          share_rest[groups] = [g for g in share_rest[groups] if g != share_group]
+          assert share_rest == default, "share entitlements differ beyond the share group: %r vs %r" % (share_rest, default)
           print("entitlement variants agree")
           PY
 
