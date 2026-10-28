@@ -45,6 +45,11 @@ public enum ConfirmTimeout {
     /// re-authentication of the device's signalling socket. First sends are not events.
     public static let maxResendEvents = 4
 
+    /// Offsets (ms) from the first send of the callee's round-1 ACCEPT at which its byte-identical copy goes again
+    /// while the REVEAL has not verified. The schedule is its own cap and takes nothing from `maxResendEvents`. All
+    /// inside `confirmTimeoutMs`.
+    public static let acceptResendDelaysMs = [4_000, 9_000]
+
     /// R-KCMAC-RESEND (four-way revision of WIRE_SPEC, b2027b09): an own KCMAC is still re-sent on a socket
     /// re-authentication for this long after its FIRST send, even when the peer MAC of its round already verified.
     /// The two MACs of a round cross on the wire, so ours can be lost in the replaced socket after the peer's
