@@ -1,5 +1,6 @@
 import XCTest
 @testable import QAudionApp
+import QAudionEngine
 
 /// Where the security-code card sits on the call screen: with the six words ready and the confirmation outstanding it
 /// is pinned above the control dock (words and confirm button visible without scrolling); before that the waiting line
@@ -96,5 +97,39 @@ final class SasCardPlacementTests: XCTestCase {
                                                  awaitingConfirmation: false))
         XCTAssertFalse(SasCardPlacement.isPinned(sasWordCount: 6, sasVerified: true, sasCeremonyRedundant: true,
                                                  awaitingConfirmation: true))
+    }
+
+    // MARK: - Which assurance states keep the card pinned
+
+    private func pinnedFor(_ state: AssuranceState, awaiting: Bool = false) -> Bool {
+        let presentation = AssuranceStateUI.present(state: state)
+        return SasCardPlacement.isPinned(
+            sasWordCount: 6, sasVerified: false,
+            sasCeremonyRedundant: SasCardPlacement.isRedundant(sasRequired: presentation.sasRequired),
+            awaitingConfirmation: awaiting)
+    }
+
+    func testConfirmedPreSharedKeyDoesNotPinTheCard() {
+        XCTAssertFalse(pinnedFor(.pskConfirmed))
+        XCTAssertFalse(pinnedFor(.nfcAuthenticated))
+    }
+
+    func testStatesThatNeedTheCodeKeepItPinned() {
+        for state in [AssuranceState.pqcOnly, .identityUnverified, .kcFailed, .pskUnconfirmed, .peerLegacy] {
+            XCTAssertTrue(pinnedFor(state), "\(state)")
+        }
+    }
+
+    func testHeldCallKeepsTheCardPinnedInEveryState() {
+        XCTAssertTrue(pinnedFor(.pskConfirmed, awaiting: true))
+        XCTAssertTrue(pinnedFor(.nfcAuthenticated, awaiting: true))
+        XCTAssertTrue(pinnedFor(.pqcOnly, awaiting: true))
+    }
+
+    func testStateNotComputedYetKeepsTheCardPinned() {
+        XCTAssertFalse(SasCardPlacement.isRedundant(sasRequired: nil))
+        XCTAssertTrue(SasCardPlacement.isRedundant(sasRequired: false))
+        XCTAssertFalse(SasCardPlacement.isRedundant(sasRequired: true))
+        XCTAssertTrue(pinned(6, redundant: SasCardPlacement.isRedundant(sasRequired: nil)))
     }
 }

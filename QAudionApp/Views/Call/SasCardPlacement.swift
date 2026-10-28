@@ -5,7 +5,7 @@ import CoreGraphics
 /// While the six words are ready and the confirmation is still outstanding, the card (and the hold notice that goes with
 /// it) is drawn above the control dock, outside the scrolling column, so the words and the confirm button are on screen
 /// at once and never under the dock. Before the words arrive there is nothing to confirm and the waiting line stays in
-/// the column; once the code is confirmed (or is redundant because the contact was authenticated in person) the card
+/// the column; once the code is confirmed (or is redundant because the contact was already verified) the card
 /// goes back into the column and no longer takes room from the call.
 enum SasCardPlacement {
 
@@ -24,6 +24,12 @@ enum SasCardPlacement {
     /// Room kept at the end of the scrolling column. The dock and the pinned card are laid out by the safe area, so only
     /// a small breathing space is needed.
     static let columnBottomSpacing: CGFloat = 16
+
+    /// True when the call's assurance state says the code comparison is not needed (an in-person authenticated or a
+    /// confirmed pre-shared-key contact). While the state is not computed yet (`nil`) the code stays required.
+    static func isRedundant(sasRequired: Bool?) -> Bool {
+        sasRequired == false
+    }
 
     /// True when the card is pinned above the dock: the words are ready and the code is not yet confirmed. Confirmed
     /// cards live in the scrolling column; a redundant card does too, unless the call is held waiting for the

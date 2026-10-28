@@ -2305,6 +2305,18 @@
         }
       }
     },
+    "sas.hint.contact_already_verified": {
+      "extractionState": "manual",
+      "comment": "SAS card hint shown when the contact's key was already confirmed, so comparing the words is optional",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Contatto già verificato: il confronto del codice è facoltativo" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Contact already verified: comparing the code is optional" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Contacto ya verificado: comparar el código es opcional" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Contact déjà vérifié : la comparaison du code est facultative" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Kontakt bereits verifiziert: Der Codevergleich ist optional" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Contato já verificado: comparar o código é opcional" } }
+      }
+    },
     "sas.header.compare_words": {
       "extractionState": "manual",
       "comment": "SAS verification panel header — prompts the user to compare the 6 SAS words with the other party",
