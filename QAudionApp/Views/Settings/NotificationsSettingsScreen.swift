@@ -167,6 +167,35 @@ struct NotificationsSettingsScreen: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        NavigationLink {
+                            LazyView { MessageSoundsSettingsScreen() }
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "message.badge")
+                                    .font(.system(size: 17, weight: .regular))
+                                    .foregroundStyle(scheme.primary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Suoni dei messaggi")
+                                        .qaudionStyle(type.bodyMedium)
+                                        .foregroundStyle(scheme.onSurface)
+                                    Text("Suono, tono e vibrazione dei nuovi messaggi")
+                                        .qaudionStyle(type.labelSmall)
+                                        .foregroundStyle(scheme.onSurfaceVariant)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(scheme.onSurfaceVariant)
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 52)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(scheme.surfaceVariant.opacity(0.4))
+                            )
+                        }
+                        .buttonStyle(.plain)
                         SettingsToggleRow(
                             title: "Suoni in-app",
                             subtitle: "Effetti sonori dentro l'app",

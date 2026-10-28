@@ -467,6 +467,8 @@ struct QAudionApp: App {
         // turn, costs nothing — MetricKit queues payloads until a
         // subscriber exists.
         MetricKitDiagnostics.start()
+        // Keep Library/Sounds/qa_msg.wav equal to the chosen message sound (what a message push plays with the app closed).
+        Task.detached(priority: .utility) { MessageAlertSoundFile.syncCurrent() }
         // W441: sweep expired messages immediately + every 60s.
         EphemeralMessageJanitor.shared.start()
     }

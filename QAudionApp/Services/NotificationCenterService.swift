@@ -221,7 +221,12 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             inAppSoundEnabled: NotificationsGate.inAppSoundEnabled,
             isMissedCall: category == .missedCall,
             callInFlight: callInFlightProvider?() ?? false)
-        content.sound = hasSound ? .default : nil
+        if category == .messageDelivered {
+            // The chat-message sound is the user's choice (Settings > Notifications > Message sounds).
+            content.sound = MessageSoundPolicy.sound(for: MessageSoundStore.current, quietNow: false).notificationSound
+        } else {
+            content.sound = hasSound ? .default : nil
+        }
         content.categoryIdentifier = category.rawValue
         content.userInfo = userInfo
         content.threadIdentifier = category.rawValue
@@ -403,6 +408,21 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         if presentation.sound { options.insert(.sound) }
         if presentation.list { options.insert(.list) }
         if presentation.badge { options.insert(.badge) }
+        if notification.request.content.categoryIdentifier == Category.messageDelivered.rawValue {
+            // A message alert names the system sound (the server's push) or the chosen one (the app's own banner).
+            // In front, the app plays the user's choice itself and tells the system to stay silent.
+            options.remove(.sound)
+            let settings = MessageSoundStore.current
+            let quiet = NotificationsGate.isQuietNow
+            let play = MessageSoundPolicy.foreground(settings, quietNow: quiet, masterHaptics: HapticFeedback.masterEnabled)
+            // The message sound has its own switch; the banner switch still decides whether anything shows at all.
+            let showsBanner: Bool = presentation.banner
+            await MainActor.run {
+                guard showsBanner else { return }
+                MessageSoundPlayer.shared.play(play.sound)
+                if play.vibrate { MessageSoundPlayer.shared.vibrate() }
+            }
+        }
         return options
     }
 
