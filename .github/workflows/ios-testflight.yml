@@ -568,6 +568,11 @@ jobs:
             plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$SHARE_PLIST"
           fi
 
+          # The Live Activity widget extension (part of every build).
+          LIVE_PLIST="../QAudionLiveActivity/Info.plist"
+          plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" "$LIVE_PLIST"
+          plutil -replace CFBundleVersion            -string "$NEW_BUILD"        "$LIVE_PLIST"
+
           plutil -extract CFBundleShortVersionString raw -o - Info.plist
           plutil -extract CFBundleVersion             raw -o - Info.plist
           if [ "$VPN_BUILD" = "true" ]; then
@@ -1100,6 +1105,27 @@ jobs:
             echo "Default build (no share extension): skipping the share extension signing files."
           fi
 
+          # -- Live Activity widget extension (part of every build) ----------------
+          # No capability and no App Group: the identifier and its App Store profile are all it needs. The step creates the
+          # App ID com.qaudion.app.live-activity when it does not exist yet; if the account or the API key cannot create it,
+          # create it by hand in the Apple Developer portal (Certificates, Identifiers & Profiles > Identifiers > App IDs,
+          # explicit bundle id com.qaudion.app.live-activity, no capabilities) and run the build again.
+          LIVE_BID="com.qaudion.app.live-activity"
+          LIVE_FETCH_TMP=$(mktemp)
+          LIVE_STATUS=0
+          app-store-connect fetch-signing-files "$LIVE_BID" \
+            --type IOS_APP_STORE \
+            --create \
+            --platform IOS \
+            --certificate-key "@file:$CERT_KEY_PATH" \
+            --strict-match-identifier > "$LIVE_FETCH_TMP" 2>&1 || LIVE_STATUS=$?
+          sed 's/\x1b\[[0-9;]*m//g' "$LIVE_FETCH_TMP"
+          rm -f "$LIVE_FETCH_TMP"
+          if [ "$LIVE_STATUS" -ne 0 ]; then
+            echo "::error::could not get the App Store signing files of the Live Activity extension. The App ID $LIVE_BID has to exist in the Apple Developer portal (explicit App ID, no capabilities) and the API key has to be allowed to create profiles for it."
+            exit 1
+          fi
+
           keychain add-certificates
           xcode-project use-profiles --project "QAudionApp/$XCODE_PROJECT"
 
@@ -1310,7 +1336,7 @@ jobs:
           # Privacy manifests that must be in the shipped bundle: the app and the
           # Intents extension, plus the packet-tunnel extension only in a build
           # with VPN support (the default build does not contain that extension).
-          MANIFESTS="$APP/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy"
+          MANIFESTS="$APP/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionIntents.appex/PrivacyInfo.xcprivacy $APP/PlugIns/QAudionLiveActivity.appex/PrivacyInfo.xcprivacy"
           if [ "$VPN_BUILD" = "true" ]; then
             MANIFESTS="$MANIFESTS $APP/PlugIns/QAudionPacketTunnel.appex/PrivacyInfo.xcprivacy"
           fi

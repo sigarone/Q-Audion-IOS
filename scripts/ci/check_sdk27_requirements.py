@@ -20,9 +20,10 @@ import re
 import sys
 
 ROOT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.getcwd()
-PLISTS = ["QAudionApp/Info.plist", "QAudionIntents/Info.plist", "QAudionPacketTunnel/Info.plist"]
+PLISTS = ["QAudionApp/Info.plist", "QAudionIntents/Info.plist", "QAudionPacketTunnel/Info.plist",
+          "QAudionLiveActivity/Info.plist"]
 FORBIDDEN_KEYS = ["UIDesignRequiresCompatibility", "UIRequiresFullScreen"]
-SOURCE_DIRS = ["QAudionApp", "QAudionIntents", "QAudionPacketTunnel", "QAudionEngine/Sources"]
+SOURCE_DIRS = ["QAudionApp", "QAudionIntents", "QAudionPacketTunnel", "QAudionLiveActivity", "QAudionEngine/Sources"]
 SOURCE_RULES = [
     (re.compile(r"UIApplication\.shared\.(windows|keyWindow)\b"), "uses the deprecated UIApplication window list"),
     (re.compile(r"\bUIWindow\(\s*frame\b"), "creates a UIWindow outside a window scene"),

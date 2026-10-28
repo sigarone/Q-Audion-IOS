@@ -61,6 +61,7 @@ targets:
           - GlassPolicyTests.swift
           - IntentHandlerTests.swift
           - KmsSweepStatusTests.swift
+          - LiveActivityPolicyTests.swift
           - LegalLinksTests.swift
           - LocationAppTests.swift
           - LocationCenterFixture.swift

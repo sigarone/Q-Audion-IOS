@@ -35,10 +35,12 @@ import os
 import re
 import sys
 
-SCAN_DIRS = ("QAudionApp", "QAudionEngine/Sources", "QAudionIntents", "QAudionPacketTunnel", "QAudionShare")
+SCAN_DIRS = ("QAudionApp", "QAudionEngine/Sources", "QAudionIntents", "QAudionPacketTunnel", "QAudionShare",
+             "QAudionLiveActivity")
 CATALOG = "QAudionApp/Localizable.xcstrings"
-# A target with a catalog of its own (the share extension bundles its own strings).
-OWN_CATALOGS = {"QAudionShare/": "QAudionShare/Localizable.xcstrings"}
+# Targets with a catalog of their own (the extensions bundle their own strings).
+OWN_CATALOGS = {"QAudionShare/": "QAudionShare/Localizable.xcstrings",
+                "QAudionLiveActivity/": "QAudionLiveActivity/Localizable.xcstrings"}
 ALLOWLIST = "scripts/ci/hardcoded_italian_allowlist.txt"
 LANGS = ("it", "en", "fr", "de", "es", "pt-BR")
 

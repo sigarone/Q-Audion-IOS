@@ -18358,6 +18358,8 @@ final class AppState: ObservableObject {
         NoticeService.shared.resetForAccountChange()
         // Location sharing: every share ends and nothing held for the account that left stays in memory (WIRE_SPEC 14.6.1 rule 7).
         LocationShareCenter.shared.accountLeft()
+        // Every Live Activity ends with the account.
+        LiveActivities.endAll()
     }
 
     /// Idempotent: returns the live call engine, building it first when there
@@ -24509,6 +24511,8 @@ extension AppState {
                 self?.liveProvider?.getWebSocketClient().requestConnection()
             }))
         LocationShareCenter.shared.startOnce()
+        // Live Activities follow the shares (and the large transfers); activities of a previous run are ended.
+        LiveActivities.start()
     }
 }
 

@@ -135,6 +135,9 @@ targets:
       # INStartCallIntent. See QAudionIntents/IntentHandler.swift.
       - target: QAudionIntents
         embed: true
+      # Live Activities (location share, large file transfer): the widget extension drawing them.
+      - target: QAudionLiveActivity
+        embed: true
     resources:
       - path: Assets.xcassets
       # Default incoming-call ringtone (CallKit cfg.ringtoneSound) and its 3 s unit for the in-app ring.
@@ -211,3 +214,35 @@ targets:
         SKIP_INSTALL: YES
     dependencies:
       - sdk: Intents.framework
+
+  # ------------------------------------------------------------------ #
+  # QAudionLiveActivity -- widget extension for the Live Activities    #
+  # (a live location share, a file transfer above 5 MB). ActivityKit,  #
+  # WidgetKit and AppIntents only; no engine, no stores, no network.   #
+  # The attributes and the Stop intent are compiled into the app too   #
+  # (QAudionApp/LiveActivity/Shared), so both sides agree on the data. #
+  # Bundle: com.qaudion.app.live-activity                              #
+  # ------------------------------------------------------------------ #
+  QAudionLiveActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.1"
+    sources:
+      - path: ../QAudionLiveActivity
+      - path: ../QAudionApp/LiveActivity/Shared
+    settings:
+      base:
+        INFOPLIST_FILE: ../QAudionLiveActivity/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.qaudion.app.live-activity
+        PRODUCT_NAME: QAudionLiveActivity
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: 5G22P9239N
+        CODE_SIGN_STYLE: Automatic
+        SKIP_INSTALL: YES
+        # Extension code must not use APIs that are unavailable to extensions.
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: ActivityKit.framework
+      - sdk: AppIntents.framework
