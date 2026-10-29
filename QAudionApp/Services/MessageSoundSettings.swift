@@ -30,6 +30,9 @@ struct MessageSoundSettings: Equatable {
     var soundEnabled: Bool
     var soundId: String
     var hapticEnabled: Bool
+    /// Loudness of the sounds the app plays itself (the preview and the sound of a message while the app is open),
+    /// 0...1. iOS plays the sound of a notification received while the app is closed at the system volume.
+    var volume: Float = 1.0
 
     static let `default` = MessageSoundSettings(soundEnabled: true, soundId: MessageSoundCatalog.defaultId, hapticEnabled: true)
 }
@@ -89,6 +92,7 @@ struct MessageSoundStore {
     static let keyEnabled = "qaudion.notifications.message_sound_enabled"
     static let keySoundId = "qaudion.notifications.message_sound_id"
     static let keyHaptic  = "qaudion.notifications.message_haptic_enabled"
+    static let keyVolume  = "qaudion.notifications.message_volume"
 
     private let defaults: UserDefaults
 
@@ -100,13 +104,15 @@ struct MessageSoundStore {
         let enabled = defaults.object(forKey: Self.keyEnabled) as? Bool ?? legacyInAppSound
         let id = MessageSoundCatalog.normalized(defaults.string(forKey: Self.keySoundId) ?? MessageSoundCatalog.defaultId)
         let haptic = defaults.object(forKey: Self.keyHaptic) as? Bool ?? true
-        return MessageSoundSettings(soundEnabled: enabled, soundId: id, hapticEnabled: haptic)
+        let volume = MessageSoundVolume.clamped(defaults.object(forKey: Self.keyVolume) as? Double ?? 1.0)
+        return MessageSoundSettings(soundEnabled: enabled, soundId: id, hapticEnabled: haptic, volume: volume)
     }
 
     func save(_ settings: MessageSoundSettings) {
         defaults.set(settings.soundEnabled, forKey: Self.keyEnabled)
         defaults.set(MessageSoundCatalog.normalized(settings.soundId), forKey: Self.keySoundId)
         defaults.set(settings.hapticEnabled, forKey: Self.keyHaptic)
+        defaults.set(Double(MessageSoundVolume.clamped(Double(settings.volume))), forKey: Self.keyVolume)
     }
 
     #if !QAUDION_NOTIFICATION_SERVICE
@@ -125,6 +131,51 @@ struct MessageSoundStore {
         if !NotificationsGate.inAppSoundEnabled { save(load(legacyInAppSound: false)) }
     }
     #endif
+}
+
+/// The message-sound volume: 0 (silent) to 1 (the phone's volume).
+enum MessageSoundVolume {
+    static func clamped(_ value: Double) -> Float {
+        guard value.isFinite else { return 1.0 }
+        return Float(min(1.0, max(0.0, value)))
+    }
+}
+
+/// How the settings screen plays a message sound as a preview. Pure, so it is tested without an audio device.
+///
+/// A real incoming message follows the ringer switch (`MessageSoundPlayer`). A preview is started on purpose, so it is
+/// played by an audio player that is audible with the switch on silent. During a call the audio session belongs to
+/// the call and is not touched: the preview then falls back to the system sound service, which uses no session.
+enum MessageSoundPreviewPolicy {
+
+    /// The file of the system "received message" tone, used to preview the system choice as a real sound.
+    static let systemToneFile = "/System/Library/Audio/UISounds/sms-received1.caf"
+
+    /// Loudness the player uses for a preview or an in-app message sound: the user's slider, 0 meaning silent.
+    static func playerVolume(for settings: MessageSoundSettings) -> Float {
+        MessageSoundVolume.clamped(Double(settings.volume))
+    }
+
+    enum Source: Equatable {
+        case bundled(fileName: String)
+        case systemTone
+    }
+
+    enum Plan: Equatable {
+        case none
+        /// Audio player with a short-lived playback session.
+        case player(Source)
+        /// The call owns the audio session: play through the system sound service.
+        case callSafe(MessageSound)
+    }
+
+    static func plan(for sound: MessageSound, inCall: Bool) -> Plan {
+        switch sound {
+        case .silent: return .none
+        case .systemDefault: return inCall ? .callSafe(sound) : .player(.systemTone)
+        case .bundled(let name): return inCall ? .callSafe(sound) : .player(.bundled(fileName: name))
+        }
+    }
 }
 
 /// Plays a bundled message sound through the system sound service: it follows the ringer switch and the system

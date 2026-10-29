@@ -129,20 +129,50 @@ final class InAppRingPlayer {
     }
 }
 
-/// Plays a short preview of a ringtone in the settings screen.
+/// Settings previews that must give way when a call starts or rings. `AppState` calls `stopAll()` before an in-app
+/// ring starts, before CallKit is told about an incoming call and whenever a call leaves idle, so the preview has
+/// released the audio session before the ring or CallKit takes it.
+@MainActor
+enum SoundPreviewCoordinator {
+
+    private static var stoppers: [ObjectIdentifier: () -> Void] = [:]
+
+    static func register(_ owner: AnyObject, stop: @escaping () -> Void) {
+        stoppers[ObjectIdentifier(owner)] = stop
+    }
+
+    static func unregister(_ owner: AnyObject) {
+        stoppers[ObjectIdentifier(owner)] = nil
+    }
+
+    static var activeCount: Int { stoppers.count }
+
+    static func stopAll() {
+        let all = Array(stoppers.values)
+        stoppers.removeAll()
+        for stop in all { stop() }
+    }
+}
+
+/// Plays a short preview of a ringtone or message sound in a settings screen.
 @MainActor
 final class RingPreviewPlayer: ObservableObject {
 
     @Published private(set) var playingId: String?
     private var player: AVAudioPlayer?
     private var stopWork: DispatchWorkItem?
+    private var interruptionObserver: NSObjectProtocol?
+    private var resignObserver: NSObjectProtocol?
     private let session = RingAudioSession()
     private let inCall: () -> Bool
 
     init(inCall: @escaping () -> Bool) { self.inCall = inCall }
 
     /// Plays `url` at `volume` for a few seconds. Starting another preview, or `stop()`, ends this one.
-    func play(id: String, url: URL?, volume: Float, startAt: TimeInterval = 0) {
+    /// `minimumVolume` keeps a ringtone preview audible at a low slider position; a message sound passes 0.
+    /// `duck` lowers the user's music instead of pausing it.
+    func play(id: String, url: URL?, volume: Float, startAt: TimeInterval = 0,
+              minimumVolume: Float = 0.2, duck: Bool = false) {
         stop()
         // No preview during a call: it would take the call's audio session.
         guard !inCall() else {
@@ -153,10 +183,15 @@ final class RingPreviewPlayer: ObservableObject {
             RTLog.warn("call", "ringpreview res=0")
             return
         }
-        session.begin(inCall: false, ignoreSilentSwitch: true)
+        // Another voice feature of the app (a voice note, the voice unlock) has the session: leave it alone.
+        guard AppAudioSession.isIdleNow(callInFlight: inCall()) else {
+            RTLog.info("call", "ringpreview skip=1 busy=1")
+            return
+        }
+        session.begin(inCall: false, ignoreSilentSwitch: true, duckOthers: duck)
         do {
             let p = try AVAudioPlayer(contentsOf: url)
-            p.volume = max(0.2, volume)
+            p.volume = max(minimumVolume, volume)
             if startAt > 0 { p.currentTime = min(startAt, max(0, p.duration - 1)) }
             guard p.play() else {
                 RTLog.warn("call", "ringpreview play=0")
@@ -165,9 +200,23 @@ final class RingPreviewPlayer: ObservableObject {
             }
             player = p
             playingId = id
+            SoundPreviewCoordinator.register(self) { [weak self] in self?.stopForCall() }
+            interruptionObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                guard raw == AVAudioSession.InterruptionType.began.rawValue else { return }
+                Task { @MainActor in self?.stop() }
+            }
+            // Leaving the foreground ends the preview and gives the session back.
+            resignObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in Task { @MainActor in self?.stop() } }
             let work = DispatchWorkItem { [weak self] in self?.stop() }
             stopWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
+            // The player does not loop: it ends after what is left to play, at most 6 s.
+            let remaining = max(0.1, p.duration - p.currentTime)
+            DispatchQueue.main.asyncAfter(deadline: .now() + min(6, remaining + 0.15), execute: work)
         } catch {
             let code: Int = (error as NSError).code
             RTLog.warn("call", "ringpreview init=0 err=\(code)")
@@ -175,12 +224,26 @@ final class RingPreviewPlayer: ObservableObject {
         }
     }
 
-    func stop() {
+    func stop() { release(callStarting: false) }
+
+    /// A call or its ring is starting: stop at once and leave the audio session exactly as it is, because the call
+    /// (or CallKit) is about to configure it.
+    func stopForCall() { release(callStarting: true) }
+
+    private func release(callStarting: Bool) {
         stopWork?.cancel()
         stopWork = nil
+        if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+        interruptionObserver = nil
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
         player?.stop()
         player = nil
-        if playingId != nil { session.end(inCall: inCall()) }
+        SoundPreviewCoordinator.unregister(self)
+        if playingId != nil {
+            // Never deactivate or reconfigure the session when a call or a ring owns it.
+            if callStarting { session.endAfterCall(isCallActive: inCall) } else { session.end(inCall: inCall()) }
+        }
         playingId = nil
     }
 }
