@@ -2,69 +2,69 @@ import XCTest
 @testable import QAudionApp
 import QAudionEngine
 
-/// Where the security-code card sits on the call screen: with the six words ready and the confirmation outstanding it
-/// is pinned above the control dock (words and confirm button visible without scrolling); before that the waiting line
-/// stays in the column, and after the confirmation (or when it is redundant) the card goes back into the column.
+/// When the security-code card shows on the call screen: only when a comparison is really needed, pinned above the
+/// control dock. Never as a routine element at answer (unknown or redundant assurance state), never once confirmed.
 final class SasCardPlacementTests: XCTestCase {
 
-    private func pinned(_ words: Int, verified: Bool = false, redundant: Bool = false) -> Bool {
-        SasCardPlacement.isPinned(sasWordCount: words, sasVerified: verified, sasCeremonyRedundant: redundant)
+    private func needed(_ required: Bool?, awaiting: Bool = false, notice: Bool = false) -> Bool {
+        SasCardPlacement.isVerificationNeeded(sasRequired: required, awaitingConfirmation: awaiting, identityNotice: notice)
     }
 
-    private func inColumn(_ words: Int, verified: Bool = false, redundant: Bool = false) -> Bool {
-        SasCardPlacement.showsCardInColumn(sasWordCount: words, sasVerified: verified, sasCeremonyRedundant: redundant)
+    private func pinned(_ words: Int, verified: Bool = false, needed: Bool) -> Bool {
+        SasCardPlacement.isPinned(sasWordCount: words, sasVerified: verified, verificationNeeded: needed)
     }
 
-    func testSixUnconfirmedWordsPinTheCard() {
-        XCTAssertTrue(pinned(6))
-        XCTAssertFalse(inColumn(6))
+    func testAnUnknownAssuranceStateDoesNotNeedTheCode() {
+        XCTAssertFalse(needed(nil))
+        XCTAssertFalse(pinned(6, needed: needed(nil)))
     }
 
-    func testConfirmedCardGoesBackToTheColumn() {
-        XCTAssertFalse(pinned(6, verified: true))
-        XCTAssertTrue(inColumn(6, verified: true))
+    func testARedundantCeremonyDoesNotNeedTheCode() {
+        XCTAssertFalse(needed(false))
+        XCTAssertFalse(pinned(6, needed: needed(false)))
     }
 
-    func testRedundantCardGoesBackToTheColumn() {
-        XCTAssertFalse(pinned(6, redundant: true))
-        XCTAssertTrue(inColumn(6, redundant: true))
-        XCTAssertFalse(pinned(6, verified: true, redundant: true))
+    func testARequiredCeremonyPinsTheCardUntilConfirmed() {
+        XCTAssertTrue(needed(true))
+        XCTAssertTrue(pinned(6, needed: needed(true)))
+        XCTAssertFalse(pinned(6, verified: true, needed: needed(true)))
     }
 
-    func testOtherWordCountsNeverPinNorShowTheCard() {
+    func testAHeldCallAndIdentityNoticesAlwaysNeedTheCode() {
+        for required in [nil, false, true] as [Bool?] {
+            XCTAssertTrue(needed(required, awaiting: true))
+            XCTAssertTrue(needed(required, notice: true))
+        }
+        XCTAssertTrue(pinned(6, needed: needed(false, awaiting: true)))
+        XCTAssertTrue(pinned(6, needed: needed(nil, notice: true)))
+    }
+
+    func testOtherWordCountsNeverPinTheCard() {
         for count in [0, 1, 5, 7] {
-            XCTAssertFalse(pinned(count), "\(count)")
-            XCTAssertFalse(inColumn(count), "\(count)")
+            XCTAssertFalse(pinned(count, needed: true), "\(count)")
         }
     }
 
-    func testTheCardIsInExactlyOnePlaceWhenTheWordsAreReady() {
-        for verified in [false, true] {
-            for redundant in [false, true] {
-                XCTAssertNotEqual(pinned(6, verified: verified, redundant: redundant),
-                                  inColumn(6, verified: verified, redundant: redundant))
-            }
+    func testWaitingLineShowsOnlyWithoutWordsAndWhenNeeded() {
+        func waiting(_ words: Int, _ waiting: Bool, _ needed: Bool) -> Bool {
+            SasCardPlacement.showsWaitingLine(sasWordCount: words, sasWaiting: waiting, verificationNeeded: needed)
         }
-    }
-
-    func testWaitingLineStaysInTheColumnOnlyWithoutWords() {
-        XCTAssertTrue(SasCardPlacement.showsWaitingLine(sasWordCount: 0, sasWaiting: true))
-        XCTAssertFalse(SasCardPlacement.showsWaitingLine(sasWordCount: 0, sasWaiting: false))
-        XCTAssertFalse(SasCardPlacement.showsWaitingLine(sasWordCount: 6, sasWaiting: true))
+        XCTAssertTrue(waiting(0, true, true))
+        XCTAssertFalse(waiting(0, true, false))
+        XCTAssertFalse(waiting(0, false, true))
+        XCTAssertFalse(waiting(6, true, true))
     }
 
     func testHoldNoticeIsPinnedOnlyWithThePinnedCard() {
-        func pins(_ words: Int, verified: Bool = false, redundant: Bool = false, awaiting: Bool) -> Bool {
+        func pins(_ words: Int, verified: Bool = false, needed: Bool = true, awaiting: Bool) -> Bool {
             SasCardPlacement.pinsHoldNotice(sasWordCount: words, sasVerified: verified,
-                                            sasCeremonyRedundant: redundant, awaitingConfirmation: awaiting)
+                                            verificationNeeded: needed, awaitingConfirmation: awaiting)
         }
         XCTAssertTrue(pins(6, awaiting: true))
         XCTAssertFalse(pins(6, awaiting: false))
         XCTAssertFalse(pins(0, awaiting: true))
         XCTAssertFalse(pins(6, verified: true, awaiting: true))
-        // A call held for confirmation keeps the card and its notice pinned even when the ceremony is redundant.
-        XCTAssertTrue(pins(6, redundant: true, awaiting: true))
-        XCTAssertFalse(pins(6, redundant: true, awaiting: false))
+        XCTAssertFalse(pins(6, needed: false, awaiting: true))
     }
 
     func testScrollableHeightFollowsTheWindowAndIsCapped() {
@@ -88,25 +88,11 @@ final class SasCardPlacementTests: XCTestCase {
         XCTAssertLessThan(SasCardPlacement.columnBottomSpacing, 40)
     }
 
-    func testRedundantCardStaysPinnedWhileTheCallIsHeldForConfirmation() {
-        XCTAssertTrue(SasCardPlacement.isPinned(sasWordCount: 6, sasVerified: false, sasCeremonyRedundant: true,
-                                                awaitingConfirmation: true))
-        XCTAssertFalse(SasCardPlacement.showsCardInColumn(sasWordCount: 6, sasVerified: false, sasCeremonyRedundant: true,
-                                                          awaitingConfirmation: true))
-        XCTAssertFalse(SasCardPlacement.isPinned(sasWordCount: 6, sasVerified: false, sasCeremonyRedundant: true,
-                                                 awaitingConfirmation: false))
-        XCTAssertFalse(SasCardPlacement.isPinned(sasWordCount: 6, sasVerified: true, sasCeremonyRedundant: true,
-                                                 awaitingConfirmation: true))
-    }
-
     // MARK: - Which assurance states keep the card pinned
 
     private func pinnedFor(_ state: AssuranceState, awaiting: Bool = false) -> Bool {
         let presentation = AssuranceStateUI.present(state: state)
-        return SasCardPlacement.isPinned(
-            sasWordCount: 6, sasVerified: false,
-            sasCeremonyRedundant: SasCardPlacement.isRedundant(sasRequired: presentation.sasRequired),
-            awaitingConfirmation: awaiting)
+        return pinned(6, needed: needed(presentation.sasRequired, awaiting: awaiting))
     }
 
     func testConfirmedPreSharedKeyDoesNotPinTheCard() {
@@ -124,12 +110,5 @@ final class SasCardPlacementTests: XCTestCase {
         XCTAssertTrue(pinnedFor(.pskConfirmed, awaiting: true))
         XCTAssertTrue(pinnedFor(.nfcAuthenticated, awaiting: true))
         XCTAssertTrue(pinnedFor(.pqcOnly, awaiting: true))
-    }
-
-    func testStateNotComputedYetKeepsTheCardPinned() {
-        XCTAssertFalse(SasCardPlacement.isRedundant(sasRequired: nil))
-        XCTAssertTrue(SasCardPlacement.isRedundant(sasRequired: false))
-        XCTAssertFalse(SasCardPlacement.isRedundant(sasRequired: true))
-        XCTAssertTrue(pinned(6, redundant: SasCardPlacement.isRedundant(sasRequired: nil)))
     }
 }
