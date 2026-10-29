@@ -169,7 +169,17 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// by `BCryptoPersistentConnectionImpl.lastDisconnectReason` right after
     /// a `.disconnected` state-listener callback.
     private var _lastDisconnectReason: String?
+    /// Drives the wait before the next automatic attempt. NOT cleared when a socket authenticates: only a
+    /// socket that stays up for `WebSocketReconnectPolicy.stabilityWindowSec` starts the backoff over (see
+    /// `handleDisconnect`), so a connection that dies seconds after every login keeps backing off.
     private var reconnectAttempt = 0
+    /// Consecutive drops counted toward `onNodeStalled`. Unlike `reconnectAttempt` it goes back to zero on
+    /// every successful authentication, as `reconnectAttempt` used to: a node that answers and authenticates
+    /// is not dead, whatever the network does to the connection afterwards.
+    private var failoverAttempt = 0
+    /// When the current socket authenticated (nil until it does) and when `connect()` opened it.
+    private var authenticatedAt: TimeInterval?
+    private var socketOpenedAt: TimeInterval?
     /// Always-reachable Phase 2: the persistent WS is a FOREGROUND latency
     /// optimization layered on top of the OS push channel (PushKit-VoIP),
     /// which is the real reachability spine. It must therefore retry
@@ -179,7 +189,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// `maxReconnectAttempts = 20` permanent give-up was removed: after 20
     /// failures the device went silently un-connected and only the next
     /// foreground/app-event could revive it.
-    private let maxReconnectDelaySec: TimeInterval = 30
+    private let maxReconnectDelaySec: TimeInterval = WebSocketReconnectPolicy.maxDelaySec
     /// W-CONNECTINGWATCHDOG (2026-09-11) — see `scheduleConnectingWatchdog`'s
     /// doc. How long `_state` may sit at `.connecting` with NEITHER a
     /// successful `authenticated` NOR a `handleDisconnect()` before this
@@ -1029,6 +1039,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             return
         }
         _state = .connecting
+        socketOpenedAt = Date().timeIntervalSinceReferenceDate
+        authenticatedAt = nil
         // IOS-E5 — any explicit connect() (forceReconnect, willEnterForeground,
         // the un-park call from handlePathUpdate itself) takes ownership away
         // from a park, exactly like it cancels a timer-based backoff retry.
@@ -1214,6 +1226,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         _binRelayNegotiated = false
         resetBinLivenessStateLocked()
         reconnectAttempt = 0
+        failoverAttempt = 0
+        authenticatedAt = nil
         pingTimer?.cancel()
         pingTimer = nil
         let listeners = stateListeners
@@ -1262,8 +1276,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // combined with the server replacing the prior same-deviceID socket this
         // produced a fast "replacing stale ws device" reconnect storm during
         // calls. Letting the attempt count carry over lets handleDisconnect's
-        // backoff actually throttle a runaway loop; a genuinely successful
-        // reconnect still resets it to 0 in handleMessage("authenticated").
+        // backoff actually throttle a runaway loop; only a socket that held for
+        // the stability window starts the count over (settled just below).
+        // This path never waits for the backoff itself: connect() runs at once.
+        reconnectAttempt = WebSocketReconnectPolicy.attemptAfterDrop(
+            current: reconnectAttempt,
+            authenticatedAt: authenticatedAt,
+            now: Date().timeIntervalSinceReferenceDate)
         let listeners = stateListeners
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
@@ -2145,7 +2164,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                 self.handleDisconnect(
                     generation: generation,
                     reason: (error as NSError).description,
-                    authRejected: authRejected)
+                    authRejected: authRejected,
+                    errorDomain: (error as NSError).domain,
+                    errorCode: (error as NSError).code,
+                    closeCode: task.closeCode.rawValue)
             }
         }
     }
@@ -2415,7 +2437,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             }
             // else: a stale generation's echo leaves the live socket's
             // negotiated state untouched — it may neither grant nor revoke.
-            reconnectAttempt = 0
+            // The backoff is NOT reset here: a socket that authenticates and is then torn
+            // down within seconds must keep growing it. `handleDisconnect` (or
+            // `forceReconnect`) clears it once this socket has held for the stability window.
+            failoverAttempt = 0
+            if generation == connectionGeneration {
+                authenticatedAt = Date().timeIntervalSinceReferenceDate
+            }
             // Clear the debounce flag set by forceReconnect() — the recovery
             // is complete; a future suspension can trigger another reconnect.
             reconnectInFlight = false
@@ -2626,6 +2654,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
                     // new credentials.
                     self.authPermanentlyRejected = false
                     self.reconnectAttempt = 0
+                    self.failoverAttempt = 0
                 case .revoked:
                     // Server-confirmed revocation — park the reconnect loop until the app
                     // layer re-onboards and calls connect() again. No QR forced.
@@ -2711,6 +2740,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         if reconnectParkedForOffline, satisfied, !rejected {
             reconnectParkedForOffline = false
             reconnectAttempt = 0
+            failoverAttempt = 0
             shouldUnpark = true
         }
         lock.unlock()
@@ -2816,7 +2846,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         }
     }
 
-    private func handleDisconnect(generation: Int? = nil, reason: String? = nil, authRejected: Bool = false) {
+    private func handleDisconnect(generation: Int? = nil, reason: String? = nil, authRejected: Bool = false,
+                                  errorDomain: String? = nil, errorCode: Int = 0, closeCode: Int = 0) {
         lock.lock()
         // Drop stale disconnect callbacks from zombie connections. This fires when
         // a cancelled task's receive closure delivers its .failure result AFTER a
@@ -2830,6 +2861,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         }
         _state = .disconnected
         _lastDisconnectReason = reason ?? "unknown"
+        // A socket that held for the stability window starts the backoff over; a shorter one keeps
+        // it growing. Then one shipped line per drop: reason, socket age, attempt now in force.
+        let dropNow = Date().timeIntervalSinceReferenceDate
+        reconnectAttempt = WebSocketReconnectPolicy.attemptAfterDrop(
+            current: reconnectAttempt, authenticatedAt: authenticatedAt, now: dropNow)
+        let dropLine = WebSocketReconnectPolicy.disconnectLine(
+            domain: errorDomain, code: errorCode, closeCode: closeCode,
+            socketAgeSec: socketOpenedAt.map { dropNow - $0 } ?? 0, attempt: reconnectAttempt + 1)
+        authenticatedAt = nil
         // The socket that negotiated binary is dead. Clearing here (and not
         // only in the connect() that follows) closes the window between the
         // drop and the reconnect, in which an in-flight relay frame would
@@ -2862,12 +2902,14 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             let attemptFrozen = reconnectAttempt
             lock.unlock()
             listeners.forEach { $0(.disconnected) }
+            print(dropLine)
             // See the un-park print in handlePathUpdate above — same
             // shipper-verified "net park=" format.
             print("[BCryptoWS] net park=1 attempt=\(attemptFrozen)")
             return
         }
         reconnectAttempt += 1
+        failoverAttempt += 1
         let attempt = reconnectAttempt
         // FAILOVER trigger: after enough consecutive reconnects the node is likely
         // DEAD. Signal the app to fail over to a different node (it re-selects +
@@ -2878,7 +2920,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // failover moved a healthy user onto the disaster-recovery replica (which holds a
         // different database and never authenticated this device) every time a stale token
         // looped three times.
-        if Self.shouldSignalNodeStalled(attempt: attempt, threshold: failoverAfterAttempts, authRejected: authRejected),
+        if Self.shouldSignalNodeStalled(attempt: failoverAttempt, threshold: failoverAfterAttempts, authRejected: authRejected),
            let onStalled = onNodeStalled {
             let deadWss = config.serverUrl
                 .replacingOccurrences(of: "https://", with: "wss://")
@@ -2894,6 +2936,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         let listeners = stateListeners
         lock.unlock()
         listeners.forEach { $0(.disconnected) }
+        print(dropLine)
 
         // Always-reachable Phase 2: NO attempt cap — the persistent WS retries
         // indefinitely (push remains the reachability spine in the meantime).
@@ -2924,9 +2967,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // background probing, never a storm. Jitter prevents N devices on a
         // network coming back from a blip from synchronizing into a
         // thundering herd.
-        let baseDelay = min(maxReconnectDelaySec, pow(2.0, Double(min(attempt - 1, 5))))
-        let jitter = baseDelay * (Double.random(in: -0.25...0.25))
-        let delay = max(0.5, baseDelay + jitter)
+        let delay = WebSocketReconnectPolicy.delay(forAttempt: attempt,
+                                                   jitterFraction: Double.random(in: -0.25...0.25))
         DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.retryConnectIfStillDesired()
         }

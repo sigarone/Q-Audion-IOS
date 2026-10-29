@@ -186,6 +186,50 @@ final class CapabilityGateTests: XCTestCase {
         XCTAssertEqual(TokenVault.loadEntitlement(), fresh)
     }
 
+    func testReconnectRefreshIsSkippedWithinTheDebounceWindowButNotAfterIt() async throws {
+        TokenVault.saveUserId("user-a")
+        let fresh = try signedToken(sub: "user-a", fea: ["feat.files": 0])
+        let api = FakeEntitlementsApiClient(result: .success(EntitlementsTokenResponse(token: fresh, kid: "ent-v1")))
+        let gate = makeGate(api: api)
+        let t0 = Date().timeIntervalSinceReferenceDate
+
+        await gate.refreshIfDue(now: t0)
+        XCTAssertEqual(api.calls, 1, "nothing cached yet: the first reconnect refresh must run")
+
+        await gate.refreshIfDue(now: t0 + 13)
+        await gate.refreshIfDue(now: t0 + 59)
+        XCTAssertEqual(api.calls, 1, "reconnects inside the window must not fetch the token again")
+
+        await gate.refreshIfDue(now: t0 + 61)
+        XCTAssertEqual(api.calls, 2, "after the window a reconnect refreshes again")
+    }
+
+    func testServerPushedRefreshIsNeverDebounced() async throws {
+        TokenVault.saveUserId("user-a")
+        let fresh = try signedToken(sub: "user-a", fea: ["feat.files": 0])
+        let api = FakeEntitlementsApiClient(result: .success(EntitlementsTokenResponse(token: fresh, kid: "ent-v1")))
+        let gate = makeGate(api: api)
+
+        await gate.refresh()
+        await gate.refresh()
+
+        XCTAssertEqual(api.calls, 2, "entitlements_changed calls refresh() directly and must always fetch")
+    }
+
+    func testReconnectRefreshRunsAgainAfterTheGrantWasDiscarded() async throws {
+        TokenVault.saveUserId("user-a")
+        let fresh = try signedToken(sub: "user-a", fea: ["feat.files": 0])
+        let api = FakeEntitlementsApiClient(result: .success(EntitlementsTokenResponse(token: fresh, kid: "ent-v1")))
+        let gate = makeGate(api: api)
+        let t0 = Date().timeIntervalSinceReferenceDate
+
+        await gate.refreshIfDue(now: t0)
+        gate.discard()
+        await gate.refreshIfDue(now: t0 + 5)
+
+        XCTAssertEqual(api.calls, 2, "a new session has no grant: the debounce must not hold it back")
+    }
+
     func testRefreshRejectsATokenForTheWrongUserAndKeepsWhateverWasCached() async throws {
         // Same acceptance rule as loadCached(), applied to a FRESHLY
         // fetched token — a mint-endpoint bug or a stale server response
@@ -300,8 +344,9 @@ final class CapabilityGateTests: XCTestCase {
 
 private final class FakeEntitlementsApiClient: EntitlementsApiClient {
     private let result: Result<EntitlementsTokenResponse, Error>
+    private(set) var calls = 0
     init(result: Result<EntitlementsTokenResponse, Error>) { self.result = result }
-    func fetchEntitlementsToken() async throws -> EntitlementsTokenResponse { try result.get() }
+    func fetchEntitlementsToken() async throws -> EntitlementsTokenResponse { calls += 1; return try result.get() }
 }
 
 private struct FakeApiError: Error {}
