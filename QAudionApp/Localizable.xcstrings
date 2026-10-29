@@ -94928,44 +94928,86 @@
         }
       }
     },
-    "Il volume è quello del sistema: si regola con i tasti del volume.": {
+    "Volume dei messaggi": {
       "extractionState": "manual",
-      "comment": "Footer of the message sounds screen: volume and killed-app limits",
+      "comment": "Title of the volume slider of the message sounds screen",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il volume è quello del sistema: si regola con i tasti del volume."
+            "value": "Volume dei messaggi"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The volume is the system volume: use the volume buttons to change it."
+            "value": "Message volume"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le volume est celui du système : règle-le avec les touches de volume."
+            "value": "Volume des messages"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Lautstärke ist die des Systems und wird mit den Lautstärketasten geregelt."
+            "value": "Lautstärke der Nachrichten"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El volumen es el del sistema: se ajusta con los botones de volumen."
+            "value": "Volumen de los mensajes"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O volume é o do sistema: ajuste com os botões de volume."
+            "value": "Volume das mensagens"
+          }
+        }
+      }
+    },
+    "Vale per l'anteprima e per i messaggi che arrivano con l'app aperta. Con l'app chiusa iOS riproduce il suono della notifica al volume di sistema, che si regola con i tasti del volume.": {
+      "extractionState": "manual",
+      "comment": "Footer of the message sounds screen: what the volume slider covers and the closed-app limit",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vale per l'anteprima e per i messaggi che arrivano con l'app aperta. Con l'app chiusa iOS riproduce il suono della notifica al volume di sistema, che si regola con i tasti del volume."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This applies to the preview and to messages that arrive while the app is open. With the app closed, iOS plays the notification sound at the system volume, which you change with the volume buttons."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vaut pour l'aperçu et pour les messages reçus quand l'app est ouverte. Quand l'app est fermée, iOS joue le son de la notification au volume du système, que tu règles avec les touches de volume."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gilt für die Vorschau und für Nachrichten, die bei geöffneter App eintreffen. Bei geschlossener App spielt iOS den Ton der Benachrichtigung in der Systemlautstärke ab, die Sie mit den Lautstärketasten ändern."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se aplica a la vista previa y a los mensajes que llegan con la app abierta. Con la app cerrada, iOS reproduce el sonido de la notificación al volumen del sistema, que se ajusta con los botones de volumen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vale para a pré-visualização e para as mensagens que chegam com o app aberto. Com o app fechado, o iOS toca o som da notificação no volume do sistema, que você ajusta com os botões de volume."
           }
         }
       }

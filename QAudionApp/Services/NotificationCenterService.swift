@@ -430,7 +430,7 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             let play = MessageSoundPolicy.foreground(settings, quietNow: quiet, masterHaptics: HapticFeedback.masterEnabled)
             // The message sound has its own switch; the banner switch still decides whether anything shows at all.
             if presentation.banner {
-                MessageSoundPlayer.shared.play(play.sound)
+                MessageSoundPlayback.shared.play(play.sound, settings: settings)
                 if play.vibrate { MessageSoundPlayer.shared.vibrate() }
             }
         }

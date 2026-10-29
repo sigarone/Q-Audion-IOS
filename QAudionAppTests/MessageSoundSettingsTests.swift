@@ -1,4 +1,7 @@
 import XCTest
+import AVFoundation
+import QAudionEngine
+import UIKit
 import UserNotifications
 @testable import QAudionApp
 
@@ -194,6 +197,177 @@ final class MessageSoundSettingsTests: XCTestCase {
         XCTAssertNotNil(MessageSound.bundled(fileName: "qa_msg_nota.wav").notificationSound)
         XCTAssertEqual(MessageAlertSoundFile.fileName, "qa_msg.wav")
     }
+
+    // MARK: - Preview
+
+    func testPreviewPlaysTheChosenFile() {
+        let sound = MessageSound.bundled(fileName: "qa_msg_nota.wav")
+        XCTAssertEqual(MessageSoundPreviewPolicy.plan(for: sound, inCall: false),
+                       .player(.bundled(fileName: "qa_msg_nota.wav")))
+    }
+
+    func testPreviewOfTheSystemChoicePlaysTheSystemToneFile() {
+        XCTAssertEqual(MessageSoundPreviewPolicy.plan(for: .systemDefault, inCall: false), .player(.systemTone))
+    }
+
+    func testPreviewNeverTouchesTheSessionDuringACall() {
+        for sound in [MessageSound.systemDefault, .bundled(fileName: "qa_msg_goccia.wav")] {
+            XCTAssertEqual(MessageSoundPreviewPolicy.plan(for: sound, inCall: true), .callSafe(sound))
+        }
+    }
+
+    func testPreviewOfSilenceIsNothing() {
+        XCTAssertEqual(MessageSoundPreviewPolicy.plan(for: .silent, inCall: false), .none)
+        XCTAssertEqual(MessageSoundPreviewPolicy.plan(for: .silent, inCall: true), .none)
+    }
+
+    func testVolumeIsPersistedAndClamped() {
+        let store = MessageSoundStore(defaults: freshDefaults())
+        XCTAssertEqual(store.load(legacyInAppSound: true).volume, 1.0)
+        store.save(MessageSoundSettings(soundEnabled: true, soundId: "nota", hapticEnabled: true, volume: 0.4))
+        XCTAssertEqual(store.load(legacyInAppSound: true).volume, 0.4, accuracy: 0.0001)
+        store.save(MessageSoundSettings(soundEnabled: true, soundId: "nota", hapticEnabled: true, volume: 7))
+        XCTAssertEqual(store.load(legacyInAppSound: true).volume, 1.0)
+        XCTAssertEqual(MessageSoundVolume.clamped(-1), 0)
+        XCTAssertEqual(MessageSoundVolume.clamped(.nan), 1.0)
+    }
+
+    func testPreviewAndInAppSoundUseTheChosenVolume() {
+        let s = MessageSoundSettings(soundEnabled: true, soundId: "nota", hapticEnabled: true, volume: 0.3)
+        XCTAssertEqual(MessageSoundPreviewPolicy.playerVolume(for: s), 0.3, accuracy: 0.0001)
+        let sound = MessageSound.bundled(fileName: "qa_msg_nota.wav")
+        XCTAssertEqual(MessageSoundPlayback.plan(for: sound, volume: 0.3, busy: false),
+                       .player(.bundled(fileName: "qa_msg_nota.wav"), volume: 0.3))
+        XCTAssertEqual(MessageSoundPlayback.plan(for: sound, volume: 0, busy: false), .none)
+        XCTAssertEqual(MessageSoundPlayback.plan(for: .silent, volume: 1, busy: false), .none)
+    }
+
+    func testInAppMessageSoundNeverTouchesASessionDuringACallOrRing() {
+        for sound in [MessageSound.systemDefault, .bundled(fileName: "qa_msg_goccia.wav")] {
+            XCTAssertEqual(MessageSoundPlayback.plan(for: sound, volume: 0.5, busy: true), .systemSound)
+        }
+    }
+
+    @MainActor
+    func testRingStartStopsEveryRegisteredPreview() {
+        final class Owner {}
+        let a = Owner(), b = Owner()
+        var stopped = 0
+        SoundPreviewCoordinator.register(a) { stopped += 1 }
+        SoundPreviewCoordinator.register(b) { stopped += 1 }
+        SoundPreviewCoordinator.stopAll()
+        XCTAssertEqual(stopped, 2)
+        XCTAssertEqual(SoundPreviewCoordinator.activeCount, 0)
+        SoundPreviewCoordinator.stopAll()
+        XCTAssertEqual(stopped, 2)
+    }
+
+    @MainActor
+    func testPreviewIsReleasedWhenTheAppResignsActive() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("preview-\(UUID().uuidString).wav")
+        try MessageAlertSoundFile.silentWAV().write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let player = RingPreviewPlayer(inCall: { false })
+        player.play(id: "x", url: url, volume: 0.5, minimumVolume: 0)
+        try XCTSkipIf(player.playingId == nil, "no audio output in this environment")
+        NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+        let released = expectation(description: "released")
+        Task { @MainActor in
+            while player.playingId != nil { try? await Task.sleep(nanoseconds: 20_000_000) }
+            released.fulfill()
+        }
+        wait(for: [released], timeout: 3)
+    }
+
+    @MainActor
+    func testPreviewDoesNotStartDuringACall() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("preview-\(UUID().uuidString).wav")
+        try MessageAlertSoundFile.silentWAV().write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let player = RingPreviewPlayer(inCall: { true })
+        player.play(id: "x", url: url, volume: 1)
+        XCTAssertNil(player.playingId)
+        XCTAssertEqual(SoundPreviewCoordinator.activeCount, 0)
+    }
+
+    func testOneCallPredicate() {
+        // (callOrRingActive, noCallInFlight) -> in flight. A CallKit ring with an idle callState is
+        // callOrRingActive == false but noCallInFlight == false: it counts.
+        XCTAssertFalse(AppAudioSession.callOrRingInFlight(callOrRingActive: false, noCallInFlight: true))
+        XCTAssertTrue(AppAudioSession.callOrRingInFlight(callOrRingActive: false, noCallInFlight: false))
+        XCTAssertTrue(AppAudioSession.callOrRingInFlight(callOrRingActive: true, noCallInFlight: true))
+        XCTAssertTrue(AppAudioSession.callOrRingInFlight(callOrRingActive: true, noCallInFlight: false))
+    }
+
+    func testShortSoundsOnlyTakeAnIdleAudioSession() {
+        func idle(_ c: AVAudioSession.Category, _ m: AVAudioSession.Mode, call: Bool = false, audio: Bool = false) -> Bool {
+            AppAudioSession.isIdle(category: c, mode: m, callInFlight: call, callAudioActive: audio)
+        }
+        XCTAssertTrue(idle(.ambient, .default))
+        XCTAssertTrue(idle(.soloAmbient, .default))
+        // The call category is idle only with no call or ring in flight and no call audio running.
+        XCTAssertTrue(idle(.playAndRecord, .voiceChat))
+        XCTAssertFalse(idle(.playAndRecord, .voiceChat, call: true))
+        XCTAssertFalse(idle(.playAndRecord, .voiceChat, audio: true))
+        XCTAssertFalse(idle(.ambient, .default, call: true))
+        // Voice note playback, voice note recording, voice unlock.
+        XCTAssertFalse(idle(.playback, .spokenAudio))
+        XCTAssertFalse(idle(.playAndRecord, .default))
+        XCTAssertFalse(idle(.record, .measurement))
+    }
+
+    func testSessionIsGivenBackOnlyIfStillOurs() {
+        let mine = RingAudioSession.Config(category: .playback, mode: .default, options: [.duckOthers])
+        XCTAssertTrue(RingAudioSession.stillOurs(current: mine, applied: mine))
+        // iOS may add options of its own; only ducking is compared.
+        let withExtra = RingAudioSession.Config(category: .playback, mode: .default, options: [.duckOthers, .mixWithOthers])
+        XCTAssertTrue(RingAudioSession.stillOurs(current: withExtra, applied: mine))
+        // A voice note took the session.
+        let voiceNote = RingAudioSession.Config(category: .playback, mode: .spokenAudio, options: [.duckOthers])
+        XCTAssertFalse(RingAudioSession.stillOurs(current: voiceNote, applied: mine))
+        // A call took it.
+        let call = RingAudioSession.Config(category: .playAndRecord, mode: .voiceChat, options: [])
+        XCTAssertFalse(RingAudioSession.stillOurs(current: call, applied: mine))
+        XCTAssertFalse(RingAudioSession.stillOurs(current: mine, applied: nil))
+    }
+
+    func testEndAfterARingStillDeactivatesWhenWebRTCChangedTheCategory() {
+        typealias S = RingAudioSession
+        // Ours: deactivate and reset the category.
+        XCTAssertEqual(S.endAction(callInFlight: false, callAudioActive: false, stillOurs: true, inCallCategory: false),
+                       .deactivateAndReset)
+        // Declined or missed ring, WebRTC pre-warm already set play-and-record/voice-chat: music must resume.
+        XCTAssertEqual(S.endAction(callInFlight: false, callAudioActive: false, stillOurs: false, inCallCategory: true),
+                       .deactivateOnly)
+        // A voice note or the voice unlock has the session: untouched.
+        XCTAssertEqual(S.endAction(callInFlight: false, callAudioActive: false, stillOurs: false, inCallCategory: false),
+                       .none)
+        // A call or ring in flight, or call audio running: never touched.
+        XCTAssertEqual(S.endAction(callInFlight: true, callAudioActive: false, stillOurs: true, inCallCategory: true), .none)
+        XCTAssertEqual(S.endAction(callInFlight: false, callAudioActive: true, stillOurs: false, inCallCategory: true), .none)
+        XCTAssertTrue(S.isCallCategory(.init(category: .playAndRecord, mode: .voiceChat, options: [])))
+        XCTAssertFalse(S.isCallCategory(.init(category: .playAndRecord, mode: .default, options: [])))
+    }
+
+    func testPendingRestoreWaitsForTheCallToEndThenRunsOnce() {
+        typealias S = RingAudioSession
+        func step(gen: Int = 3, call: Bool, audio: Bool = false, ours: Bool = true, callCat: Bool = false,
+                  left: Int = 5) -> S.RestoreStep {
+            S.restoreStep(token: 3, currentGeneration: gen, callInFlight: call, callAudioActive: audio,
+                          stillOurs: ours, inCallCategory: callCat, attemptsLeft: left)
+        }
+        // The call is still ringing at +1.5 s: look again.
+        XCTAssertEqual(step(call: true), .retry)
+        XCTAssertEqual(step(call: false, audio: true), .retry)
+        // The ring ended without a call taking audio: restore once (reset if still ours).
+        XCTAssertEqual(step(call: false), .run(.deactivateAndReset))
+        XCTAssertEqual(step(call: false, ours: false, callCat: true), .run(.deactivateOnly))
+        XCTAssertEqual(step(call: false, ours: false, callCat: false), .run(.none))
+        // A newer begin owns the session now, or the attempts ran out: drop.
+        XCTAssertEqual(step(gen: 4, call: false), .drop)
+        XCTAssertEqual(step(call: true, left: 0), .drop)
+    }
+
 
     // MARK: - Bundle
 

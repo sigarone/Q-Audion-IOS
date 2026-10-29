@@ -618,6 +618,7 @@ final class AppState: ObservableObject {
     @Published var isInCall: Bool = false {
         didSet {
             guard oldValue != isInCall else { return }
+            if isInCall { SoundPreviewCoordinator.stopAll() }
             // The microphone strip in the call screen follows the call state at once.
             MicrophonePermissionMonitor.shared.callStateChanged()
             // A call never starts reduced and never stays reduced once it is over (same choke point as the rest
@@ -687,6 +688,11 @@ final class AppState: ObservableObject {
     @Published var callState: CallState = .idle {
         didSet {
             guard oldValue != callState else { return }
+            // A settings preview never plays over a call or its ring.
+            switch callState {
+            case .ringing, .connecting, .active, .encrypted: SoundPreviewCoordinator.stopAll()
+            case .idle, .ended: break
+            }
             updateProximityMonitoring()
             updateMeshCallState()
             callResourceLogger.update(callActive: callState == .active || callState == .encrypted)
@@ -4383,6 +4389,10 @@ final class AppState: ObservableObject {
             guard let self else { return false }
             return !self.noCallInFlight()
         }
+        // The app's own message sounds and the settings previews leave the audio session alone during a call or a ring.
+        MessageSoundPlayback.shared.callOrRingActive = { [weak self] in
+            self?.anyCallOrRing ?? false
+        }
         // W-MISSEDBADGE (2026-10-04) — the Calls-tab badge is created here, at launch, so that the "seen up to"
         // mark of a first run is the launch time: a missed call replayed right after start-up (before the home
         // screen first appears) is then counted, not swallowed by a mark that started later.
@@ -7696,6 +7706,7 @@ final class AppState: ObservableObject {
                             // W-CARPLAYVIDEOFIX (2026-09-08) — not forced on
                             // CarPlay, same reasoning as the PushKit 1:1
                             // branch's kdoc (prepareIncomingPushCall above).
+                            SoundPreviewCoordinator.stopAll()
                             await ck.reportIncomingCall(
                                 uuid: callUUID,
                                 callerName: resolvedCallerName,
@@ -20592,6 +20603,7 @@ final class AppState: ObservableObject {
         // W-CALLERBUSY (review of #169) — a ring (1:1 or group) never plays over the busy tone of the outgoing call
         // that just ended.
         callerBusyTone.stop()
+        SoundPreviewCoordinator.stopAll()
         guard !inAppRing.isRunning else { return }
         inAppRing.start()
     }
@@ -20615,6 +20627,22 @@ final class AppState: ObservableObject {
         case .connecting, .active: return true
         case .idle, .failed: return false
         }
+    }
+
+    /// True while a call is live or an incoming call is ringing (in-app ring or CallKit). Settings previews and the
+    /// app's own message sounds leave the audio session alone then.
+    var callOrRingActive: Bool {
+        if callSoundsInCall || inAppRing.isRunning { return true }
+        switch callState {
+        case .idle, .ended: return false
+        case .connecting, .ringing, .active, .encrypted: return true
+        }
+    }
+
+    /// The one "a call or a ring is in flight" rule for short app sounds: also true for a CallKit, PushKit or group ring
+    /// while `callState` is still idle.
+    var anyCallOrRing: Bool {
+        AppAudioSession.callOrRingInFlight(callOrRingActive: callOrRingActive, noCallInFlight: noCallInFlight())
     }
 
     /// Plays a cue that comes after the call (ended, busy) or before its audio session exists (start tick).
@@ -21462,6 +21490,7 @@ extension AppState {
         // W-CALLERBUSY (review of #169) — answering an incoming call (any path: CallKit, in-app, notification)
         // silences the busy tone of the outgoing call that just ended.
         callerBusyTone.stop()
+        SoundPreviewCoordinator.stopAll()
         RTLog.info("call", "W-CALLFG-DIAG performAcceptIncoming ENTER uuid=\(uuid) alreadyAnswered=\(self.answeredCallKitId == uuid)")
         // W-GHOSTCALL — before anything else: never turn a tap on a dead call's
         // ring into an in-call state (incident e3acecd7).
@@ -27434,6 +27463,7 @@ extension AppState {
             // W-CALLKITVIDEOFORCE — force hasVideo=true (see the PushKit
             // group branch above for the full rationale); `invite.hasVideo`
             // still drives the real group-call UI/behavior elsewhere.
+            await MainActor.run { SoundPreviewCoordinator.stopAll() }
             await self?.callKit?.reportIncomingCall(
                 uuid: uuid, callerName: name, hasVideo: true)
         }
