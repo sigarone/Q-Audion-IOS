@@ -20,6 +20,14 @@ public enum MeshMessageBanner {
         bannersEnabled && !muted && activePeerUserId != senderUserId
     }
 
+    /// The soft tap the normal receive path gives when a message lands in the conversation that is open (no banner is
+    /// shown then, so the tap is the only cue). Independent of the banner switch, like the normal path.
+    public static func shouldTapInOpenChat(
+        muted: Bool, activePeerUserId: String?, senderUserId: String
+    ) -> Bool {
+        !muted && activePeerUserId == senderUserId
+    }
+
     /// The generic text when either privacy switch hides the content, otherwise the text cut to ``previewLimit``.
     /// `displayText` is the one-line preview of a file or reply, never a descriptor or an object.
     public static func body(displayText: String, hideContent: Bool, previewAllowed: Bool) -> String {

@@ -427,6 +427,21 @@ final class MeshLinkBehaviorTests: XCTestCase {
         XCTAssertFalse(notify(false))
     }
 
+    func testOpenChatTapMatchesTheNormalPath() {
+        func tap(muted: Bool = false, active: String?) -> Bool {
+            MeshMessageBanner.shouldTapInOpenChat(muted: muted, activePeerUserId: active, senderUserId: "peer")
+        }
+        XCTAssertTrue(tap(active: "peer"))
+        XCTAssertFalse(tap(active: "someone-else"))
+        XCTAssertFalse(tap(active: nil))
+        XCTAssertFalse(tap(muted: true, active: "peer"))
+        // Banner and tap never both fire for one message, and a muted chat gets neither.
+        for muted in [false, true] { for active in [nil, "peer", "other"] as [String?] {
+            let banner = MeshMessageBanner.shouldNotify(bannersEnabled: true, muted: muted, activePeerUserId: active, senderUserId: "peer")
+            XCTAssertFalse(banner && tap(muted: muted, active: active))
+        } }
+    }
+
     func testBannerBodyShowsNoMoreThanTheNormalPathDoes() {
         XCTAssertEqual(MeshMessageBanner.body(displayText: "ciao", hideContent: false, previewAllowed: true), "ciao")
         XCTAssertEqual(MeshMessageBanner.body(displayText: "ciao", hideContent: true, previewAllowed: true), "Nuovo messaggio")
