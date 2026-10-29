@@ -163,9 +163,9 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
             to: "func promoteToGroupCall(newPeerIds:")
         let cancel = try slice(
             code, from: "private func routeCallCancel(envelopeCallId: String, reason: String?) {",
-            to: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {")
+            to: "private func handleRemoteCallHangup(")
         let remote = try slice(
-            code, from: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {",
+            code, from: "private func handleRemoteCallHangup(",
             to: "private func wireIncomingChatHandlers(on ws: BCryptoWebSocketClient) {")
         for (name, text) in [("endCall", end), ("routeCallCancel", cancel), ("handleRemoteCallHangup", remote)] {
             for forbidden in ["callerBusyTone", "callerOutcome"] {
@@ -267,7 +267,7 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
     func testRemoteHangupAsksThePolicyBeforeItMarksAMissedCall() throws {
         let code = try appCode()
         let remote = try slice(
-            code, from: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {",
+            code, from: "private func handleRemoteCallHangup(",
             to: "private func wireIncomingChatHandlers(on ws: BCryptoWebSocketClient) {")
         XCTAssertTrue(remote.contains(
             "let recordMissed: Bool = GhostCallPolicy.shouldRecordMissedOnRemoteHangup( wasRinging: wasRinging, reason: reasonString, viaServerCancel: viaServerCancel )"))
@@ -286,7 +286,7 @@ final class BadgeAndBusyHoldWiringTests: XCTestCase {
         XCTAssertEqual(occurrences(of: "viaServerCancel: true", in: code), 1)
         let cancel = try slice(
             code, from: "private func routeCallCancel(envelopeCallId: String, reason: String?) {",
-            to: "private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {")
+            to: "private func handleRemoteCallHangup(")
         XCTAssertTrue(cancel.contains(
             "handleRemoteCallHangup(reasonString: r.isEmpty ? \"timeout\" : r, viaServerCancel: true)"))
     }

@@ -98,4 +98,63 @@ public struct DeferredInPersonFinalize: Equatable, Sendable {
     public mutating func flush(callId: String) -> [String] {
         heldByCall.removeValue(forKey: callId.lowercased()) ?? []
     }
+
+    /// The call ended. A call that ended on a handshake failure finalizes nothing: what was held for it is dropped
+    /// (deleting earlier keys is not undone, and the next good call finalizes them again).
+    public mutating func flushOnEnd(callId: String, endedOnHandshakeFailure: Bool) -> [String] {
+        let held = flush(callId: callId)
+        return endedOnHandshakeFailure ? [] : held
+    }
+}
+
+/// Where a handshake failure that ended a call was learned from.
+public enum HandshakeFailureSource: Equatable, Sendable {
+    /// This device detected it.
+    case local
+    /// The peer reported it over the authenticated media leg (the control frame).
+    case authenticatedPeer
+    /// A reason carried by a message the server relays in the clear. It labels the call history, nothing more:
+    /// a relay could forge it, so it neither drops finalization nor changes the verdict.
+    case relay
+
+    /// Trust rank: local over authenticated peer over relay.
+    private var rank: Int {
+        switch self {
+        case .local: return 3
+        case .authenticatedPeer: return 2
+        case .relay: return 1
+        }
+    }
+
+    /// The source to keep when a second report arrives for the same call: never weaker than what is recorded
+    /// (a peer sends both the authenticated frame and the relayed envelope, in either order).
+    public static func strongest(_ recorded: HandshakeFailureSource?, _ incoming: HandshakeFailureSource) -> HandshakeFailureSource {
+        guard let recorded else { return incoming }
+        return incoming.rank > recorded.rank ? incoming : recorded
+    }
+}
+
+/// What the end of a call does to trust, decided from how it ended.
+public struct CallEndTrust: Equatable, Sendable {
+    /// The held in-person finalizations may run.
+    public let finalizeInPersonKeys: Bool
+    /// The stashed assurance verdict is replaced by the failure outcome (or dropped) instead of persisted.
+    public let downgradeStashedVerdict: Bool
+
+    /// `failureSource` is nil for an end with no handshake failure recorded. `identityHeldUnconfirmed` is true when the
+    /// call's media was still held for an identity the user never confirmed: not a clean end.
+    public static func decide(failureSource: HandshakeFailureSource?, identityHeldUnconfirmed: Bool) -> CallEndTrust {
+        let authenticatedFailure = failureSource == .local || failureSource == .authenticatedPeer
+        return CallEndTrust(
+            finalizeInPersonKeys: !authenticatedFailure && !identityHeldUnconfirmed,
+            downgradeStashedVerdict: authenticatedFailure)
+    }
+
+    /// The verdict to persist for a stashed one: unchanged, the failure outcome of `reason`, or none.
+    public static func verdictToPersist(
+        stashed: AssuranceState, failureSource: HandshakeFailureSource?, reason: String
+    ) -> AssuranceState? {
+        decide(failureSource: failureSource, identityHeldUnconfirmed: false).downgradeStashedVerdict
+            ? FatalAssuranceOutcome.persisted(forReason: reason) : stashed
+    }
 }

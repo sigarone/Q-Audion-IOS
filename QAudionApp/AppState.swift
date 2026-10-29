@@ -1184,6 +1184,8 @@ final class AppState: ObservableObject {
     /// or of a remote hangup carrying one, kept for the end-of-call telemetry and call history. Consumed
     /// (and cleared) by `endCall`.
     private var pendingFatalCloseReason: String?
+    /// Where `pendingFatalCloseReason` came from (see `HandshakeFailureSource`); nil when it is nil.
+    private var pendingFatalSource: HandshakeFailureSource?
     /// The 1:1 calls that already ended here (bounded): a late handshake fatal or confirmation expiry for one of
     /// them is ignored (`EndedCallBook`).
     private var endedCalls = EndedCallBook()
@@ -6094,7 +6096,7 @@ final class AppState: ObservableObject {
             if let cid = self.canonicalActiveCallId() {
                 self.echoHangupToServer(callId: cid, tag: "dc")
             }
-            self.handleRemoteCallHangup(reasonString: reason)
+            self.handleRemoteCallHangup(reasonString: reason, source: .authenticatedPeer)
         }
         // W-MEDIADEAD (2026-08-25) — the 90 s inbound-audio backstop fired: a
         // Connected call decoded ZERO real audio for the whole window. Notify
@@ -9890,15 +9892,7 @@ final class AppState: ObservableObject {
         // This call is ending now: anything that names it afterwards (a confirmation timer still armed) is stale.
         endedCalls.noteEnded(callId, nowMs: SasCommit.monotonicNowMs())
         // A call that ends on a handshake failure never applies a positive trust outcome at teardown.
-        let assuranceKey = callId.lowercased()
-        if var stashed = finalAssuranceByCall[assuranceKey] {
-            if let outcome = FatalAssuranceOutcome.persisted(forReason: reason) {
-                stashed.state = outcome
-                finalAssuranceByCall[assuranceKey] = stashed
-            } else {
-                finalAssuranceByCall.removeValue(forKey: assuranceKey)
-            }
-        }
+        downgradeStashedAssurance(callId: callId, reason: reason)
         let code: Int
         switch reason {
         case "dtls_fp_mismatch": code = 1
@@ -9914,6 +9908,7 @@ final class AppState: ObservableObject {
         let localReason: CallCloseReason = CallCloseReason.accepted(reason) ?? .handshakeMalformed
         if !isEndingCall {
             pendingFatalCloseReason = localReason.rawValue
+            pendingFatalSource = HandshakeFailureSource.strongest(pendingFatalSource, .local)
             // The contact's version cannot complete the handshake: say what to do, not just that it failed.
             if localReason == .peerIncompatible {
                 showPeerIncompatibleToast()
@@ -9936,6 +9931,7 @@ final class AppState: ObservableObject {
         self.endCall(notifyPeerInBand: false)
         // `endCall` consumed the reason; if it returned early it must not wait for the next call.
         pendingFatalCloseReason = nil
+        pendingFatalSource = nil
     }
 
     /// W-HANGUPECHO (2026-08-25) — tell the SERVER the call is over when the
@@ -10183,7 +10179,26 @@ final class AppState: ObservableObject {
     /// `viaServerCancel` is `true` only when the teardown comes from a `call_cancel` envelope (`routeCallCancel`),
     /// the one message the server itself sends with the sibling-device reasons; see
     /// `GhostCallPolicy.shouldRecordMissedOnRemoteHangup`.
-    private func handleRemoteCallHangup(reasonString: String, viaServerCancel: Bool = false) {
+    /// A call that ends on a handshake failure never applies a positive trust outcome at teardown. A failure with no
+    /// call id applies to the active call, and with no id known at all to every stashed verdict.
+    private func downgradeStashedAssurance(callId: String, reason: String) {
+        for assuranceKey in FatalAssuranceOutcome.affectedKeys(
+            callId: callId, activeCallId: canonicalActiveCallId(), stashedKeys: Array(finalAssuranceByCall.keys)) {
+            guard var stashed = finalAssuranceByCall[assuranceKey] else { continue }
+            if let outcome = FatalAssuranceOutcome.persisted(forReason: reason) {
+                stashed.state = outcome
+                finalAssuranceByCall[assuranceKey] = stashed
+            } else {
+                finalAssuranceByCall.removeValue(forKey: assuranceKey)
+            }
+        }
+    }
+
+    /// `source` says how the reason reached this device: only the authenticated media-leg control frame is trusted to
+    /// change trust (a reason in a message the server relays in the clear only labels the call history).
+    private func handleRemoteCallHangup(
+        reasonString: String, viaServerCancel: Bool = false, source: HandshakeFailureSource = .relay
+    ) {
         let reason: CallEndReason
         switch reasonString {
         case "busy":      reason = .declined
@@ -10217,7 +10232,13 @@ final class AppState: ObservableObject {
             // CallKit's failed treatment, and the reason is kept for the call history.
             if let closeReason = CallCloseReason.accepted(reasonString) {
                 reason = .failed(closeReason.rawValue)
-                if !self.isEndingCall { self.pendingFatalCloseReason = closeReason.rawValue }
+                if !self.isEndingCall {
+                    self.pendingFatalCloseReason = closeReason.rawValue
+                    self.pendingFatalSource = HandshakeFailureSource.strongest(self.pendingFatalSource, source)
+                    if source == .authenticatedPeer {
+                        self.downgradeStashedAssurance(callId: "", reason: closeReason.rawValue)
+                    }
+                }
             } else {
                 reason = .remoteEnded
             }
@@ -16142,9 +16163,10 @@ final class AppState: ObservableObject {
             matchedFingerprints: state.mutualFingerprints)
         let names = InPersonKeyFinalize.namesToFinalize(
             round: round, localKeys: AppState.resolveInPersonKeys(fingerprints: fingerprints))
-        // A rekey this phone started resolves its ACCEPT against the vault: nothing is deleted until it is done.
-        let rekeyWaiting = callService.callIntegration?.hasPendingReKeyAttempt ?? false
-        let now = deferredInPersonFinalize.submit(callId: callId, names: names, rekeyWaitingForAccept: rekeyWaiting)
+        // Always held: the keys are deleted only when the call ends cleanly (`endCall`), so a call that later fails
+        // its handshake has deleted nothing. The next good call finalizes them again. The held names live only in
+        // memory: a process killed mid-call keeps the old keys until the next clean call.
+        let now = deferredInPersonFinalize.submit(callId: callId, names: names, rekeyWaitingForAccept: true)
         runInPersonFinalize(now)
     }
 
@@ -22759,8 +22781,15 @@ extension AppState {
         // The call's audio session is going away: no later cue (busy, ended) may use the player on it.
         outgoingAudioSessionReady = false
         // Finalizations held for a rekey that was waiting for its ACCEPT run now: the call is over.
+        // Every in-person finalization is held until here (`finalizeInPersonKeys`). A call that ended on a failure
+        // this device detected or the peer reported over the authenticated media leg, or with its media still held
+        // for an unconfirmed identity, finalizes nothing.
         for callId in Array(kcCalls.keys) {
-            runInPersonFinalize(deferredInPersonFinalize.flush(callId: callId))
+            let trust = CallEndTrust.decide(
+                failureSource: pendingFatalCloseReason == nil ? nil : pendingFatalSource,
+                identityHeldUnconfirmed: identityUnverifiedCallIds.contains(callId.lowercased()))
+            runInPersonFinalize(deferredInPersonFinalize.flushOnEnd(
+                callId: callId, endedOnHandshakeFailure: !trust.finalizeInPersonKeys))
         }
         // Group calls v2 — however the 1:1 leg ends (the hand-over itself, the peer
         // hanging up, media dead, End on its CallKit entry): a pending hand-over is
@@ -22953,6 +22982,7 @@ extension AppState {
         let closeReason: CallCloseReason? = CallCloseReason.forEnd(
             fatalReason: pendingFatalCloseReason, heldIdentityCode: heldIdentityCode)
         pendingFatalCloseReason = nil
+        pendingFatalSource = nil
 
         // W541-3: telemetry event for call end. callState carries the
         // terminal state which the maintainer correlates with peer's
