@@ -1,12 +1,13 @@
 import CoreGraphics
 
-/// Where the security-code card sits on the call screen.
+/// When and where the security-code card shows on the call screen.
 ///
-/// While the six words are ready and the confirmation is still outstanding, the card (and the hold notice that goes with
-/// it) is drawn above the control dock, outside the scrolling column, so the words and the confirm button are on screen
-/// at once and never under the dock. Before the words arrive there is nothing to confirm and the waiting line stays in
-/// the column; once the code is confirmed (or is redundant because the contact was already verified) the card
-/// goes back into the column and no longer takes room from the call.
+/// The card is not part of a routine call. It appears only when a comparison is really needed: the call is held waiting
+/// for the confirmation, the identity check raised a notice, or the call's assurance state says the code is required and
+/// the contact's code was not confirmed before. While the assurance state is not known yet, and when it says the code
+/// is redundant, nothing is drawn (no flash at answer). The code stays reachable on demand from the security sheet.
+/// When it is needed, the card (and the hold notice that goes with it) is drawn above the control dock, outside the
+/// scrolling column, so the words and the confirm button are on screen at once and never under the dock.
 enum SasCardPlacement {
 
     /// The number of words in a security code.
@@ -31,33 +32,29 @@ enum SasCardPlacement {
         sasRequired == false
     }
 
-    /// True when the card is pinned above the dock: the words are ready and the code is not yet confirmed. Confirmed
-    /// cards live in the scrolling column; a redundant card does too, unless the call is held waiting for the
-    /// confirmation, in which case the confirm action must stay in view.
-    static func isPinned(sasWordCount: Int, sasVerified: Bool, sasCeremonyRedundant: Bool,
-                         awaitingConfirmation: Bool = false) -> Bool {
-        sasWordCount == wordCount && !sasVerified && (!sasCeremonyRedundant || awaitingConfirmation)
+    /// True when a comparison is really needed. `sasRequired` is the assurance state's verdict (`nil` while it is not
+    /// computed yet, which is not a reason to show the card). A call held for the confirmation, or one with an identity
+    /// notice, always needs it.
+    static func isVerificationNeeded(sasRequired: Bool?, awaitingConfirmation: Bool, identityNotice: Bool) -> Bool {
+        awaitingConfirmation || identityNotice || sasRequired == true
     }
 
-    /// True when the card is drawn in the scrolling column (words ready but not pinned).
-    static func showsCardInColumn(sasWordCount: Int, sasVerified: Bool, sasCeremonyRedundant: Bool,
-                                  awaitingConfirmation: Bool = false) -> Bool {
-        sasWordCount == wordCount
-            && !isPinned(sasWordCount: sasWordCount, sasVerified: sasVerified, sasCeremonyRedundant: sasCeremonyRedundant,
-                         awaitingConfirmation: awaitingConfirmation)
+    /// True when the card is pinned above the dock: the words are ready, the code is not confirmed and a comparison is
+    /// needed. In every other case the card is not drawn on the call screen.
+    static func isPinned(sasWordCount: Int, sasVerified: Bool, verificationNeeded: Bool) -> Bool {
+        sasWordCount == wordCount && !sasVerified && verificationNeeded
     }
 
-    /// True when the waiting line (no words yet) stays in the scrolling column.
-    static func showsWaitingLine(sasWordCount: Int, sasWaiting: Bool) -> Bool {
-        sasWordCount != wordCount && sasWaiting
+    /// True when the waiting line (no words yet) shows in the scrolling column: only when a comparison is needed.
+    static func showsWaitingLine(sasWordCount: Int, sasWaiting: Bool, verificationNeeded: Bool) -> Bool {
+        sasWordCount != wordCount && sasWaiting && verificationNeeded
     }
 
     /// True when the hold notice is drawn with the pinned card; otherwise it stays in the column.
-    static func pinsHoldNotice(sasWordCount: Int, sasVerified: Bool, sasCeremonyRedundant: Bool,
+    static func pinsHoldNotice(sasWordCount: Int, sasVerified: Bool, verificationNeeded: Bool,
                                awaitingConfirmation: Bool) -> Bool {
         awaitingConfirmation
-            && isPinned(sasWordCount: sasWordCount, sasVerified: sasVerified, sasCeremonyRedundant: sasCeremonyRedundant,
-                        awaitingConfirmation: awaitingConfirmation)
+            && isPinned(sasWordCount: sasWordCount, sasVerified: sasVerified, verificationNeeded: verificationNeeded)
     }
 
     /// The height limit of the scrollable part of the pinned area (notice, header, words) for a window of the given

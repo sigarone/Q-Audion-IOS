@@ -993,16 +993,10 @@ struct InCallScreen: View {
                     identityHoldBanner.padding(.horizontal, 20)
                 }
 
-                // While the confirmation is outstanding the card is pinned above the dock (`pinnedSasArea`); once
-                // confirmed (or redundant) it sits here.
-                if SasCardPlacement.showsCardInColumn(sasWordCount: sasWords.count, sasVerified: sasVerified,
-                                                      sasCeremonyRedundant: sasCeremonyRedundant,
-                                                      awaitingConfirmation: awaitingIdentityConfirmation) {
-                    Spacer().frame(height: 12)
-                    sasPanel.padding(.horizontal, 20)
-                }
-
-                if SasCardPlacement.showsWaitingLine(sasWordCount: sasWords.count, sasWaiting: sasWaiting) {
+                // The card is pinned above the dock (`pinnedSasArea`) only when a comparison is needed; it is
+                // never drawn here. The code is always available in the security sheet.
+                if SasCardPlacement.showsWaitingLine(sasWordCount: sasWords.count, sasWaiting: sasWaiting,
+                                                     verificationNeeded: sasVerificationNeeded) {
                     Spacer().frame(height: 12)
                     sasWaitingRow.padding(.horizontal, 20)
                 }
@@ -1027,13 +1021,20 @@ struct InCallScreen: View {
 
     private var sasIsPinned: Bool {
         SasCardPlacement.isPinned(sasWordCount: sasWords.count, sasVerified: sasVerified,
-                                  sasCeremonyRedundant: sasCeremonyRedundant,
-                                  awaitingConfirmation: awaitingIdentityConfirmation)
+                                  verificationNeeded: sasVerificationNeeded)
+    }
+
+    /// A comparison of the code is really needed (see `SasCardPlacement.isVerificationNeeded`).
+    private var sasVerificationNeeded: Bool {
+        SasCardPlacement.isVerificationNeeded(
+            sasRequired: assurancePresentation?.sasRequired,
+            awaitingConfirmation: awaitingIdentityConfirmation,
+            identityNotice: identityUnauthenticatedChange || handshakeSignatureInvalid || identityRotationAwaitingSas)
     }
 
     private var sasPinsHoldNotice: Bool {
         SasCardPlacement.pinsHoldNotice(sasWordCount: sasWords.count, sasVerified: sasVerified,
-                                        sasCeremonyRedundant: sasCeremonyRedundant,
+                                        verificationNeeded: sasVerificationNeeded,
                                         awaitingConfirmation: awaitingIdentityConfirmation)
     }
 
