@@ -442,6 +442,21 @@ final class MeshLinkBehaviorTests: XCTestCase {
         } }
     }
 
+    func testReceivedRowTakesTheEffectiveTimer() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func stamp(_ override: Int?, _ conv: Int?) -> (expiresAt: Date?, isViewOnce: Bool?) {
+            AttachmentTimerResolver.stamp(overrideSeconds: override, conversationDefault: conv, now: now)
+        }
+        XCTAssertNil(stamp(nil, nil).expiresAt); XCTAssertNil(stamp(nil, nil).isViewOnce)
+        XCTAssertNil(stamp(nil, 0).expiresAt)
+        XCTAssertEqual(stamp(nil, 3600).expiresAt, now.addingTimeInterval(3600)); XCTAssertNil(stamp(nil, 3600).isViewOnce)
+        XCTAssertNil(stamp(nil, -1).expiresAt); XCTAssertEqual(stamp(nil, -1).isViewOnce, true)
+        // The sender's own timer on a file wins over the conversation default; 0 means "use the default".
+        XCTAssertEqual(stamp(60, 3600).expiresAt, now.addingTimeInterval(60))
+        XCTAssertEqual(stamp(0, 3600).expiresAt, now.addingTimeInterval(3600))
+        XCTAssertEqual(stamp(-1, nil).isViewOnce, true)
+    }
+
     func testBannerBodyShowsNoMoreThanTheNormalPathDoes() {
         XCTAssertEqual(MeshMessageBanner.body(displayText: "ciao", hideContent: false, previewAllowed: true), "ciao")
         XCTAssertEqual(MeshMessageBanner.body(displayText: "ciao", hideContent: true, previewAllowed: true), "Nuovo messaggio")

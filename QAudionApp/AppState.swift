@@ -13458,10 +13458,14 @@ final class AppState: ObservableObject {
             store.upsertConversation(conv)
         }
 
+        // Same disappearing-message timer as a server-delivered message.
+        let ephemeral = AttachmentTimerResolver.stamp(
+            overrideSeconds: nil, conversationDefault: conv.ephemeralTimerSeconds, now: Date())
         let msg = Message(
             id: UUID(), conversationId: conv.id, direction: .incoming,
             plaintext: plaintext, sentAt: Date(), deliveredAt: Date(), readAt: nil,
             status: .delivered, senderUserId: senderId, clientMsgId: envelope.clientMsgId,
+            expiresAt: ephemeral.expiresAt, isViewOnce: ephemeral.isViewOnce,
             viaMesh: true
         )
         // The one inbound write boundary (refuses service-shaped text again).
@@ -14735,7 +14739,8 @@ final class AppState: ObservableObject {
     /// the 1:1 conversation, then insert the message).
     @MainActor
     private func handleReceivedFileAttachment(
-        _ result: ChatFileAttachmentReceiver.Result, senderId: String, fileId: String
+        _ result: ChatFileAttachmentReceiver.Result, senderId: String, fileId: String,
+        ephemeralSpecSec: Int64? = nil, xp: Int? = nil
     ) {
         let store = ConversationStore()
         let existing = store.loadConversations().first(where: { $0.peerUserId == senderId })
@@ -14768,6 +14773,11 @@ final class AppState: ObservableObject {
         } else {
             friendly = String(localized: "reply.kind.file", defaultValue: "📎 Allegato", comment: "One-line label of a file attachment")
         }
+        // The sender's timer for this file wins over the conversation default, and its export block is kept, as on
+        // the other receive paths.
+        let ephemeral = AttachmentTimerResolver.stamp(
+            overrideSeconds: ephemeralSpecSec.map { Int(clamping: $0) },
+            conversationDefault: conv.ephemeralTimerSeconds, now: Date())
 
         let msg = Message(
             id: UUID(),
@@ -14781,6 +14791,9 @@ final class AppState: ObservableObject {
             senderUserId: senderId,
             mediaLocalPath: result.localUrl.path,
             mediaMimeType: result.mime,
+            expiresAt: ephemeral.expiresAt,
+            isViewOnce: ephemeral.isViewOnce,
+            exportBlocked: (xp ?? 1) == 0 ? true : nil,
             wireAttachmentId: fileId
         )
         store.appendMessage(msg)
@@ -14945,7 +14958,9 @@ final class AppState: ObservableObject {
                     // signature is bound to it and a mismatch/forgery drops
                     // the envelope before anything is installed or saved.
                     let result = try await receiver.receive(envelope: envelope, transportSenderId: senderId)
-                    self?.handleReceivedFileAttachment(result, senderId: senderId, fileId: envelope.fileId)
+                    self?.handleReceivedFileAttachment(
+                        result, senderId: senderId, fileId: envelope.fileId,
+                        ephemeralSpecSec: envelope.ephemeralSpecSec, xp: envelope.xp)
                 } catch {
                     RTLog.warn("chat", "file-attachment receive failed sender=\(senderId.prefix(8)) fileId=\(envelope.fileId.prefix(8)): \(error)")
                     // W-ATTACHSILENT (2026-09-15, audit
