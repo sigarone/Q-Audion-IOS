@@ -73,4 +73,13 @@ public enum FatalAssuranceOutcome {
     public static func persisted(forReason reason: String) -> AssuranceState? {
         reason == "kcmac_mismatch" ? .kcFailed : nil
     }
+
+    /// The keys of the stashed verdicts a fatal applies to: the call named by the fatal, else the active call,
+    /// else (no id known) every stashed verdict, so that a positive outcome is never persisted for a call that
+    /// ended on a failure.
+    public static func affectedKeys(callId: String, activeCallId: String?, stashedKeys: [String]) -> [String] {
+        if !callId.isEmpty { return [callId.lowercased()] }
+        if let active = activeCallId, !active.isEmpty { return [active.lowercased()] }
+        return stashedKeys
+    }
 }

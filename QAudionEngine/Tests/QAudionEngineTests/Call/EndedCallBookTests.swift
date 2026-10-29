@@ -107,3 +107,108 @@ final class FatalAssuranceOutcomeTests: XCTestCase {
         }
     }
 }
+
+final class FatalAssuranceKeysTests: XCTestCase {
+    func testTheNamedCallWins() {
+        XCTAssertEqual(FatalAssuranceOutcome.affectedKeys(callId: "ABC", activeCallId: "def", stashedKeys: ["abc", "def"]), ["abc"])
+    }
+
+    func testAnEmptyIdUsesTheActiveCall() {
+        XCTAssertEqual(FatalAssuranceOutcome.affectedKeys(callId: "", activeCallId: "DEF", stashedKeys: ["abc", "def"]), ["def"])
+    }
+
+    func testNoIdAtAllFailsClosedOnEveryStashedVerdict() {
+        XCTAssertEqual(FatalAssuranceOutcome.affectedKeys(callId: "", activeCallId: nil, stashedKeys: ["abc", "def"]), ["abc", "def"])
+        XCTAssertEqual(FatalAssuranceOutcome.affectedKeys(callId: "", activeCallId: "", stashedKeys: ["abc"]), ["abc"])
+    }
+}
+
+final class FatalEndSkipsInPersonFinalizeTests: XCTestCase {
+    func testACallEndedOnAHandshakeFailureFinalizesNothingAndForgetsWhatWasHeld() {
+        var deferred = DeferredInPersonFinalize()
+        XCTAssertEqual(deferred.submit(callId: "c1", names: ["new"], rekeyWaitingForAccept: true), [])
+        XCTAssertEqual(deferred.flushOnEnd(callId: "C1", endedOnHandshakeFailure: true), [])
+        XCTAssertEqual(deferred, DeferredInPersonFinalize(), "nothing stays held for the next call")
+    }
+
+    func testAnOrdinaryEndStillRunsWhatWasHeld() {
+        var deferred = DeferredInPersonFinalize()
+        _ = deferred.submit(callId: "c2", names: ["new"], rekeyWaitingForAccept: true)
+        XCTAssertEqual(deferred.flushOnEnd(callId: "c2", endedOnHandshakeFailure: false), ["new"])
+    }
+
+    /// The app passes the pending fatal reason of the ending call, and resolves the id of a fatal that arrives with none.
+    func testAppStateWiring() throws {
+        let app = try appStateSource()
+        let flat = app.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        XCTAssertTrue(flat.contains("endedOnHandshakeFailure: !trust.finalizeInPersonKeys"))
+        XCTAssertTrue(flat.contains("rekeyWaitingForAccept: true"), "every finalization is held until the call ends")
+        XCTAssertTrue(flat.contains("handleRemoteCallHangup(reasonString: reason, source: .authenticatedPeer)"))
+        XCTAssertTrue(app.contains("FatalAssuranceOutcome.affectedKeys("))
+        XCTAssertFalse(app.contains("runInPersonFinalize(deferredInPersonFinalize.flush(callId: callId))"))
+    }
+
+    private func appStateSource() throws -> String {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { root.deleteLastPathComponent() }   // the repository root
+        return try String(contentsOf: root.appendingPathComponent("QAudionApp/AppState.swift"), encoding: .utf8)
+    }
+}
+
+final class CallEndTrustTests: XCTestCase {
+    func testAnOrdinaryEndFinalizesAndKeepsTheVerdict() {
+        let t = CallEndTrust.decide(failureSource: nil, identityHeldUnconfirmed: false)
+        XCTAssertTrue(t.finalizeInPersonKeys)
+        XCTAssertFalse(t.downgradeStashedVerdict)
+        XCTAssertEqual(CallEndTrust.verdictToPersist(stashed: .pskConfirmed, failureSource: nil, reason: ""), .pskConfirmed)
+    }
+
+    func testALocalOrAuthenticatedFailureFinalizesNothingAndDowngradesTheVerdict() {
+        for source in [HandshakeFailureSource.local, .authenticatedPeer] {
+            let t = CallEndTrust.decide(failureSource: source, identityHeldUnconfirmed: false)
+            XCTAssertFalse(t.finalizeInPersonKeys, "\(source)")
+            XCTAssertTrue(t.downgradeStashedVerdict, "\(source)")
+            XCTAssertEqual(CallEndTrust.verdictToPersist(stashed: .nfcAuthenticated, failureSource: source, reason: "kcmac_mismatch"), .kcFailed)
+            XCTAssertNil(CallEndTrust.verdictToPersist(stashed: .nfcAuthenticated, failureSource: source, reason: "dtls_fp_mismatch"))
+        }
+    }
+
+    func testAReasonFromTheRelayAloneChangesNothing() {
+        let t = CallEndTrust.decide(failureSource: .relay, identityHeldUnconfirmed: false)
+        XCTAssertTrue(t.finalizeInPersonKeys)
+        XCTAssertFalse(t.downgradeStashedVerdict)
+        XCTAssertEqual(CallEndTrust.verdictToPersist(stashed: .pskConfirmed, failureSource: .relay, reason: "dtls_fp_mismatch"), .pskConfirmed)
+    }
+
+    func testMediaStillHeldForAnUnconfirmedIdentityIsNotACleanEnd() {
+        XCTAssertFalse(CallEndTrust.decide(failureSource: nil, identityHeldUnconfirmed: true).finalizeInPersonKeys)
+        XCTAssertFalse(CallEndTrust.decide(failureSource: .relay, identityHeldUnconfirmed: true).finalizeInPersonKeys)
+    }
+
+    func testHeldFinalizationsRunOnlyForACleanEnd() {
+        for (source, held, expected) in [
+            (nil as HandshakeFailureSource?, false, ["new"]), (.relay, false, ["new"]),
+            (.local, false, []), (.authenticatedPeer, false, []), (nil, true, []),
+        ] as [(HandshakeFailureSource?, Bool, [String])] {
+            var deferred = DeferredInPersonFinalize()
+            XCTAssertEqual(deferred.submit(callId: "c", names: ["new"], rekeyWaitingForAccept: true), [])
+            let t = CallEndTrust.decide(failureSource: source, identityHeldUnconfirmed: held)
+            XCTAssertEqual(deferred.flushOnEnd(callId: "c", endedOnHandshakeFailure: !t.finalizeInPersonKeys), expected)
+        }
+    }
+}
+
+final class HandshakeFailureSourcePrecedenceTests: XCTestCase {
+    func testASourceIsNeverWeakenedByALaterReport() {
+        // The peer's authenticated frame, then the relayed envelope for the same failure.
+        var s = HandshakeFailureSource.strongest(nil, .authenticatedPeer)
+        s = HandshakeFailureSource.strongest(s, .relay)
+        XCTAssertEqual(s, .authenticatedPeer)
+        XCTAssertFalse(CallEndTrust.decide(failureSource: s, identityHeldUnconfirmed: false).finalizeInPersonKeys)
+        // Either order, and a local failure outranks both.
+        XCTAssertEqual(HandshakeFailureSource.strongest(.relay, .authenticatedPeer), .authenticatedPeer)
+        XCTAssertEqual(HandshakeFailureSource.strongest(.authenticatedPeer, .local), .local)
+        XCTAssertEqual(HandshakeFailureSource.strongest(.local, .relay), .local)
+        XCTAssertEqual(HandshakeFailureSource.strongest(nil, .relay), .relay)
+    }
+}
