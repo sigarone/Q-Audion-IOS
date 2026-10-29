@@ -151,7 +151,7 @@ public final class FeatureFlags {
     }
 
     private func fetchOverlay(url: URL, token: String) async {
-        let session: URLSession = URLSession(configuration: URLSessionConfiguration.default)
+        let session: URLSession = PinnedURLSession.auxiliary(for: self.apiBaseUrl ?? url.absoluteString)
         var request: URLRequest = URLRequest(url: url)
         request.httpMethod = "GET"
         request.cachePolicy = URLRequest.CachePolicy.reloadIgnoringLocalCacheData

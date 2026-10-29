@@ -15,10 +15,8 @@ import CryptoKit
 ///  - Older iOS revs of this file fed `pepper.utf8` which produces a
 ///    completely different hash and silently breaks server-side matching.
 ///  - The W343 fix: the canonical entry point is now
-///    `hash(phone:pepperBytes:)` accepting `Data`. The legacy
-///    `hash(phone:pepper:)` String overload is retained but treats the
-///    string as a base64-encoded payload to match Android — a raw-utf8
-///    pepper string is no longer supported.
+///    `hash(phone:pepperBytes:)` accepting `Data`; the base64 form
+///    `hash(phone:pepperBase64:)` decodes the string first to match Android.
 public enum PepperedPhoneHash {
 
     public enum Error: Swift.Error, LocalizedError {
@@ -69,19 +67,6 @@ public enum PepperedPhoneHash {
             throw Error.invalidPepperBase64
         }
         return try hash(phone: phone, pepperBytes: pepperBytes, defaultCountry: defaultCountry)
-    }
-
-    /// Legacy overload — pre-W343 callers passed an arbitrary string. The
-    /// only safe interpretation matching Android is that the string is the
-    /// server's base64 payload, so we decode it that way. A raw-utf8 string
-    /// no longer works; callers must update to either `pepperBytes:` or
-    /// `pepperBase64:`.
-    @available(*, deprecated, renamed: "hash(phone:pepperBase64:defaultCountry:)",
-                message: "Use pepperBytes: (Data) for cross-platform parity, or pepperBase64: for the server response.")
-    public static func hash(phone: String,
-                            pepper: String,
-                            defaultCountry: String = "+39") throws -> String {
-        return try hash(phone: phone, pepperBase64: pepper, defaultCountry: defaultCountry)
     }
 
     /// Batch-hash a list of phones. Invalid phones are skipped silently

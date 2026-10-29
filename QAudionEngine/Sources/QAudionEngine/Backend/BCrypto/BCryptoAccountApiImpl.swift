@@ -253,14 +253,6 @@ public final class BCryptoAccountApiImpl: AccountApi {
         let data = try await rest.post("/api/v1/auth/email/verify-confirm", body: body)
         return try JSONDecoder().decode(EmailVerifyConfirmResponse.self, from: data)
     }
-
-    @available(*, deprecated, message: "Use PhoneHash.hash(_:) — matches Android PhoneHashHelper byte-for-byte. This forwarder is kept only to avoid breaking callers in the in-progress BCrypto workstream.")
-    public static func hashPhone(_ phone: String) -> String {
-        // Forward to the canonical helper. Falls back to raw-hex only if
-        // normalization fails (legacy callers sometimes pass already-E.164
-        // input where invalidE164 would be spurious — callers should migrate).
-        return PhoneHash.hashOrNil(phone) ?? PhoneHash.sha256Hex(phone)
-    }
 }
 
 private struct RecoverySetupResponse: Codable {
