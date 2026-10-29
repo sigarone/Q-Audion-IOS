@@ -109,7 +109,7 @@ DOWN_REASONS = sorted(set(re.findall(r'(?:tearDown|disconnect)\([^)]*reason: "([
 APP_RESULTS = sorted(set(re.findall(r'logMeshRx\([^)]*result: "([a-z_]+)"\)', appstate_src)))
 APP_STATES = sorted(set(re.findall(r'logApp\([^)]*state: "([a-z]+)"', drain_src)))
 
-check(len(EVENTS) == 20, "expected 20 events in MeshLog.Event, found %r" % (EVENTS,))
+check(len(EVENTS) == 21, "expected 20 events in MeshLog.Event, found %r" % (EVENTS,))
 check({"radio.pause", "radio.resume", "connect.backoff"} <= set(EVENTS), "the pause / backoff events are missing: %r" % (EVENTS,))
 check(PAUSE_REASONS == ["bt_call_route"], "radio.pause reasons: %r" % (PAUSE_REASONS,))
 check(sorted(RESUME_REASONS) == ["call_ended", "route_changed"], "radio.resume reasons: %r" % (RESUME_REASONS,))
@@ -117,7 +117,7 @@ check(len(FRAME_REASONS) == 6, "MeshFrameFailure tokens: %r" % (FRAME_REASONS,))
 check(len(MALFORMED) == 4, "MalformedReason tokens: %r" % (MALFORMED,))
 check(sorted(SKIPS) == ["dup", "mode", "rate", "ttl"], "relay skip reasons: %r" % (SKIPS,))
 check(len(RADIO_REASONS) >= 8, "radio reasons found: %r" % (RADIO_REASONS,))
-check(set(DOWN_REASONS) <= {"remote", "timeout", "evicted", "blocked", "stop"}, "link.down reasons: %r" % (DOWN_REASONS,))
+check(set(DOWN_REASONS) <= {"remote", "timeout", "evicted", "blocked", "stop", "dup", "rebind"}, "link.down reasons: %r" % (DOWN_REASONS,))
 check(len(APP_RESULTS) >= 8, "app.rx results found: %r" % (APP_RESULTS,))
 check(set(APP_STATES) <= {"sent", "queued", "failed"}, "app.tx states: %r" % (APP_STATES,))
 
@@ -137,6 +137,8 @@ LINES = [
     "link.refused reason=blocked role=p",
     "ann.tx link=c1 nbrs=2 bytes=126 ok=1",
     "ann.rx link=c1 nh=%s nbrs=2 bound=1" % NH,
+    "ann.sum tx=30 fail=1 rx=28 links=4 claim=2 s=60",
+    "tx.frame.fail link=c1 ph=%s idx=0 total=1 reason=timeout rep=2" % PH,
     "tx ph=%s type=1 bytes=483 route=direct links=1 okLinks=1 frames=3 l=182 result=sent reason=none ms=240" % PH,
     "tx ph=%s type=5 bytes=163 route=flood links=0 okLinks=0 frames=0 l=0 result=queued reason=no_links ms=0" % PH,
     "tx ph=%s type=1 bytes=483 route=direct links=1 okLinks=0 frames=3 l=182 result=failed reason=write_failed ms=2001" % PH,

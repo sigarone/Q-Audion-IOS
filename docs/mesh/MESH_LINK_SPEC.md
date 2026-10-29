@@ -152,18 +152,25 @@ peer appearing under several addresses or platform identifiers.
   cancelled and its slot freed.
 - A connected link that has not completed service discovery and notification
   subscription within 10 s MUST be disconnected.
-- An outgoing link that carried no successful frame and no ANNOUNCE for 120 s
-  SHOULD be disconnected (it frees the slot for a peer that is actually present).
-- If both devices open a link to each other, both links are kept; senders prefer
-  the outgoing link (section 6.2).
+- An outgoing link that carried no successful frame and received no valid packet
+  for 120 s SHOULD be disconnected (it frees the slot for a peer that is
+  actually present). Section 3.4 sets the same rule for incoming links.
+- If both devices open a link to each other, both links are kept unless they
+  provably are one device in both roles (section 3.6); senders prefer the
+  outgoing link for a flood (section 6.2) and use every healthy link for a
+  direct send.
 
 ### 3.4 Incoming connections
 
-- At most 8 incoming links (peripheral role).
+- At most 8 incoming links (peripheral role). An incoming link that has not
+  subscribed within 30 s is released, also below the cap.
 - At the cap, a new connection MAY evict the oldest incoming link that has not
   subscribed to notifications for more than 30 s; otherwise it is refused.
 - Where the platform cannot refuse or close a specific incoming link, the
   device MUST ignore that link's frames and MUST NOT write to it.
+- A subscribed incoming link that carried no successful frame and received no
+  valid packet for 120 s SHOULD be closed, as an outgoing one is (section 3.3).
+  The two roles use the same value.
 
 ### 3.5 Retry backoff for outgoing connections
 
@@ -181,6 +188,94 @@ identifier is a different advertiser.
 - At most 64 identifiers are remembered; the oldest entry is dropped first.
 - The backoff table is in memory only and is cleared when the antenna is
   turned off.
+
+### 3.6 Links that claim one node
+
+The node id in an ANNOUNCE is only a claim (section 8.1: the cipher is an
+app-recognition boundary). While ANNOUNCE carries no proof of the node id,
+links with different peer addresses that claim the same node id are all kept
+open and all used: nothing is closed, excluded or refused because another link
+claims the same id. Collapsing them needs proof of identity, which is a later
+change to ANNOUNCE.
+
+A link keeps the node id its first ANNOUNCE named. A later ANNOUNCE on the
+same link that names another node id is not accepted: the link is closed with
+`link.down reason=rebind`, and nothing it carried changes any mapping.
+
+Sends to a node (section 9.1) go to every healthy link bound to it, up to
+four. Only above four are they ranked: the link bound to the node earliest
+(age counts from the ANNOUNCE that first named the node on that link) first,
+then the others by the most recent data activity, ties going to the older bind.
+Data activity is a validated DATA or RECEIPT packet RECEIVED on the link; an
+ANNOUNCE, a reserved type, a packet that fails decoding and anything this
+device sends never counts. A link is healthy when it is subscribed and carried a
+frame or received a valid packet within the last 120 s. Receivers already drop
+a copy of a message or receipt they have by its message id, so the extra copies
+cost air time but change nothing else. A flood (section 9.2) goes to every link
+not yet bound to a node and to up to four links of each node, chosen the same
+way, and never to any link of the node the packet came from. A relayed packet
+whose recipient is directly linked goes only to the links of that recipient.
+The `claim` count of `ann.sum` shows how often more than one address claims a
+node.
+
+The one case that is closed is a link that provably duplicates another on the
+same physical device: the same peer address in the opposite role. Of such a
+pair, the link in the role "central is the node with the lower node id" (node
+ids compared as lowercase hex strings) stays and the other is closed with
+`link.down reason=dup`; both ends reach the same answer. Where the platform
+gives the two roles of one device different identifiers, nothing is provably
+the same device and nothing is closed. The decision is taken again, at once,
+whenever a link bound to a node is bound or goes away, so a link left over is
+used at once.
+
+- The address of an outgoing link closed as a same-device duplicate is
+  remembered, and is not dialled while a healthy link to its node exists, for
+  30 s, then 60, 120 and 300 s for each repeat. The memory is forgotten as soon
+  as no healthy link to that node exists. A scan result is also skipped when a
+  healthy link exists at that very address; a healthy link to the same node at
+  a different address never skips it. No other address is ever suppressed. At
+  most 64 addresses are remembered; the oldest goes first.
+- A link may be closed as a same-device duplicate at most 4 times in 300 s,
+  counted per platform link key (address or identifier), so one peer cannot use
+  up the allowance of another. A link the allowance does not let the device
+  close stays open but is not used (nothing is sent on it, it gets no periodic
+  ANNOUNCE) until the next decision. At most 64 keys are remembered.
+- An incoming connection from a central whose link was closed (or, where the
+  platform cannot close it, dropped) as a same-device duplicate is refused for
+  30 s, and so is one whose link was closed for naming another node id
+  (`rebind`). Unsubscribing and subscribing again does not lift this. The
+  refusal is keyed by that central's own address, never by a claimed node id,
+  so it cannot be used against another device. No incoming connection from
+  any other address is refused for this reason.
+- At the cap of incoming links (section 3.4) a connection that never
+  subscribed is released after 30 s to make room. Otherwise one connection
+  beyond the cap (and one outgoing link beyond the outgoing cap) is allowed on
+  probation. Only when that link has sent a valid ANNOUNCE and is subscribed
+  may it make room, and at most one link per role is evicted per 30 s: a link
+  kept open but not used first, then the longest idle link. A link is idle
+  since the later of its last validated DATA or RECEIPT and its bind, and is
+  evictable once idle for more than 30 s. Never evicted: the newcomer itself,
+  any link bound to the node id the newcomer claims, and the earliest-bound
+  healthy link of a node (the newcomer is not counted in that decision). With
+  no link to evict, the newcomer is closed.
+- A link closed by eviction, the newcomer itself included, is remembered: an
+  outgoing address is not dialled again for 30 s, then 60, 120 and 300 s for
+  each repeat (forgotten after 15 quiet minutes), whether or not a healthy
+  link to its node exists; an incoming central is refused for 60 s. Beyond the
+  outgoing cap only an address whose node has no healthy link is dialled.
+- A link that subscribed and has not sent a valid ANNOUNCE within 35 s (two ANNOUNCE periods and a frame
+  timeout, so one lost ANNOUNCE does not close an honest link) is
+  closed, so that it cannot hold a slot (including the probation slot).
+- Where the platform cannot close an incoming link (section 3.4), it is dropped
+  from the tables and ignored as described there.
+- All the timers of this section (bind time, activity, refusals, memories,
+  allowance, ANNOUNCE pacing) use a monotonic clock that keeps counting while the
+  device sleeps; the timestamp inside a packet is not one of them.
+- A signed ANNOUNCE (a challenge in each ANNOUNCE and a signature over the node
+  id with the identity key) would let a device collapse links by verified
+  identity instead of by address.
+- No new wire field and no new frame is used. A peer that does not implement
+  this keeps both links open and sees an ordinary disconnect on the closed one.
 
 ## 4. GATT service
 
@@ -414,7 +509,12 @@ not for a direct send.
 ### 8.4 Timing
 
 ANNOUNCE is sent on link-up (section 4.3) and then every 15 s on every
-subscribed or writable link.
+subscribed or writable link, counted from the previous ANNOUNCE on that link.
+
+The periodic ANNOUNCEs of different links MUST NOT go out at one instant: a
+device starts at most one periodic ANNOUNCE per 1 s tick, the link whose last
+ANNOUNCE is the oldest first. Links announced together at link-up are thereby
+spread over the period, and each keeps its 15 s cadence (up to 1 s late).
 
 ## 9. Delivery and relaying
 
@@ -542,12 +642,13 @@ display names. The only identifiers allowed are:
 | `radio` | `state` (`off`, `starting`, `on`, `error`), `mode` (`full`, `direct`, `visible`), `reason` |
 | `link.up` | `link`, `role` (`c`, `p`), `n` (links now) |
 | `link.ready` | `link`, `mtu` (Android, 0 if unknown), `l` (value limit L), `sub` |
-| `link.down` | `link`, `reason` (`remote`, `timeout`, `evicted`, `blocked`, `stop`), `heldMs` |
+| `link.down` | `link`, `reason` (`remote`, `timeout`, `evicted`, `blocked`, `stop`, `dup`, `rebind`), `heldMs` |
 | `link.refused` | `reason` (`cap`, `blocked`), `role` |
-| `ann.tx` | `link`, `nbrs`, `bytes`, `ok` |
-| `ann.rx` | `link`, `nh`, `nbrs`, `bound` (1 if the link mapping changed) |
+| `ann.tx` | `link`, `nbrs`, `bytes`, `ok`; only for the ANNOUNCE sent at link-up (section 4.3) |
+| `ann.rx` | `link`, `nh`, `nbrs`, `bound` (always 1); only when the link-to-node mapping changed |
+| `ann.sum` | `tx`, `fail` (of `tx`, not confirmed), `rx`, `links`, `claim` (nodes claimed from more than one distinct address in the window), `s` (window in seconds); one line per 60 s, none when nothing was sent or received. Counts every ANNOUNCE, so the periodic ones need no line of their own |
 | `tx` | `ph`, `type`, `bytes`, `route` (`direct`, `flood`), `links`, `okLinks`, `frames`, `l` (min L used), `result` (`sent`, `queued`, `failed`), `reason`, `ms` |
-| `tx.frame.fail` (WARN) | `link`, `ph`, `idx`, `total`, `reason` (`too_big`, `rejected`, `timeout`, `not_ready`, `link_lost`, `too_many_frames`) |
+| `tx.frame.fail` (WARN) | `link`, `ph`, `idx`, `total`, `reason` (`too_big`, `rejected`, `timeout`, `not_ready`, `link_lost`, `too_many_frames`), `rep` (only when above 0: failures on the same link and reason withheld meanwhile; at most one line per link and reason per 60 s) |
 | `rx` | `link`, `ph`, `type`, `bytes`, `frames`, `forUs`, `relay` (0/1) |
 | `rx.drop` (WARN) | `link`, `reason` (`short_frame`, `bad_header`, `total_mismatch`, `set_expired`, `set_evicted`, `set_too_large`, `decode`, `ann_decrypt`, `ann_parse`, `blocked`) , `streak` |
 | `guard.block` (WARN) | `link`, `streak`, `ms` |
@@ -603,7 +704,7 @@ output; ratchet vectors live with the ratchet.
 | frame confirmation timeout | 2 s |
 | connect timeout | 10 s |
 | discovery + subscribe timeout | 10 s |
-| idle outgoing link | 120 s |
+| idle link, either role | 120 s |
 | outgoing links | 6 |
 | incoming links | 8 |
 | unsubscribed incoming eviction age | 30 s |
@@ -613,6 +714,15 @@ output; ratchet vectors live with the ratchet.
 | relay window | 20 per 10 s per link |
 | relayed identities remembered | 256 |
 | ANNOUNCE interval | 15 s |
+| periodic ANNOUNCE tick (one link per tick) | 1 s |
+| `ann.sum` window | 60 s |
+| same-device duplicate: address memory / refusal of redials | 30 s (60, 120, 300 s per repeat) |
+| addresses / collapse keys remembered | 64 each |
+| closes of one link key | 4 per 300 s |
+| links of one node a send or flood goes to | 4 |
+| idle time before a link may be evicted | 30 s |
+| subscribed link without ANNOUNCE | closed after 35 s |
+| evicted address: redial wait / incoming refusal | 30, 60, 120, 300 s / 60 s |
 | ANNOUNCE max neighbours | 10 |
 | outbox retry / give-up | 20 s / 1 h |
 | unknown-sender refresh | once per 60 s |
