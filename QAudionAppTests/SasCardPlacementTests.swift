@@ -111,4 +111,48 @@ final class SasCardPlacementTests: XCTestCase {
         XCTAssertTrue(pinnedFor(.nfcAuthenticated, awaiting: true))
         XCTAssertTrue(pinnedFor(.pqcOnly, awaiting: true))
     }
+
+    // MARK: - Every assurance state, one verdict
+
+    private static let everyState: [AssuranceState] = [
+        .peerLegacy, .kcFailed, .nfcAuthenticated, .nfcIdentityMismatch, .nfcUnattestable, .identityUnverified,
+        .nfcPresentUnconfirmed, .expectedNfcStripped, .pskConfirmed, .pskUnconfirmed, .pqcOnly,
+    ]
+
+    /// Fails to compile when a state is added to `AssuranceState` and not to `everyState`.
+    private func isListed(_ state: AssuranceState) -> Bool {
+        switch state {
+        case .peerLegacy, .kcFailed, .nfcAuthenticated, .nfcIdentityMismatch, .nfcUnattestable, .identityUnverified,
+             .nfcPresentUnconfirmed, .expectedNfcStripped, .pskConfirmed, .pskUnconfirmed, .pqcOnly:
+            return Self.everyState.contains(state)
+        }
+    }
+
+    func testEveryStateIsListed() {
+        XCTAssertTrue(Self.everyState.allSatisfy(isListed))
+        XCTAssertEqual(Set(Self.everyState.map { "\($0)" }).count, Self.everyState.count)
+    }
+
+    func testVerificationNeededMatchesSasRequiredForEveryState() {
+        for state in Self.everyState {
+            let required = AssuranceStateUI.present(state: state).sasRequired
+            XCTAssertEqual(needed(required), required, "\(state)")
+            XCTAssertEqual(pinned(6, needed: needed(required)), required, "\(state)")
+        }
+    }
+
+    func testHeldCallAndIdentityNoticeNeedTheCardInEveryState() {
+        for state in Self.everyState {
+            let required = AssuranceStateUI.present(state: state).sasRequired
+            XCTAssertTrue(needed(required, awaiting: true), "\(state)")
+            XCTAssertTrue(needed(required, notice: true), "\(state)")
+        }
+        XCTAssertFalse(needed(nil))
+    }
+
+    func testNothingClaimsVerifiedBeforeTheVerdictArrives() {
+        XCTAssertFalse(SasCardPlacement.showsVerified(sasVerified: true, verdictKnown: false))
+        XCTAssertTrue(SasCardPlacement.showsVerified(sasVerified: true, verdictKnown: true))
+        XCTAssertFalse(SasCardPlacement.showsVerified(sasVerified: false, verdictKnown: true))
+    }
 }

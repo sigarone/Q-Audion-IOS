@@ -1024,6 +1024,12 @@ struct InCallScreen: View {
                                   verificationNeeded: sasVerificationNeeded)
     }
 
+    /// The code counts as confirmed on screen only once this call's assurance verdict is in. Until then (the first
+    /// seconds of a call) the header, the shield and the identity cell stay in the neutral pending state.
+    private var sasVerifiedShown: Bool {
+        SasCardPlacement.showsVerified(sasVerified: sasVerified, verdictKnown: assurancePresentation != nil)
+    }
+
     /// A comparison of the code is really needed (see `SasCardPlacement.isVerificationNeeded`).
     private var sasVerificationNeeded: Bool {
         SasCardPlacement.isVerificationNeeded(
@@ -1308,7 +1314,7 @@ struct InCallScreen: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke((sasVerified ? extras.success : scheme.primary).opacity(sasCeremonyRedundant ? 0.3 : 0.6),
+                .stroke((sasVerifiedShown ? extras.success : scheme.primary).opacity(sasCeremonyRedundant ? 0.3 : 0.6),
                         lineWidth: 1)
         )
         // Reduced visual weight ONLY — every control above stays fully
@@ -1332,21 +1338,21 @@ struct InCallScreen: View {
             }
 
             HStack(spacing: 6) {
-                Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.fill")
+                Image(systemName: sasVerifiedShown ? "checkmark.seal.fill" : "lock.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(sasVerified ? extras.success : scheme.primary)
+                    .foregroundStyle(sasVerifiedShown ? extras.success : scheme.primary)
                 // W-L10N-BATCH1 (2026-09-08) — ternary-in-Text(variable) does
                 // NOT auto-localize (confirmed for this codebase); explicit
                 // lookup. Shared key with VideoCallView's SAS mini panel —
                 // W-L10N-SASCONSOLIDATE also unifies the previously-different
                 // wording ("CONFRONTA QUESTE PAROLE" here vs "CONFRONTA
                 // PAROLE" there) into one canonical string, see the plan doc.
-                Text(sasVerified
+                Text(sasVerifiedShown
                      ? String(localized: "sas.header.verified", defaultValue: "SAS VERIFICATO", comment: "SAS verification panel header — words already confirmed")
                      : String(localized: "sas.header.compare_words", defaultValue: "CONFRONTA PAROLE", comment: "SAS verification panel header — prompts the user to compare the 6 SAS words with the other party"))
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.2)
-                    .foregroundStyle(sasVerified ? extras.success : scheme.primary)
+                    .foregroundStyle(sasVerifiedShown ? extras.success : scheme.primary)
             }
 
             VStack(spacing: 10) {
@@ -1376,23 +1382,23 @@ struct InCallScreen: View {
             // "CONFERMA COINCIDONO" to "CONFERMA", shared with
             // VideoCallView's SAS mini panel (previously "CONFERMO"
             // there) — see the l10n plan doc.
-            Text(sasVerified
+            Text(sasVerifiedShown
                  ? String(localized: "sas.confirm.button_verified", defaultValue: "VERIFICATO", comment: "SAS verification button — disabled state after confirmation, ALL CAPS styling")
                  : String(localized: "sas.confirm.button", defaultValue: "CONFERMA", comment: "SAS verification panel — button to confirm the 6 SAS words match, ALL CAPS styling"))
                 .qaudionStyle(type.labelLarge)
                 .tracking(1.2)
-                .foregroundStyle(sasVerified ? extras.success : scheme.onPrimary)
+                .foregroundStyle(sasVerifiedShown ? extras.success : scheme.onPrimary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 999)
-                        .fill(sasVerified
+                        .fill(sasVerifiedShown
                               ? scheme.surfaceVariant
                               : scheme.primary.opacity(0.85))
                 )
         }
         .buttonStyle(.plain)
-        .disabled(sasVerified)
+        .disabled(sasVerifiedShown)
     }
 
     private func sasWordView(_ word: String) -> some View {
@@ -1579,10 +1585,10 @@ struct InCallScreen: View {
             // hid it entirely pre-verification, a real cross-platform divergence.
             if sasWords.count == 6 {
                 trustShield(
-                    tint: sasVerified ? extras.success : extras.pqcAccent,
+                    tint: sasVerifiedShown ? extras.success : extras.pqcAccent,
                     label: "SAS",
                     info: .sas,
-                    accessibilityLabel: sasVerified
+                    accessibilityLabel: sasVerifiedShown
                         ? String(localized: "sas.accessibility.verified", defaultValue: "Identità verificata (SAS)", comment: "Call screen, VoiceOver label of the SAS shield once the identity is verified")
                         : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Call screen, VoiceOver label of the SAS shield while the verification is pending")
                 )
@@ -2304,8 +2310,8 @@ struct InCallScreen: View {
     private func trustStatRing() -> some View {
         HStack(spacing: 0) {
             trustStatCell(icon: "checkmark.seal.fill", label: VoiceCustodyCopy.identity,
-                          value: VoiceCustody.identityValue(verified: sasVerified),
-                          active: sasVerified, accent: extras.success)
+                          value: VoiceCustody.identityValue(verified: sasVerifiedShown),
+                          active: sasVerifiedShown, accent: extras.success)
             trustStatCell(icon: "shield.lefthalf.filled", label: VoiceCustodyCopy.postQuantum,
                           value: VoiceCustody.postQuantumValue(active: pqcActive),
                           active: pqcActive, accent: extras.success)

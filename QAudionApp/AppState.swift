@@ -16340,11 +16340,14 @@ final class AppState: ObservableObject {
         // `callIdentityUnauthenticatedChange` above, so a late/duplicate
         // verdict from a just-ended or different call can't overwrite the
         // CURRENT call's banner.
-        if callContactId == nil || callContactId == state.peerId {
+        // The ids are compared as contacts (letter case, a "|<device>" suffix), not as raw strings.
+        if callContactId == nil || CallPeerIdMatch.same(callContactId ?? "", state.peerId) {
             callAssuranceState = assurance
             callAssuranceExpectedNfc = expectedNfc
             callMutualNfcInCommon = mutualNfcInCommon
             callPskMixedThisCall = pskMixedThisCall
+        } else {
+            print("[AppState] assurance verdict not shown — peer=\(state.peerId.prefix(8))… is not the active call peer=\((callContactId ?? "").prefix(8))… callId=\(callId.prefix(8))…")
         }
     }
 
