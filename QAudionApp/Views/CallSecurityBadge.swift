@@ -70,7 +70,7 @@ struct CallSecurityBadge: View {
                 .foregroundColor(backendColor)
 
             // Drawn only on a verified fact: a pre-shared key was mixed into this call's session key. Not on
-            // `pskActive`, which is true from the first second of every call (the transitional key counts for it).
+            // the broader `pskActive` flag.
             if appState.callPskMixedThisCall {
                 Text("PSK")
                     .font(.system(size: 9, weight: .bold))

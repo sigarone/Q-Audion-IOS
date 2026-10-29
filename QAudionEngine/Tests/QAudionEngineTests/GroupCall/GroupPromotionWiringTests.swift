@@ -249,7 +249,7 @@ final class GroupPromotionWiringTests: XCTestCase {
     }
 
     func testSpec28_theCreatorSendsTheTokenBeforeTheCreateAndMintsTheIdInLowerCase() throws {
-        let promote = try slice(try app(), from: "func promoteToGroupCall(newPeerIds: [String]) {", to: "private static func deriveTransitionalSasKey")
+        let promote = try slice(try app(), from: "func promoteToGroupCall(newPeerIds: [String]) {", to: "var callSasWords: [String]")
         XCTAssertTrue(promote.contains("GroupPromotionPlan.plan("))
         XCTAssertTrue(promote.contains("groupCallId: UUID().uuidString.lowercased()"))
         XCTAssertTrue(promote.contains("invitees: plan.recipients"), "the create carries exactly the recipients the token lists")

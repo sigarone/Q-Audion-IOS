@@ -235,9 +235,9 @@ struct InCallScreen: View {
     let sasWaiting: Bool
     let sasVerified: Bool
     let keyInfo: KeyInfo?
-    /// The call holds a session key of any kind, the transitional one it starts with included. `keyInfo` is narrower
+    /// The call is a live one with real data. `keyInfo` is narrower
     /// (it names ML-KEM and prints the fingerprint, so it exists only for the real ML-KEM key), and the "DEMO" badge
-    /// must not come back on a real call while only the transitional key exists: it follows this flag and `keyInfo`
+    /// must not show on a real call before the ML-KEM key lands: it follows this flag and `keyInfo`
     /// together (`demoBadgeShown`). The default `false` keeps the screens built without it (previews, showcase) as
     /// they were: the badge follows `keyInfo` alone.
     let hasSessionKey: Bool
@@ -1108,9 +1108,9 @@ struct InCallScreen: View {
         }
     }
 
-    /// The "DEMO" badge is shown only when neither the key panel nor any session key exists. The panel exists only
-    /// for the real ML-KEM key, so on its own it would bring the badge back on a real call that still holds the
-    /// transitional key (`sessionKeyPresent`): that is the case this decision keeps out.
+    /// The "DEMO" badge is shown only when neither the key panel nor the live-call flag is set. The panel exists only
+    /// for the real ML-KEM key, so on its own it would show the badge on a real call that has not received it yet
+    /// (`sessionKeyPresent`): that is the case this decision keeps out.
     static func demoBadgeShown(keyInfoPresent: Bool, sessionKeyPresent: Bool) -> Bool {
         !keyInfoPresent && !sessionKeyPresent
     }
@@ -1748,8 +1748,8 @@ struct InCallScreen: View {
         /// depends on `pqcActive`: the popup must not say "attivo" under a grey
         /// shield. Every other shield is drawn only while its fact holds.
         /// `pqcActive` is true only once the ML-KEM session key exists: the
-        /// caller (`LiveInCallScreen.mlKemKeyActive`) never counts the transitional
-        /// key a call starts with, so "attivo" is said only when it is.
+        /// caller (`LiveInCallScreen.mlKemKeyActive`) counts only that key,
+        /// so "attivo" is said only when it is.
         /// The two texts of the post-quantum shield come from the catalog (the popup
         /// shows a plain `String`, which SwiftUI does not localize by itself), so they
         /// follow the language of the phone, and so do the titles and the other popups.

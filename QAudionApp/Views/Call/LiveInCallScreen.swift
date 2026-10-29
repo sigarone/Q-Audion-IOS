@@ -31,12 +31,11 @@ import QAudionEngine
 ///   - `keyInfo`             ← built from `appState.callPqcSessionKey` +
 ///                              `appState.pskActive`/`pskName`/`pskFingerprint`
 ///                              only once that key is the ML-KEM session key
-///                              (`callSasKeySource == .mlKem`), never for the
-///                              transitional key a call starts with (W502)
+///                              (`callSasKeySource == .mlKem`) (W502)
 ///   - `pqcActive`           ← the same ML-KEM key (`mlKemKeyActive`), never
 ///                              the PSK
-///   - `hasSessionKey`       ← any session key, the transitional one included;
-///                              only the "DEMO" badge follows it
+///   - `hasSessionKey`       ← always true on this screen (a live call is never
+///                              placeholder data); only the "DEMO" badge follows it
 ///   - `voiceBiometrics`     ← built from `appState.voiceAnalysis` (Guardian
 ///                              ribbon + security-sheet biometrics; unified
 ///                              call UI pass — see `liveVoiceBiometrics`)
@@ -341,8 +340,7 @@ struct LiveInCallScreen: View {
                 // session key has actually been established
                 // (`mlKemKeyActive`), not the transport string and not the
                 // PSK: the shield, its popup, the "Post-quantistico" cell and
-                // the custody verdict never say "attivo" while the call only
-                // holds the transitional key.
+                // the custody verdict never say "attivo" before that key lands.
                 pqcActive: mlKemKeyActive,
                 // W339: real SAS from ComputeSasUseCase — derived from
                 // appState.callPqcSessionKey when set by the call setup
@@ -357,9 +355,10 @@ struct LiveInCallScreen: View {
                 sasVerified: liveSasVerified,
                 // W502: KeyInfo built from live session key when available.
                 keyInfo: liveKeyInfo,
-                // Any session key at all: keeps the "DEMO" badge off a real
-                // call whose only key is still the transitional one.
-                hasSessionKey: hasSessionKey,
+                // This is a live call, never placeholder data: the "DEMO" badge stays
+                // off, including before the ML-KEM key lands (the panels that need
+                // the key are simply not drawn yet, as in any call that is securing).
+                hasSessionKey: true,
                 transportMode: liveTransportMode,
                 muted: liveMuted,
                 speakerOn: speakerOn,
@@ -824,12 +823,6 @@ struct LiveInCallScreen: View {
         CallSessionKeyShown.realKey(appState.callPqcSessionKey, source: appState.callSasKeySource) != nil
     }
 
-    /// The call holds a session key of any kind, the transitional one it starts with included. The "DEMO" badge
-    /// follows this ("no key at all yet"), as it did before the panel was narrowed to ML-KEM.
-    private var hasSessionKey: Bool {
-        CallSessionKeyShown.isPresent(appState.callPqcSessionKey)
-    }
-
     /// W502: build a `KeyInfo` panel from the live ML-KEM session key.
     /// Returns nil while the real key is unavailable (panel stays hidden).
     /// The "DEMO" badge does not follow this panel: see `hasSessionKey`.
@@ -837,10 +830,9 @@ struct LiveInCallScreen: View {
     /// + PSK block.
     ///
     /// The key is the ML-KEM one only when `callSasKeySource == .mlKem`: until the
-    /// handshake replaces it, `callPqcSessionKey` holds the transitional key derived
-    /// from the pairwise secret at call start. The panel names "ML-KEM-1024 + X25519"
-    /// and prints a fingerprint of the session key, so it must not appear for that
-    /// transitional key (`CallSessionKeyShown`).
+    /// handshake publishes it, `callPqcSessionKey` is nil. The panel names
+    /// "ML-KEM-1024 + X25519" and prints a fingerprint of the session key, so it
+    /// appears only for that key (`CallSessionKeyShown`).
     private var liveKeyInfo: InCallScreen.KeyInfo? {
         guard let key = CallSessionKeyShown.realKey(appState.callPqcSessionKey,
                                                     source: appState.callSasKeySource) else { return nil }
