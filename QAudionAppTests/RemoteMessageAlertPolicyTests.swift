@@ -108,4 +108,21 @@ final class RemoteMessageAlertCleanerTests: XCTestCase {
         XCTAssertFalse(RemoteMessageAlertPolicy.isGenericTap(userInfo: ["conversationId": "1"]))
         XCTAssertFalse(RemoteMessageAlertPolicy.isGenericTap(userInfo: ["groupId": "ab"]))
     }
+
+    func testPushedMessageAlertIsHiddenWhileTheAppIsInFront() {
+        XCTAssertTrue(RemoteMessageAlertPolicy.isHiddenInForeground(
+            category: "QAUDION_MESSAGE_DELIVERED", thread: "messages", enriched: false))
+        // Rewritten by the notification extension: its thread is the conversation's, the marker tells it apart.
+        XCTAssertTrue(RemoteMessageAlertPolicy.isHiddenInForeground(
+            category: "QAUDION_MESSAGE_DELIVERED", thread: "u:abc", enriched: true))
+    }
+
+    func testLocalBannerAndOtherCategoriesStayVisibleInFront() {
+        XCTAssertFalse(RemoteMessageAlertPolicy.isHiddenInForeground(
+            category: "QAUDION_MESSAGE_DELIVERED", thread: "QAUDION_MESSAGE_DELIVERED", enriched: false))
+        XCTAssertFalse(RemoteMessageAlertPolicy.isHiddenInForeground(
+            category: "INCOMING_CALL", thread: "calls", enriched: false))
+        XCTAssertFalse(RemoteMessageAlertPolicy.isHiddenInForeground(
+            category: "QAUDION_MISSED_CALL", thread: "messages", enriched: true))
+    }
 }

@@ -388,11 +388,16 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         // of a blocked creator is suppressed like a private one; a group message alert carries a group id and is
         // not filtered (`BlockPolicy`).
         let alertInfo: [AnyHashable: Any] = notification.request.content.userInfo
-        let blocked = BlockPolicy.suppressesNotification(userInfo: alertInfo, blocked: BlockedContactsStore.loadBlockedIds())
         let categoryId: String = notification.request.content.categoryIdentifier
-        Task { @MainActor in
-            completionHandler(self.foregroundPresentation(categoryId: categoryId, blocked: blocked))
-        }
+        let blockedContact = BlockPolicy.suppressesNotification(userInfo: alertInfo, blocked: BlockedContactsStore.loadBlockedIds())
+        if blockedContact { RTLog.info("call", "block drop=1 kind=notif") }
+        // A message alert the server pushed is not shown while the app is in front: the message arrives over the
+        // socket and gets the app's own banner. It is presented like a dropped one (nothing).
+        let blocked = blockedContact || RemoteMessageAlertPolicy.isHiddenInForeground(
+            category: categoryId,
+            thread: notification.request.content.threadIdentifier,
+            enriched: alertInfo[NotificationContentBuilder.enrichedKey] as? String == "1")
+        Task { @MainActor in completionHandler(self.foregroundPresentation(categoryId: categoryId, blocked: blocked)) }
     }
 
     /// W405: foreground presentation respects the user's preferences. Banner suppressed if banners disabled; sound
@@ -402,10 +407,7 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     /// quietly (banner / list, no sound). Every other notification, and a missed call outside a call, is
     /// presented exactly as before. The decision is `MissedCallAlertPolicy.foreground`.
     private func foregroundPresentation(categoryId: String, blocked: Bool) -> UNNotificationPresentationOptions {
-        if blocked {
-            RTLog.info("call", "block drop=1 kind=notif")
-            return []
-        }
+        if blocked { return [] }
         let isMissedCall: Bool = categoryId == Category.missedCall.rawValue
         let callInFlight: Bool = isMissedCall ? isCallInFlight() : false
         let presentation = MissedCallAlertPolicy.foreground(

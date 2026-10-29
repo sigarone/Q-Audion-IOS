@@ -149,4 +149,50 @@ final class NoticePushTests: XCTestCase {
             XCTAssertFalse(PhoneTransferNotice.isPendingPush(userInfo: info), "\(info)")
         }
     }
+
+    // MARK: - kept token: debounce and retry
+
+    func testKeptTokenIsNotSentTwiceInTheDebounceWindow() {
+        let now = Date()
+        let last = AlertTokenRegistrationPolicy.Accepted(userId: "u1", hex: hex, at: now.addingTimeInterval(-60))
+        XCTAssertFalse(AlertTokenRegistrationPolicy.shouldSendKept(hex: hex, userId: "u1", last: last, now: now))
+    }
+
+    func testKeptTokenIsSentAgainAfterTheWindow() {
+        let now = Date()
+        let last = AlertTokenRegistrationPolicy.Accepted(
+            userId: "u1", hex: hex, at: now.addingTimeInterval(-AlertTokenRegistrationPolicy.debounceInterval))
+        XCTAssertTrue(AlertTokenRegistrationPolicy.shouldSendKept(hex: hex, userId: "u1", last: last, now: now))
+    }
+
+    func testATokenOrAccountChangeAlwaysSends() {
+        let now = Date()
+        let last = AlertTokenRegistrationPolicy.Accepted(userId: "u1", hex: hex, at: now)
+        XCTAssertTrue(AlertTokenRegistrationPolicy.shouldSendKept(
+            hex: String(repeating: "cd", count: 32), userId: "u1", last: last, now: now))
+        XCTAssertTrue(AlertTokenRegistrationPolicy.shouldSendKept(hex: hex, userId: "u2", last: last, now: now))
+        XCTAssertTrue(AlertTokenRegistrationPolicy.shouldSendKept(hex: hex, userId: "u1", last: nil, now: now))
+    }
+
+    func testAClockThatWentBackSends() {
+        let now = Date()
+        let last = AlertTokenRegistrationPolicy.Accepted(userId: "u1", hex: hex, at: now.addingTimeInterval(3600))
+        XCTAssertTrue(AlertTokenRegistrationPolicy.shouldSendKept(hex: hex, userId: "u1", last: last, now: now))
+    }
+
+    func testOnlyTransientFailuresAreRetried() {
+        for code in [nil, 408, 429, 500, 502, 503] as [Int?] {
+            XCTAssertTrue(AlertTokenRegistrationPolicy.isRetryable(statusCode: code), "\(String(describing: code))")
+        }
+        for code in [400, 401, 403, 404, 409, 413] {
+            XCTAssertFalse(AlertTokenRegistrationPolicy.isRetryable(statusCode: code), "\(code)")
+        }
+    }
+
+    func testRetriesStopAfterThree() {
+        XCTAssertEqual(AlertTokenRegistrationPolicy.retryDelay(afterFailures: 1), 30)
+        XCTAssertEqual(AlertTokenRegistrationPolicy.retryDelay(afterFailures: 3), 30)
+        XCTAssertNil(AlertTokenRegistrationPolicy.retryDelay(afterFailures: 4))
+        XCTAssertNil(AlertTokenRegistrationPolicy.retryDelay(afterFailures: 0))
+    }
 }

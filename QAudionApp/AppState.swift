@@ -468,6 +468,14 @@ final class AppState: ObservableObject {
     private var noticeTokenInFlight = AccountApnsTokenInFlight()
     /// Same for the message-alert registration of the token (default mode).
     private var messageAlertTokenInFlight = AccountApnsTokenInFlight()
+    /// Consecutive failed alert-token registrations; each one schedules a retry (`scheduleAlertTokenRetry`).
+    private var alertTokenFailures = 0
+    /// The pending retry of a failed alert-token registration; cancelled when the account leaves.
+    private var alertTokenRetryTask: Task<Void, Never>?
+    /// When the system last handed this process a token (AppDelegate callback): a fresh token of the same cycle
+    /// makes the kept copy redundant.
+    private var lastApnsTokenCallbackAt: Date?
+    private static let alertTokenAcceptedKey = "qaudion.push.alertTokenAccepted"
     /// A permission check for the notice push is running (it may be waiting on the system prompt).
     private var noticePushCheckInFlight = false
     /// W-PUSHDEDUP: coalesce duplicate VoIP-token registrations. Several
@@ -4534,6 +4542,9 @@ final class AppState: ObservableObject {
         // in initialize() (not at call start), on the main thread, where
         // reading it is allowed.
         AppBackgroundFlag.shared.set(isInBackground: UIApplication.shared.applicationState == .background)
+        _ = AppBackgroundFlag.shared.addChangeObserver { [weak self] _ in
+            Task { @MainActor [weak self] in self?.sendAppStateToServer() }
+        }
         #endif
 
         // W-BGK: BGAppRefreshTask handler routing.
@@ -6573,6 +6584,7 @@ final class AppState: ObservableObject {
                     TelemetryService.shared.emit(kind: "ws.state", attrs: attrs)
                 }
                 self?.wsConnectionState = state
+                if state == .authenticated { self?.sendAppStateToServer() }
                 // A live location share builds no frame while the socket is down (WIRE_SPEC 14.6.1 rule 5).
                 LocationShareCenter.shared.socketStateChanged(authenticated: state == .authenticated)
                 // W-WSSTUCKWATCHDOG — see the property kdoc. Cancel on every
@@ -6882,6 +6894,7 @@ final class AppState: ObservableObject {
     /// `CallsGate.callKitFreeMode` is ON, so flag-OFF behavior is byte-identical
     /// to today (VoIP/CallKit path untouched; the token is simply ignored).
     func handleApnsDeviceToken(hex: String) {
+        rememberApnsTokenFromSystem(hex: hex)
         guard CallsGate.callKitFreeMode else {
             // Flag OFF — VoIP/PushKit owns incoming-call wakeups. The token only goes to the server as
             // the notice token, and only because the user allowed notifications (the system hands out
@@ -6952,6 +6965,62 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Keeps the token the system just handed over (for the kept-token resend) and notes when it came.
+    private func rememberApnsTokenFromSystem(hex: String) {
+        guard !CallsGate.callKitFreeMode, AccountApnsTokenRequest.isValid(hex: hex) else { return }
+        UserDefaults.standard.set(hex, forKey: AppState.lastKnownApnsTokenKey)
+        lastApnsTokenCallbackAt = Date()
+    }
+
+    /// Sends the last APNs token the system gave this install to the notice and message-alert routes. Runs on
+    /// every launch, login and return to the foreground (through the permission check), so a registration that
+    /// never happened or failed once does not leave the device without message alerts.
+    private func sendKeptAlertTokens() {
+        guard !CallsGate.callKitFreeMode,
+              let hex = UserDefaults.standard.string(forKey: AppState.lastKnownApnsTokenKey),
+              AccountApnsTokenRequest.isValid(hex: hex) else { return }
+        let userId = currentUserId ?? ""
+        let last = Self.loadAcceptedAlertToken()
+        guard AlertTokenRegistrationPolicy.shouldSendKept(hex: hex, userId: userId, last: last, now: Date()) else { return }
+        registerNoticeApnsToken(hex: hex)
+        registerMessageAlertToken(hex: hex)
+    }
+
+    private static func loadAcceptedAlertToken() -> AlertTokenRegistrationPolicy.Accepted? {
+        guard let d = UserDefaults.standard.dictionary(forKey: alertTokenAcceptedKey),
+              let u = d["u"] as? String, let h = d["h"] as? String, let t = d["t"] as? Double else { return nil }
+        return .init(userId: u, hex: h, at: Date(timeIntervalSince1970: t))
+    }
+
+    private func storeAcceptedAlertToken(hex: String) {
+        UserDefaults.standard.set(
+            ["u": currentUserId ?? "", "h": hex, "t": Date().timeIntervalSince1970] as [String: Any],
+            forKey: AppState.alertTokenAcceptedKey)
+    }
+
+    /// A failed alert-token registration is tried again after 30 s, three times in a row at most, and only for a
+    /// transient failure (network, 408, 429, 5xx). The next launch, login or foreground starts the count over.
+    private func scheduleAlertTokenRetry(statusCode: Int?) {
+        guard AlertTokenRegistrationPolicy.isRetryable(statusCode: statusCode) else { return }
+        alertTokenFailures += 1
+        guard let delay = AlertTokenRegistrationPolicy.retryDelay(afterFailures: alertTokenFailures) else { return }
+        alertTokenRetryTask?.cancel()
+        alertTokenRetryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.sendKeptAlertTokens()
+        }
+    }
+
+    /// Tells the server whether the app is on screen (WIRE_SPEC 15.9): the server sends the message alert to a
+    /// device whose socket did not report the foreground. Sent on every background / foreground change and again
+    /// after each authentication of the socket (a new socket starts as "not reported").
+    private func sendAppStateToServer() {
+        guard wsConnectionState == .authenticated, let ws = liveProvider?.getWebSocketClient() else { return }
+        let state = AppBackgroundFlag.shared.isInBackground ? "background" : "foreground"
+        ws.send(type: "app_state", data: ["state": state])
+    }
+
     // MARK: - Notice push for a pending phone-number transfer
 
     /// Default mode (`callKitFreeMode` OFF): once signed in, asks ONCE for the system notification
@@ -6978,11 +7047,18 @@ final class AppState: ObservableObject {
                 callKitFree: CallsGate.callKitFreeMode,
                 authenticated: true,  // a stored session token was checked above
                 authorization: authorization)
+            // A new cycle: the retry count starts over. The system hands the token back through the AppDelegate
+            // only when it chooses to, and a token that arrived before sign-in or a request that failed was dropped;
+            // if no fresh token has come back a few seconds after the request, the kept one is sent (a fresh one is
+            // registered by its own callback, and sending both could put an old token over the new one).
+            let cycleStart = Date()
+            if step == .register { self.alertTokenFailures = 0 }
             switch step {
             case .none:
                 break
-            case .register:
-                UIApplication.shared.registerForRemoteNotifications()
+            case .register: UIApplication.shared.registerForRemoteNotifications()
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if (self.lastApnsTokenCallbackAt ?? .distantPast) < cycleStart { self.sendKeptAlertTokens() }
             case .askThenRegister:
                 // Registers for remote notifications itself when the answer is yes.
                 _ = await center.requestAuthorization()
@@ -7043,13 +7119,18 @@ final class AppState: ObservableObject {
                 let (_, resp) = try await session.data(for: req)
                 if let http = resp as? HTTPURLResponse {
                     if (200..<300).contains(http.statusCode) {
-                        await MainActor.run { self?.registerNotifyKeyAfterAlertToken() }
+                        await MainActor.run {
+                            self?.storeAcceptedAlertToken(hex: hex)
+                            self?.registerNotifyKeyAfterAlertToken()
+                        }
                     } else {
                         print("[AppState] APNs message alert register HTTP \(http.statusCode)")
+                        await MainActor.run { self?.scheduleAlertTokenRetry(statusCode: http.statusCode) }
                     }
                 }
             } catch {
                 print("[AppState] APNs message alert register error: \(error.localizedDescription)")
+                await MainActor.run { self?.scheduleAlertTokenRetry(statusCode: nil) }
             }
             await MainActor.run {
                 self?.messageAlertTokenInFlight.finish(ticket: ticket)
@@ -18448,6 +18529,10 @@ final class AppState: ObservableObject {
         // account's: after the next sign-in the same token is registered again.
         noticeTokenInFlight.reset()
         messageAlertTokenInFlight.reset()
+        alertTokenRetryTask?.cancel()
+        alertTokenRetryTask = nil
+        alertTokenFailures = 0
+        UserDefaults.standard.removeObject(forKey: AppState.alertTokenAcceptedKey)
         // The notification key, the list of names and the avatars belong to the account that left.
         NotifyKeyService.shared.wipeLocal()
         // A pending phone-number transfer belongs to the account that left (logout, remote wipe,

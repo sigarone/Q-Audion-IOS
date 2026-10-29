@@ -28,6 +28,14 @@ enum RemoteMessageAlertPolicy {
         category == messageCategory && thread == remoteThreadIdentifier
     }
 
+    /// True for an alert the server pushed (generic, or rewritten by the notification extension) that must not be
+    /// shown while the app is in front: a message reaches the open app over its socket and the app shows its own
+    /// banner, so the pushed one would only repeat it. The server sends the alert for a socket that did not report
+    /// the foreground yet (a reconnect, the moment before the app comes forward).
+    static func isHiddenInForeground(category: String, thread: String, enriched: Bool) -> Bool {
+        isRemoteMessageAlert(category: category, thread: thread) || (enriched && category == messageCategory)
+    }
+
     /// Identifiers of the delivered notifications to remove before the app posts a local message banner or once
     /// the user has seen the messages.
     static func identifiersToRemove(from delivered: [Delivered]) -> [String] {
