@@ -211,7 +211,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// `authRecoveryInFlight` boolean only dedups concurrent/within-cycle
     /// cascades; it is reset on every clean `authenticated` AND at the end of
     /// every recovery completion, so it does NOT throttle the pathological
-    /// `auth_failed → recover → reconnectAttempt=0 → forceReconnect →
+    /// `auth_failed → recover → (recovery resets the backoff) → forceReconnect →
     /// auth_failed` loop that arises when the server keeps rejecting even a
     /// freshly-renewed token (clock skew / server-side account edge). Without a
     /// gate that survives reconnect cycles the device would run the 2-network-
@@ -242,14 +242,14 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     public var onLatencyMeasured: ((Int) -> Void)?
     /// FAILOVER signal: invoked with the current (apparently-DEAD) wss URL after
     /// `failoverAfterAttempts` consecutive reconnect attempts to the same node
-    /// (reconnectAttempt resets to 0 on a successful auth, so a transient flap
+    /// (`failoverAttempt` goes back to 0 on every successful auth, so a transient flap
     /// never trips it). The app layer (AppState) wires this to
     /// `ServerSelector.reselectExcluding` so a dead node no longer pins the client
     /// until its ~60s server-side heartbeat TTL clears. The socket's own backoff
     /// reconnect is unchanged — this only adds a fast cross-node recovery path.
     public var onNodeStalled: ((String) -> Void)?
     /// Consecutive failed reconnects to the same node after which `onNodeStalled`
-    /// fires. High enough that a flap (counter resets on auth) never trips it.
+    /// fires. High enough that a flap (`failoverAttempt` resets on auth) never trips it.
     /// Only failures the node did NOT answer count: a server that closes the socket
     /// with an authentication rejection is demonstrably up (see `handleDisconnect`).
     private let failoverAfterAttempts = 3
@@ -2440,9 +2440,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             // The backoff is NOT reset here: a socket that authenticates and is then torn
             // down within seconds must keep growing it. `handleDisconnect` (or
             // `forceReconnect`) clears it once this socket has held for the stability window.
-            failoverAttempt = 0
+            let settled = WebSocketReconnectPolicy.afterAuthentication(
+                attempt: reconnectAttempt, failoverAttempt: failoverAttempt,
+                now: Date().timeIntervalSinceReferenceDate)
+            reconnectAttempt = settled.attempt
+            failoverAttempt = settled.failoverAttempt
             if generation == connectionGeneration {
-                authenticatedAt = Date().timeIntervalSinceReferenceDate
+                authenticatedAt = settled.authenticatedAt
             }
             // Clear the debounce flag set by forceReconnect() — the recovery
             // is complete; a future suspension can trigger another reconnect.
@@ -2614,8 +2618,8 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // Cross-cycle anti-storm gate: even though `authRecoveryInFlight` is
         // reset after each cascade, a server that keeps rejecting a freshly-
         // renewed token would otherwise re-fire the (2-network-call) cascade
-        // every ~1-2 s because the success path resets `reconnectAttempt = 0`,
-        // restarting backoff. This timestamp gate survives reconnect cycles
+        // every ~1-2 s because the recovery verdict resets `reconnectAttempt = 0`,
+        // restarting backoff (a plain authentication no longer does: see the `authenticated` handler). This timestamp gate survives reconnect cycles
         // (it is never reset on `authenticated`) and caps cascades to one per
         // `minAuthRecoveryIntervalSec`. The very first auth_failed after a long
         // quiet period passes immediately (lastAuthRecoveryAt == 0), so a
