@@ -48,12 +48,27 @@ final class NoticePushTests: XCTestCase {
         XCTAssertEqual(AccountApnsTokenRoute.notice.path, "/api/v1/account/apns-notice-token")
     }
 
-    func testTheNoticeRequestHasTheSameBodyAsTheCallAlertRequest() throws {
+    func testTheMessageAlertRouteHasItsOwnPathAndTheSameBody() throws {
+        XCTAssertEqual(AccountApnsTokenRoute.messageAlert.path, "/api/v1/account/apns-message-token")
+        XCTAssertNotEqual(AccountApnsTokenRoute.messageAlert.path, AccountApnsTokenRoute.callAlert.path)
+        let message = try XCTUnwrap(AccountApnsTokenRequest.make(
+            serverUrl: "https://server.test", route: .messageAlert, hex: hex, bundleId: "com.example.app", bearer: "tok"))
+        let call = try XCTUnwrap(AccountApnsTokenRequest.make(
+            serverUrl: "https://server.test", route: .callAlert, hex: hex, bundleId: "com.example.app", bearer: "tok"))
+        let notice = try XCTUnwrap(AccountApnsTokenRequest.make(
+            serverUrl: "https://server.test", route: .notice, hex: hex, bundleId: "com.example.app", bearer: "tok"))
+        XCTAssertEqual(message.httpBody, call.httpBody)
+        XCTAssertEqual(message.httpBody, notice.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(message.httpBody)) as? [String: String])
+        XCTAssertEqual(json, ["apns_token": hex, "bundle_id": "com.example.app"], "no calls field")
+        XCTAssertEqual(message.url?.absoluteString, "https://server.test/api/v1/account/apns-message-token")
+    }
+
+    func testTheNoticeRequestHasTheSameTokenFieldsAsTheCallAlertRequest() throws {
         let notice = try XCTUnwrap(AccountApnsTokenRequest.make(
             serverUrl: "https://server.test", route: .notice, hex: hex, bundleId: "com.example.app", bearer: "tok"))
         let alert = try XCTUnwrap(AccountApnsTokenRequest.make(
             serverUrl: "https://server.test", route: .callAlert, hex: hex, bundleId: "com.example.app", bearer: "tok"))
-        XCTAssertEqual(notice.httpBody, alert.httpBody)
         let bodyData = try XCTUnwrap(notice.httpBody)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: bodyData) as? [String: String])
         XCTAssertEqual(json, ["apns_token": hex, "bundle_id": "com.example.app"])

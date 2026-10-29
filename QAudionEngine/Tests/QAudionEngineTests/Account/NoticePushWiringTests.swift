@@ -51,7 +51,7 @@ final class NoticePushWiringTests: XCTestCase {
             try appState(), from: "func handleApnsDeviceToken(hex: String) {",
             to: "private func reassertStandardApnsTokenRegistration() {")
         XCTAssertTrue(text.contains(
-            "guard CallsGate.callKitFreeMode else { registerNoticeApnsToken(hex: hex) return } registerStandardApnsToken(hex: hex)"))
+            "guard CallsGate.callKitFreeMode else { registerNoticeApnsToken(hex: hex) registerMessageAlertToken(hex: hex) return } registerStandardApnsToken(hex: hex)"))
     }
 
     func testLoginAndForegroundRunTheNoticeCheckOnlyWithoutTheAlertCallPath() throws {
@@ -87,6 +87,23 @@ final class NoticePushWiringTests: XCTestCase {
             try appState(), from: "private func registerStandardApnsToken(hex: String) {",
             to: "private func ensureNoticePushRegistration() {")
         XCTAssertTrue(alert.contains("route: .callAlert"))
+    }
+
+    func testTheMessageAlertTokenGoesWithoutCallStateAndTheKeyFollowsIt() throws {
+        let text = try slice(
+            try appState(), from: "private func registerMessageAlertToken(hex: String) {",
+            to: "private func registerNotifyKeyAfterAlertToken() {")
+        XCTAssertTrue(text.contains("route: .messageAlert"))
+        XCTAssertFalse(text.contains(".callAlert"))
+        XCTAssertFalse(text.contains("pendingApnsTokenHex"), "no call-alert state is touched")
+        XCTAssertTrue(text.contains("self?.registerNotifyKeyAfterAlertToken()"),
+                      "the notification key is sent once the server accepted this token")
+        let notice = try slice(
+            try appState(), from: "private func registerNoticeApnsToken(hex: String) {",
+            to: "private func registerMessageAlertToken(hex: String) {")
+        XCTAssertFalse(notice.contains("registerNotifyKeyAfterAlertToken"),
+                       "the notice token is not an alert token; the key follows the message alert token")
+        XCTAssertTrue(try appState().contains("messageAlertTokenInFlight.reset()"))
     }
 
     func testAnAccountChangeForgetsTheRunningNoticeTokenRequest() throws {
