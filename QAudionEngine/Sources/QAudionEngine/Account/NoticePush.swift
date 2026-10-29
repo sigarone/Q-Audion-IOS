@@ -40,20 +40,24 @@ public enum NoticePushPolicy {
 
 /// The two account endpoints that take the APNs device token of the app.
 public enum AccountApnsTokenRoute: Equatable, Sendable {
-    /// Token used for the alert push of an incoming call (no CallKit).
+    /// Token used for the alert push of an incoming call (no CallKit). The server drops the VoIP token.
     case callAlert
+    /// Token used for the alert of a new message and for the notification key, on a device whose calls
+    /// ring through CallKit and PushKit. The server keeps the VoIP token and never uses this one for calls.
+    case messageAlert
     /// Token used for the account notice of a pending phone-number transfer.
     case notice
 
     public var path: String {
         switch self {
         case .callAlert: return "/api/v1/account/apns-token"
+        case .messageAlert: return "/api/v1/account/apns-message-token"
         case .notice: return "/api/v1/account/apns-notice-token"
         }
     }
 }
 
-/// The registration request for an APNs device token. Both routes carry the same body.
+/// The registration request for an APNs device token. All routes carry the same body.
 public enum AccountApnsTokenRequest {
     /// An APNs device token is 32 bytes, 64 hex digits.
     public static func isValid(hex: String) -> Bool {

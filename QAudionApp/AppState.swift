@@ -466,6 +466,8 @@ final class AppState: ObservableObject {
     /// the account changes (`resetAccountScopedRuntimeState`), so the next account registers the token
     /// again even if the previous account's request was still running.
     private var noticeTokenInFlight = AccountApnsTokenInFlight()
+    /// Same for the message-alert registration of the token (default mode).
+    private var messageAlertTokenInFlight = AccountApnsTokenInFlight()
     /// A permission check for the notice push is running (it may be waiting on the system prompt).
     private var noticePushCheckInFlight = false
     /// W-PUSHDEDUP: coalesce duplicate VoIP-token registrations. Several
@@ -6881,8 +6883,10 @@ final class AppState: ObservableObject {
             // Flag OFF — VoIP/PushKit owns incoming-call wakeups. The token only goes to the server as
             // the notice token, and only because the user allowed notifications (the system hands out
             // a token only after `registerForRemoteNotifications`, which `ensureNoticePushRegistration`
-            // calls for a granted permission).
+            // calls for a granted permission). The same token also goes to the server for new-message alerts
+            // and the notification key, next to the VoIP token (calls stay on PushKit).
             registerNoticeApnsToken(hex: hex)
+            registerMessageAlertToken(hex: hex)
             return
         }
         registerStandardApnsToken(hex: hex)
@@ -7005,15 +7009,47 @@ final class AppState: ObservableObject {
                 let (_, resp) = try await session.data(for: req)
                 if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                     print("[AppState] APNs notice register HTTP \(http.statusCode)")
-                } else if resp is HTTPURLResponse {
-                    // The server has the alert token: the notification key can follow.
-                    await MainActor.run { self?.registerNotifyKeyAfterAlertToken() }
                 }
             } catch {
                 print("[AppState] APNs notice register error: \(error.localizedDescription)")
             }
             await MainActor.run {
                 self?.noticeTokenInFlight.finish(ticket: ticket)
+            }
+        }
+    }
+
+    /// Default mode: sends the token to `POST /api/v1/account/apns-message-token`, so the server can
+    /// push a new-message alert to this device (and seal the sender for the notification extension) while its
+    /// calls keep ringing through PushKit. Once the server has it, the notification key follows. Not kept before
+    /// sign-in: the permission check after login registers again. A request already running for the same token
+    /// is not repeated.
+    private func registerMessageAlertToken(hex: String) {
+        guard AccountApnsTokenRequest.isValid(hex: hex) else { return }
+        guard let token = authService.loadToken(), !token.isEmpty else { return }
+        guard let req = AccountApnsTokenRequest.make(
+            serverUrl: serverUrl,
+            route: .messageAlert,
+            hex: hex,
+            bundleId: Bundle.main.bundleIdentifier ?? "com.qaudion.app",
+            bearer: token) else { return }
+        guard let ticket = messageAlertTokenInFlight.begin(hex: hex) else { return }
+        let session = voipPushSession
+        Task { [weak self, session] in
+            do {
+                let (_, resp) = try await session.data(for: req)
+                if let http = resp as? HTTPURLResponse {
+                    if (200..<300).contains(http.statusCode) {
+                        await MainActor.run { self?.registerNotifyKeyAfterAlertToken() }
+                    } else {
+                        print("[AppState] APNs message alert register HTTP \(http.statusCode)")
+                    }
+                }
+            } catch {
+                print("[AppState] APNs message alert register error: \(error.localizedDescription)")
+            }
+            await MainActor.run {
+                self?.messageAlertTokenInFlight.finish(ticket: ticket)
             }
         }
     }
@@ -18374,6 +18410,7 @@ final class AppState: ObservableObject {
         // The notice push token request of the account that left must not stand in for the next
         // account's: after the next sign-in the same token is registered again.
         noticeTokenInFlight.reset()
+        messageAlertTokenInFlight.reset()
         // The notification key, the list of names and the avatars belong to the account that left.
         NotifyKeyService.shared.wipeLocal()
         // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
