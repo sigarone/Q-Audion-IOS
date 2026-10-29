@@ -130,3 +130,44 @@ extension PhoneTransferNotice {
         userInfo["type"] == "phone_transfer_pending"
     }
 }
+
+/// When the kept APNs token is sent again, and what happens after a failure. Pure, so it is tested without a network.
+public enum AlertTokenRegistrationPolicy {
+    /// A token that was accepted for this account is not sent again from the kept copy within this time.
+    public static let debounceInterval: TimeInterval = 15 * 60
+    /// Retries after a failure, one launch / login / foreground trigger at a time.
+    public static let maxRetries = 3
+    public static let retryDelaySeconds: TimeInterval = 30
+
+    /// The last accepted registration: which account, which token, when.
+    public struct Accepted: Equatable, Sendable {
+        public let userId: String
+        public let hex: String
+        public let at: Date
+        public init(userId: String, hex: String, at: Date) {
+            self.userId = userId
+            self.hex = hex
+            self.at = at
+        }
+    }
+
+    /// False only when this very token was accepted for this very account less than `debounceInterval` ago.
+    /// A different token, a different account, no record, or a clock that went back always sends.
+    public static func shouldSendKept(hex: String, userId: String, last: Accepted?, now: Date) -> Bool {
+        guard let last, last.hex == hex, last.userId == userId else { return true }
+        let age = now.timeIntervalSince(last.at)
+        return age < 0 || age >= debounceInterval
+    }
+
+    /// A network error (nil status), a timeout (408), too many requests (429) and a server error (5xx) are tried
+    /// again; every other answer (401, 403, 409, 400 ...) is final.
+    public static func isRetryable(statusCode: Int?) -> Bool {
+        guard let code = statusCode else { return true }
+        return code == 408 || code == 429 || (500..<600).contains(code)
+    }
+
+    /// Delay before retry number `failures` (1-based), nil when the retries are used up.
+    public static func retryDelay(afterFailures failures: Int) -> TimeInterval? {
+        (1...maxRetries).contains(failures) ? retryDelaySeconds : nil
+    }
+}
