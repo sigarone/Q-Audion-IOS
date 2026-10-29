@@ -1158,6 +1158,9 @@ final class AppState: ObservableObject {
     /// or of a remote hangup carrying one, kept for the end-of-call telemetry and call history. Consumed
     /// (and cleared) by `endCall`.
     private var pendingFatalCloseReason: String?
+    /// The 1:1 calls that already ended here (bounded): a late handshake fatal or confirmation expiry for one of
+    /// them is ignored (`EndedCallBook`).
+    private var endedCalls = EndedCallBook()
     // W-STALESEALER (2026-09-26) — the monotonic call-generation counter AND the
     // stale-install guard behind the caller/responder `onRelaySessionReady` wiring
     // both live on `CallService` now, not here: several terminal paths call
@@ -7605,6 +7608,7 @@ final class AppState: ObservableObject {
                             // state could see noCallInFlight() == true and
                             // reap a call CallKit already knows is ringing.
                             await MainActor.run {
+                                self.endedCalls.forget(callUUID.uuidString); self.endedCalls.forget(callIdStr)
                                 if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                                 self.incomingCallRingVisible = true
                             }
@@ -7619,7 +7623,8 @@ final class AppState: ObservableObject {
                         }
                     }
                     await MainActor.run {
-                        if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
+                        self.endedCalls.forget(callUUID.uuidString); self.endedCalls.forget(callIdStr)
+                                if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                         self.callContactId = senderId
                         self.drainPendingOfferReplays(for: senderId, callId: callIdStr.isEmpty ? nil : callIdStr)  // W-OFFERBUFFER
                         // WIRE_SPEC §8.3 — we answered → polite on any later glare.
@@ -8305,7 +8310,9 @@ final class AppState: ObservableObject {
             // mismatch is not. The wait is read now, before the hop to the main actor.
             let statsWaitMs: Int? = DtlsFingerprint.isStatsTimeout(stage: stage) ? controller?.dtlsStatsElapsedMs : nil
             Task { @MainActor [weak self] in
-                if let statsWaitMs, let self {
+                if let statsWaitMs, let self,
+                   !self.endedCalls.isStale(callId: cid, activeCallId: self.canonicalActiveCallId(),
+                                            anyCallInFlight: !self.noCallInFlight(), nowMs: SasCommit.monotonicNowMs()) {
                     let integration = self.sasIntegration(forCallId: cid)
                     self.reportConfirmTimeout(ConfirmTimeoutEvent(
                         timer: .dtlsfpStats, elapsedMs: statsWaitMs, round: 1,
@@ -9617,10 +9624,23 @@ final class AppState: ObservableObject {
     /// scoped `hsfatal r=<n> dstage=<n>` shape (`scripts/ship-ios-logs.py`).
     @MainActor
     private func handleHandshakeFatal(callId: String, reason: String, dtlsStage: Int? = nil) {
-        if let active = self.canonicalActiveCallId(), !active.isEmpty,
-           active.lowercased() != callId.lowercased() {
+        if HandshakeFatalDecision.decide(
+            callId: callId, activeCallId: self.canonicalActiveCallId(), anyCallInFlight: !self.noCallInFlight(),
+            ended: endedCalls, nowMs: SasCommit.monotonicNowMs()) == .stale {
             RTLog.warn("call", "hsfatal stale=1")
             return
+        }
+        // This call is ending now: anything that names it afterwards (a confirmation timer still armed) is stale.
+        endedCalls.noteEnded(callId, nowMs: SasCommit.monotonicNowMs())
+        // A call that ends on a handshake failure never applies a positive trust outcome at teardown.
+        let assuranceKey = callId.lowercased()
+        if var stashed = finalAssuranceByCall[assuranceKey] {
+            if let outcome = FatalAssuranceOutcome.persisted(forReason: reason) {
+                stashed.state = outcome
+                finalAssuranceByCall[assuranceKey] = stashed
+            } else {
+                finalAssuranceByCall.removeValue(forKey: assuranceKey)
+            }
         }
         let code: Int
         switch reason {
@@ -9657,6 +9677,8 @@ final class AppState: ObservableObject {
             }
         }
         self.endCall(notifyPeerInBand: false)
+        // `endCall` consumed the reason; if it returned early it must not wait for the next call.
+        pendingFatalCloseReason = nil
     }
 
     /// W-HANGUPECHO (2026-08-25) — tell the SERVER the call is over when the
@@ -15661,6 +15683,9 @@ final class AppState: ObservableObject {
     @MainActor
     private func handleKcMacReady(_ event: QAudionCallIntegration.KcMacReadyEvent) {
         let key = event.callId.lowercased()
+        // A round for a call that already ended creates no state, but only when no call exists at all: while any call
+        // is in flight the round is armed normally.
+        if noCallInFlight(), endedCalls.hasEnded(event.callId, nowMs: SasCommit.monotonicNowMs()) { return }
         notePromotionAnchor(from: event)
         let state = KeyConfirmationCallState(event: event)
         // R-KCMAC-ROUNDS: one context per key round, each with its own window. Arming this round never cancels,
@@ -15900,6 +15925,17 @@ final class AppState: ObservableObject {
     /// (R-KCMAC-ROUNDS).
     @MainActor
     private func failKeyConfirmation(callId: String, state: KeyConfirmationCallState, expired: Bool = false) {
+        // A call that already ended (and is not the active one) is not ended again: the round is recorded as failed,
+        // never as decided in the peer's favour, and nothing else runs.
+        guard !endedCalls.isStale(callId: callId, activeCallId: canonicalActiveCallId(),
+                                  anyCallInFlight: !noCallInFlight(), nowMs: SasCommit.monotonicNowMs()) else {
+            state.kcStatus = .wrong
+            state.resultRecorded = true
+            state.deadlineTask?.cancel()
+            finalAssuranceByCall.removeValue(forKey: callId.lowercased())
+            clearKeyConfirmationState(callId: callId)
+            return
+        }
         state.kcStatus = .wrong
         state.resultRecorded = true
         state.deadlineTask?.cancel()
@@ -17598,6 +17634,7 @@ final class AppState: ObservableObject {
 
     @MainActor
     private func prepareIncomingPushCall(callId: UUID, callerId: String, hasVideo: Bool, fallbackName: String) -> String {
+        endedCalls.forget(callId.uuidString)
         activeCallKitId = callId
         callContactId = callerId
         drainPendingOfferReplays(for: callerId, callId: callId.uuidString)  // W-OFFERBUFFER
@@ -19187,6 +19224,7 @@ final class AppState: ObservableObject {
         // call left in the accept latch (a held early `call_answer`, a finalized marker) is cleared, even when
         // that call ended through a path that never reset it.
         acceptLatch.beginOutgoing(callId: nativeSrtpOutgoingCallId)
+        endedCalls.forget(nativeSrtpOutgoingCallId)
         // W-CALLERBUSY — a redial right after a busy / unreachable outcome does not wait for the outcome screen:
         // it is closed and its tone stopped before this call's own cues can start.
         dismissCallerOutcome()
@@ -21382,6 +21420,7 @@ extension AppState {
         self.startCryptoMeter()
         // Item 5 — arm the 5 Hz voice-confidence wave sampler for this call.
         self.startVoiceConfidenceWaveSampler()
+        self.endedCalls.forget(uuid.uuidString)
         self.activeCallKitId = uuid
         if self.callState == .ringing {
             self.callState = .active
@@ -22383,6 +22422,8 @@ extension AppState {
         // ring screen must never outlive the call it was ringing for.
         incomingCallRingVisible = false
         guard let teardownToken = teardownLatch.begin() else { return }
+        // Remember which call this is (by the provider's id and by the record id) before anything unbinds them.
+        endedCalls.noteEnded((liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), nowMs: SasCommit.monotonicNowMs())
         calleeOfferWatchdogTask?.cancel()
         calleeOfferWatchdogTask = nil
         calleeAcceptDeliveredCallId = nil
@@ -22555,6 +22596,7 @@ extension AppState {
         // not on the `CallingApi` protocol.
         let wireCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
         let endCallId = (wireCallId ?? (callLogId == "none" ? nil : callLogId))?.lowercased()
+        endedCalls.noteEnded(endCallId, nowMs: SasCommit.monotonicNowMs())
         // R-CERT: the call is over, its DTLS context is released (and, having signed, its id is
         // retired: never given a second certificate).
         if let wireCallId, !wireCallId.isEmpty { CallDtlsContextStore.shared.release(callId: wireCallId) }
@@ -22649,6 +22691,9 @@ extension AppState {
             // `callService.endCall()` above (which already read
             // `getKeyConfirmationTelemetry` during its own teardown).
             clearKeyConfirmationState(callId: cid)
+            // A handshake fatal unbinds the wire id before this runs, so `cid` can be nil here: the KCMAC waits of
+            // the call must still stop (a wait left armed fired 15 s later for a call that was long over).
+            for key in Array(kcCalls.keys) where endedCalls.hasEnded(key, nowMs: SasCommit.monotonicNowMs()) { clearKeyConfirmationState(callId: key) }
         }
         // W-CALLERBUSY (review of #169) — a hangup would have cleared the call id bound for the dead call
         // (`sendHangup` clears it by design). With nothing sent, drop it locally, after every read of it above:
