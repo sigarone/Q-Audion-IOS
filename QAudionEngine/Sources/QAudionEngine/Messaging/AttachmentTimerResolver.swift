@@ -34,4 +34,15 @@ public enum AttachmentTimerResolver {
         }
         return conversationDefault
     }
+
+    /// The disappearing-message stamp of a received row, as the normal receive path sets it: the effective timer
+    /// (see ``resolve(overrideSeconds:conversationDefault:)``) gives `expiresAt` = arrival + N seconds when positive,
+    /// view-once when -1 (its expiry is set when it is opened), nothing when off.
+    public static func stamp(
+        overrideSeconds: Int?, conversationDefault: Int?, now: Date
+    ) -> (expiresAt: Date?, isViewOnce: Bool?) {
+        let timer = resolve(overrideSeconds: overrideSeconds, conversationDefault: conversationDefault)
+        let expiresAt: Date? = timer.flatMap { $0 > 0 ? now.addingTimeInterval(Double($0)) : nil }
+        return (expiresAt, (timer ?? 0) == -1 ? true : nil)
+    }
 }
