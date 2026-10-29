@@ -275,6 +275,20 @@ public final class CapabilityGate: ObservableObject {
         RTLog.warn("entitlements", "discard: session ended (token cleared) without a currentUserId change — clearing cached grant")
         TokenVault.clearEntitlement()
         claims = nil
+        reconnectRefreshDebounce = ReconnectRefreshDebounce()
+    }
+
+    /// Completion time of the last successful token fetch (any caller); see `refreshIfDue()`.
+    private var reconnectRefreshDebounce = ReconnectRefreshDebounce()
+
+    /// The refresh a socket reconnect asks for. Skipped when a token was fetched less than
+    /// `ReconnectRefreshDebounce.minIntervalSec` ago, so a connection that keeps dropping and
+    /// re-authenticating does not fetch the same token every time. The server's own
+    /// `entitlements_changed` message still calls `refresh()` directly and is never skipped.
+    public func refreshIfDue(now: TimeInterval = Date().timeIntervalSinceReferenceDate) async {
+        // With no verified grant cached (first launch, new account) there is nothing to protect: ask.
+        guard claims == nil || reconnectRefreshDebounce.isDue(now: now) else { return }
+        await refresh()
     }
 
     /// Fetches a fresh token from the server, verifies it, and caches it.
@@ -291,6 +305,7 @@ public final class CapabilityGate: ObservableObject {
             RTLog.warn("entitlements", "refresh: fetchEntitlementsToken failed (network error or non-2xx) — keeping existing cache")
             return
         }
+        reconnectRefreshDebounce.markCompleted(at: Date().timeIntervalSinceReferenceDate)
         _ = tryAdopt(response.token, source: "refresh")
     }
 

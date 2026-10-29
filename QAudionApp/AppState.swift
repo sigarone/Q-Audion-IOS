@@ -6659,7 +6659,7 @@ final class AppState: ObservableObject {
                     // call per login call site.
                     if prev != .authenticated {
                         Task { [weak self] in
-                            await self?.capabilityGate.refresh()
+                            await self?.capabilityGate.refreshIfDue()
                         }
                         // Pending phone-number transfers for this account: read once per
                         // (re)connect, the first read after a launch.
