@@ -128,9 +128,10 @@ public final class DeviceKeyManager: @unchecked Sendable {
         }
 
         // 2b. Phase 2 session-renewal — load OR generate the Ed25519
-        //     signing keypair. Stored alongside the KMS keys; never
-        //     deleted on logout (mirrors Android's Ed25519DeviceSigner
-        //     contract). Used to sign /auth/device-renew blobs.
+        //     signing keypair. Stored alongside the KMS keys in the vault,
+        //     so signing out (LocalCryptoWipe.wipeAll -> SovereignKeyVault
+        //     .clearAll) removes it with them and the next sign-in provisions
+        //     fresh keys. Used to sign /auth/device-renew blobs.
         let ed25519Pub: Data
         if let existingEdPriv = try vault.loadPsk(name: Self.LABEL_ED25519_PRIV),
            let existingEdPub  = try vault.loadPsk(name: Self.LABEL_ED25519_PUB),
