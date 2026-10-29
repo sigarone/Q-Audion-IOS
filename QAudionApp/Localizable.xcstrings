@@ -66532,6 +66532,48 @@
         }
       }
     },
+    "settings.link_device.sign_in_again": {
+      "extractionState": "manual",
+      "comment": "Link new device screen, error shown when there is no signed-in user, so no QR is displayed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi di nuovo per collegare un dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in again to link a device."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inicia sesión de nuevo para vincular un dispositivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnectez-vous pour associer un appareil."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Melde dich erneut an, um ein Gerät zu verknüpfen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entre novamente para vincular um dispositivo."
+          }
+        }
+      }
+    },
     "settings.link_device.stub_hint": {
       "extractionState": "manual",
       "comment": "Link new device screen, banner: the server-side pairing is not active yet, the QR only carries local key material",

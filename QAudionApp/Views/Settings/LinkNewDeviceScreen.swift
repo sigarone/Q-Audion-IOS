@@ -42,6 +42,9 @@ struct LinkNewDeviceScreen: View {
     private static var stubPairingHint: String {
         String(localized: "settings.link_device.stub_hint", defaultValue: "Funzione in arrivo — il pairing server-side non è ancora attivo. Per ora il QR genera solo materiale locale.", comment: "Link new device screen, banner: the server-side pairing is not active yet, the QR only carries local key material")
     }
+    private static var signInAgainText: String {
+        String(localized: "settings.link_device.sign_in_again", defaultValue: "Accedi di nuovo per collegare un dispositivo.", comment: "Link new device screen, error shown when there is no signed-in user, so no QR is displayed")
+    }
     private static var copyHint: String {
         String(localized: "settings.link_device.copy_hint", defaultValue: "Tocca il fingerprint per copiarlo.", comment: "Link new device screen, hint under the fingerprint: tap it to copy")
     }
@@ -262,12 +265,19 @@ struct LinkNewDeviceScreen: View {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000) // UX latency
 
+            // No signed-in user: no QR is built, the error state is shown instead.
+            guard let userId = TokenVault.loadUserId(), !userId.isEmpty else {
+                errorMessage = Self.signInAgainText
+                generating = false
+                return
+            }
+
             // Generate ephemeral X25519 keypair
             let key = Curve25519.KeyAgreement.PrivateKey()
             ephemeralPrivateKey = key
 
             let pubkeyBytes = key.publicKey.rawRepresentation
-            let payload = encodePairingPayload(pubkey: pubkeyBytes)
+            let payload = encodePairingPayload(pubkey: pubkeyBytes, userId: userId)
 
             // Generate QR via CoreImage
             qrImage = generateQrImage(content: payload)
@@ -286,17 +296,13 @@ struct LinkNewDeviceScreen: View {
         }
     }
 
-    private func encodePairingPayload(pubkey: Data) -> String {
+    private func encodePairingPayload(pubkey: Data, userId: String) -> String {
         // W359: switch from the iOS-only JSON shape to the cross-
         // platform DeviceLinkingProtocol QR. Android, Desktop, and
         // iOS all share `qaudion://link/<base64url(pub|userIdLen|
         // userId|oneTimeCode)>` so a single QR is scannable on every
         // platform.
         let proto = DeviceLinkingProtocol()
-        // Use the current authenticated user id; fall back to a synth
-        // for unauthenticated previews so the QR still renders.
-        let userId = TokenVault.loadUserId()  // W-USERID-PLAINTEXT: was a plaintext UserDefaults read
-            ?? UUID().uuidString
         let qr = proto.generateLinkQr(userId: userId, devicePubKey: pubkey)
         return proto.encodeLinkQr(qr)
     }

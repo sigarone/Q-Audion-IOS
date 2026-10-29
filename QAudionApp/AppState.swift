@@ -1543,11 +1543,9 @@ final class AppState: ObservableObject {
     @Published var waveformEnabled: Bool = false
 
     // MARK: - Messaging state
-    /// Legacy preview rows. The W11.A path uses `ConversationStore` + the engine
-    /// `Conversation` (UUID-keyed); this array survives only for the deprecated
-    /// `sendMessage(to:text:)` and `createConversation(contactId:)` helpers below.
+    /// Conversations live in `ConversationStore`; this legacy array is no longer written by any path
+    /// (the home badge still sums its unread counts).
     @Published var conversations: [LegacyConversation] = []
-    @Published var currentMessages: [ChatMessage] = []
 
     // MARK: - Security badge state (updated during call)
     @Published var confidenceLevel: String = "green"  // "green", "yellow", "red"
@@ -2617,6 +2615,8 @@ final class AppState: ObservableObject {
     /// precedes it) is what turns a still-undecryptable CHAT frame into the
     /// single placeholder row.
     private static var bufferedFinalizeScheduled: Set<String> = []
+    /// At most one key-exchange request per peer per 30 s from the receive paths.
+    private static var inboundKeyExchangeThrottle = KeyExchangeThrottle()
     private static let bufferedFinalizeDelaySec: UInt64 = 25
     /// 2026-09-19 (IOS-19) — resends already made per nacked `client_msg_id`
     /// (cap 2), so a looping or hostile peer cannot multiply them.
@@ -3507,6 +3507,9 @@ final class AppState: ObservableObject {
     /// makes the whole sequence run exactly once per wake, and the second
     /// caller just awaits the first's result instead of racing it.
     private var wakeSocketRefreshTask: Task<Void, Never>?
+    /// Set when an inbound frame was left pending because the key vault could not be read (device
+    /// locked). Cleared by the next unlock, which asks the server to deliver pending messages again.
+    private var redeliveryPendingAfterUnlock = false
 
     // MARK: - W-CONNWANT — named reasons to keep the persistent WS open
     //
@@ -4407,6 +4410,20 @@ final class AppState: ObservableObject {
             }
         }
 
+
+        // Device unlock: a frame deferred because the key vault was unreadable is otherwise only
+        // redelivered at the next reconnect. Once per unlock, and only if something was deferred.
+        #if canImport(UIKit) && os(iOS)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.redeliverPendingAfterUnlock()
+            }
+        }
+        #endif
 
         // W74: re-attempt the persistent WS the moment the app returns
         // to the foreground. iOS suspends URLSessionWebSocketTask while
@@ -11897,9 +11914,9 @@ final class AppState: ObservableObject {
         let vault = SovereignKeyVault()
         let plaintext: String
         // W77: prefer the pairwise PSK stored under the
-        // `auto:<prefix>:<peerId>` name by ContactKeyExchange. Falls
-        // back to the bare peerId (legacy) and finally to the
-        // deterministic shared-secret fallback.
+        // `auto:<prefix>:<peerId>` name by ContactKeyExchange, then the bare
+        // peerId (legacy). There is no derived fallback: without a bound
+        // pairwise key a PSK-based frame (v1/v2) is not opened at all.
         let psk: Data
         let prefix = senderId.count > 8 ? String(senderId.prefix(8)) : senderId
         let autoName = "auto:\(prefix):\(senderId)"
@@ -11920,12 +11937,20 @@ final class AppState: ObservableObject {
         } else if let stored = (try? vault.loadPsk(name: senderId)) ?? nil, !stored.isEmpty {
             psk = stored
         } else {
-            // Mirror the same fallback shape used by ChatMessageSendService.
-            // Symmetric in (peer, self) so both sides derive the same key
-            // when no pairwise PSK has been negotiated yet.
-            let pair = [senderId, currentUserId ?? ""].sorted().joined(separator: ":")
-            let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
-            psk = Data(digest)
+            // No pairwise key bound. A vault that cannot be read right now
+            // (device locked) means "later", not "no key": the frame is left
+            // pending, neither acknowledged nor settled. Otherwise the frame
+            // goes on to the normal decrypt path: v4/v5 carry their own
+            // session state, v3 sweeps the candidate PSKs, and the PSK-based
+            // formats (v1/v2) fail there with `InboundKeyError.noPairwiseKey`
+            // and follow the usual keep, retry, nack and placeholder policy.
+            let pskFormat = [MessageWireFormat.Version.v1, .v2, .v3].contains(MessageWireFormat.detect(cipher))
+            if pskFormat, PairwiseChainKeyResolver.vaultUnreadable(peerId: senderId, vault: vault) {
+                RTLog.warn("chat", "msg deferred vault_unreadable=1")
+                redeliveryPendingAfterUnlock = true
+                return
+            }
+            psk = Data()
         }
         // W365: probe the wire-format magic byte to learn this peer's
         // capability. Once we observe a v3 inbound, every outbound
@@ -12007,6 +12032,7 @@ final class AppState: ObservableObject {
                 // v2 kept the v1 AAD shape ("msg:sender:recipient:msgId")
                 // and only added the epoch-routing header in the wire.
                 // PSK is already resolved above via the same ladder.
+                guard !psk.isEmpty else { throw InboundKeyError.noPairwiseKey }
                 let aad = Data("msg:\(senderId):\(currentUserId ?? ""):\(clientMsgId ?? serverMsgId)".utf8)
                 if let plain = MessageCryptoV2.decrypt(wire: cipher, psk: psk, aad: aad) {
                     pt = plain
@@ -12020,6 +12046,7 @@ final class AppState: ObservableObject {
                     )
                 }
             case .v1:
+                guard !psk.isEmpty else { throw InboundKeyError.noPairwiseKey }
                 pt = try crypto.decrypt(
                     wireBlob: cipher,
                     psk: psk,
@@ -12199,6 +12226,12 @@ final class AppState: ObservableObject {
                     serverMsgId: serverMsgId, senderId: senderId,
                     clientMsgId: clientMsgId, settleClientKey: true)
                 return
+            }
+            // No pairwise key bound to a sender who is not blocked: ask for one, at most
+            // once per peer per 30 s. The frame itself stays on the path below (kept
+            // without an ack, retried when a key lands).
+            if case InboundKeyError.noPairwiseKey = error {
+                requestKeyExchangeForInbound(from: senderId)
             }
             // CONTROL (0xE6): silent by construction — never a row, always acked.
             if wireClass == .v5 {
@@ -13427,9 +13460,16 @@ final class AppState: ObservableObject {
         } else if let stored = (try? vault.loadPsk(name: senderId)) ?? nil, !stored.isEmpty {
             firstPsk = stored
         } else {
-            let pair = [senderId, currentUserId ?? ""].sorted().joined(separator: ":")
-            let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
-            firstPsk = Data(digest)
+            // No pairwise key bound: PSK-based formats (v1/v2) are not opened;
+            // v3 sweeps the candidate PSKs and v4/v5 carry their own session.
+            switch MessageWireFormat.detect(cipher) {
+            case .v1, .v2:
+                RTLog.warn("chat", "mesh msg undecryptable no_pairwise_key undec=1")
+                requestKeyExchangeForInbound(from: senderId)
+                return nil
+            case .v3, .v4, .v5:
+                firstPsk = Data()
+            }
         }
         PeerCapabilityRegistry.shared.probeInbound(cipher, from: senderId)
 
@@ -18231,6 +18271,27 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The server pushes `msg_pending_sync` on every (re)connect, so a reconnect is the redelivery request.
+    @MainActor
+    func redeliverPendingAfterUnlock() {
+        guard redeliveryPendingAfterUnlock else { return }
+        redeliveryPendingAfterUnlock = false
+        guard isAuthenticated else { return }
+        forceReconnectPersistentSocket(reason: "unlock-redelivery")
+    }
+
+    /// Key-exchange request prompted by an inbound frame that needs a pairwise key.
+    /// Never for a blocked sender, and at most once per peer per 30 s.
+    func requestKeyExchangeForInbound(from peerId: String) {
+        guard !BlockedContactsStore.isBlocked(peerId) else { return }
+        // The slot is taken only when the request is handed to the exchange service: with the
+        // socket not up nothing is sent, and the next frame must be free to ask.
+        guard contactKeyExchange != nil else { return }
+        guard Self.inboundKeyExchangeThrottle.isAllowed(peerId: peerId) else { return }
+        Self.inboundKeyExchangeThrottle.record(peerId: peerId)
+        triggerKeyExchange(with: peerId)
+    }
+
     func triggerKeyExchange(with contactId: String, force: Bool = false) {
         guard let cke = contactKeyExchange else {
             print("[AppState] triggerKeyExchange called before WS up — pending")
@@ -19348,24 +19409,15 @@ final class AppState: ObservableObject {
         txWaveformSamples = []
         rxWaveformSamples = []
         cipherWaveformSamples = []
-        // W369: seed `callPqcSessionKey` from the per-pair PSK so the
-        // SAS panel renders REAL words derived from the same secret
-        // both peers hold. This is a transitional source — it will be
-        // replaced by the actual ML-KEM-1024 session key once the
-        // PQC handshake plumbing surfaces it. Until then the SAS is
-        // still a meaningful authentication primitive: identical on
-        // both ends if and only if the PSK ladder agrees.
-        callPqcRekeyEpoch = -1  // W-KEYSLOTROTATE — transitional phase is pre-epoch-0
-        callPqcSessionKey = Self.deriveTransitionalSasKey(
-            selfId: currentUserId ?? "",
-            peerId: contactId)
-        // G7 — this transitional seed is for THIS outgoing call.
+        // No key is seeded before the ML-KEM session key arrives: the session
+        // key stays nil, `pskActive` false and the SAS source `.none` until
+        // the handshake publishes the real key.
+        callPqcRekeyEpoch = -1  // W-KEYSLOTROTATE — pre-epoch-0
+        callPqcSessionKey = nil
         callPqcSessionKeyCallId = nativeSrtpOutgoingCallId
-        pskActive = !(callPqcSessionKey?.isEmpty ?? true)
+        pskActive = false
         // Drop the PREVIOUS call's PSK display metadata now, unconditionally
-        // — this transitional key is derived straight from the local PSK
-        // ladder, not through CallSessionKeyBroker, so the real
-        // method/name/fingerprint for THIS call aren't known yet regardless.
+        // — the real method/name/fingerprint for THIS call aren't known yet.
         // Resetting here (not only at teardown) guarantees a clean slate no
         // matter which completion path this call eventually takes: the JSON
         // OFFER/ACCEPT path fires registerPqcSessionKeyWithPsk and re-sets
@@ -19378,10 +19430,9 @@ final class AppState: ObservableObject {
         pskMethod = ""
         pskName = ""
         pskFingerprint = ""
-        // M-10: SAS words shown now are seeded from the transitional
-        // PSK, NOT the ML-KEM handshake. Flip to .mlKem only when the
-        // broker's real key overwrites it (see wireSasReadyToController).
-        callSasKeySource = pskActive ? .psk : .none
+        // M-10: flip to .mlKem only when the broker's real key arrives
+        // (see wireSasReadyToController).
+        callSasKeySource = .none
         do {
             // W67: wire WebSocket transport PRIMA di startCall così il
             // handler "audio_frame" è già registrato quando il peer
@@ -20123,11 +20174,9 @@ final class AppState: ObservableObject {
                 // from a durable store rather than depending solely on the
                 // async NotificationCenter forward.
                 // G7 — feeds a cryptor: assert against THIS outgoing call's
-                // own id (the same one the W369 transitional seed above was
-                // tagged with).
-                // Transcript v6: the slot still holds the W369 TRANSITIONAL key (derived from the
-                // per-pair PSK or a deterministic fallback of the two user ids) until the real
-                // handshake key is counted (`callPqcRekeyEpoch >= 0`). The 1:1 frame keys derive
+                // own id (the one the slot is tagged with at call start).
+                // Transcript v6: the slot stays empty until the real handshake
+                // key is counted (`callPqcRekeyEpoch >= 0`). The 1:1 frame keys derive
                 // from the session key and are the only thing between the media and a DTLS
                 // terminator, so a key that is not bound to the signed transcript must never
                 // reach the controller: the real key arrives through the push path.
@@ -23075,36 +23124,6 @@ extension AppState {
         beginGroupPromotion(groupCallId: groupCallId, peerId: peer)
     }
 
-    /// W369: transitional SAS key derivation. Loads the per-pair PSK
-    /// from the SovereignKeyVault using the same ladder
-    /// ChatMessageSendService uses (auto:<prefix>:<peer> → bare
-    /// peerId → deterministic SHA-256(pair) fallback) and uses it as
-    /// the SAS engine input. Both peers hold the same PSK so they
-    /// derive the same 6 words.
-    ///
-    /// This is a TRANSITIONAL bridge until the call PQC handshake
-    /// surfaces the real ML-KEM-1024 session key. The SAS still
-    /// authenticates the call: identical words on both ends ⇔ same
-    /// PSK ladder agreed; mismatched words ⇒ key tampering or one
-    /// side has a stale PSK.
-    private static func deriveTransitionalSasKey(selfId: String, peerId: String) -> Data {
-        guard !peerId.isEmpty, !selfId.isEmpty else { return Data() }
-        let vault = SovereignKeyVault()
-        let prefix = peerId.count > 8 ? String(peerId.prefix(8)) : peerId
-        let autoName = "auto:\(prefix):\(peerId)"
-        if let stored = (try? vault.loadPsk(name: autoName)) ?? nil, !stored.isEmpty {
-            return stored
-        }
-        if let stored = (try? vault.loadPsk(name: peerId)) ?? nil, !stored.isEmpty {
-            return stored
-        }
-        // Deterministic fallback (same as ChatMessageSendService.fallbackPsk):
-        // both peers derive the same key from the sorted-pair tuple.
-        let pair = [peerId, selfId].sorted().joined(separator: ":")
-        let digest = SHA256.hash(data: Data("qaudion-fallback-psk:\(pair)".utf8))
-        return Data(digest)
-    }
-
     /// The ROUND-1 SAS words of the active 1:1 call, uppercase (WIRE_SPEC §4, transcript v6).
     ///
     /// The words come from the call integration's SAS commitment book: the caller's once it bound the
@@ -24116,94 +24135,6 @@ extension AppState {
         } catch {
             connectionStatus = "error"
         }
-    }
-
-    // MARK: - Messaging
-
-    func sendMessage(to contactId: String, text: String) async {
-        let messageId = UUID().uuidString
-        let now = Date()
-
-        // Add to local messages immediately for responsiveness
-        let outgoing = ChatMessage(
-            id: messageId,
-            text: text,
-            timestamp: now,
-            isSent: true,
-            isEncrypted: true
-        )
-        currentMessages.append(outgoing)
-
-        // Update conversation preview
-        if let idx = conversations.firstIndex(where: { $0.id == contactId }) {
-            conversations[idx].lastMessage = text
-            conversations[idx].lastMessageTime = now
-        }
-
-        // Encrypt and send via backend
-        do {
-            guard let content = text.data(using: .utf8) else { return }
-            // Use a derived PSK for message encryption (32 bytes for AES-256).
-            // New AAD-bound encrypt() returns a self-contained wire blob
-            // (salt || nonce || ciphertext || tag) — no manual packing needed.
-            let psk = Data(SHA256.hash(data: Data((contactId + (currentUserId ?? "")).utf8)))
-            let payload = try messageCrypto.encrypt(
-                plaintext: content,
-                psk: psk,
-                senderId: currentUserId ?? "",
-                recipientId: contactId,
-                msgId: messageId
-            )
-
-            // Send over the shared persistent WS (liveProvider) instead of
-            // opening a fresh per-send WebSocket — a second socket with the
-            // same JWT/deviceID makes the server replace the persistent one
-            // ("replacing stale ws device") and triggers a reconnect storm.
-            // Pass the same msgId used for AAD so the server echoes it
-            // verbatim and the receiver reconstructs the identical AAD.
-            // W-ONESOCKET: ride the persistent WS only — never open a
-            // throwaway socket for a single send (that made the server
-            // replace the live device → reconnect storm + duplicate
-            // apns-voip-token). If the persistent socket can't be brought up,
-            // surface the failure instead of churning a zombie.
-            guard let live = await ensurePersistentProviderConnected() else {
-                errorMessage = "Send failed: no connection"
-                return
-            }
-            _ = try await live.messageApi.sendMessage(
-                recipientId: contactId, content: payload, clientMsgId: messageId)
-        } catch {
-            errorMessage = "Send failed: \(error.localizedDescription)"
-        }
-    }
-
-    func loadMessages(for contactId: String) async {
-        // In production this would fetch from backend storage.
-        // For now keep local state. Populate demo data if empty.
-        if currentMessages.isEmpty {
-            let now = Date()
-            currentMessages = [
-                ChatMessage(id: UUID().uuidString, text: "Hey, are you available for a secure call?",
-                            timestamp: now.addingTimeInterval(-300), isSent: false, isEncrypted: true),
-                ChatMessage(id: UUID().uuidString, text: "Yes, line is encrypted. Go ahead.",
-                            timestamp: now.addingTimeInterval(-240), isSent: true, isEncrypted: true),
-                ChatMessage(id: UUID().uuidString, text: "Sending the documents now.",
-                            timestamp: now.addingTimeInterval(-120), isSent: false, isEncrypted: true),
-            ]
-        }
-    }
-
-    func createConversation(contactId: String) {
-        guard !conversations.contains(where: { $0.id == contactId }) else { return }
-        let conversation = LegacyConversation(
-            id: contactId,
-            contactName: contactId,
-            lastMessage: "Tap to start chatting",
-            lastMessageTime: Date(),
-            unreadCount: 0,
-            isEncrypted: true
-        )
-        conversations.insert(conversation, at: 0)
     }
 
     // MARK: - Waveform Helpers

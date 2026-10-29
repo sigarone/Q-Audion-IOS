@@ -139,24 +139,20 @@ final class DesignSystemAccessibilityTests: XCTestCase {
 
     // MARK: - What the call screens print
 
-    /// A call starts with a transitional key derived from the pairwise secret: it exists before any key exchange, so
-    /// it is not the post-quantum key. The call screens present a key (its fingerprint, the algorithm name, the
+    /// A call starts with no session key: nothing is shown as the key of the call before the key exchange, so
+    /// the call screens present a key (its fingerprint, the algorithm name, the
     /// "post-quantum active" shield, its popup, the custody cell and verdict, the PQC chip of the video call) only
     /// once it is the ML-KEM one, and the third row of the handshake log is ticked only with that fingerprint.
     func testOnlyTheMlKemKeyIsShownAsTheKeyOfTheCall() {
         let key = Data([1, 2, 3, 4])
         XCTAssertNil(CallSessionKeyShown.realKey(key, source: .none))
-        XCTAssertNil(CallSessionKeyShown.realKey(key, source: .psk), "the transitional key is shown as the ML-KEM key")
+        XCTAssertNil(CallSessionKeyShown.realKey(key, source: .psk), "a non-ML-KEM source is shown as the ML-KEM key")
         XCTAssertEqual(CallSessionKeyShown.realKey(key, source: .mlKem), key)
         XCTAssertNil(CallSessionKeyShown.realKey(nil, source: .mlKem))
         XCTAssertNil(CallSessionKeyShown.realKey(Data(), source: .mlKem), "an empty key is not a key")
-        // `isPresent` is the other question, "does the call hold any key": the transitional key counts.
-        XCTAssertTrue(CallSessionKeyShown.isPresent(key), "the transitional key is a key")
-        XCTAssertFalse(CallSessionKeyShown.isPresent(nil))
-        XCTAssertFalse(CallSessionKeyShown.isPresent(Data()), "an empty key is not a key")
 
         XCTAssertFalse(OutgoingCallScreen.sessionKeyRowDone(state: .connected, hasFingerprint: false),
-                       "the call is up but the key is still the transitional one")
+                       "the call is up but the ML-KEM key has not landed")
         XCTAssertTrue(OutgoingCallScreen.sessionKeyRowDone(state: .connected, hasFingerprint: true))
         let notYetConnected: [OutgoingCallScreen.State] = [.dialing, .handshaking, .ended]
         for state in notYetConnected {
@@ -225,13 +221,13 @@ final class DesignSystemAccessibilityTests: XCTestCase {
         }
     }
 
-    /// The "DEMO" badge follows "does the call hold any key", the transitional one included, as it always did: the
-    /// key panel exists only for the real ML-KEM key, so on its own it would bring the badge back on a real call.
+    /// The "DEMO" badge follows "is this a live call": the
+    /// key panel exists only for the real ML-KEM key, so on its own it would show the badge on a real call that is still securing.
     /// The badge of the call screen shows only with neither a key panel nor a key.
     func testTheDemoBadgeStaysOffAsSoonAsAnyKeyExists() {
         XCTAssertTrue(InCallScreen.demoBadgeShown(keyInfoPresent: false, sessionKeyPresent: false))
         XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: false, sessionKeyPresent: true),
-                       "the transitional key a real call starts with brings the DEMO badge back")
+                       "a live call before the ML-KEM key shows the DEMO badge")
         XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: true, sessionKeyPresent: false),
                        "a screen built with only a key panel shows the badge")
         XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: true, sessionKeyPresent: true))
