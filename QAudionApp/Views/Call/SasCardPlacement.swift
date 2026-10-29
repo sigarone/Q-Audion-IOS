@@ -32,6 +32,12 @@ enum SasCardPlacement {
         sasRequired == false
     }
 
+    /// True when the screen may say the code is confirmed: the contact's code was confirmed AND this call's assurance
+    /// verdict has arrived. While the verdict is still `nil` nothing on the call screen claims a verification.
+    static func showsVerified(sasVerified: Bool, verdictKnown: Bool) -> Bool {
+        sasVerified && verdictKnown
+    }
+
     /// True when a comparison is really needed. `sasRequired` is the assurance state's verdict (`nil` while it is not
     /// computed yet, which is not a reason to show the card). A call held for the confirmation, or one with an identity
     /// notice, always needs it.

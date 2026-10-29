@@ -837,6 +837,8 @@ struct VideoCallView: View {
     // silently misses a pin that genuinely exists. Both call sites below now
     // pass appState.peerDeviceId(for:) — see that accessor's kdoc.
     private var sasVerified: Bool {
+        // Nothing here claims a verification before this call's assurance verdict is in.
+        guard SasCardPlacement.showsVerified(sasVerified: true, verdictKnown: appState.callAssuranceState != nil) else { return false }
         let words = appState.callSasWords
         guard !words.isEmpty, let peer = appState.callContactId else { return false }
         guard let pinned = PeerIdentityPinStore().pinnedKey(
