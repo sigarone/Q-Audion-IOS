@@ -33,6 +33,10 @@ enum TokenVault {
     private static let userIdAccount = "user_id"
     /// Entitlements Task 2 (2026-08-17) — see `saveEntitlement` doc.
     private static let entitlementAccount = "entitlement_blob"
+    /// Sign-out request waiting for the server (see `savePendingLogout`).
+    private static let pendingLogoutBearerAccount = "pending_logout_bearer"
+    private static let pendingLogoutUserAccount = "pending_logout_user"
+    private static let pendingLogoutRefreshAccount = "pending_logout_refresh"
 
     // MARK: - Public API
 
@@ -194,6 +198,31 @@ enum TokenVault {
 
     static func clearEntitlement() {
         delete(account: entitlementAccount)
+    }
+
+    /// A sign-out the server has not confirmed yet: the bearer of the session that ended and its account. Kept
+    /// outside `clear()` on purpose (`clear()` runs as part of that sign-out); removed once the server answered.
+    /// The refresh token is kept as well: the access token lives about 15 minutes, so a retry at the next launch
+    /// gets a new one with it. Same Keychain class as the tokens (after first unlock, this device only, not synced).
+    static func savePendingLogout(bearer: String, refreshToken: String?, userId: String) {
+        save(account: pendingLogoutBearerAccount, value: bearer)
+        if let refreshToken, !refreshToken.isEmpty {
+            save(account: pendingLogoutRefreshAccount, value: refreshToken)
+        } else {
+            delete(account: pendingLogoutRefreshAccount)
+        }
+        save(account: pendingLogoutUserAccount, value: userId)
+    }
+
+    static func loadPendingLogout() -> (bearer: String, refreshToken: String?, userId: String?)? {
+        guard let bearer = load(account: pendingLogoutBearerAccount), !bearer.isEmpty else { return nil }
+        return (bearer, load(account: pendingLogoutRefreshAccount), load(account: pendingLogoutUserAccount))
+    }
+
+    static func clearPendingLogout() {
+        delete(account: pendingLogoutBearerAccount)
+        delete(account: pendingLogoutRefreshAccount)
+        delete(account: pendingLogoutUserAccount)
     }
 
     /// Remove every credential item in the `com.qaudion.auth` scope.

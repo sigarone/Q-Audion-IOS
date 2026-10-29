@@ -30,6 +30,9 @@ import QAudionEngine
 /// cross-store dependencies here.
 enum LocalCryptoWipe {
     static func wipeAll() {
+        // A sign-out waiting for the server belongs to the session being wiped (remote wipe, account deletion):
+        // there is nothing left to send it with. `AppState.logout()` stores its own after this call.
+        TokenVault.clearPendingLogout()
         do {
             try SovereignIdentityManager().deleteIdentity()
         } catch {
