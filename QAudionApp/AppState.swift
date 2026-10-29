@@ -13492,6 +13492,11 @@ final class AppState: ObservableObject {
     /// Whether to show it is `MeshMessageBanner.shouldNotify`; quiet hours are applied by `scheduleLocal`, and the
     /// notification delegate decides how a banner looks when the app is in the foreground.
     private func notifyStoredMeshMessage(conversation conv: Conversation, senderId: String, text: String) {
+        // Same cue as the server-delivered path: a message into the open conversation taps softly (no banner then).
+        if MeshMessageBanner.shouldTapInOpenChat(
+            muted: conv.muted, activePeerUserId: activePeerUserId, senderUserId: senderId) {
+            HapticFeedback.messageSent()
+        }
         let bannersEnabled: Bool = (UserDefaults.standard.object(
             forKey: "qaudion.notifications.banners_enabled") as? Bool) ?? true
         guard MeshMessageBanner.shouldNotify(
