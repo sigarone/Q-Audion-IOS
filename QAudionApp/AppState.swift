@@ -82,6 +82,12 @@ final class AppState: ObservableObject {
                 // login path goes through, so the engine is back before the
                 // first call of the new session (report bea72b22).
                 ensureCallEngine(reason: "login")
+                // A sign-out still running for the account that just signed in again would end the new session too.
+                if let running = pendingLogoutTask, let pending = TokenVault.loadPendingLogout(),
+                   !PendingLogoutPolicy.shouldSend(
+                    pendingUserId: pending.userId, currentUserId: authService.loadUserId() ?? currentUserId) {
+                    running.cancel()
+                }
                 requestSiriAuthorizationIfNeeded()
                 // A share queued while the app was closed is picked up once the session is there (the profile, and with it
                 // the account id, may arrive a moment later: one tick).
@@ -468,14 +474,20 @@ final class AppState: ObservableObject {
     private var noticeTokenInFlight = AccountApnsTokenInFlight()
     /// Same for the message-alert registration of the token (default mode).
     private var messageAlertTokenInFlight = AccountApnsTokenInFlight()
-    /// Consecutive failed alert-token registrations; each one schedules a retry (`scheduleAlertTokenRetry`).
+    /// Consecutive failed registrations per route; each one schedules a retry (`scheduleAlertTokenRetry`).
     private var alertTokenFailures = 0
+    private var noticeTokenFailures = 0
     /// The pending retry of a failed alert-token registration; cancelled when the account leaves.
     private var alertTokenRetryTask: Task<Void, Never>?
+    private var noticeTokenRetryTask: Task<Void, Never>?
     /// When the system last handed this process a token (AppDelegate callback): a fresh token of the same cycle
     /// makes the kept copy redundant.
     private var lastApnsTokenCallbackAt: Date?
     private static let alertTokenAcceptedKey = "qaudion.push.alertTokenAccepted"
+    /// Same record for the notice route: each route is accepted (or not) on its own.
+    private static let noticeTokenAcceptedKey = "qaudion.push.noticeTokenAccepted"
+    /// The sign-out request to the server that is running (`flushPendingLogout`); token registrations wait for it.
+    private var pendingLogoutTask: Task<Void, Never>?
     /// A permission check for the notice push is running (it may be waiting on the system prompt).
     private var noticePushCheckInFlight = false
     /// W-PUSHDEDUP: coalesce duplicate VoIP-token registrations. Several
@@ -4388,6 +4400,9 @@ final class AppState: ObservableObject {
         // screen first appears) is then counted, not swallowed by a mark that started later.
         _ = MissedCallsBadge.shared
 
+        // A sign-out the server did not confirm last time is sent again now.
+        Task { @MainActor [weak self] in await self?.flushPendingLogout() }
+
         // W-NOCALLKIT — receive the standard APNs device token from AppDelegate
         // and register it server-side (only when callKitFreeMode; handleApnsDeviceToken
         // gates internally). Posted by
@@ -6901,8 +6916,9 @@ final class AppState: ObservableObject {
             // a token only after `registerForRemoteNotifications`, which `ensureNoticePushRegistration`
             // calls for a granted permission). The same token also goes to the server for new-message alerts
             // and the notification key, next to the VoIP token (calls stay on PushKit).
-            registerNoticeApnsToken(hex: hex)
-            registerMessageAlertToken(hex: hex)
+            // The same 15-minute debounce as the kept-token resend, per route: a token the system hands back on
+            // every foreground is not posted again while both routes accepted it; a new token or account always is.
+            sendAlertTokens(hex: hex)
             return
         }
         registerStandardApnsToken(hex: hex)
@@ -6979,36 +6995,158 @@ final class AppState: ObservableObject {
         guard !CallsGate.callKitFreeMode,
               let hex = UserDefaults.standard.string(forKey: AppState.lastKnownApnsTokenKey),
               AccountApnsTokenRequest.isValid(hex: hex) else { return }
-        let userId = currentUserId ?? ""
-        let last = Self.loadAcceptedAlertToken()
-        guard AlertTokenRegistrationPolicy.shouldSendKept(hex: hex, userId: userId, last: last, now: Date()) else { return }
-        registerNoticeApnsToken(hex: hex)
-        registerMessageAlertToken(hex: hex)
+        sendAlertTokens(hex: hex)
     }
 
-    private static func loadAcceptedAlertToken() -> AlertTokenRegistrationPolicy.Accepted? {
-        guard let d = UserDefaults.standard.dictionary(forKey: alertTokenAcceptedKey),
+    /// Sends `hex` to the routes that still need it (each route has its own accepted record). A sign-out the server
+    /// has not confirmed yet is sent first, so the old account's push records are gone before this account's are written.
+    private func sendAlertTokens(hex: String) {
+        guard AccountApnsTokenRequest.isValid(hex: hex) else { return }
+        if pendingLogoutTask != nil || TokenVault.loadPendingLogout() != nil {
+            Task { @MainActor [weak self] in
+                await self?.flushPendingLogout()
+                self?.sendAlertTokenRoutes(hex: hex)
+            }
+        } else {
+            sendAlertTokenRoutes(hex: hex)
+        }
+    }
+
+    private func sendAlertTokenRoutes(hex: String) {
+        let routes = AlertTokenRegistrationPolicy.routesToSend(
+            hex: hex,
+            userId: currentUserId ?? "",
+            notice: Self.loadAcceptedAlertToken(key: Self.noticeTokenAcceptedKey),
+            messageAlert: Self.loadAcceptedAlertToken(key: Self.alertTokenAcceptedKey),
+            now: Date())
+        if routes.notice { registerNoticeApnsToken(hex: hex) }
+        if routes.messageAlert { registerMessageAlertToken(hex: hex) }
+    }
+
+    private static func loadAcceptedAlertToken(key: String) -> AlertTokenRegistrationPolicy.Accepted? {
+        guard let d = UserDefaults.standard.dictionary(forKey: key),
               let u = d["u"] as? String, let h = d["h"] as? String, let t = d["t"] as? Double else { return nil }
         return .init(userId: u, hex: h, at: Date(timeIntervalSince1970: t))
     }
 
-    private func storeAcceptedAlertToken(hex: String) {
+    /// Records the server's acceptance for one route, for the account that sent the request (not the one that may be
+    /// signed in when the answer comes back).
+    private func storeAcceptedAlertToken(hex: String, userId: String, key: String) {
+        guard (currentUserId ?? "") == userId else { return }
         UserDefaults.standard.set(
-            ["u": currentUserId ?? "", "h": hex, "t": Date().timeIntervalSince1970] as [String: Any],
-            forKey: AppState.alertTokenAcceptedKey)
+            ["u": userId, "h": hex, "t": Date().timeIntervalSince1970] as [String: Any], forKey: key)
+    }
+
+    // MARK: - Sign-out that reaches the server
+
+    /// Asks the server to drop this device's push records for the session that ended (`DELETE /auth/logout`). When
+    /// the request does not get an answer (offline, 5xx) it stays in the Keychain, with the refresh token, and is sent
+    /// again at the next launch or sign-in, before any token of the next account is registered: an expired access
+    /// token (401) is renewed once with the stored refresh token. Callers share one running flush, so a token
+    /// registration always waits for it. The same account signing in again drops it (it would end the new session).
+    private func flushPendingLogout() async {
+        if let running = pendingLogoutTask {
+            await running.value
+            return
+        }
+        guard TokenVault.loadPendingLogout() != nil else { return }
+        let task = Task { @MainActor [weak self] in
+            await self?.runPendingLogout()
+            self?.pendingLogoutTask = nil
+        }
+        pendingLogoutTask = task
+        await task.value
+    }
+
+    private func pendingLogoutSend(_ request: URLRequest) async -> (status: Int?, data: Data) {
+        do {
+            let (data, resp) = try await voipPushSession.data(for: request)
+            return ((resp as? HTTPURLResponse)?.statusCode, data)
+        } catch {
+            print("[AppState] logout request error: \(error.localizedDescription)")
+            return (nil, Data())
+        }
+    }
+
+    private func runPendingLogout() async {
+        guard var pending = TokenVault.loadPendingLogout() else { return }
+        // Checked again right before every request: the same account may have signed in while one was running.
+        func stillApplies() -> Bool {
+            if Task.isCancelled { return false }
+            return PendingLogoutPolicy.shouldSend(
+                pendingUserId: pending.userId, currentUserId: authService.loadUserId() ?? currentUserId)
+        }
+        var refreshTried = false
+        while true {
+            guard stillApplies(), let request = AccountLogoutRequest.make(serverUrl: serverUrl, bearer: pending.bearer) else {
+                TokenVault.clearPendingLogout()
+                return
+            }
+            let status = (await pendingLogoutSend(request)).status
+            switch PendingLogoutPolicy.afterLogout(
+                statusCode: status, hasRefreshToken: pending.refreshToken?.isEmpty == false,
+                refreshAlreadyTried: refreshTried) {
+            case .done:
+                TokenVault.clearPendingLogout()
+                return
+            case .keep:
+                print("[AppState] logout request kept for the next launch (status \(status.map(String.init) ?? "none"))")
+                return
+            case .refreshAndRetry:
+                refreshTried = true
+                guard stillApplies(), let refresh = pending.refreshToken,
+                      let refreshRequest = AccountRefreshRequest.make(serverUrl: serverUrl, refreshToken: refresh) else {
+                    TokenVault.clearPendingLogout()
+                    return
+                }
+                let answer = await pendingLogoutSend(refreshRequest)
+                switch PendingLogoutPolicy.afterRefresh(statusCode: answer.status) {
+                case .done:
+                    TokenVault.clearPendingLogout()
+                    return
+                case .keep:
+                    return
+                case .refreshAndRetry:
+                    // A 2xx answer that does not decode is not a verdict: the item stays for the next launch.
+                    guard let pair = PendingLogoutPolicy.decodeRefreshedPair(answer.data) else {
+                        print("[AppState] logout refresh answer not readable, kept for the next launch")
+                        return
+                    }
+                    pending.bearer = pair.accessToken
+                    pending.refreshToken = pair.refreshToken ?? pending.refreshToken
+                    // The refresh token is single-use: the new pair replaces the stored one at once.
+                    TokenVault.savePendingLogout(
+                        bearer: pending.bearer, refreshToken: pending.refreshToken, userId: pending.userId ?? "")
+                }
+            }
+        }
     }
 
     /// A failed alert-token registration is tried again after 30 s, three times in a row at most, and only for a
     /// transient failure (network, 408, 429, 5xx). The next launch, login or foreground starts the count over.
-    private func scheduleAlertTokenRetry(statusCode: Int?) {
+    private func scheduleAlertTokenRetry(route: AccountApnsTokenRoute, statusCode: Int?) {
         guard AlertTokenRegistrationPolicy.isRetryable(statusCode: statusCode) else { return }
-        alertTokenFailures += 1
-        guard let delay = AlertTokenRegistrationPolicy.retryDelay(afterFailures: alertTokenFailures) else { return }
-        alertTokenRetryTask?.cancel()
-        alertTokenRetryTask = Task { @MainActor [weak self] in
+        // One counter and one task per route: a retry of the notice route does not cancel the alert route's.
+        let failures: Int
+        if route == .notice {
+            noticeTokenFailures += 1
+            failures = noticeTokenFailures
+        } else {
+            alertTokenFailures += 1
+            failures = alertTokenFailures
+        }
+        guard let delay = AlertTokenRegistrationPolicy.retryDelay(afterFailures: failures) else { return }
+        let task = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.sendKeptAlertTokens()
+        }
+        if route == .notice {
+            noticeTokenRetryTask?.cancel()
+            noticeTokenRetryTask = task
+        } else {
+            alertTokenRetryTask?.cancel()
+            alertTokenRetryTask = task
         }
     }
 
@@ -7052,7 +7190,7 @@ final class AppState: ObservableObject {
             // if no fresh token has come back a few seconds after the request, the kept one is sent (a fresh one is
             // registered by its own callback, and sending both could put an old token over the new one).
             let cycleStart = Date()
-            if step == .register { self.alertTokenFailures = 0 }
+            if step == .register { self.alertTokenFailures = 0; self.noticeTokenFailures = 0 }
             switch step {
             case .none:
                 break
@@ -7083,14 +7221,23 @@ final class AppState: ObservableObject {
             bearer: token) else { return }
         guard let ticket = noticeTokenInFlight.begin(hex: hex) else { return }
         let session = voipPushSession
+        let userId = currentUserId ?? ""
         Task { [weak self, session] in
             do {
                 let (_, resp) = try await session.data(for: req)
-                if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                    print("[AppState] APNs notice register HTTP \(http.statusCode)")
+                if let http = resp as? HTTPURLResponse {
+                    if (200..<300).contains(http.statusCode) {
+                        await MainActor.run {
+                            self?.storeAcceptedAlertToken(hex: hex, userId: userId, key: AppState.noticeTokenAcceptedKey)
+                        }
+                    } else {
+                        print("[AppState] APNs notice register HTTP \(http.statusCode)")
+                        await MainActor.run { self?.scheduleAlertTokenRetry(route: .notice, statusCode: http.statusCode) }
+                    }
                 }
             } catch {
                 print("[AppState] APNs notice register error: \(error.localizedDescription)")
+                await MainActor.run { self?.scheduleAlertTokenRetry(route: .notice, statusCode: nil) }
             }
             await MainActor.run {
                 self?.noticeTokenInFlight.finish(ticket: ticket)
@@ -7114,23 +7261,24 @@ final class AppState: ObservableObject {
             bearer: token) else { return }
         guard let ticket = messageAlertTokenInFlight.begin(hex: hex) else { return }
         let session = voipPushSession
+        let userId = currentUserId ?? ""
         Task { [weak self, session] in
             do {
                 let (_, resp) = try await session.data(for: req)
                 if let http = resp as? HTTPURLResponse {
                     if (200..<300).contains(http.statusCode) {
                         await MainActor.run {
-                            self?.storeAcceptedAlertToken(hex: hex)
+                            self?.storeAcceptedAlertToken(hex: hex, userId: userId, key: AppState.alertTokenAcceptedKey)
                             self?.registerNotifyKeyAfterAlertToken()
                         }
                     } else {
                         print("[AppState] APNs message alert register HTTP \(http.statusCode)")
-                        await MainActor.run { self?.scheduleAlertTokenRetry(statusCode: http.statusCode) }
+                        await MainActor.run { self?.scheduleAlertTokenRetry(route: .messageAlert, statusCode: http.statusCode) }
                     }
                 }
             } catch {
                 print("[AppState] APNs message alert register error: \(error.localizedDescription)")
-                await MainActor.run { self?.scheduleAlertTokenRetry(statusCode: nil) }
+                await MainActor.run { self?.scheduleAlertTokenRetry(route: .messageAlert, statusCode: nil) }
             }
             await MainActor.run {
                 self?.messageAlertTokenInFlight.finish(ticket: ticket)
@@ -18532,7 +18680,11 @@ final class AppState: ObservableObject {
         alertTokenRetryTask?.cancel()
         alertTokenRetryTask = nil
         alertTokenFailures = 0
+        noticeTokenRetryTask?.cancel()
+        noticeTokenRetryTask = nil
+        noticeTokenFailures = 0
         UserDefaults.standard.removeObject(forKey: AppState.alertTokenAcceptedKey)
+        UserDefaults.standard.removeObject(forKey: AppState.noticeTokenAcceptedKey)
         // The notification key, the list of names and the avatars belong to the account that left.
         NotifyKeyService.shared.wipeLocal()
         // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
@@ -18608,6 +18760,11 @@ final class AppState: ObservableObject {
         // The notification key goes from the server with the bearer of the session that is ending.
         NotifyKeyService.shared.accountLeft(
             serverUrl: serverUrl, bearer: authService.loadToken(), session: voipPushSession)
+        // The server drops this device's push records for the account that leaves, so the next account on the
+        // phone does not inherit them. Kept until the server answers (offline: sent at the next launch / sign-in).
+        let leavingBearer = authService.loadToken()
+        let leavingRefresh = authService.loadRefreshToken()
+        let leavingUserId = authService.loadUserId() ?? currentUserId ?? ""
         authService.clearToken()
         // The per-user flag overlay belongs to the account that just left. Not
         // clearing it hands the next account on this device whatever was
@@ -18620,6 +18777,11 @@ final class AppState: ObservableObject {
         // conversation/threat-report store on the device untouched.
         LocalCryptoWipe.wipeAll()
         resetAccountScopedRuntimeState()
+        // Stored after the wipe and the reset (neither touches it from here on): the server is told this device left.
+        if let bearer = leavingBearer, !bearer.isEmpty {
+            TokenVault.savePendingLogout(bearer: bearer, refreshToken: leavingRefresh, userId: leavingUserId)
+            Task { @MainActor [weak self] in await self?.flushPendingLogout() }
+        }
         tearDownSessionRuntime()
         isAuthenticated = false
     }

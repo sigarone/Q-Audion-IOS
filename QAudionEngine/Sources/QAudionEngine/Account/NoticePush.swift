@@ -159,6 +159,27 @@ public enum AlertTokenRegistrationPolicy {
         return age < 0 || age >= debounceInterval
     }
 
+    /// Which of the two routes (notice, message alert) get the token now. Each route has its own accepted record,
+    /// so a route whose request failed is sent again even when the other one was accepted a moment ago. The
+    /// same debounce as `shouldSendKept` applies to each route; a new token or account sends both.
+    public struct Routes: Equatable, Sendable {
+        public let notice: Bool
+        public let messageAlert: Bool
+        public init(notice: Bool, messageAlert: Bool) {
+            self.notice = notice
+            self.messageAlert = messageAlert
+        }
+        public var any: Bool { notice || messageAlert }
+    }
+
+    public static func routesToSend(
+        hex: String, userId: String, notice: Accepted?, messageAlert: Accepted?, now: Date
+    ) -> Routes {
+        Routes(
+            notice: shouldSendKept(hex: hex, userId: userId, last: notice, now: now),
+            messageAlert: shouldSendKept(hex: hex, userId: userId, last: messageAlert, now: now))
+    }
+
     /// A network error (nil status), a timeout (408), too many requests (429) and a server error (5xx) are tried
     /// again; every other answer (401, 403, 409, 400 ...) is final.
     public static func isRetryable(statusCode: Int?) -> Bool {
@@ -169,5 +190,88 @@ public enum AlertTokenRegistrationPolicy {
     /// Delay before retry number `failures` (1-based), nil when the retries are used up.
     public static func retryDelay(afterFailures failures: Int) -> TimeInterval? {
         (1...maxRetries).contains(failures) ? retryDelaySeconds : nil
+    }
+}
+
+/// `DELETE /api/v1/auth/logout` with the bearer of the session that is ending. The server answers by dropping
+/// this device's push records, so the next account on the phone does not inherit them.
+public enum AccountLogoutRequest {
+    public static func make(serverUrl: String, bearer: String) -> URLRequest? {
+        guard !bearer.isEmpty, var components = URLComponents(string: serverUrl) else { return nil }
+        var path = components.path
+        while path.hasSuffix("/") { path.removeLast() }
+        components.path = path + "/api/v1/auth/logout"
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+}
+
+/// `POST /api/v1/auth/refresh` with `{"refresh_token": ...}`.
+public enum AccountRefreshRequest {
+    public static func make(serverUrl: String, refreshToken: String) -> URLRequest? {
+        guard !refreshToken.isEmpty, var components = URLComponents(string: serverUrl) else { return nil }
+        var path = components.path
+        while path.hasSuffix("/") { path.removeLast() }
+        components.path = path + "/api/v1/auth/refresh"
+        guard let url = components.url,
+              let body = try? JSONSerialization.data(withJSONObject: ["refresh_token": refreshToken]) else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return request
+    }
+}
+
+/// What to do with a sign-out request that could not reach the server, at the next launch or login.
+public enum PendingLogoutPolicy {
+    /// What the flush does next.
+    public enum Next: Equatable, Sendable {
+        /// Finished (accepted, or no answer can ever succeed): forget the pending request.
+        case done
+        /// A transient failure: keep it for the next launch.
+        case keep
+        /// Get a new access token with the stored refresh token, then send the sign-out again.
+        case refreshAndRetry
+    }
+
+    /// Whether to send at all. `currentUserId` is the account signed in now (nil or empty: nobody). With someone signed
+    /// in, the request goes out only when it is known to belong to another account: the same account (or an unknown
+    /// one) would end the new session as well, so it is dropped.
+    public static func shouldSend(pendingUserId: String?, currentUserId: String?) -> Bool {
+        guard let current = currentUserId, !current.isEmpty else { return true }
+        guard let pending = pendingUserId, !pending.isEmpty else { return false }
+        return pending != current
+    }
+
+    /// Any answer ends the attempt (done, or the old session is already invalid: 401); a network error, 408, 429
+    /// and 5xx keep the request for the next launch.
+    public static func isFinal(statusCode: Int?) -> Bool {
+        guard let code = statusCode else { return false }
+        return !AlertTokenRegistrationPolicy.isRetryable(statusCode: code)
+    }
+
+    /// After a sign-out attempt. A 401 means the access token expired: refresh once (when a refresh token is kept)
+    /// and only then treat a 401 as final.
+    public static func afterLogout(statusCode: Int?, hasRefreshToken: Bool, refreshAlreadyTried: Bool) -> Next {
+        if statusCode == 401, hasRefreshToken, !refreshAlreadyTried { return .refreshAndRetry }
+        return isFinal(statusCode: statusCode) ? .done : .keep
+    }
+
+    /// The new pair from a 2xx refresh answer, nil when the body cannot be read (then the item is kept, not dropped).
+    public static func decodeRefreshedPair(_ data: Data) -> (accessToken: String, refreshToken: String?)? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let access = object["access_token"] as? String, !access.isEmpty else { return nil }
+        let refresh = object["refresh_token"] as? String
+        return (access, refresh?.isEmpty == false ? refresh : nil)
+    }
+
+    /// After the refresh: `.refreshAndRetry` here means "send the sign-out with the new access token".
+    public static func afterRefresh(statusCode: Int?) -> Next {
+        if let code = statusCode, (200..<300).contains(code) { return .refreshAndRetry }
+        return isFinal(statusCode: statusCode) ? .done : .keep
     }
 }

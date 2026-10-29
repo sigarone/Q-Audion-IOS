@@ -51,7 +51,7 @@ final class NoticePushWiringTests: XCTestCase {
             try appState(), from: "func handleApnsDeviceToken(hex: String) {",
             to: "private func reassertStandardApnsTokenRegistration() {")
         XCTAssertTrue(text.contains(
-            "guard CallsGate.callKitFreeMode else { registerNoticeApnsToken(hex: hex) registerMessageAlertToken(hex: hex) return } registerStandardApnsToken(hex: hex)"))
+            "guard CallsGate.callKitFreeMode else { sendAlertTokens(hex: hex) return } registerStandardApnsToken(hex: hex)"))
     }
 
     func testLoginAndForegroundRunTheNoticeCheckOnlyWithoutTheAlertCallPath() throws {

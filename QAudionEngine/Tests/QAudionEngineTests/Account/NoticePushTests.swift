@@ -195,4 +195,93 @@ final class NoticePushTests: XCTestCase {
         XCTAssertNil(AlertTokenRegistrationPolicy.retryDelay(afterFailures: 4))
         XCTAssertNil(AlertTokenRegistrationPolicy.retryDelay(afterFailures: 0))
     }
+
+    func testRoutesAreDecidedSeparately() {
+        let now = Date()
+        let fresh = AlertTokenRegistrationPolicy.Accepted(userId: "u1", hex: hex, at: now.addingTimeInterval(-60))
+        // The message alert was accepted, the notice was not: only the notice is sent.
+        let r = AlertTokenRegistrationPolicy.routesToSend(
+            hex: hex, userId: "u1", notice: nil, messageAlert: fresh, now: now)
+        XCTAssertEqual(r, .init(notice: true, messageAlert: false))
+        // Both accepted a minute ago: nothing.
+        let none = AlertTokenRegistrationPolicy.routesToSend(
+            hex: hex, userId: "u1", notice: fresh, messageAlert: fresh, now: now)
+        XCTAssertFalse(none.any)
+        // A new token or another account sends both.
+        let other = String(repeating: "cd", count: 32)
+        XCTAssertEqual(
+            AlertTokenRegistrationPolicy.routesToSend(hex: other, userId: "u1", notice: fresh, messageAlert: fresh, now: now),
+            .init(notice: true, messageAlert: true))
+        XCTAssertEqual(
+            AlertTokenRegistrationPolicy.routesToSend(hex: hex, userId: "u2", notice: fresh, messageAlert: fresh, now: now),
+            .init(notice: true, messageAlert: true))
+    }
+
+    func testLogoutRequestShape() throws {
+        let req = try XCTUnwrap(AccountLogoutRequest.make(serverUrl: "https://example.test/", bearer: "tok"))
+        XCTAssertEqual(req.httpMethod, "DELETE")
+        XCTAssertEqual(req.url?.absoluteString, "https://example.test/api/v1/auth/logout")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
+        XCTAssertNil(AccountLogoutRequest.make(serverUrl: "https://example.test", bearer: ""))
+    }
+
+    func testPendingLogoutIsDroppedForTheSameAccountOnly() {
+        XCTAssertTrue(PendingLogoutPolicy.shouldSend(pendingUserId: "a", currentUserId: nil))
+        XCTAssertTrue(PendingLogoutPolicy.shouldSend(pendingUserId: "a", currentUserId: "b"))
+        XCTAssertFalse(PendingLogoutPolicy.shouldSend(pendingUserId: "a", currentUserId: "a"))
+        // Someone is signed in and the pending request does not say whose it is: dropped, not sent.
+        XCTAssertFalse(PendingLogoutPolicy.shouldSend(pendingUserId: nil, currentUserId: "a"))
+        XCTAssertFalse(PendingLogoutPolicy.shouldSend(pendingUserId: "", currentUserId: "a"))
+        // Nobody signed in: nothing to harm, sent.
+        XCTAssertTrue(PendingLogoutPolicy.shouldSend(pendingUserId: nil, currentUserId: nil))
+        XCTAssertTrue(PendingLogoutPolicy.shouldSend(pendingUserId: "", currentUserId: ""))
+    }
+
+    func testPendingLogoutStaysOnlyForTransientFailures() {
+        for code in [nil, 408, 429, 500, 503] as [Int?] {
+            XCTAssertFalse(PendingLogoutPolicy.isFinal(statusCode: code), "\(String(describing: code))")
+        }
+        for code in [200, 204, 401, 403, 404] {
+            XCTAssertTrue(PendingLogoutPolicy.isFinal(statusCode: code), "\(code)")
+        }
+    }
+
+    func testAnExpiredAccessTokenIsRefreshedOnceBeforeA401IsFinal() {
+        typealias P = PendingLogoutPolicy
+        XCTAssertEqual(P.afterLogout(statusCode: 401, hasRefreshToken: true, refreshAlreadyTried: false), .refreshAndRetry)
+        XCTAssertEqual(P.afterLogout(statusCode: 401, hasRefreshToken: true, refreshAlreadyTried: true), .done)
+        XCTAssertEqual(P.afterLogout(statusCode: 401, hasRefreshToken: false, refreshAlreadyTried: false), .done)
+        XCTAssertEqual(P.afterLogout(statusCode: 200, hasRefreshToken: true, refreshAlreadyTried: false), .done)
+        XCTAssertEqual(P.afterLogout(statusCode: nil, hasRefreshToken: true, refreshAlreadyTried: false), .keep)
+        XCTAssertEqual(P.afterLogout(statusCode: 503, hasRefreshToken: true, refreshAlreadyTried: true), .keep)
+    }
+
+    func testTheRefreshOutcomeDecidesWhetherToSendTheSignOut() {
+        typealias P = PendingLogoutPolicy
+        XCTAssertEqual(P.afterRefresh(statusCode: 200), .refreshAndRetry)
+        XCTAssertEqual(P.afterRefresh(statusCode: 401), .done, "the refresh token is dead too")
+        XCTAssertEqual(P.afterRefresh(statusCode: 400), .done)
+        XCTAssertEqual(P.afterRefresh(statusCode: nil), .keep)
+        XCTAssertEqual(P.afterRefresh(statusCode: 500), .keep)
+    }
+
+    func testARefreshAnswerThatCannotBeReadIsNotAVerdict() {
+        typealias P = PendingLogoutPolicy
+        XCTAssertNil(P.decodeRefreshedPair(Data()))
+        XCTAssertNil(P.decodeRefreshedPair(Data("{}".utf8)))
+        XCTAssertNil(P.decodeRefreshedPair(Data(#"{"access_token":""}"#.utf8)))
+        let ok = P.decodeRefreshedPair(Data(#"{"access_token":"a","refresh_token":"r","expires_in":900}"#.utf8))
+        XCTAssertEqual(ok?.accessToken, "a")
+        XCTAssertEqual(ok?.refreshToken, "r")
+        XCTAssertNil(P.decodeRefreshedPair(Data(#"{"access_token":"a"}"#.utf8))?.refreshToken)
+    }
+
+    func testRefreshRequestShape() throws {
+        let req = try XCTUnwrap(AccountRefreshRequest.make(serverUrl: "https://example.test/", refreshToken: "rt"))
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.url?.absoluteString, "https://example.test/api/v1/auth/refresh")
+        let body = try XCTUnwrap(req.httpBody)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: body) as? [String: String], ["refresh_token": "rt"])
+        XCTAssertNil(AccountRefreshRequest.make(serverUrl: "https://example.test", refreshToken: ""))
+    }
 }
