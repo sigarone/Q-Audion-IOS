@@ -21,7 +21,7 @@ public enum VoiceprintLookup: Equatable {
 
 /// Storage abstraction so `VoiceprintStore` can be exercised in unit tests
 /// without touching the real Keychain — mirrors this codebase's
-/// `RatchetVault`/`KeychainRatchetVault`/`InMemoryRatchetVault` split (see
+/// `RatchetVault`/`KeychainRatchetVault` split (see
 /// `RatchetVault.swift`) for the same reason: tests must stay hermetic
 /// across runs, while production always gets durable, encrypted-at-rest
 /// storage. Internal (not `public`) so it never leaks into the public API —

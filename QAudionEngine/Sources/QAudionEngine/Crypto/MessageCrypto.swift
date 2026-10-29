@@ -14,9 +14,6 @@ import CryptoKit
 /// AEAD: AES-256-GCM with AAD = UTF-8("msg:{senderId}:{recipientId}:{msgId}").
 public final class MessageCrypto {
 
-    // Legacy passthrough preserved for existing callers.
-    private let cipher = AeadCipher()
-
     public init() {}
 
     public enum MessageCryptoError: Error {
@@ -112,22 +109,6 @@ public final class MessageCrypto {
             tag: Data(tag)
         )
         return Data(try AES.GCM.open(sealedBox, using: key, authenticating: aad))
-    }
-
-    // MARK: - Legacy passthrough (pre-existing API kept for source compatibility)
-
-    // SECURITY M-24: these legacy APIs encrypt with NO associated data,
-    // so a ciphertext is not bound to sender/recipient/msgId and can be
-    // replayed across contexts. Kept (not deleted) for source compat with
-    // any remaining callers; new code MUST use the AAD-bound API.
-    @available(*, deprecated, message: "Use AAD-bound encrypt(plaintext:psk:senderId:recipientId:msgId:)")
-    public func encrypt(message: Data, key: Data) throws -> AeadCipher.CipherOutput {
-        try cipher.encrypt(plaintext: message, key: key)
-    }
-
-    @available(*, deprecated, message: "Use AAD-bound encrypt(plaintext:psk:senderId:recipientId:msgId:)")
-    public func decrypt(cipherOutput: AeadCipher.CipherOutput, key: Data) throws -> Data {
-        try cipher.decrypt(cipherOutput: cipherOutput, key: key)
     }
 
     // MARK: - Internals
