@@ -110,4 +110,37 @@ final class WebSocketReconnectPolicyTests: XCTestCase {
         debounce.markCompleted(at: 1_000)
         XCTAssertTrue(debounce.isDue(now: 900))
     }
+
+    // MARK: - wiring of the client
+
+    func testAuthenticationKeepsTheBackoffAndClearsTheFailoverCount() {
+        let r = WebSocketReconnectPolicy.afterAuthentication(attempt: 4, failoverAttempt: 2, now: 500)
+        XCTAssertEqual(r.attempt, 4)
+        XCTAssertEqual(r.failoverAttempt, 0)
+        XCTAssertEqual(r.authenticatedAt, 500)
+        // A socket that dies seconds after authenticating keeps the count; one that held starts over.
+        XCTAssertEqual(WebSocketReconnectPolicy.attemptAfterDrop(current: r.attempt, authenticatedAt: r.authenticatedAt, now: 513), 4)
+        XCTAssertEqual(WebSocketReconnectPolicy.attemptAfterDrop(current: r.attempt, authenticatedAt: r.authenticatedAt, now: 561), 0)
+    }
+
+    /// The client must not put the old reset back in its `authenticated` handler, and both places that settle the
+    /// count on a drop (`handleDisconnect`, `forceReconnect`) must go through the policy.
+    func testClientDoesNotResetTheBackoffOnAuthentication() throws {
+        let source = try clientSource()
+        let start = try XCTUnwrap(source.range(of: "if type == \"authenticated\" {"))
+        let tail = source[start.upperBound...]
+        let end = try XCTUnwrap(tail.range(of: "\n        if type == \"pong\""))
+        let handler = String(tail[..<end.lowerBound])
+        XCTAssertFalse(handler.contains("reconnectAttempt = 0"), "authenticated handler resets the backoff")
+        XCTAssertTrue(handler.contains("WebSocketReconnectPolicy.afterAuthentication"))
+        XCTAssertEqual(source.components(separatedBy: "WebSocketReconnectPolicy.attemptAfterDrop(").count - 1, 2,
+                       "handleDisconnect and forceReconnect both settle through the policy")
+    }
+
+    private func clientSource() throws -> String {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { root.deleteLastPathComponent() }   // .../QAudionEngine
+        let url = root.appendingPathComponent("Sources/QAudionEngine/Backend/BCrypto/BCryptoWebSocketClient.swift")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
 }

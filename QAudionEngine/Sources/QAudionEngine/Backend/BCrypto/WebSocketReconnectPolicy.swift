@@ -24,6 +24,14 @@ enum WebSocketReconnectPolicy {
         return 0
     }
 
+    /// The counters after a socket authenticated. The backoff attempt is NOT touched (only a socket that
+    /// holds for the stability window starts it over, see `attemptAfterDrop`); the failover count, which
+    /// counts nodes that did not answer, goes back to zero; the authentication time is recorded.
+    static func afterAuthentication(attempt: Int, failoverAttempt: Int, now: TimeInterval)
+        -> (attempt: Int, failoverAttempt: Int, authenticatedAt: TimeInterval) {
+        (attempt, 0, now)
+    }
+
     /// Wait before automatic attempt number `attempt` (1 = first retry): 1 s doubling up to
     /// `maxDelaySec`, with `jitterFraction` (-0.25...0.25) applied, never below half a second.
     static func delay(forAttempt attempt: Int, jitterFraction: Double) -> TimeInterval {
