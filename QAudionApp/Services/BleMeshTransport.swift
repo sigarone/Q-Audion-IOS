@@ -73,13 +73,13 @@ final class BleMeshTransport: NSObject, MeshTransport {
     static let centralRestoreIdentifier = "com.qaudion.mesh.central"
     static let peripheralRestoreIdentifier = "com.qaudion.mesh.peripheral"
 
-    private static let announceIntervalMs: Int = 15_000
     private static let sweepIntervalMs: Int = 5_000
     private static let maxOutgoingLinks = 6
     private static let maxIncomingLinks = 8
+    /// One connection beyond a cap may exist until it has announced (spec 3.3 / 3.4).
+    private static let probationSlots = 1
     private static let connectTimeoutMs: Int = 10_000
     private static let setupTimeoutMs: Int = 10_000
-    private static let idleOutgoingMs: Int64 = 120_000
     private static let unsubscribedEvictionMs: Int64 = 30_000
 
     let localNodeId: MeshNodeId
@@ -111,6 +111,15 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private var failedSetupAtMs: [UUID: Int64] = [:]
     private static let redialSpacingMs: Int64 = 3_000
 
+    /// Spec 3.6: address -> (claimed node, remembered until) for outgoing links closed as a duplicate.
+    private var redialMemory = MeshRedialMemory()
+    /// Spec 3.4: centrals dropped as duplicates; the platform cannot close their link, so their frames are refused.
+    private var inboundRefusals = MeshRefusalTable()
+    private var collapseGuard = MeshCollapseGuard()
+    private var evictionLimiter = MeshEvictionLimiter()
+    private var evictionMemory = MeshEvictionMemory()
+    private var annSummary = MeshAnnounceSummary(startMs: 0)
+    private var txFailThrottle = MeshTxFailThrottle()
     private var malformedGuard = MeshMalformedGuard()
     private var relayGate = MeshRelayGate()
     private var announcedNeighborsByNode: [String: Set<String>] = [:]
@@ -154,6 +163,16 @@ final class BleMeshTransport: NSObject, MeshTransport {
         var subscribed = false
         var useWriteWithoutResponse = false
         var nodeHex: String?
+        /// When `nodeHex` was set; set once (spec 3.6).
+        var boundAtMs: Int64 = 0
+        /// Spec 3.6: a claimant the collapse guard refused to close: kept open but not a route.
+        var unroutable = false
+        /// The last time a validated DATA or RECEIPT packet arrived on this link (spec 3.6), 0 if never.
+        var lastDataMs: Int64 = 0
+        /// When the subscription was confirmed, 0 before (spec 3.3 / 3.4: no ANNOUNCE within 35 s closes the link).
+        var subscribedAtMs: Int64 = 0
+        /// When the last ANNOUNCE went out on this link, for the pacing of spec 8.4 (0: none yet).
+        var lastAnnounceTxMs: Int64 = 0
         var rssi: Int?
         var lastActivityMs: Int64
         var reassembler = MeshLinkReassembler()
@@ -240,7 +259,17 @@ final class BleMeshTransport: NSObject, MeshTransport {
         }
     }
 
+    /// The clock of every link timer (bind time, activity, refusals, redial memory, collapse guard, pacing): monotonic and
+    /// counting sleep (`CLOCK_MONOTONIC` on Darwin), so a wall-clock change cannot shorten or stretch them. Replaced by
+    /// tests.
+    var clockMs: () -> Int64 = { Int64(clock_gettime_nsec_np(CLOCK_MONOTONIC) / 1_000_000) }
+
     private func nowMs() -> Int64 {
+        clockMs()
+    }
+
+    /// Wall-clock milliseconds, for what leaves the process as a date: the packet timestamp and the time a peer was seen.
+    private func wallMs() -> Int64 {
         Int64(Date().timeIntervalSince1970 * 1000)
     }
 
@@ -304,6 +333,9 @@ final class BleMeshTransport: NSObject, MeshTransport {
         active = false
         announceScheduled = false
         sweepScheduled = false
+        redialMemory = MeshRedialMemory()
+        evictionMemory = MeshEvictionMemory()
+        inboundRefusals = MeshRefusalTable()
         central?.stopScan()
         peripheralManager?.stopAdvertising()
         for link in allLinks() {
@@ -479,6 +511,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     /// A link that can carry frames right now.
     private func isWritable(_ link: Link) -> Bool {
+        if link.unroutable { return false }
         if link.isOutgoing {
             guard link.state == .ready, let peripheral = link.peripheral else { return false }
             return peripheral.state == .connected && link.characteristic != nil
@@ -490,25 +523,70 @@ final class BleMeshTransport: NSObject, MeshTransport {
         allLinks().filter { isWritable($0) }
     }
 
-    /// The writable link to `nodeHex`, the outgoing one first.
-    private func directLink(to nodeHex: String) -> Link? {
-        let candidates = writableLinks().filter { $0.nodeHex == nodeHex }
-        return candidates.first(where: { $0.isOutgoing }) ?? candidates.first
+    private func candidate(of link: Link) -> MeshLinkCandidate {
+        MeshLinkCandidate(key: (link.isOutgoing ? "w:" : "n:") + link.identifier.uuidString, central: link.isOutgoing,
+                          address: link.identifier.uuidString, subscribed: link.subscribed,
+                          lastActivityMs: link.lastActivityMs, boundAtMs: link.boundAtMs > 0 ? link.boundAtMs : link.createdAtMs,
+                          lastDataMs: link.lastDataMs, nodeHex: link.nodeHex)
     }
 
-    /// One link per distinct node (the outgoing one first), plus every writable link not yet bound to a node.
-    private func floodLinks(excluding excluded: Link?) -> [Link] {
-        var chosen: [Link] = []
-        var seen: Set<String> = []
-        let ordered = writableLinks().sorted { ($0.isOutgoing ? 0 : 1) < ($1.isOutgoing ? 0 : 1) }
-        for link in ordered where link !== excluded {
-            if let nodeHex = link.nodeHex {
-                if seen.contains(nodeHex) { continue }
-                seen.insert(nodeHex)
+    private func links(forKeys keys: [String]) -> [Link] {
+        let wanted = Set(keys)
+        return allLinks().filter { wanted.contains(candidate(of: $0).key) }
+            .sorted { ($0.isOutgoing ? 0 : 1) < ($1.isOutgoing ? 0 : 1) }
+    }
+
+    /// The writable links a direct send to `nodeHex` goes to: every healthy one, up to four (spec 3.6), the outgoing one first. The node id of
+    /// a link is only a claim, and the receiver drops a copy it already has by message id.
+    private func directLinks(to nodeHex: String) -> [Link] {
+        let candidates = writableLinks().filter { $0.nodeHex == nodeHex }.map { candidate(of: $0) }
+        return links(forKeys: MeshNodeLinkPolicy.fanOut(links: candidates, nowMs: nowMs()))
+    }
+
+    /// Where a flood goes (spec 9.2): every link not yet bound to a node, and up to four links of each node. The link the
+    /// packet arrived on, and all links of the node it came from, are left out.
+    private func floodLinks(excluding excluded: Link?, excludingNode: String? = nil) -> [Link] {
+        let candidates = writableLinks().map { candidate(of: $0) }
+        let keys = MeshNodeLinkPolicy.floodTargets(
+            links: candidates, excludingKey: excluded.map { candidate(of: $0).key }, excludingNode: excludingNode, nowMs: nowMs()
+        )
+        return links(forKeys: keys)
+    }
+
+    /// Spec 3.3 / 3.4: the slots of a role are over the cap by the probation slot, and `newcomer` has just announced. Only
+    /// now may a link make room, and only one per role per 30 s: an excluded link first, then the one that carried no
+    /// validated data for the longest time, never the newcomer and never the only healthy link to a node. With no victim
+    /// the newcomer itself goes.
+    private func makeRoom(for newcomer: Link) {
+        let centralRole = newcomer.isOutgoing
+        let count = centralRole ? outgoing.count : incoming.count
+        let cap = centralRole ? Self.maxOutgoingLinks : Self.maxIncomingLinks
+        guard count > cap else { return }
+        let now = nowMs()
+        let all = allLinks().map { candidate(of: $0) }
+        var victim: Link?
+        if MeshNodeLinkPolicy.canTriggerEviction(newcomer: candidate(of: newcomer)) {
+            let pool = centralRole ? Array(outgoing.values) : Array(incoming.values)
+            var chosen = pool.first(where: { $0.unroutable && $0 !== newcomer && $0.nodeHex != newcomer.nodeHex })
+            if chosen == nil,
+               let key = MeshNodeLinkPolicy.evictionVictim(links: all, centralRole: centralRole,
+                                                           excludingKey: candidate(of: newcomer).key, nowMs: now) {
+                chosen = pool.first(where: { candidate(of: $0).key == key })
             }
-            chosen.append(link)
+            if chosen != nil, evictionLimiter.allow(centralRole: centralRole, nowMs: now) { victim = chosen }
         }
-        return chosen
+        let target = victim ?? newcomer
+        target.downReason = "evicted"
+        if target.isOutgoing {
+            // An evicted address is not dialled again at once: it would be bound and evicted in a loop (spec 3.3).
+            evictionMemory.note(target.identifier.uuidString, nowMs: now)
+            disconnect(target, reason: "evicted")
+        } else {
+            // The same for a central that connects to us (spec 3.4).
+            inboundRefusals.refuse(target.identifier.uuidString, untilMs: now + MeshLinkTiming.evictRefuseMs)
+            tearDown(target, reason: "evicted", cancelConnection: false)
+            recomputeAndNotifyPeers()
+        }
     }
 
     private func linkedNodeCount() -> Int {
@@ -564,6 +642,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private func scheduleAnnounceLoop() {
         guard !announceScheduled else { return }
         announceScheduled = true
+        annSummary = MeshAnnounceSummary(startMs: nowMs())
         runAnnounceTick()
     }
 
@@ -572,10 +651,21 @@ final class BleMeshTransport: NSObject, MeshTransport {
             announceScheduled = false
             return
         }
-        for link in writableLinks() {
-            sendAnnounce(on: link)
+        // Spec 8.4: one link per tick, the most overdue first, so the links are not all announced at one instant.
+        let now = nowMs()
+        var last: [String: Int64] = [:]
+        var byKey: [String: Link] = [:]
+        for link in writableLinks() where link.lastAnnounceTxMs != 0 {
+            let key = (link.isOutgoing ? "w:" : "n:") + link.identifier.uuidString
+            last[key] = link.lastAnnounceTxMs
+            byKey[key] = link
         }
-        bleQueue.asyncAfter(deadline: .now() + .milliseconds(Self.announceIntervalMs)) { [weak self] in
+        if let key = MeshAnnouncePacer.next(lastSentMs: last, nowMs: now), let link = byKey[key] {
+            sendAnnounce(on: link, intro: false)
+        }
+        annSummary.flushIfDue(nowMs: now, links: allLinks().count)
+        inboundRefusals.prune(nowMs: now)
+        bleQueue.asyncAfter(deadline: .now() + .milliseconds(Int(MeshLinkTiming.announceTickMs))) { [weak self] in
             self?.runAnnounceTick()
         }
     }
@@ -605,7 +695,20 @@ final class BleMeshTransport: NSObject, MeshTransport {
             if expired > 0 {
                 log(.rxDrop, [("link", link.handle), ("reason", "set_expired"), ("streak", String(malformedGuard.streak(link.identifier.uuidString)))])
             }
-            if link.isOutgoing, link.state == .ready, now - link.lastActivityMs > Self.idleOutgoingMs {
+            // Spec 3.3 / 3.4: a link that subscribed and has not announced within 35 s is closed, so it cannot hold a slot.
+            if MeshNodeLinkPolicy.unboundExpired(subscribedAtMs: link.subscribedAtMs, nodeHex: link.nodeHex, nowMs: now) {
+                disconnect(link, reason: "timeout")
+                continue
+            }
+            // Spec 3.4: an incoming link that never subscribed is released after 30 s, also below the cap.
+            if !link.isOutgoing, !link.subscribed, now - link.createdAtMs > Self.unsubscribedEvictionMs {
+                link.downReason = "evicted"
+                tearDown(link, reason: "evicted", cancelConnection: false)
+                continue
+            }
+            // Spec 3.3 / 3.4: the same idle rule for both roles.
+            let live = link.isOutgoing ? link.state == .ready : link.subscribed
+            if live, now - link.lastActivityMs > MeshLinkTiming.linkIdleTimeoutMs {
                 disconnect(link, reason: "timeout")
             }
         }
@@ -626,12 +729,14 @@ final class BleMeshTransport: NSObject, MeshTransport {
         let encryptedPayload = MeshDiscoveryCipher.encrypt(announce.encode())!
         return try! MeshPacket(
             type: .announce, senderId: localNodeId, recipientId: .broadcast,
-            timestampMs: nowMs(), payload: encryptedPayload
+            timestampMs: wallMs(), payload: encryptedPayload
         )
     }
 
-    private func sendAnnounce(on link: Link) {
+    /// `intro`: the ANNOUNCE sent when the link becomes writable (spec 4.3), the only one that gets its own `ann.tx` line.
+    private func sendAnnounce(on link: Link, intro: Bool = true) {
         guard isWritable(link) else { return }
+        link.lastAnnounceTxMs = nowMs()
         let packet = buildAnnouncePacket()
         let bytes = packet.encode()
         let neighborCount = min(linkedNodeCount(), MeshAnnounce.maxNeighbors)
@@ -639,7 +744,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
         let ph = MeshLog.payloadHash(packet.payload)
         transmit(bytes, ph: ph, links: [link], chosen: nil) { [weak self] summary in
             let ok = summary.okLinks > 0
-            self?.log(.annTx, [("link", handle), ("nbrs", String(neighborCount)), ("bytes", String(bytes.count)), ("ok", MeshLog.flag(ok))])
+            self?.annSummary.recordTx(ok: ok)
+            if intro {
+                self?.log(.annTx, [("link", handle), ("nbrs", String(neighborCount)), ("bytes", String(bytes.count)), ("ok", MeshLog.flag(ok))])
+            }
         }
     }
 
@@ -656,18 +764,19 @@ final class BleMeshTransport: NSObject, MeshTransport {
         let isBroadcast = packet.recipientId == .broadcast
         var route = "flood"
         var links: [Link] = []
-        var chosen: Link?
-        if !isBroadcast, let direct = directLink(to: packet.recipientId.hex) {
-            // A direct link to the recipient always wins over a next-hop hint.
+        let chosen: Link? = nil
+        let directToRecipient = isBroadcast ? [] : directLinks(to: packet.recipientId.hex)
+        let directToHint = (isBroadcast || preferredNextHop == nil || preferredNextHop == packet.recipientId)
+            ? [] : directLinks(to: preferredNextHop!.hex)
+        if !directToRecipient.isEmpty {
+            // Every direct link to the recipient gets the frame, and it wins over a next-hop hint.
             route = "direct"
-            chosen = direct
-            links = [direct]
-        } else if !isBroadcast, let hint = preferredNextHop, hint != packet.recipientId, let hop = directLink(to: hint.hex) {
+            links = directToRecipient
+        } else if !directToHint.isEmpty {
             // The announced topology says the hint reaches the recipient. The ANNOUNCE does not say whether a
             // peer relays (its mode is not on the wire), so a hint that does not is only found out by its absence.
             route = "direct"
-            chosen = hop
-            links = [hop]
+            links = directToHint
         } else {
             links = floodLinks(excluding: nil)
         }
@@ -697,7 +806,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     /// Spec 10.1: a direct send succeeds only if the packet was accepted on the chosen link; a flood succeeds if it
     /// was accepted on at least one.
     private static func report(for summary: TransmitSummary, direct: Bool) -> MeshSendReport {
-        let accepted = direct ? summary.chosenOk : summary.okLinks > 0
+        let accepted = summary.okLinks > 0
         if accepted {
             return MeshSendReport(result: direct ? .sentDirect : .sentViaRelay, links: summary.links, okLinks: summary.okLinks)
         }
@@ -788,8 +897,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
         job.frameTimer = nil
         if link.activeJob === job { link.activeJob = nil }
         if let failure {
-            log(.txFrameFail, [("link", link.handle), ("ph", job.ph), ("idx", String(frameIndex)),
-                               ("total", String(job.sender.frameCount)), ("reason", failure.rawValue)])
+            txFailThrottle.warn(link: link.handle, ph: job.ph, idx: frameIndex, total: job.sender.frameCount,
+                                reason: failure.rawValue, nowMs: nowMs())
         }
         job.completion(failure)
         pump(link)
@@ -960,6 +1069,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
                       ("frames", String(frames)), ("forUs", "0"), ("relay", "0")])
             return
         }
+        // Only a validated DATA or RECEIPT packet counts as data activity (spec 3.6).
+        link.lastDataMs = nowMs()
         let forUs = packet.recipientId == localNodeId || packet.recipientId == .broadcast
         if forUs {
             let fromNode: MeshNodeId = (link.nodeHex.flatMap { try? MeshNodeId(hex: $0) }) ?? packet.senderId
@@ -980,23 +1091,81 @@ final class BleMeshTransport: NSObject, MeshTransport {
             registerMalformed(link, reason: "ann_parse")
             return
         }
+        // Spec 3.6: a link keeps the node id its first ANNOUNCE named; another one closes the link, it never rebinds.
+        guard MeshNodeLinkPolicy.mayBind(boundTo: link.nodeHex, announced: announce.nodeIdHex) else {
+            if !link.isOutgoing {
+                inboundRefusals.refuse(link.identifier.uuidString, untilMs: nowMs() + MeshLinkTiming.dupRedialSuppressMs)
+            }
+            disconnect(link, reason: "rebind")
+            return
+        }
         // Only a fully valid ANNOUNCE counts as the link behaving.
         malformedGuard.registerWellFormed(link.identifier.uuidString)
         link.lastActivityMs = nowMs()
         // Spec 3.5: the device at the other end answered, so its backoff history is over.
         link.announceReceived = true
         connectBackoff.clear(link.identifier.uuidString)
+        annSummary.recordRx(node: announce.nodeIdHex, address: link.identifier.uuidString)
         var bound = false
         if announce.nodeIdHex != localNodeId.hex {
             // The ONLY place a link is bound to a node. The sender id of any other packet is its originator,
             // which for a relayed packet is not the device at the other end of this link.
             bound = link.nodeHex != announce.nodeIdHex
-            link.nodeHex = announce.nodeIdHex
+            if link.nodeHex == nil {
+                link.nodeHex = announce.nodeIdHex
+                link.boundAtMs = nowMs()
+                makeRoom(for: link)
+            }
             announcedNeighborsByNode[announce.nodeIdHex] = Set(announce.neighborNodeIdsHex)
         }
-        log(.annRx, [("link", link.handle), ("nh", MeshLog.nodeHash(announce.nodeIdHex)),
-                     ("nbrs", String(announce.neighborNodeIdsHex.count)), ("bound", MeshLog.flag(bound))])
+        // Spec 13: only a change of the link-to-node mapping gets its own line; the rest is counted in `ann.sum`.
+        if bound {
+            log(.annRx, [("link", link.handle), ("nh", MeshLog.nodeHash(announce.nodeIdHex)),
+                         ("nbrs", String(announce.neighborNodeIdsHex.count)), ("bound", "1")])
+        }
+        if announce.nodeIdHex != localNodeId.hex { collapseLinks(to: announce.nodeIdHex) }
         recomputeAndNotifyPeers()
+    }
+
+    private func isHealthy(_ link: Link, at now: Int64) -> Bool {
+        link.subscribed && now - link.lastActivityMs <= MeshLinkTiming.linkIdleTimeoutMs
+    }
+
+    private func hasHealthyLink(to node: String, at now: Int64) -> Bool {
+        allLinks().contains(where: { $0.nodeHex == node && isHealthy($0, at: now) })
+    }
+
+    /// Spec 3.6: called when an ANNOUNCE has bound a link to `nodeHex` and when a link bound to it is gone. The node id is only
+    /// a claim, so links with different identifiers are all kept and used. A link is closed only when it provably duplicates
+    /// another on the same physical device (same identifier, opposite role), which the platform's own identifiers make rare.
+    private func collapseLinks(to nodeHex: String) {
+        let now = nowMs()
+        // A link excluded earlier gets another chance.
+        for link in allLinks() where link.nodeHex == nodeHex { link.unroutable = false }
+        var byKey: [String: Link] = [:]
+        var candidates: [MeshLinkCandidate] = []
+        for link in allLinks() where link.nodeHex == nodeHex && link.subscribed {
+            let entry = candidate(of: link)
+            byKey[entry.key] = link
+            candidates.append(entry)
+        }
+        let toClose = MeshNodeLinkPolicy.sameDeviceDuplicates(localHex: localNodeId.hex, peerHex: nodeHex, links: candidates)
+        guard !toClose.isEmpty else { return }
+        // The budget is per link key; a link the guard refuses to close stays open but is not a route.
+        let plan = MeshNodeLinkPolicy.plan(toClose: toClose) { collapseGuard.allow($0, nowMs: now) }
+        for key in plan.exclude { byKey[key]?.unroutable = true }
+        for key in plan.close {
+            guard let link = byKey[key] else { continue }
+            if link.isOutgoing {
+                redialMemory.note(link.identifier.uuidString, node: nodeHex, nowMs: now)
+                disconnect(link, reason: "dup")
+            } else {
+                // The platform cannot close a central's link: drop it and refuse its frames for a while.
+                inboundRefusals.refuse(link.identifier.uuidString, untilMs: now + MeshLinkTiming.dupRedialSuppressMs)
+                link.downReason = "dup"
+                tearDown(link, reason: "dup", cancelConnection: false)
+            }
+        }
     }
 
     /// Applies the relay conditions (spec 9.2); returns whether the packet was forwarded.
@@ -1016,7 +1185,15 @@ final class BleMeshTransport: NSObject, MeshTransport {
             log(.relay, [("ph", ph), ("ttl", ttlToken), ("p", String(permille)), ("fwd", "0"), ("okLinks", "0")])
             return false
         case .forward(let nextTTL, let permille):
-            let targets = floodLinks(excluding: link)
+            // A recipient that is directly linked gets it on its own links; otherwise every other node, up to four links
+            // each, and none of the links of the node it came from.
+            let recipient = (packet.recipientId == .broadcast || packet.recipientId == localNodeId) ? nil : packet.recipientId.hex
+            let candidates = writableLinks().map { candidate(of: $0) }
+            let keys = MeshNodeLinkPolicy.relayTargets(
+                links: candidates, recipientNode: recipient, arrivalKey: candidate(of: link).key, arrivalNode: link.nodeHex,
+                nowMs: nowMs()
+            )
+            let targets = links(forKeys: keys)
             guard !targets.isEmpty else {
                 log(.relay, [("ph", ph), ("ttl", ttlToken), ("p", String(permille)), ("fwd", "0"), ("okLinks", "0")])
                 return false
@@ -1036,7 +1213,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     /// One `MeshPeerInfo` per node, however many links reach it (an outgoing and an incoming link to the same device
     /// are common): the strongest RSSI of its links, connected if any of them is writable.
     private func recomputeAndNotifyPeers() {
-        let now = nowMs()
+        let now = wallMs()
         struct Accum {
             var rssi: Int?
             var connected = false
@@ -1106,6 +1283,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
            MeshConnectBackoff.isFailedAttempt(outgoing: link.isOutgoing, announceReceived: link.announceReceived, reason: finalReason) {
             let failure = connectBackoff.recordFailure(link.identifier.uuidString, nowMs: uptimeMs())
             log(.connectBackoff, [("link", link.handle), ("failures", String(failure.failures)), ("waitMs", String(failure.waitMs))])
+        }
+        // Spec 3.6: the links left to the node are decided again at once, so a survivor becomes the keeper and routable.
+        // Closes made by the collapse itself do not come back here.
+        if active, let nodeHex = link.nodeHex, reason != "stop", finalReason != "dup", finalReason != "rebind" {
+            collapseLinks(to: nodeHex)
         }
     }
 
@@ -1183,17 +1365,20 @@ final class BleMeshTransport: NSObject, MeshTransport {
             log(.linkRefused, [("reason", "blocked"), ("role", "p")])
             return nil
         }
+        if inboundRefusals.isRefused(identifier.uuidString, nowMs: nowMs()) { return nil }
         if incoming.count >= Self.maxIncomingLinks {
             let now = nowMs()
-            let stale = incoming.values
-                .filter { !$0.subscribed && now - $0.createdAtMs > Self.unsubscribedEvictionMs }
-                .min(by: { $0.createdAtMs < $1.createdAtMs })
-            guard let stale else {
+            // A connection that never subscribed yields to a newcomer after 30 s. No subscribed link is ever evicted by a
+            // newcomer that has not yet announced: it gets the one probation slot, and `makeRoom` decides once it is bound.
+            if let stale = incoming.values
+                .filter({ !$0.subscribed && now - $0.createdAtMs > Self.unsubscribedEvictionMs })
+                .min(by: { $0.createdAtMs < $1.createdAtMs }) {
+                stale.downReason = "evicted"
+                tearDown(stale, reason: "evicted", cancelConnection: false)
+            } else if incoming.count >= Self.maxIncomingLinks + Self.probationSlots {
                 log(.linkRefused, [("reason", "cap"), ("role", "p")])
                 return nil
             }
-            stale.downReason = "evicted"
-            tearDown(stale, reason: "evicted", cancelConnection: false)
         }
         let link = Link(handle: linkHandle(outgoing: false), identifier: identifier, isOutgoing: false, nowMs: nowMs(), state: .ready)
         link.central = central
@@ -1291,13 +1476,25 @@ extension BleMeshTransport: CBCentralManagerDelegate {
         // Spec 2.1: a result that was already queued when the scan stopped must not open a new link.
         guard !discoveryPaused else { return }
         guard !isBlocked(identifier) else { return }
-        guard outgoing.count < Self.maxOutgoingLinks else { return }
         if let failedAt = failedSetupAtMs[identifier], nowMs() - failedAt < Self.redialSpacingMs { return }
+        // Spec 3.6: an address closed as a duplicate of node N is not dialled while a healthy link to N exists (longer each
+        // time on the keeper's own device); once that link is gone the address is dialled like any other. An identifier that
+        // already works as a healthy link in the other role is not dialled either, and no other address is skipped.
+        let healthyNow = nowMs()
+        if redialMemory.blocks(identifier.uuidString, nowMs: healthyNow, healthy: { hasHealthyLink(to: $0, at: healthyNow) }) { return }
+        let healthyIdentifiers = Set(allLinks().filter { isHealthy($0, at: healthyNow) }.map { $0.identifier.uuidString })
+        if MeshNodeLinkPolicy.dialBlockedByLink(target: identifier.uuidString, healthyLinkIdentifiers: healthyIdentifiers) { return }
         // Spec 3.5: an advertiser that did not answer is left alone until its backoff expires (silently: the
         // `connect.backoff` line was written when the backoff was set, not for every advertisement heard since).
         guard !connectBackoff.isBackedOff(identifier.uuidString, nowMs: uptimeMs()) else { return }
-        // Two phones may open a link to each other at the same time; both links are kept and senders prefer the
-        // outgoing one (spec 3.3).
+        // One probation slot lets a newcomer announce first; `makeRoom` decides then (spec 3.3).
+        guard outgoing.count < Self.maxOutgoingLinks + Self.probationSlots else { return }
+        if evictionMemory.blocks(identifier.uuidString, nowMs: healthyNow) { return }
+        // Beyond the cap only a node that is not linked yet is worth the probation slot.
+        if outgoing.count >= Self.maxOutgoingLinks,
+           let known = allLinks().first(where: { $0.identifier == identifier })?.nodeHex, hasHealthyLink(to: known, at: healthyNow) { return }
+        // Two phones may open a link to each other at the same time; both links are used, and one is closed only when it
+        // provably is the same device in the other role (spec 3.6).
         let link = Link(handle: linkHandle(outgoing: true), identifier: identifier, isOutgoing: true, nowMs: nowMs(), state: .connecting)
         link.peripheral = peripheral
         link.rssi = RSSI.intValue
@@ -1383,6 +1580,7 @@ extension BleMeshTransport: CBPeripheralDelegate {
         }
         guard characteristic.isNotifying else { return }
         link.subscribed = true
+        link.subscribedAtMs = nowMs()
         markReady(link)
         recomputeAndNotifyPeers()
         // Introduce ourselves as soon as the subscription is confirmed (spec 4.3), not after a fixed delay.
@@ -1495,6 +1693,7 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
         let wasSubscribed = link.subscribed
         link.subscribed = true
         guard !wasSubscribed else { return }
+        link.subscribedAtMs = nowMs()
         markReady(link)
         recomputeAndNotifyPeers()
         sendAnnounce(on: link)

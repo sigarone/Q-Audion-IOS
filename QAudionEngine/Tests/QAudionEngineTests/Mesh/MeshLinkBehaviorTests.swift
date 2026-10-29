@@ -586,7 +586,7 @@ final class MeshLinkBehaviorTests: XCTestCase {
     func testEventNamesAndLevelsFollowTheSpecification() {
         XCTAssertEqual(MeshLog.Event.allCases.map(\.rawValue), [
             "identity", "radio", "link.up", "link.ready", "link.down", "link.refused", "ann.tx", "ann.rx",
-            "tx", "tx.frame.fail", "rx", "rx.drop", "guard.block", "relay", "app.tx", "app.rx", "outbox",
+            "ann.sum", "tx", "tx.frame.fail", "rx", "rx.drop", "guard.block", "relay", "app.tx", "app.rx", "outbox",
             "radio.pause", "radio.resume", "connect.backoff",
         ])
         let warn = Set(MeshLog.Event.allCases.filter { $0.level == .warn }.map(\.rawValue))
