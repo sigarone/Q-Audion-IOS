@@ -51,6 +51,9 @@ public final class BCryptoBackendProvider: BackendProvider {
         // `true` on success → WS resumes reconnect; `false` on genuine
         // revocation → WS parks its loop (never forces QR).
         c.latestAccessToken = { [weak self] in self?.storedTokenPair?().access }
+        c.onSessionReissued = { [weak self] tokens, presented in
+            _ = self?.adoptReissuedSession(tokens, presentedAccess: presented)
+        }
         c.onAuthFailedRecover = { [weak self] in
             guard let self = self else { return .revoked }
             // Another provider may already have rotated the pair into the shared store.
@@ -214,6 +217,34 @@ public final class BCryptoBackendProvider: BackendProvider {
         // socket built later reads the now-updated `config` at creation time.
         _wsClient?.updateConfig(snapshot)
         if persist { onTokenRotated?(access, refresh) }
+    }
+
+    /// Store and apply the pair a socket's `authenticated` reply reissued. Written like any
+    /// other rotation: compare-and-swap into the shared store, then pushed to every transport
+    /// of this provider. Nothing happens when the store already moved past the token the
+    /// socket presented (another path rotated the pair meanwhile and holds the newer one).
+    /// Returns true when the pair was installed.
+    @discardableResult
+    func adoptReissuedSession(_ tokens: AuthTokenSet, presentedAccess: String?) -> Bool {
+        guard let refresh = tokens.refreshToken, !refresh.isEmpty else { return false }
+        if let store = credentialStore {
+            guard let held = try? store.load() else { return false }
+            if let presented = presentedAccess, let heldAccess = held.access,
+               !heldAccess.isEmpty, heldAccess != presented {
+                return false
+            }
+            guard (try? store.compareAndSwap(expectedRefresh: held.refresh, with: tokens)) == true else {
+                return false
+            }
+            applyTokenPair(access: tokens.accessToken, refresh: refresh, persist: false)
+            return true
+        }
+        if let presented = presentedAccess, let current = config.accessToken,
+           !current.isEmpty, current != presented {
+            return false
+        }
+        applyTokenPair(access: tokens.accessToken, refresh: refresh, persist: true)
+        return true
     }
 
     /// The app's shared credential store (Keychain). Installed by the app layer with

@@ -146,6 +146,26 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// MUST be thread-safe (the calling impl's accessor locks).
     public var activeCallIdProvider: (@Sendable () -> String?)?
 
+    /// Called when an `authenticated` reply carries a NEW token pair. The server hands one
+    /// out when the access token presented was close to expiry, and the presented token is
+    /// retired at that moment, so the new pair is the only live session and the app must
+    /// store it. The second argument is the access token this socket presented. Invoked on
+    /// the WS delegate thread, before the `.authenticated` listeners run, so anything that
+    /// reacts to being connected already sees the new pair. Never logs the values.
+    public var onSessionReissued: (@Sendable (AuthTokenSet, String?) -> Void)?
+
+    /// The `access_token` / `refresh_token` / `expires_in` triple of an `authenticated`
+    /// payload, or nil when the reply carries no complete pair. All three must be present
+    /// and sane (non-empty strings, positive lifetime): a half-formed pair must never
+    /// replace a working one.
+    static func reissuedTokens(from payload: [String: Any]) -> AuthTokenSet? {
+        guard let access = payload["access_token"] as? String, !access.isEmpty,
+              let refresh = payload["refresh_token"] as? String, !refresh.isEmpty,
+              let expiresIn = (payload["expires_in"] as? NSNumber)?.intValue, expiresIn > 0
+        else { return nil }
+        return AuthTokenSet(accessToken: access, refreshToken: refresh, expiresInSec: expiresIn)
+    }
+
     private var webSocketTask: URLSessionWebSocketTask?
     /// SECURITY C-6 / H-5 — strong ref to the session delegate so it
     /// survives the lifetime of the `URLSession` (URLSession only holds
@@ -2456,7 +2476,15 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             authRecoveryInFlight = false
             authPermanentlyRejected = false
             let listeners = stateListeners
+            let presentedAtAuth = _lastPresentedAccessToken
             lock.unlock()
+            // A reissued pair replaces the token we just presented, which is now retired.
+            // Stored BEFORE the listeners run so nothing reacting to `.authenticated`
+            // can pick up the old one. Applied whatever the socket generation: the old
+            // token is gone either way.
+            if let reissued = Self.reissuedTokens(from: authPayload), let handler = onSessionReissued {
+                handler(reissued, presentedAtAuth)
+            }
             // Deliver anything held across the echo race, in arrival order,
             // through the same code a live frame takes. Empty on every build
             // that did not ask for binary, so this is a no-op array walk on the
