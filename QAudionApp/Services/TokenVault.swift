@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import UIKit
 import QAudionEngine
 
 /// SECURITY C-5 + M-2 — single source of truth for auth-token storage.
@@ -408,7 +409,50 @@ enum AuthCoordinatorLogging {
             case .error: RTLog.error("auth", message)
             }
         }
+        AuthRefreshCoordinator.shared.setBackgroundGuard(
+            begin: { AuthFlightBackgroundTask.begin() },
+            end: { AuthFlightBackgroundTask.end($0) })
     }()
 
     static func installIfNeeded() { _ = once }
+}
+
+/// Keeps the process running while a token renewal is on the wire, so the app cannot be
+/// suspended between the request and the moment its answer is stored. Every `begin` is matched by
+/// one `end`; the expiration handler also ends the task, and an `end` after that is a no-op.
+enum AuthFlightBackgroundTask {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var live = Set<Int>()
+
+    private final class IdBox: @unchecked Sendable { var raw = 0 }
+
+    /// Opaque token for `end`; 0 when the system granted no extra time.
+    static func begin() -> Int {
+        let box = IdBox()
+        let start: @Sendable () -> Void = {
+            MainActor.assumeIsolated {
+                let id = UIApplication.shared.beginBackgroundTask(withName: "auth-renewal") {
+                    AuthFlightBackgroundTask.finish(box.raw)
+                }
+                guard id != .invalid else { return }
+                box.raw = id.rawValue
+                lock.withLock { _ = live.insert(id.rawValue) }
+            }
+        }
+        if Thread.isMainThread { start() } else { DispatchQueue.main.sync(execute: start) }
+        return box.raw
+    }
+
+    static func end(_ token: Int) { finish(token) }
+
+    private static func finish(_ token: Int) {
+        guard token != 0 else { return }
+        let stop: @Sendable () -> Void = {
+            MainActor.assumeIsolated {
+                guard lock.withLock({ live.remove(token) != nil }) else { return }
+                UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: token))
+            }
+        }
+        if Thread.isMainThread { stop() } else { DispatchQueue.main.async(execute: stop) }
+    }
 }
