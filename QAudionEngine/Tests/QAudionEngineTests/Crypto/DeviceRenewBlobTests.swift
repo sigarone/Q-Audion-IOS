@@ -15,6 +15,9 @@ final class DeviceRenewBlobTests: XCTestCase {
         "qaudion-mesh-announce-v1",   // the proof of a node id on a mesh link (MESH_LINK_SPEC 8.5)
         DeviceRenewBlob.domainTagDeviceRenew,  // QAUDION-DEVICE-RENEW-v1
         DeviceRenewBlob.domainTagDeviceRevoke, // QAUDION-REVOKE-v1
+        "qaudion-handshake-sig-v6",
+        "qaudion-vn-announce-sig-v1",
+        "qaudion-fa-announce-sig-v1",
     ]
 
     func testNoTagIsAPrefixOfAnother() {

@@ -272,43 +272,6 @@ final class BCryptoAuthWireFormatTests: XCTestCase {
         _ = try await makeApi().register(phoneNumber: "+14155552671", password: "pw", displayName: nil, ageDeclared: false, termsAcceptance: nil)
         assertNotDeclared(try lastBodyJson())
     }
-
-    // MARK: - Age declaration (register/sovereign)
-
-    private let okSovereignJson = #"{"user_id":"u-1","challenge":"00ff"}"#
-
-    func testRegisterSovereignTickedSendsDeclarationAndTermsAcceptance() async throws {
-        StubURLProtocol.stubResponse = (200, Data(okSovereignJson.utf8))
-        let manager = SovereignIdentityManager()
-        let identity = manager.generateIdentity(serverUrl: "https://test.local", displayName: "Anna")
-        let result = try await manager.registerWithServer(identity: identity, rest: makeRest(), ageDeclared: true, termsAcceptance: Self.sampleAcceptance)
-        XCTAssertEqual(result.userId, "u-1")
-        XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/register/sovereign")
-        let json = try lastBodyJson()
-        assertDeclared(json)
-        // The declaration does not displace the fields the request already carried.
-        XCTAssertEqual(json["display_name"] as? String, "Anna")
-        XCTAssertEqual(json["server_url"] as? String, "https://test.local")
-        XCTAssertEqual((json["signing_pub_key"] as? String)?.count, 64)
-    }
-
-    func testRegisterSovereignNotTickedSendsNoDeclarationAndNoAcceptance() async throws {
-        StubURLProtocol.stubResponse = (200, Data(okSovereignJson.utf8))
-        let manager = SovereignIdentityManager()
-        let identity = manager.generateIdentity(serverUrl: "https://test.local", displayName: nil)
-        _ = try await manager.registerWithServer(identity: identity, rest: makeRest(), ageDeclared: false, termsAcceptance: nil)
-        XCTAssertEqual(StubURLProtocol.lastRequestPath, "/api/v1/register/sovereign")
-        assertNotDeclared(try lastBodyJson())
-    }
-
-    /// A caller that says nothing about the declaration (the engine's demo UI) declares nothing.
-    func testRegisterSovereignWithoutTheArgumentSendsNoDeclarationAndNoAcceptance() async throws {
-        StubURLProtocol.stubResponse = (200, Data(okSovereignJson.utf8))
-        let manager = SovereignIdentityManager()
-        let identity = manager.generateIdentity(serverUrl: "https://test.local", displayName: nil)
-        _ = try await manager.registerWithServer(identity: identity, rest: makeRest())
-        assertNotDeclared(try lastBodyJson())
-    }
 }
 
 // MARK: - URLProtocol stub

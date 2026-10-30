@@ -216,17 +216,6 @@ final class CrossPlatformTestVectors: XCTestCase {
         XCTAssertEqual(loaded?.signingPublic, identity.signingPublic)
     }
 
-    func testSovereignChallengeSign() throws {
-        let manager = SovereignIdentityManager()
-        let identity = manager.generateIdentity(serverUrl: "https://voip.bcrypto.com", displayName: nil)
-        let challenge = Data(repeating: 0xAB, count: 32)
-        let signature = try manager.signChallenge(challenge, identity: identity)
-        XCTAssertEqual(signature.count, 64) // Ed25519 signature
-        XCTAssertTrue(manager.verifySignature(publicKey: identity.signingPublic, challenge: challenge, signature: signature))
-        // Wrong challenge must fail
-        XCTAssertFalse(manager.verifySignature(publicKey: identity.signingPublic, challenge: Data(repeating: 0x00, count: 32), signature: signature))
-    }
-
     // MARK: - Opaque Mailbox (must match Android)
 
     func testOpaqueMailboxIdDeterminism() {

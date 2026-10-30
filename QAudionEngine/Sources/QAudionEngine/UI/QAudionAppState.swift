@@ -72,42 +72,6 @@ public final class QAudionAppState: ObservableObject {
         }
     }
 
-    /// Sovereign identity registration. `ageDeclared` is handed on to the server as it is, like in `register`.
-    public func registerSovereign(displayName: String?, ageDeclared: Bool = false,
-                                  termsAcceptance: TermsAcceptance? = nil) async {
-        do {
-            let mgr = SovereignIdentityManager()
-            let identity = mgr.generateIdentity(serverUrl: config.serverUrl, displayName: displayName)
-            let tempBackend = BCryptoBackendProvider(config: config)
-            let (userId, challenge) = try await mgr.registerWithServer(identity: identity, rest: tempBackend.getRestClient(),
-                                                                       ageDeclared: ageDeclared,
-                                                                       termsAcceptance: termsAcceptance)
-            // Sign challenge
-            let challengeData = Data(hex: challenge)
-            let updatedIdentity = SovereignIdentityManager.SovereignIdentity(
-                userId: userId,
-                encryptionPrivate: identity.encryptionPrivate,
-                encryptionPublic: identity.encryptionPublic,
-                signingPrivate: identity.signingPrivate,
-                signingPublic: identity.signingPublic,
-                serverUrl: identity.serverUrl,
-                displayName: identity.displayName,
-                identityType: identity.identityType
-            )
-            let signature = try mgr.signChallenge(challengeData, identity: updatedIdentity)
-            let creds = try await mgr.verifySovereignRegistration(userId: userId, signature: signature, rest: tempBackend.getRestClient())
-            try mgr.saveIdentity(updatedIdentity)
-            saveCredentials(creds)
-            config.accessToken = creds.accessToken
-            config.userId = creds.userId
-            config.deviceId = creds.deviceId
-            initializeBackend()
-            await MainActor.run { authState = .authenticated }
-        } catch {
-            await MainActor.run { errorMessage = "Sovereign registration failed: \(error.localizedDescription)" }
-        }
-    }
-
     /// Logout and clear state.
     public func logout() async {
         try? await backend?.accountApi.logout()
