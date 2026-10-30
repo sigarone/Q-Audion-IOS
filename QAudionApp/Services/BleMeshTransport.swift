@@ -170,6 +170,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
         var boundAtMs: Int64 = 0
         /// Spec 3.6: a claimant the collapse guard refused to close: kept open but not a route.
         var unroutable = false
+        /// Qualifier of `downReason` that goes into `link.down` as `why` (spec 3.6.1: `verified`).
+        var downWhy: String?
         /// The last time a validated DATA or RECEIPT packet arrived on this link (spec 3.6), 0 if never.
         var lastDataMs: Int64 = 0
         /// The challenge and proof state of this link (section 8.5).
@@ -1236,9 +1238,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
         allLinks().contains(where: { $0.nodeHex == node && isHealthy($0, at: now) })
     }
 
-    /// Spec 3.6: called when an ANNOUNCE has bound a link to `nodeHex` and when a link bound to it is gone. The node id is only
-    /// a claim, so links with different identifiers are all kept and used. A link is closed only when it provably duplicates
-    /// another on the same physical device (same identifier, opposite role), which the platform's own identifiers make rare.
+    /// Spec 3.6 / 3.6.1: called when an ANNOUNCE has bound a link to `nodeHex`, when a link of it is verified and when a link
+    /// bound to it is gone. The node id is only a claim, so links that merely claim it are all kept and used. A link is closed
+    /// when it provably duplicates another on the same physical device (same identifier, opposite role), and an own outgoing
+    /// link is closed when the node id is proved on it and on a preferred link.
     private func collapseLinks(to nodeHex: String) {
         let now = nowMs()
         // A link excluded earlier gets another chance.
@@ -1250,7 +1253,12 @@ final class BleMeshTransport: NSObject, MeshTransport {
             byKey[entry.key] = link
             candidates.append(entry)
         }
-        let toClose = MeshNodeLinkPolicy.sameDeviceDuplicates(localHex: localNodeId.hex, peerHex: nodeHex, links: candidates)
+        let sameDevice = MeshNodeLinkPolicy.sameDeviceDuplicates(localHex: localNodeId.hex, peerHex: nodeHex, links: candidates)
+        // Spec 3.6.1: own outgoing links on which the node id is proved, other than the preferred verified link.
+        let verifiedDup = MeshNodeLinkPolicy.verifiedDuplicates(
+            localHex: localNodeId.hex, peerHex: nodeHex, links: candidates.filter { !sameDevice.contains($0.key) }, nowMs: now
+        )
+        let toClose = sameDevice + verifiedDup
         guard !toClose.isEmpty else { return }
         // The budget is per link key; a link the guard refuses to close stays open but is not a route.
         let plan = MeshNodeLinkPolicy.plan(toClose: toClose) { collapseGuard.allow($0, nowMs: now) }
@@ -1258,7 +1266,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
         for key in plan.close {
             guard let link = byKey[key] else { continue }
             if link.isOutgoing {
-                redialMemory.note(link.identifier.uuidString, node: nodeHex, nowMs: now)
+                redialMemory.note(link.identifier.uuidString, node: nodeHex, nowMs: now, verified: verifiedDup.contains(key))
+                if verifiedDup.contains(key) { link.downWhy = "verified" }
                 disconnect(link, reason: "dup")
             } else {
                 // The platform cannot close a central's link: drop it and refuse its frames for a while.
@@ -1374,7 +1383,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
         malformedGuard.linkGone(link.identifier.uuidString)
         let held = Int(nowMs() - link.createdAtMs)
         let finalReason = link.downReason ?? reason
-        log(.linkDown, [("link", link.handle), ("reason", finalReason), ("heldMs", String(held))])
+        var downFields: [(String, String)] = [("link", link.handle), ("reason", finalReason)]
+        if finalReason == "dup", let why = link.downWhy { downFields.append(("why", why)) }
+        downFields.append(("heldMs", String(held)))
+        log(.linkDown, downFields)
         if let nodeHex = link.nodeHex, !allLinks().contains(where: { $0.nodeHex == nodeHex }) {
             announcedNeighborsByNode.removeValue(forKey: nodeHex)
         }

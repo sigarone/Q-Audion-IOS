@@ -192,11 +192,10 @@ identifier is a different advertiser.
 ### 3.6 Links that claim one node
 
 The node id in an ANNOUNCE is only a claim (section 8.1: the cipher is an
-app-recognition boundary). While ANNOUNCE carries no proof of the node id,
-links with different peer addresses that claim the same node id are all kept
-open and all used: nothing is closed, excluded or refused because another link
-claims the same id. Collapsing them needs proof of identity, which is a later
-change to ANNOUNCE.
+app-recognition boundary). Links with different peer addresses that only claim
+the same node id are all kept open and all used: nothing is closed, excluded or
+refused because another link claims the same id. Only links on which the node id
+is proved collapse (section 3.6.1).
 
 A link keeps the node id its first ANNOUNCE named. A later ANNOUNCE on the
 same link that names another node id is not accepted: the link is closed with
@@ -282,6 +281,29 @@ used at once.
   being unverified.
 - The collapse of this section needs no new frame. A peer that does not implement
   it keeps both links open and sees an ordinary disconnect on the closed one.
+
+### 3.6.1 Collapse of verified links
+
+A link is verified for a node when this device has verified that node's proof on
+it (section 8.5). For each peer node with at least one healthy verified link, the
+preferred link is the earliest-bound healthy verified link on which the node with
+the lower node id (node ids compared as lowercase hex strings) is the central;
+when there is none, it is the earliest-bound healthy verified link on which the
+node with the higher node id is the central. A device closes, with `link.down
+reason=dup why=verified`, every outgoing link of its own that is verified for that
+node and is neither the preferred link nor its own earliest-bound healthy verified
+outgoing link to that node. So at most two links per pair remain, one in each
+direction, and this rule never leaves a pair without a link: a link that silently
+fails in one direction still has the other. It never closes an incoming link for
+this reason and never closes or excludes a link that is not verified: links that
+only claim the node are kept and used as before. The decision is taken again, at
+once, whenever a link of that node is verified or goes away. The address of an
+outgoing link closed this way is not dialled again while a healthy link to its
+node exists, with no time limit, and is forgotten as soon as no healthy link to
+that node exists. The close counts toward the allowance of 4 closes in 300 s per
+platform link key; a link the allowance does not let the device close stays open
+but is not used until the next decision. A peer that does not verify proofs sees
+an ordinary disconnect on the closed link.
 
 ## 4. GATT service
 
@@ -628,6 +650,11 @@ See `announceChallenge` and `announceProof` in the vectors (section 14). Ed25519
 randomness to the signature (CryptoKit does), so implementations are held to the vector by verifying the vector's signature
 and, where the library is deterministic, by producing its exact bytes.
 
+A relay in radio range that forwards a live proof can make its link the preferred
+one of section 3.6.1. It still cannot read or forge content, and the device keeps
+its own earliest outgoing link to the node, so the effect is at most a denial of
+service comparable to jamming.
+
 ## 9. Delivery and relaying
 
 ### 9.1 For this device
@@ -754,7 +781,7 @@ display names. The only identifiers allowed are:
 | `radio` | `state` (`off`, `starting`, `on`, `error`), `mode` (`full`, `direct`, `visible`), `reason` |
 | `link.up` | `link`, `role` (`c`, `p`), `n` (links now) |
 | `link.ready` | `link`, `mtu` (Android, 0 if unknown), `l` (value limit L), `sub` |
-| `link.down` | `link`, `reason` (`remote`, `timeout`, `evicted`, `blocked`, `stop`, `dup`, `rebind`), `heldMs` |
+| `link.down` | `link`, `reason` (`remote`, `timeout`, `evicted`, `blocked`, `stop`, `dup`, `rebind`), `why` (`verified`, only with `reason=dup`), `heldMs` |
 | `link.refused` | `reason` (`cap`, `blocked`), `role` |
 | `ann.tx` | `link`, `nbrs`, `bytes`, `ok`; only for the ANNOUNCE sent at link-up (section 4.3) |
 | `ann.rx` | `link`, `nh`, `nbrs`, `bound` (always 1); only when the link-to-node mapping changed |
