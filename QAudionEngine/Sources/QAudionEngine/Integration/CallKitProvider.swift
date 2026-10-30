@@ -461,6 +461,17 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         ledger.recordRejected(uuid)
     }
 
+    /// The CallKit call `uuid` is only there to satisfy a push report and is ended at once: its end must
+    /// not touch the audio session or the end balance of any live call.
+    public func markReportOnly(_ uuid: UUID) {
+        ledger.markReportOnly(uuid)
+    }
+
+    /// Report for a group push that cannot ring: a fresh report-only uuid, never `derivedUuid`.
+    public func groupNotPresentableReport(derivedUuid: UUID) -> PushKitProvider.ReportSpec {
+        ledger.groupNotPresentableReport(derivedUuid: derivedUuid)
+    }
+
     /// W-WAKEONLY — "CallKit for wake only". After the user answers a
     /// push-woken call we dismiss the SYSTEM in-call UI (which iOS keeps on top
     /// of our window) by reporting the CallKit call ended, so the app's own SAS
