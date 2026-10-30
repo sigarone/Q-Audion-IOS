@@ -8,7 +8,7 @@ import CryptoKit
 /// pinned here so an edit (or a line-ending rewrite) cannot go unnoticed.
 final class MeshLinkVectorsTests: XCTestCase {
 
-    static let pinnedSha256 = "9ae4b0331419000406a132a94c71f1a094ab75615d473e5cce855f803ef1f888"
+    static let pinnedSha256 = "2bbeb51ff983aabacf5848b0d33b6e94501e6f0a05b34986ae339906d3bf4a95"
 
     // MARK: - Loading
 
@@ -88,6 +88,7 @@ final class MeshLinkVectorsTests: XCTestCase {
         XCTAssertEqual(int(types, "ANNOUNCE"), Int(MeshPacketType.announce.rawValue))
         XCTAssertEqual(int(types, "ACK"), Int(MeshPacketType.ack.rawValue))
         XCTAssertEqual(int(types, "RECEIPT"), Int(MeshPacketType.receipt.rawValue))
+        XCTAssertEqual(int(types, "ANNOUNCE_PROOF"), Int(MeshPacketType.announceProof.rawValue))
     }
 
     func testSpecConstantsOfTheLinkLayer() {
@@ -206,6 +207,83 @@ final class MeshLinkVectorsTests: XCTestCase {
             let opened = try XCTUnwrap(MeshDiscoveryCipher.decrypt(packet.payload), name)
             XCTAssertEqual(MeshAnnounce.decode(opened), announce, name)
             XCTAssertEqual(packet.encode().count, int(row, "packetLength"), name)
+        }
+    }
+
+    func testAnnounceWithAChallengeEncodesAndDecodesAsTheVectorsSay() throws {
+        for row in try section("announceChallenge") {
+            let name = string(row, "name")
+            let announce = MeshAnnounce(
+                nodeIdHex: string(row, "nodeIdHex"), identityFingerprintHex: string(row, "nodeIdHex"),
+                neighborNodeIdsHex: try XCTUnwrap(row["neighborNodeIdsHex"] as? [String]),
+                challengeHex: string(row, "challengeHex"), peerVerified: (row["peerVerified"] as? Bool) ?? false
+            )
+            XCTAssertEqual(hex(announce.encode()), string(row, "canonicalJsonHex"), name)
+            let decoded = try XCTUnwrap(MeshAnnounce.decode(try bytes(string(row, "canonicalJsonHex"))), name)
+            XCTAssertEqual(decoded.challengeHex, string(row, "challengeHex"), name)
+            XCTAssertEqual(decoded.peerVerified, (row["peerVerified"] as? Bool) ?? false, name)
+        }
+        // A challenge that is not 32 lowercase hex characters reads as absent; the ANNOUNCE stays valid.
+        let bad = Data(#"{"v":1,"node":"21fe31dfa154a261","fp":"21fe31dfa154a261","nbrs":[],"ch":"zz"}"#.utf8)
+        XCTAssertNil(try XCTUnwrap(MeshAnnounce.decode(bad)).challengeHex)
+    }
+
+    func testTheProofVectorsMatchByteForByteAndVerify() throws {
+        let proof = try XCTUnwrap(try vectors()["announceProof"] as? [String: Any])
+        XCTAssertEqual(string(proof, "domainHex"), hex(MeshAnnounceProof.domain))
+        XCTAssertEqual(int(proof, "payloadLength"), MeshAnnounceProof.payloadLength)
+        XCTAssertEqual(int(proof, "signedBytesLength"), MeshAnnounceProof.messageLength)
+        for row in try XCTUnwrap(proof["cases"] as? [[String: Any]]) {
+            let name = string(row, "name")
+            let prover = try MeshNodeId(hex: string(row, "proverNodeIdHex"))
+            let verifier = try MeshNodeId(hex: string(row, "verifierNodeIdHex"))
+            let central = (row["proverIsCentral"] as? Bool) ?? false
+            let proverNonce = try bytes(string(row, "proverNonceHex"))
+            let verifierNonce = try bytes(string(row, "verifierNonceHex"))
+            let message = try XCTUnwrap(MeshAnnounceProof.message(prover: prover, verifier: verifier, proverNonce: proverNonce,
+                                                                  verifierNonce: verifierNonce, proverIsCentral: central), name)
+            XCTAssertEqual(hex(message), string(row, "signedBytesHex"), name)
+            // CryptoKit hedges its Ed25519 signatures with fresh randomness, so its bytes differ from run to run (the Android
+            // library and the generator give the exact bytes of the vector). What must hold here: the vector's signature
+            // verifies, and a signature made now verifies too.
+            let key = try Curve25519.Signing.PrivateKey(rawRepresentation: try bytes(string(row, "proverSeedHex")))
+            let vectorSignature = try bytes(string(row, "signatureHex"))
+            XCTAssertTrue(key.publicKey.isValidSignature(vectorSignature, for: message), name)
+            XCTAssertTrue(key.publicKey.isValidSignature(try key.signature(for: message), for: message), name)
+            XCTAssertEqual(hex(key.publicKey.rawRepresentation), string(row, "proverPublicKeyHex"), name)
+            let payload = try XCTUnwrap(MeshAnnounceProof.payload(publicKey: key.publicKey.rawRepresentation, signature: vectorSignature), name)
+            XCTAssertEqual(hex(payload), string(row, "payloadHex"), name)
+            XCTAssertEqual(MeshNodeId.from(identityKeyRaw: key.publicKey.rawRepresentation), prover, name)
+            let packet = try MeshPacket(type: .announceProof, senderId: prover, recipientId: verifier,
+                                        timestampMs: try XCTUnwrap((row["packetTimestampMs"] as? NSNumber)?.int64Value), payload: payload)
+            XCTAssertEqual(hex(packet.encode()), string(row, "packetHex"), name)
+            XCTAssertEqual(MeshPacket.decode(packet.encode()), packet, name)
+            XCTAssertEqual(MeshAnnounceProof.verify(payload: payload, prover: prover, verifier: verifier, proverNonce: proverNonce,
+                                                    verifierNonce: verifierNonce, proverIsCentral: central), .ok, name)
+        }
+        // A signature made by CryptoKit on iOS (hedged, so not the deterministic bytes of the cases) is one of the vectors: it must
+        // verify on every platform.
+        let cases = try XCTUnwrap(proof["cases"] as? [[String: Any]])
+        for external in try XCTUnwrap(proof["externalSignatures"] as? [[String: Any]]) {
+            let name = string(external, "name")
+            let row = try XCTUnwrap(cases.first { string($0, "name") == string(external, "caseName") }, name)
+            XCTAssertNotEqual(string(external, "signatureHex"), string(row, "signatureHex"), name)
+            let payload = try XCTUnwrap(MeshAnnounceProof.payload(publicKey: try bytes(string(row, "proverPublicKeyHex")),
+                                                                  signature: try bytes(string(external, "signatureHex"))), name)
+            XCTAssertEqual(MeshAnnounceProof.verify(
+                payload: payload, prover: try MeshNodeId(hex: string(row, "proverNodeIdHex")),
+                verifier: try MeshNodeId(hex: string(row, "verifierNodeIdHex")), proverNonce: try bytes(string(row, "proverNonceHex")),
+                verifierNonce: try bytes(string(row, "verifierNonceHex")), proverIsCentral: (row["proverIsCentral"] as? Bool) ?? false
+            ), .ok, name)
+        }
+        for row in try XCTUnwrap(proof["negatives"] as? [[String: Any]]) {
+            let name = string(row, "name")
+            let result = MeshAnnounceProof.verify(
+                payload: try bytes(string(row, "payloadHex")), prover: try MeshNodeId(hex: string(row, "proverNodeIdHex")),
+                verifier: try MeshNodeId(hex: string(row, "verifierNodeIdHex")), proverNonce: try bytes(string(row, "proverNonceHex")),
+                verifierNonce: try bytes(string(row, "verifierNonceHex")), proverIsCentral: (row["proverIsCentral"] as? Bool) ?? false
+            )
+            XCTAssertNotEqual(result, .ok, name)
         }
     }
 

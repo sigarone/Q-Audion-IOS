@@ -32,6 +32,12 @@ public enum MeshLinkTiming {
     /// Section 3.3: the wait before an evicted address is dialled again grows 30, 60, 120, 300 s, and resets after this quiet time.
     public static let evictRedialBackoffMs: [Int64] = [30_000, 60_000, 120_000, 300_000]
     public static let evictMemoryResetMs: Int64 = 900_000
+    /// Section 8.5: how long a verified key stays pinned to its node id.
+    public static let verifiedCacheTtlMs: Int64 = 600_000
+    /// Section 8.5: at most this many proofs are checked on one link; later ones are ignored.
+    public static let proofMaxAttempts = 3
+    /// Section 8.5: at most this many times our proof is sent on one link, whatever happens (a safety net).
+    public static let proofMaxSends = 8
     /// Section 3.6: at most this many closes of one link key inside `collapseWindowMs`; beyond it the link is excluded.
     public static let collapseMaxPerWindow = 4
     public static let collapseWindowMs: Int64 = 300_000
@@ -51,9 +57,15 @@ public struct MeshLinkCandidate: Equatable, Sendable {
     public let lastDataMs: Int64
     /// The node the link is bound to, nil while it has no ANNOUNCE yet.
     public let nodeHex: String?
+    /// The node id of this link was proved (section 8.5), or is trusted for the short window of a cached proof.
+    public let verified: Bool
+    /// A proof arrived and did not verify. Such a link ranks last, but it is not closed for that.
+    public let failed: Bool
 
     public init(key: String, central: Bool, address: String, subscribed: Bool, lastActivityMs: Int64, boundAtMs: Int64,
-                lastDataMs: Int64 = 0, nodeHex: String? = nil) {
+                lastDataMs: Int64 = 0, nodeHex: String? = nil, verified: Bool = false, failed: Bool = false) {
+        self.verified = verified
+        self.failed = failed
         self.lastDataMs = lastDataMs
         self.nodeHex = nodeHex
         self.key = key
@@ -62,6 +74,91 @@ public struct MeshLinkCandidate: Equatable, Sendable {
         self.subscribed = subscribed
         self.lastActivityMs = lastActivityMs
         self.boundAtMs = boundAtMs
+    }
+}
+
+/// Section 8.5: what is known of the proof of a link.
+public enum MeshVerification: Sendable { case unverified, verified, failed }
+
+/// Section 8.5: the challenge and proof state of one link. The nonce is never logged.
+public final class MeshLinkProofState {
+    /// Our challenge on this link, sent in every ANNOUNCE on it.
+    public let nonce: Data = MeshAnnounceProof.newNonce()
+    /// The challenge of the peer, from its first ANNOUNCE that carried one.
+    public var peerNonce: Data?
+    /// An ANNOUNCE carrying our challenge went out on this link.
+    public var announceSent = false
+    /// When we last tried to send our proof on this link (0: never). A failed attempt is retried after one ANNOUNCE period.
+    public var lastProofAttemptMs: Int64 = 0
+    /// How many times we tried to send our proof on this link.
+    public var proofSends = 0
+    /// The peer's ANNOUNCE said `pv=1`: it verified us. Only stops our resending; it never changes routing.
+    public var peerVerifiedUs = false
+    public var state: MeshVerification = .unverified
+    /// Proofs checked on this link so far; after ``MeshLinkTiming/proofMaxAttempts`` the rest are ignored.
+    public var verifyAttempts = 0
+    public var badLogged = false
+
+    public init() {}
+
+    public func verifiedAt(_ nowMs: Int64) -> Bool {
+        state == .verified
+    }
+
+    /// Whether to send our proof now: the link is bound, both challenges are known, our ANNOUNCE went out, the peer has not said it
+    /// verified us (`pv=1`), fewer than ``MeshLinkTiming/proofMaxSends`` tries were made, and the last attempt is at least one
+    /// ANNOUNCE period old. This resends the proof on later ANNOUNCEs until the peer verified us, and retries after a signature or
+    /// a write that failed (the Keychain may be locked). What WE verified of the peer has nothing to do with it.
+    public func proofDue(nowMs: Int64, bound: Bool) -> Bool {
+        bound && peerNonce != nil && announceSent && !peerVerifiedUs && proofSends < MeshLinkTiming.proofMaxSends
+            && (lastProofAttemptMs == 0 || nowMs - lastProofAttemptMs >= MeshLinkTiming.announceIntervalMs)
+    }
+
+    /// Whether a received proof is still to be checked (3 per link).
+    public func takeVerifyAttempt() -> Bool {
+        guard verifyAttempts < MeshLinkTiming.proofMaxAttempts else { return false }
+        verifyAttempts += 1
+        return true
+    }
+}
+
+/// Section 8.5: the key pinned to each node id that was verified, for ``MeshLinkTiming/verifiedCacheTtlMs`` (at most 64 nodes).
+/// A valid proof for a node id with a different key than the pinned one must not become verified. The pin is not replaced and
+/// not deleted before it expires.
+public struct MeshVerifiedCache {
+    private struct Entry {
+        var key: Data
+        var stampMs: Int64
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    public init() {}
+
+    public var count: Int { entries.count }
+
+    /// Pins `key` to `node`, or refreshes the pin when it is the same key. A different key never replaces a live pin.
+    public mutating func put(_ node: String, key: Data, nowMs: Int64) {
+        entries = entries.filter { nowMs - $0.value.stampMs < MeshLinkTiming.verifiedCacheTtlMs }
+        if var existing = entries[node] {
+            if existing.key == key {
+                existing.stampMs = nowMs
+                entries[node] = existing
+            }
+            return
+        }
+        entries[node] = Entry(key: key, stampMs: nowMs)
+        while entries.count > MeshLinkTiming.tableCap,
+              let oldest = entries.min(by: { $0.value.stampMs < $1.value.stampMs })?.key {
+            entries.removeValue(forKey: oldest)
+        }
+    }
+
+    /// True when `node` has no live pin, or the pin is `key`.
+    public func keyMatches(_ node: String, key: Data, nowMs: Int64) -> Bool {
+        guard let entry = entries[node] else { return true }
+        if nowMs - entry.stampMs >= MeshLinkTiming.verifiedCacheTtlMs { return true }
+        return entry.key == key
     }
 }
 
@@ -84,6 +181,8 @@ public enum MeshNodeLinkPolicy {
         let groups = Dictionary(grouping: links.filter { $0.subscribed }, by: { $0.address })
         for (_, group) in groups {
             guard group.contains(where: { $0.central }), group.contains(where: { !$0.central }) else { continue }
+            // Only the deterministic role rule: the two ends may differ in what they verified, so verification must not decide
+            // which of the pair is closed (they could close opposite links).
             close.append(contentsOf: group.filter { $0.central != preferCentral }.map { $0.key })
         }
         return close.sorted()
@@ -95,14 +194,20 @@ public enum MeshNodeLinkPolicy {
         links.filter { $0.subscribed && nowMs - $0.lastActivityMs <= MeshLinkTiming.linkIdleTimeoutMs }.map { $0.key }
     }
 
-    /// The links of ONE node a send goes to: every healthy link, up to ``MeshLinkTiming/maxLinksPerNode``. Only above that is
-    /// there a ranking: the link bound to the node earliest first, then the others by the most recent validated data (ties:
-    /// the older bind). Claimants therefore push the real node out only when more than four addresses claim it.
+    /// The links of ONE node a send goes to: every healthy link, up to ``MeshLinkTiming/maxLinksPerNode``. Nothing is excluded for
+    /// being unverified (a link that is believed verified may be dead or relayed, section 8.5). Above the cap the order is:
+    /// verified, then unverified, then failed proofs last; within a class the link bound to the node earliest first, then the
+    /// others by the most recent validated data (ties: the older bind).
     public static func fanOut(links: [MeshLinkCandidate], nowMs: Int64) -> [String] {
-        let healthy = links.filter { $0.subscribed && nowMs - $0.lastActivityMs <= MeshLinkTiming.linkIdleTimeoutMs }
-        let byBind = healthy.sorted { a, b in a.boundAtMs != b.boundAtMs ? a.boundAtMs < b.boundAtMs : a.key < b.key }
+        let pool = links.filter { $0.subscribed && nowMs - $0.lastActivityMs <= MeshLinkTiming.linkIdleTimeoutMs }
+        func tier(_ link: MeshLinkCandidate) -> Int { link.verified ? 0 : (link.failed ? 2 : 1) }
+        let byBind = pool.sorted { a, b in
+            if tier(a) != tier(b) { return tier(a) < tier(b) }
+            return a.boundAtMs != b.boundAtMs ? a.boundAtMs < b.boundAtMs : a.key < b.key
+        }
         if byBind.count <= MeshLinkTiming.maxLinksPerNode { return byBind.map { $0.key } }
         let rest = byBind.dropFirst().sorted { a, b in
+            if tier(a) != tier(b) { return tier(a) < tier(b) }
             if a.lastDataMs != b.lastDataMs { return a.lastDataMs > b.lastDataMs }
             if a.boundAtMs != b.boundAtMs { return a.boundAtMs < b.boundAtMs }
             return a.key < b.key
@@ -143,7 +248,8 @@ public enum MeshNodeLinkPolicy {
     /// newcomer, never a link bound to the node the newcomer itself claims, and never the earliest-bound healthy link of its
     /// node (the newcomer is not counted in that decision). Nil when there is none.
     public static func evictionVictim(links: [MeshLinkCandidate], centralRole: Bool, excludingKey: String?, nowMs: Int64) -> String? {
-        let newcomerNode = links.first(where: { $0.key == excludingKey })?.nodeHex
+        let newcomer = links.first(where: { $0.key == excludingKey })
+        let newcomerNode = newcomer?.nodeHex
         let healthy = links.filter {
             $0.key != excludingKey && $0.subscribed && nowMs - $0.lastActivityMs <= MeshLinkTiming.linkIdleTimeoutMs
         }
@@ -154,12 +260,26 @@ public enum MeshNodeLinkPolicy {
                         && ($0.boundAtMs < link.boundAtMs || ($0.boundAtMs == link.boundAtMs && $0.key < link.key))
                 })
         }
+        // The earliest-bound VERIFIED link of a node is protected too (section 8.5); any other link, verified or not, can go.
+        func earliestVerifiedOfItsNode(_ link: MeshLinkCandidate) -> Bool {
+            link.verified && link.nodeHex != nil && healthy.contains(where: { $0.key == link.key })
+                && !healthy.contains(where: {
+                    $0.key != link.key && $0.verified && $0.nodeHex == link.nodeHex
+                        && ($0.boundAtMs < link.boundAtMs || ($0.boundAtMs == link.boundAtMs && $0.key < link.key))
+                })
+        }
         func idleSince(_ link: MeshLinkCandidate) -> Int64 { max(link.lastDataMs, link.boundAtMs) }
         return links.filter {
             $0.central == centralRole && $0.key != excludingKey
                 && nowMs - idleSince($0) > MeshLinkTiming.evictMinAgeMs
-                && (newcomerNode == nil || $0.nodeHex != newcomerNode) && !earliestOfItsNode($0)
+                && (newcomerNode == nil || $0.nodeHex != newcomerNode) && !earliestOfItsNode($0) && !earliestVerifiedOfItsNode($0)
         }.min { a, b in idleSince(a) != idleSince(b) ? idleSince(a) < idleSince(b) : a.key < b.key }?.key
+    }
+
+    /// Whether a dial or an accept beyond the cap (the probation slot) is worth it: only when, once the newcomer has announced,
+    /// there would be a link to evict and the limiter would allow it. Otherwise the newcomer could only end by evicting itself.
+    public static func probationUseful(links: [MeshLinkCandidate], centralRole: Bool, nowMs: Int64, limiterAllows: Bool) -> Bool {
+        limiterAllows && evictionVictim(links: links, centralRole: centralRole, excludingKey: nil, nowMs: nowMs) != nil
     }
 
     /// Whether a link that subscribed at `subscribedAtMs` and has no node yet has waited too long for its ANNOUNCE.
@@ -192,6 +312,12 @@ public struct MeshEvictionLimiter {
 
     public init() {}
 
+    /// True when a link of the role could be evicted now; nothing is recorded.
+    public func wouldAllow(centralRole: Bool, nowMs: Int64) -> Bool {
+        guard let last = lastMs[centralRole] else { return true }
+        return nowMs - last >= MeshLinkTiming.evictWindowMs
+    }
+
     /// True (and recorded) when a link of the role may be evicted now.
     public mutating func allow(centralRole: Bool, nowMs: Int64) -> Bool {
         if let last = lastMs[centralRole], nowMs - last < MeshLinkTiming.evictWindowMs { return false }
@@ -214,16 +340,20 @@ public struct MeshEvictionMemory {
 
     public init() {}
 
-    public mutating func note(_ address: String, nowMs: Int64) {
+    /// Records an eviction of `address` and returns the wait that now applies, in milliseconds.
+    @discardableResult
+    public mutating func note(_ address: String, nowMs: Int64) -> Int64 {
         var strikes = 0
         if let existing = entries[address], nowMs - existing.stampMs < MeshLinkTiming.evictMemoryResetMs {
             strikes = min(existing.strikes + 1, MeshLinkTiming.evictRedialBackoffMs.count - 1)
         }
-        entries[address] = Entry(untilMs: nowMs + MeshLinkTiming.evictRedialBackoffMs[strikes], strikes: strikes, stampMs: nowMs)
+        let wait = MeshLinkTiming.evictRedialBackoffMs[strikes]
+        entries[address] = Entry(untilMs: nowMs + wait, strikes: strikes, stampMs: nowMs)
         while entries.count > MeshLinkTiming.tableCap,
               let oldest = entries.min(by: { $0.value.stampMs < $1.value.stampMs })?.key {
             entries.removeValue(forKey: oldest)
         }
+        return wait
     }
 
     public func blocks(_ address: String, nowMs: Int64) -> Bool {
@@ -345,6 +475,7 @@ public struct MeshAnnounceSummary {
     private var tx = 0
     private var txFail = 0
     private var rx = 0
+    private var badSig = 0
     private var addressesByNode: [String: Set<String>] = [:]
 
     public init(startMs: Int64) {
@@ -354,6 +485,10 @@ public struct MeshAnnounceSummary {
     public mutating func recordTx(ok: Bool) {
         tx += 1
         if !ok { txFail += 1 }
+    }
+
+    public mutating func recordBadSig() {
+        badSig += 1
     }
 
     public mutating func recordRx(node: String, address: String) {
@@ -369,14 +504,16 @@ public struct MeshAnnounceSummary {
     }
 
     /// Emits the line and starts a new window when the window is over and something happened; otherwise does nothing.
-    public mutating func flushIfDue(nowMs: Int64, links: Int) {
+    public mutating func flushIfDue(nowMs: Int64, links: Int, verified: Int = 0, unverified: Int = 0) {
         guard nowMs - windowStartMs >= MeshLinkTiming.announceSummaryMs else { return }
         if tx != 0 || rx != 0 {
             let claim = addressesByNode.values.filter { $0.count > 1 }.count
             MeshLog.emit(.annSum, [("tx", String(tx)), ("fail", String(txFail)), ("rx", String(rx)),
-                                   ("links", String(links)), ("claim", String(claim)),
+                                   ("links", String(links)), ("claim", String(claim)), ("ver", String(verified)),
+                                   ("unv", String(unverified)), ("badsig", String(badSig)),
                                    ("s", String((nowMs - windowStartMs) / 1000))])
         }
+        badSig = 0
         windowStartMs = nowMs
         tx = 0
         txFail = 0

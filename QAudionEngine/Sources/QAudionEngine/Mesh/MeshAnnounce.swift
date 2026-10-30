@@ -24,6 +24,8 @@ public struct MeshAnnounce: Equatable, Sendable, Codable {
         case identityFingerprintHex = "fp"
         case displayHint = "hint"
         case neighborNodeIdsHex = "nbrs"
+        case challengeHex = "ch"
+        case peerVerified = "pv"
     }
 
     public let version: Int
@@ -41,19 +43,27 @@ public struct MeshAnnounce: Equatable, Sendable, Codable {
     /// Hex node ids this sender is directly connected to right now — its
     /// neighbor list. Capped by the sender to bound packet size.
     public let neighborNodeIdsHex: [String]
+    /// The 16-byte challenge of this link as 32 lowercase hex characters (section 8.5); nil when the sender sends none.
+    public let challengeHex: String?
+    /// `pv`: the sender has verified the proof of this link's peer (section 8.5). Only stops the peer resending; never routing.
+    public let peerVerified: Bool
 
     public init(
         version: Int = MeshAnnounce.wireVersion,
         nodeIdHex: String,
         identityFingerprintHex: String,
         displayHint: String? = nil,
-        neighborNodeIdsHex: [String] = []
+        neighborNodeIdsHex: [String] = [],
+        challengeHex: String? = nil,
+        peerVerified: Bool = false
     ) {
         self.version = version
         self.nodeIdHex = nodeIdHex
         self.identityFingerprintHex = identityFingerprintHex
         self.displayHint = displayHint
         self.neighborNodeIdsHex = neighborNodeIdsHex
+        self.challengeHex = challengeHex
+        self.peerVerified = peerVerified
     }
 
     /// Canonical wire JSON (docs/mesh/MESH_LINK_SPEC.md section 8.2): members
@@ -62,7 +72,12 @@ public struct MeshAnnounce: Equatable, Sendable, Codable {
     /// number or lowercase hex, so nothing needs escaping.
     public func encode() -> Data {
         let neighbors = neighborNodeIdsHex.prefix(Self.maxNeighbors).map { "\"" + $0 + "\"" }.joined(separator: ",")
-        let json = "{\"v\":\(version),\"node\":\"\(nodeIdHex)\",\"fp\":\"\(identityFingerprintHex)\",\"nbrs\":[\(neighbors)]}"
+        var json = "{\"v\":\(version),\"node\":\"\(nodeIdHex)\",\"fp\":\"\(identityFingerprintHex)\",\"nbrs\":[\(neighbors)]"
+        if let challengeHex, Self.isChallengeHex(challengeHex) {
+            json += ",\"ch\":\"\(challengeHex)\""
+            if peerVerified { json += ",\"pv\":1" }
+        }
+        json += "}"
         return Data(json.utf8)
     }
 
@@ -99,7 +114,11 @@ public struct MeshAnnounce: Equatable, Sendable, Codable {
         let neighbors: [String] = Array(valid.prefix(maxNeighbors))
         return .success(MeshAnnounce(
             version: wireVersion, nodeIdHex: node, identityFingerprintHex: fp,
-            displayHint: wire.hint?.value, neighborNodeIdsHex: neighbors
+            displayHint: wire.hint?.value, neighborNodeIdsHex: neighbors,
+            // `ch` is optional; anything but 32 lowercase hex characters reads as absent (a peer without proofs).
+            challengeHex: wire.ch?.value.flatMap { isChallengeHex($0) ? $0 : nil },
+            // `pv` is read strictly: only the number 1 as written counts; a string, a boolean, 1.0 or anything else reads as absent.
+            peerVerified: members["pv"] == "1" && (wire.ch?.value.map { isChallengeHex($0) } ?? false)
         ))
     }
 
@@ -181,11 +200,16 @@ public struct MeshAnnounce: Equatable, Sendable, Codable {
         let fp: String?
         let hint: LenientString?
         let nbrs: [LenientString]?
+        let ch: LenientString?
     }
 
     public static func decode(_ bytes: Data) -> MeshAnnounce? {
         if case .success(let announce) = decodeStrict(bytes) { return announce }
         return nil
+    }
+
+    static func isChallengeHex(_ value: String) -> Bool {
+        value.utf8.count == 32 && value.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x61 && $0 <= 0x66) }
     }
 
     private static func isNodeIdHex(_ value: String) -> Bool {

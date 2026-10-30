@@ -255,14 +255,19 @@ used at once.
   kept open but not used first, then the longest idle link. A link is idle
   since the later of its last validated DATA or RECEIPT and its bind, and is
   evictable once idle for more than 30 s. Never evicted: the newcomer itself,
-  any link bound to the node id the newcomer claims, and the earliest-bound
-  healthy link of a node (the newcomer is not counted in that decision). With
+  any link bound to the node id the newcomer claims, the earliest-bound
+  healthy link of a node and the earliest-bound verified link of a node (the
+  newcomer is not counted in that decision). With
   no link to evict, the newcomer is closed.
 - A link closed by eviction, the newcomer itself included, is remembered: an
   outgoing address is not dialled again for 30 s, then 60, 120 and 300 s for
   each repeat (forgotten after 15 quiet minutes), whether or not a healthy
-  link to its node exists; an incoming central is refused for 60 s. Beyond the
-  outgoing cap only an address whose node has no healthy link is dialled.
+  link to its node exists; an incoming central is refused for 60 s, or for the
+  same growing wait if that is longer. Beyond the outgoing cap only an address
+  whose node has no healthy link is dialled, and only when a dry run of the
+  eviction choice (leaving the newcomer out) finds a link that could make room and
+  the limit of one eviction per 30 s allows it; an incoming connection beyond the
+  incoming cap is accepted under the same test.
 - A link that subscribed and has not sent a valid ANNOUNCE within 35 s (two ANNOUNCE periods and a frame
   timeout, so one lost ANNOUNCE does not close an honest link) is
   closed, so that it cannot hold a slot (including the probation slot).
@@ -271,11 +276,12 @@ used at once.
 - All the timers of this section (bind time, activity, refusals, memories,
   allowance, ANNOUNCE pacing) use a monotonic clock that keeps counting while the
   device sleeps; the timestamp inside a packet is not one of them.
-- A signed ANNOUNCE (a challenge in each ANNOUNCE and a signature over the node
-  id with the identity key) would let a device collapse links by verified
-  identity instead of by address.
-- No new wire field and no new frame is used. A peer that does not implement
-  this keeps both links open and sees an ordinary disconnect on the closed one.
+- Links whose node id is proved (section 8.5) rank first above four links. The
+  earliest-bound verified link of a node is protected from eviction, as is the
+  earliest-bound healthy link of a node. Nothing is left out of a send for
+  being unverified.
+- The collapse of this section needs no new frame. A peer that does not implement
+  it keeps both links open and sees an ordinary disconnect on the closed one.
 
 ## 4. GATT service
 
@@ -462,9 +468,11 @@ Senders MUST produce exactly this canonical form. See `packetHeaders` and
 | 0x03 | ANNOUNCE | discovery-wrapped JSON (section 8) | never |
 | 0x04 | ACK | reserved, not sent; receivers drop | no |
 | 0x05 | RECEIPT | sealed shell (WIRE_SPEC 9.5) | yes |
+| 0x06 | ANNOUNCE_PROOF | proof of a node id (section 8.5) | never |
 
 DATA and RECEIPT are originated with `ttl = 5` and no source route. ANNOUNCE
-has no ttl and recipient broadcast.
+has no ttl and recipient broadcast. ANNOUNCE_PROOF has no ttl and the node id
+of the verifier as recipient; it goes to the peer of one link only.
 
 ## 8. ANNOUNCE
 
@@ -486,7 +494,14 @@ only to make the vectors reproducible; on the air the nonce is random).
 
 - Senders emit `v`, `node`, `fp`, `nbrs` in this order, UTF-8, no whitespace,
   and omit `hint`. `fp` equals `node`. `nbrs` lists at most 10 node ids of
-  peers this device currently has a live link to (empty list if none).
+  peers this device currently has a live link to (empty list if none). A
+  sender that implements section 8.5 appends a sixth member after `nbrs`:
+  `"ch":"<32 lowercase hex characters>"`, its challenge on this link, and once
+  it has verified the peer's proof on this link, `"pv":1` after it (8.5).
+  Receivers read `ch` when it is exactly 32 lowercase hex characters and treat
+  anything else as absent (a peer without proofs). They read `pv` strictly: only
+  the number 1 counts, a string, a boolean, `1.0` or anything else is absent, and
+  `pv` without a valid `ch` is ignored.
 - Receivers parse JSON; they MUST NOT depend on key order or escaping. They
   MUST reject when `v` is absent or not 1, when `node` or `fp` is absent or not
   16 lowercase hex characters, or when `node` equals the broadcast id. They MUST
@@ -515,6 +530,103 @@ The periodic ANNOUNCEs of different links MUST NOT go out at one instant: a
 device starts at most one periodic ANNOUNCE per 1 s tick, the link whose last
 ANNOUNCE is the oldest first. Links announced together at link-up are thereby
 spread over the period, and each keeps its 15 s cadence (up to 1 s late).
+
+### 8.5 Proof of the node id
+
+The node id in an ANNOUNCE is a claim. A device can prove it holds the identity
+key behind the node id, in the background, without ever delaying a message.
+
+**Challenge.** When a link is created each end draws 16 random bytes, its
+challenge for that link, and sends them as `ch` in every ANNOUNCE on the link
+(the same bytes each time). A challenge is never reused on another link.
+
+**Proof packet.** After its own ANNOUNCE (with its challenge) went out on the
+link, and once the peer's ANNOUNCE with a challenge has bound the link to a node,
+a device sends an ANNOUNCE_PROOF (type 0x06) on that link: header sender = its
+own node id, recipient = the peer's node id, no ttl, no route. The payload is 97
+bytes:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 | version, 0x01 |
+| 1 | 32 | the raw Ed25519 identity public key |
+| 33 | 64 | the Ed25519 signature (RFC 8032) over the signed message |
+
+A device sends its proof again on later ANNOUNCEs, at most once per ANNOUNCE period
+(15 s), until the peer's ANNOUNCE carries `pv=1` (the peer has verified it), and
+retries the same way when the signature or the write failed (the identity key
+may be unreadable for a while, for example while the phone is locked). What a
+device verified of its peer has no effect on this. It stops after 8 sends on one
+link whatever happens. `pv` only controls this resending and never changes
+routing or ranking. A device checks at most 3 proofs per link and ignores the
+rest before they use any budget; each proof checked also counts in the per-link
+rate limit of the relay path (section 9.2).
+
+**Signed message.** Fixed layout, 73 bytes, no length prefixes needed:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 24 | the ASCII string `qaudion-mesh-announce-v1` |
+| 24 | 1 | role of the PROVER on this link: 0x01 central, 0x02 peripheral |
+| 25 | 8 | node id of the prover |
+| 33 | 8 | node id of the verifier |
+| 41 | 16 | challenge of the prover (the `ch` it sent on this link) |
+| 57 | 16 | challenge of the verifier (the `ch` the prover received on this link) |
+
+**Verification.** The receiver (the verifier) rebuilds the message from the node
+id the link is bound to, its own node id, the prover's challenge from the
+prover's ANNOUNCE on this link, its own challenge on this link, and the role
+opposite to its own. It accepts the proof only if all of these hold: the payload
+has 97 bytes and version 1; the first 8 bytes of SHA-256 of the public key equal
+the node id the link is bound to (the derivation of section 1.1); the header
+sender equals that node id; the signature verifies. Because both challenges and
+the role are inside the signature, a captured proof does not verify on another
+link, in the other direction, or for another node id.
+
+**Never blocking.** A link is usable from its first ANNOUNCE, exactly as without
+proofs. Verification only changes ranking:
+
+- Verified: the link is marked verified.
+- No proof yet, or a peer without this section (no `ch`, no proof): the
+  link stays unverified and keeps working under the rules of section 3.6.
+- A proof that does not verify marks the link failed: it ranks after every other
+  link of the node and wins nothing, but it is not closed for that reason, and
+  it still carries messages when it is all there is. It is not a malformed
+  packet and does not count towards the malformed streak.
+- A proof received before the link is bound, or without a challenge on record,
+  is ignored.
+
+**Effect.** Verification only ranks links. Nothing is left out of a send for
+being unverified: a send, a flood and a relay use every healthy link bound to the
+node, up to four, and above four the order is verified, unverified, failed. A
+verified link is protected from eviction only if it is the earliest-bound verified
+link of its node (section 3.6); every other link, verified or not, can be evicted
+under the idle rule.
+
+**What a proof is not.** Bluetooth Low Energy has no channel binding. A device
+that sits between two others can forward the ANNOUNCEs and the proofs of one to
+the other, and both then see a verified link to a peer that is only reachable
+through the relay; a proof does not prevent that, and a link that was verified
+may stay believed verified for a while after its peer left. For these reasons a
+verified link never excludes the others. What a proof does prevent: claiming a
+node id without its key, so squatting on a node id and getting verified links
+evicted or displaced by a claimant.
+
+**Key pin.** A device pins the key of each node id that verified, for 10 minutes
+(at most 64 node ids). A valid proof for a node id with another key than the
+pinned one does not make the link verified: the link is marked failed, and one
+`ann.proof` line with the reason `key_change` is written. The pin is not replaced
+and not deleted before it expires. The pin and the log are all the cache is for:
+a reconnect is not trusted before its proof verifies.
+
+**Logging.** `ann.sum` carries the number of verified and unverified bound links
+and the number of failed proofs of the window; one `ann.proof` line per link
+whose proof did not verify carries a short reason token. No key, challenge or
+signature is ever logged.
+
+See `announceChallenge` and `announceProof` in the vectors (section 14). Ed25519 is RFC 8032; a library may add
+randomness to the signature (CryptoKit does), so implementations are held to the vector by verifying the vector's signature
+and, where the library is deterministic, by producing its exact bytes.
 
 ## 9. Delivery and relaying
 
@@ -646,7 +758,8 @@ display names. The only identifiers allowed are:
 | `link.refused` | `reason` (`cap`, `blocked`), `role` |
 | `ann.tx` | `link`, `nbrs`, `bytes`, `ok`; only for the ANNOUNCE sent at link-up (section 4.3) |
 | `ann.rx` | `link`, `nh`, `nbrs`, `bound` (always 1); only when the link-to-node mapping changed |
-| `ann.sum` | `tx`, `fail` (of `tx`, not confirmed), `rx`, `links`, `claim` (nodes claimed from more than one distinct address in the window), `s` (window in seconds); one line per 60 s, none when nothing was sent or received. Counts every ANNOUNCE, so the periodic ones need no line of their own |
+| `ann.sum` | `tx`, `fail` (of `tx`, not confirmed), `rx`, `links`, `claim` (nodes claimed from more than one distinct address in the window), `ver` and `unv` (bound links that are verified, and that are not), `badsig` (proofs that did not verify in the window), `s` (window in seconds); one line per 60 s, none when nothing was sent or received. Counts every ANNOUNCE, so the periodic ones need no line of their own |
+| `ann.proof` | `link`, `reason` (`bad_sig`, `bad_node`, `bad_len`, `bad_ver`, `key_change`); one line per link whose proof did not verify |
 | `tx` | `ph`, `type`, `bytes`, `route` (`direct`, `flood`), `links`, `okLinks`, `frames`, `l` (min L used), `result` (`sent`, `queued`, `failed`), `reason`, `ms` |
 | `tx.frame.fail` (WARN) | `link`, `ph`, `idx`, `total`, `reason` (`too_big`, `rejected`, `timeout`, `not_ready`, `link_lost`, `too_many_frames`), `rep` (only when above 0: failures on the same link and reason withheld meanwhile; at most one line per link and reason per 60 s) |
 | `rx` | `link`, `ph`, `type`, `bytes`, `frames`, `forUs`, `relay` (0/1) |
@@ -677,6 +790,8 @@ result. `app.tx` is emitted when an application-level state changes.
 | `announce` | canonical JSON, fixed-nonce ciphertext, full ANNOUNCE packet |
 | `announceDecryptNegative` | ciphertexts that MUST fail to open |
 | `announceJsonAccept` / `announceJsonReject` | parser tolerance |
+| `announceChallenge` | canonical JSON of an ANNOUNCE with `ch`, and with `ch` and `pv` |
+| `announceProof` | fixed Ed25519 seeds, nonces, node ids and role: the exact signed bytes, signature, payload and packet; one extra signature made by CryptoKit on iOS (`externalSignatures`) that every implementation MUST verify; and proofs that MUST NOT verify (other role, other link, wrong node id, bad signature, bad length or version) |
 | `envelope`, `receipt`, `shell` | canonical JSON bytes, accepted variants, rejects |
 | `aad` | associated-data strings (WIRE_SPEC 9.3) |
 | `frames` | splitting of two packets at L = 20, 182, 244, 509 |
@@ -716,6 +831,9 @@ output; ratchet vectors live with the ratchet.
 | ANNOUNCE interval | 15 s |
 | periodic ANNOUNCE tick (one link per tick) | 1 s |
 | `ann.sum` window | 60 s |
+| challenge / proof payload / signed message | 16 B / 97 B / 73 B |
+| key pin per verified node id | 10 min, 64 entries |
+| proofs checked per link / proof sends per link / resend | 3 / 8 / once per 15 s until `pv=1` |
 | same-device duplicate: address memory / refusal of redials | 30 s (60, 120, 300 s per repeat) |
 | addresses / collapse keys remembered | 64 each |
 | closes of one link key | 4 per 300 s |

@@ -12,6 +12,7 @@ final class DeviceRenewBlobTests: XCTestCase {
         "qaudion-device-link/v1",
         "qaudion-identity-bundle-v1",
         "qaudion-kms-prebootstrap-v1",
+        "qaudion-mesh-announce-v1",   // the proof of a node id on a mesh link (MESH_LINK_SPEC 8.5)
         DeviceRenewBlob.domainTagDeviceRenew,  // QAUDION-DEVICE-RENEW-v1
         DeviceRenewBlob.domainTagDeviceRevoke, // QAUDION-REVOKE-v1
     ]
