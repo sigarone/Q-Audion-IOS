@@ -480,7 +480,10 @@ struct QAudionApp: App {
         // subscriber exists.
         MetricKitDiagnostics.start()
         // Keep Library/Sounds/qa_msg.wav equal to the chosen message sound (what a message push plays with the app closed).
-        Task.detached(priority: .utility) { MessageAlertSoundFile.syncCurrent() }
+        Task.detached(priority: .utility) {
+            let file = MessageAlertSoundFile.syncCurrent()
+            await MainActor.run { NotifySoundDiagLog.report(file: file) }
+        }
         // W441: sweep expired messages immediately + every 60s.
         EphemeralMessageJanitor.shared.start()
     }
@@ -512,6 +515,7 @@ struct QAudionApp: App {
         case .background:
             lockService.handleBackground()
         case .active:
+            NotifySoundDiagLog.report()
             // Active call bypasses the lock so in-call controls stay reachable.
             // SECURITY M-25/L-7: pass the real callState so the bypass only
             // applies to an answered/established call (.active/.encrypted),

@@ -197,6 +197,7 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         // The receive paths already drop those; this is the backstop at the one place every local banner
         // goes through. Group notifications carry a group id and are not filtered (`BlockPolicy`).
         if BlockPolicy.suppressesNotification(userInfo: userInfo, blocked: BlockedContactsStore.loadBlockedIds()) {
+            if category == .messageDelivered { NotifySoundDiagLog.localDrop("blocked") }
             return
         }
         // W405: respect the user's quiet-hours setting — if we're
@@ -205,6 +206,7 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         // persisted in the conversation store either way.
         if NotificationsGate.isQuietNow {
             print("[NotificationCenterService] quiet-hours active, suppressing banner")
+            if category == .messageDelivered { NotifySoundDiagLog.localDrop("quiet") }
             return
         }
         // The server may already have shown its generic alert for this burst while the app had no live socket;
@@ -223,7 +225,9 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             callInFlight: callInFlightProvider?() ?? false)
         if category == .messageDelivered {
             // The chat-message sound is the user's choice (Settings > Notifications > Message sounds).
-            content.sound = MessageSoundPolicy.sound(for: MessageSoundStore.current, quietNow: false).notificationSound
+            let chosen = MessageSoundPolicy.sound(for: MessageSoundStore.current, quietNow: false)
+            content.sound = chosen.notificationSound
+            NotifySoundDiagLog.local(sound: chosen)
         } else {
             content.sound = hasSound ? .default : nil
         }
@@ -407,7 +411,10 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     /// quietly (banner / list, no sound). Every other notification, and a missed call outside a call, is
     /// presented exactly as before. The decision is `MissedCallAlertPolicy.foreground`.
     private func foregroundPresentation(categoryId: String, blocked: Bool) -> UNNotificationPresentationOptions {
-        if blocked { return [] }
+        if blocked {
+            if categoryId == Category.messageDelivered.rawValue { NotifySoundDiagLog.foregroundDrop("blocked") }
+            return []
+        }
         let isMissedCall: Bool = categoryId == Category.missedCall.rawValue
         let callInFlight: Bool = isMissedCall ? isCallInFlight() : false
         let presentation = MissedCallAlertPolicy.foreground(
@@ -429,10 +436,13 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             let quiet = NotificationsGate.isQuietNow
             let play = MessageSoundPolicy.foreground(settings, quietNow: quiet, masterHaptics: HapticFeedback.masterEnabled)
             // The message sound has its own switch; the banner switch still decides whether anything shows at all.
+            let audio = NotifySoundDiagLog.audioState()
+            var outcome: MessageSoundPlayback.Outcome?
             if presentation.banner {
-                MessageSoundPlayback.shared.play(play.sound, settings: settings)
+                outcome = MessageSoundPlayback.shared.play(play.sound, settings: settings)
                 if play.vibrate { MessageSoundPlayer.shared.vibrate() }
             }
+            NotifySoundDiagLog.foreground(banner: presentation.banner, sound: play.sound, outcome: outcome, audio: audio)
         }
         return options
     }
