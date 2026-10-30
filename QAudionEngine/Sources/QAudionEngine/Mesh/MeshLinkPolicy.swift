@@ -188,6 +188,28 @@ public enum MeshNodeLinkPolicy {
         return close.sorted()
     }
 
+    /// Section 3.6.1: the own outgoing links to close because the node id is proved on a better link. Only verified links count.
+    /// The preferred link is the earliest-bound healthy verified link on which the node with the lower node id is the central;
+    /// when there is none, the earliest-bound healthy verified link on which the node with the higher node id is the central. Every outgoing verified link of this
+    /// device that is neither the preferred one nor its own earliest-bound healthy verified outgoing link is returned, so a
+    /// pair keeps at most one link per direction and never zero. Incoming links and links that are not verified are never
+    /// returned. Nothing is returned while no healthy verified link exists.
+    public static func verifiedDuplicates(localHex: String, peerHex: String, links: [MeshLinkCandidate], nowMs: Int64) -> [String] {
+        let verified = links.filter { $0.nodeHex == peerHex && $0.verified && $0.subscribed }
+        let healthy = verified.filter { nowMs - $0.lastActivityMs <= MeshLinkTiming.linkIdleTimeoutMs }
+        guard !healthy.isEmpty else { return [] }
+        // A link has the lower node as central when this device is central and is the lower node, or when it is not and is not.
+        let localIsLower = localHex < peerHex
+        let lowerCentral = healthy.filter { $0.central == localIsLower }
+        let pool = lowerCentral.isEmpty ? healthy : lowerCentral
+        guard let preferred = pool.min(by: { a, b in a.boundAtMs != b.boundAtMs ? a.boundAtMs < b.boundAtMs : a.key < b.key }) else {
+            return []
+        }
+        let ownEarliest = healthy.filter { $0.central }
+            .min(by: { a, b in a.boundAtMs != b.boundAtMs ? a.boundAtMs < b.boundAtMs : a.key < b.key })
+        return verified.filter { $0.central && $0.key != preferred.key && $0.key != ownEarliest?.key }.map { $0.key }.sorted()
+    }
+
     /// The links a frame for a node goes to: every healthy link bound to it, so a claim cannot stand in the way of the real
     /// node.
     public static func directTargets(links: [MeshLinkCandidate], nowMs: Int64) -> [String] {
@@ -380,9 +402,10 @@ public struct MeshRefusalTable {
     }
 }
 
-/// Section 3.6: addresses whose outgoing link was closed as a same-device duplicate. The address is not dialled while a
-/// healthy link to that node exists, for 30 s; the time doubles with every repeat (60, 120, 300 s). It is forgotten as
-/// soon as no healthy link to the node exists.
+/// Section 3.6: addresses whose outgoing link was closed as a duplicate. After a same-device duplicate the address is not
+/// dialled while a healthy link to that node exists, for 30 s; the time doubles with every repeat (60, 120, 300 s). After a
+/// close with `why=verified` (section 3.6.1) it is not dialled while a healthy link to the node exists, with no time limit.
+/// Either way it is forgotten as soon as no healthy link to the node exists.
 public struct MeshRedialMemory {
     private struct Entry {
         var node: String
@@ -395,7 +418,15 @@ public struct MeshRedialMemory {
 
     public init() {}
 
-    public mutating func note(_ address: String, node: String, nowMs: Int64) {
+    public mutating func note(_ address: String, node: String, nowMs: Int64, verified: Bool = false) {
+        if verified {
+            entries[address] = Entry(node: node, untilMs: Int64.max, strikes: 0, stampMs: nowMs)
+            while entries.count > MeshLinkTiming.tableCap,
+                  let oldest = entries.min(by: { $0.value.stampMs < $1.value.stampMs })?.key {
+                entries.removeValue(forKey: oldest)
+            }
+            return
+        }
         var strikes = 0
         // Only a link that duplicates the keeper on the same device is ever noted, so the wait may grow without a claim
         // being able to stretch the block on the real node.
