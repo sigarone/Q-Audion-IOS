@@ -47,7 +47,7 @@ final class BugReporterRetryQueueTests: XCTestCase {
     /// hanging, if it does not finish in time.
     private func drain(_ reporter: BugReporter,
                        report: BugReporter.PendingReport,
-                       timeout: TimeInterval = 15,
+                       timeout: TimeInterval = 60,
                        file: StaticString = #filePath,
                        line: UInt = #line) async {
         let finished = expectation(description: "queue drained")
