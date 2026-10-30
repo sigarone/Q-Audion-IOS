@@ -21,6 +21,8 @@ public struct LiveLogBacklog: Equatable, Sendable {
         public let line: String
         /// UTF-8 size of the line plus its trailing newline: what it adds to a chunk.
         public let bytes: Int
+        /// Raw native output and low-value lines: the first to go when a bound is hit.
+        public let disposable: Bool
     }
 
     /// A chunk-sized prefix of the backlog. Nothing is removed by looking at it.
@@ -55,11 +57,12 @@ public struct LiveLogBacklog: Equatable, Sendable {
 
     // MARK: - Growing
 
-    /// Add one prepared line at the tail. If that puts the backlog over either bound the
-    /// oldest lines are dropped (and counted) until it fits again.
-    public mutating func append(seq: Int64, line: String) {
+    /// Add one prepared line at the tail. If that puts the backlog over either bound lines
+    /// are dropped (and counted) until it fits again: the oldest `disposable` line first,
+    /// the oldest line of all only when no disposable one is left.
+    public mutating func append(seq: Int64, line: String, disposable: Bool = false) {
         let bytes = line.utf8.count + 1
-        items.append(Item(seq: seq, line: line, bytes: bytes))
+        items.append(Item(seq: seq, line: line, bytes: bytes, disposable: disposable))
         liveBytes += bytes
         trimToBounds()
     }
@@ -129,12 +132,38 @@ public struct LiveLogBacklog: Equatable, Sendable {
 
     private mutating func trimToBounds() {
         while head < items.count && (items.count - head > maxEntries || liveBytes > maxBytes) {
-            liveBytes -= items[head].bytes
-            head += 1
+            if let victim = items[head...].firstIndex(where: { $0.disposable }), victim != head {
+                liveBytes -= items[victim].bytes
+                items.remove(at: victim)
+            } else {
+                liveBytes -= items[head].bytes
+                head += 1
+            }
             droppedTotal += 1
             droppedUnreported += 1
         }
         compactIfNeeded()
+    }
+
+    /// Tags whose lines explain a call or its security and must outlive the rest.
+    private static let protectedTags: Set<String> = [
+        "call", "net", "rekey", "srtp", "audiosrtp", "security", "crypto", "auth", "dial", "group", "groupdel",
+        "videodiag", "pair", "chat", "bugreport",
+    ]
+
+    /// True for a line that may be dropped before the others when the backlog is full: anything
+    /// that is not a warning or an error and does not carry one of the call, network, rekey,
+    /// SRTP or security tags (raw native output has the tag `stdout`).
+    /// Even on `stdout`, the glitch and underrun counts, the `[repeated xN]` summaries, lines that read as a
+    /// warning or an error (`LogSeverity`) and lines that start with `[` (tagged lines of the app) are kept.
+    public static func isDisposable(levelInitial: String, tag: String, message: String = "") -> Bool {
+        if levelInitial == "W" || levelInitial == "E" { return false }
+        if message.hasPrefix("[repeated") { return false }
+        // An app-tagged line that arrived through stdout, or a native line that reads as a warning or error.
+        if message.hasPrefix("[") || LogSeverity.looksSevere(message) { return false }
+        let lower = message.lowercased()
+        if lower.contains("glitch") || lower.contains("underrun") { return false }
+        return !protectedTags.contains(tag.lowercased())
     }
 
     /// Reclaim the dead prefix now and then instead of shifting the array on every drop.
@@ -148,5 +177,16 @@ public struct LiveLogBacklog: Equatable, Sendable {
             items.removeFirst(head)
             head = 0
         }
+    }
+}
+
+/// Whether a raw line reads as a warning or an error. One definition for the stdout rate limiter (which never
+/// collapses such a line) and for the backlog (which never drops one first).
+public enum LogSeverity {
+    private static let words = ["error", "warn", "fail", "fatal", "assert"]
+
+    public static func looksSevere(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        return words.contains { lower.contains($0) }
     }
 }

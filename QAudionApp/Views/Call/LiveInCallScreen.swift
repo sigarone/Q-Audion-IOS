@@ -549,7 +549,7 @@ struct LiveInCallScreen: View {
     }
 
     private func handleHangup() {
-        appState.endCall()
+        appState.endCall(origin: "button")
     }
 
     private func handleConfirmSas() {

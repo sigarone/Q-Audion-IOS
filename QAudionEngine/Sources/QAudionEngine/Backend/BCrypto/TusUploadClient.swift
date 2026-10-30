@@ -388,11 +388,31 @@ public final class TusUploadClient {
     /// leaks upward).
     private func patchWithRetry(fileId: String, offset: Int, bytes: Data) async throws -> Int {
         var lastError: Error = TusError.patchFailed(0)
+        var offset = offset
+        var bytes = bytes
         for attempt in 0..<Self.maxChunkAttempts {
             do {
                 return try await patch(fileId: fileId, offset: offset, bytes: bytes)
             } catch {
                 lastError = error
+                // A 409 says the server's offset is not the one this PATCH carried (the previous PATCH did land
+                // although its answer was lost, or the chunk was cut short). Resending the same bytes at the same
+                // offset would be refused again, so ask the server where it is (HEAD) and continue from there.
+                if case TusError.patchFailed(409) = error,
+                   let confirmed = try? await head(fileId: fileId).offset {
+                    switch ChunkRealign.decide(chunkOffset: offset, chunkLength: bytes.count, serverOffset: confirmed) {
+                    case .alreadyComplete(let end):
+                        return end
+                    case .resend(let skip):
+                        if skip > 0 {
+                            bytes = bytes.subdata(in: skip..<bytes.count)
+                            offset += skip
+                        }
+                        continue
+                    case .unrecoverable:
+                        break
+                    }
+                }
                 // W-RETRYAFTER (2026-10-03): a 429 (or a 503 that carries a `Retry-After`) says the
                 // per-IP bucket is empty. Sending the same chunk again after 0.5 s / 1 s / 2 s
                 // cannot succeed and only spends more of the bucket that the iPad and the Android
@@ -406,6 +426,23 @@ public final class TusUploadClient {
             }
         }
         throw lastError
+    }
+
+    /// Where a chunk stands once the server has said (HEAD) how much of the file it holds.
+    enum ChunkRealign: Equatable {
+        /// The server already holds the whole chunk; the upload continues at this offset.
+        case alreadyComplete(Int)
+        /// The server holds the first `skip` bytes of the chunk; send the rest (`skip` 0: the chunk as it was).
+        case resend(skip: Int)
+        /// The server is behind or beyond this chunk: only the caller's resume logic can fix that.
+        case unrecoverable
+
+        static func decide(chunkOffset: Int, chunkLength: Int, serverOffset: Int64) -> ChunkRealign {
+            let end = Int64(chunkOffset) + Int64(chunkLength)
+            if serverOffset < Int64(chunkOffset) || serverOffset > end { return .unrecoverable }
+            if serverOffset == end { return .alreadyComplete(Int(end)) }
+            return .resend(skip: Int(serverOffset) - chunkOffset)
+        }
     }
 
     /// True for a chunk failure that must NOT be retried in place: HTTP 429, or 503 with a

@@ -295,7 +295,7 @@ struct ContentView: View {
                     ? String(localized: "Termina chiamata",
                              comment: "Snackbar action next to the voice anomaly alert: ends the current call")
                     : nil,
-                onAction: inCall ? { appState.endCall() } : nil,
+                onAction: inCall ? { appState.endCall(origin: "button") } : nil,
                 durationSeconds: 6
             ))
         }
@@ -632,7 +632,7 @@ struct ContentView: View {
             pskMethodLabel: pskMethodLabel,
             sessionFingerprint: sessionFingerprint,
             isVideo: appState.isVideoCall,
-            onHangup: { appState.endCall() }
+            onHangup: { appState.endCall(origin: "button") }
         )
     }
 

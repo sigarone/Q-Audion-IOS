@@ -473,4 +473,28 @@ final class CallSoundsTests: XCTestCase {
         XCTAssertTrue(ring.contains("guard !inCall() else {"), "the preview refuses to play during a call")
         XCTAssertFalse(ring.contains("session.category"), "a call is decided from the app state, not from the session category")
     }
+
+    func testTheCueRetryRunsOnceAndOnlyForARefusedPlay() {
+        XCTAssertTrue(CueRetryPolicy.shouldRetry(failure: .playFalse, attempt: 0))
+        XCTAssertFalse(CueRetryPolicy.shouldRetry(failure: .playFalse, attempt: 1), "one retry, no more")
+        XCTAssertFalse(CueRetryPolicy.shouldRetry(failure: .disabled, attempt: 0))
+        XCTAssertFalse(CueRetryPolicy.shouldRetry(failure: .missingFile, attempt: 0))
+        XCTAssertFalse(CueRetryPolicy.shouldRetry(failure: .initFailed, attempt: 0))
+        XCTAssertFalse(CueRetryPolicy.shouldRetry(failure: nil, attempt: 0))
+        XCTAssertGreaterThanOrEqual(CueRetryPolicy.delaySeconds, 0.25)
+        XCTAssertLessThanOrEqual(CueRetryPolicy.delaySeconds, 0.4)
+    }
+
+    #if canImport(AVFoundation)
+    func testThePlayerReportsWhyACueDidNotStart() {
+        let player = QAudionRingtonePlayer()
+        player.settingsProvider = { CallSoundSettings(connectionSoundEnabled: false) }
+        XCTAssertFalse(player.play(.callConnected))
+        XCTAssertEqual(player.lastFailure, .disabled)
+        player.settingsProvider = { .defaults }
+        player.resourceURL = { _ in nil }
+        XCTAssertFalse(player.loop(.confirmedRingback))
+        XCTAssertEqual(player.lastFailure, .missingFile)
+    }
+    #endif
 }
