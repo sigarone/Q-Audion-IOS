@@ -73,6 +73,23 @@ import Foundation
 //      the failure is transient for everyone and a renewer-equipped caller that joins the
 //      flight (or arrives inside its cooldown) runs the renew leg itself.
 //
+// Two rules cover the time a flight spends while the app may be suspended:
+//
+//   8. Every flight runs inside an injectable background-time guard (`setBackgroundGuard`): it
+//      begins before the request can be sent and ends when the work of the flight is over, with
+//      its result persisted or discarded (also when the flight was cut at its deadline: the
+//      guard follows the work, not the waiters). The app backs it with a UIKit background task;
+//      the engine itself stays UIKit-free. Each `begin` is matched by exactly one `end`.
+//   9. A refresh request whose outcome is unknown (transport error, timeout, cancellation: it
+//      may have reached the server, and the app may have been suspended before the answer was
+//      stored) is remembered with the time of its FIRST send (a repeat does not move it). The
+//      server tolerates a repeat of the same refresh token only for a short grace, so once
+//      `unconfirmedSendLimitSec` has passed the token is treated as spent: a later attempt, or a
+//      flight whose own request fails after that long, goes straight to device-renew. This only
+//      applies while the renew leg is available (a renewer, no renew cooldown); otherwise the
+//      refresh is still tried, as before, and nothing is recorded as rejected. Within the limit
+//      a plain retry is fine. Any definitive answer from the server clears the record.
+//
 // The coordinator is Foundation-only on purpose: it holds no secrets in logs, has no
 // dependency on the transport, and is exercised by plain unit tests.
 
@@ -176,12 +193,18 @@ public struct AuthRecoveryFailure: Error, Sendable, Equatable {
     public var retryAfterSec: Int
     /// For `.cooldown`: the reason of the failure that started the cooldown.
     public var underlyingReason: AuthRecoveryReason?
+    /// Set by the classifier for a refresh request that may have reached the server although
+    /// no answer was processed (a timeout, a connection lost mid-request, a cancellation).
+    /// False for a failure that provably sent nothing (offline, DNS, no connection).
+    public var requestMayHaveReached: Bool
 
     public init(reason: AuthRecoveryReason,
                 status: Int? = nil,
                 isFinal: Bool = false,
                 retryAfterSec: Int = 0,
-                underlyingReason: AuthRecoveryReason? = nil) {
+                underlyingReason: AuthRecoveryReason? = nil,
+                requestMayHaveReached: Bool = false) {
+        self.requestMayHaveReached = requestMayHaveReached
         self.reason = reason
         self.status = status
         self.isFinal = isFinal
@@ -333,6 +356,9 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     /// How long, in flight deadlines, an abandoned flight's marker keeps its refresh token from
     /// being presented again when the abandoned work never reports back.
     public static let abandonedMarkerFactor: Double = 2
+    /// How long after an unconfirmed refresh send (see rule 9) the same refresh token may still
+    /// be presented again. Kept below the 15 s the server tolerates a repeated token for.
+    public static let unconfirmedSendLimitSec: TimeInterval = 8
 
     /// Equality for refresh tokens where nil and "" both mean "none".
     public static func sameRefreshToken(_ a: String?, _ b: String?) -> Bool {
@@ -419,6 +445,11 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
     private var lastRenewFailure: AuthRecoveryFailure?
     /// The refresh token the server last rejected (or consumed) and when. In memory only, never logged.
     private var rejectedRefresh: (token: String, at: Date)?
+    /// The refresh token of the last refresh request that was sent without a definitive answer,
+    /// and when. In memory only, never logged.
+    private var unconfirmedSend: (token: String, at: Date)?
+    private var backgroundBegin: (@Sendable () -> Int)?
+    private var backgroundEnd: (@Sendable (Int) -> Void)?
     /// Bumped by `resetBackoff()`: a flight that began under an older epoch (before a login
     /// or logout) must not write its outcome into the state of the new session.
     private var epoch = 0
@@ -438,6 +469,15 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         lock.withLock { self.logger = logger }
     }
 
+    /// Install the background-time guard (the app backs it with a UIKit background task). `begin`
+    /// returns an opaque token that is handed back to `end`, exactly once per `begin`.
+    public func setBackgroundGuard(begin: (@Sendable () -> Int)?, end: (@Sendable (Int) -> Void)?) {
+        lock.withLock {
+            backgroundBegin = begin
+            backgroundEnd = end
+        }
+    }
+
     /// Drop the failure/cooldown state (login, logout, tests).
     public func resetBackoff() {
         lock.withLock {
@@ -449,6 +489,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             renewBlockedUntil = nil
             lastRenewFailure = nil
             rejectedRefresh = nil
+            unconfirmedSend = nil
             epoch += 1
         }
     }
@@ -688,9 +729,14 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         let trigger = request.trigger.rawValue
         let seconds = flightDeadlineSec
 
+        // The guard opens before the work can send anything and closes when the work is over.
+        let (begin, end) = lock.withLock { (backgroundBegin, backgroundEnd) }
+        let guardToken = begin?()
+
         let work = Task<Void, Never> { [self] in
             let outcome = await self.perform(request, sendToken: sendToken,
                                              expectedRefresh: expectedRefresh, epoch: startEpoch)
+            if let guardToken { end?(guardToken) }
             if !gate.settle(outcome) {
                 // The abandoned work is over: its request is no longer on the wire.
                 self.clearAbandoned(key: key, flightId: flightId)
@@ -750,7 +796,19 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
            now().timeIntervalSince(rejected.at) < TimeInterval(Self.deadTokenMemorySec) {
             knownDead = true
         }
-        let canRefresh = sendToken != nil && request.refresher != nil && !knownDead
+        // A refresh sent earlier with no answer, now too old for the server to tolerate a repeat:
+        // the token counts as spent (rule 9), so this goes to device-renew without presenting it.
+        // Only when the renew leg can run now; otherwise the refresh is still the better try.
+        var skipStale = false
+        if !knownDead, let sendToken, request.renewer != nil, renewGate() == nil,
+           let pending = lock.withLock({ unconfirmedSend }), pending.token == sendToken {
+            let age = now().timeIntervalSince(pending.at)
+            if age > Self.unconfirmedSendLimitSec {
+                skipStale = true
+                emit(.info, "refresh token unconfirmed trigger=\(trigger) reason=send_unconfirmed age_s=\(Int(age.rounded())) limit_s=\(Int(Self.unconfirmedSendLimitSec))")
+            }
+        }
+        let canRefresh = sendToken != nil && request.refresher != nil && !knownDead && !skipStale
         let canRenew = request.renewer != nil
         let deadNote: String = knownDead ? " refresh_token_known_dead=1" : ""
         emit(.info, "recovery start trigger=\(trigger) refresh=\(canRefresh ? 1 : 0) renew=\(canRenew ? 1 : 0) store=\(request.store != nil ? 1 : 0)\(deadNote)")
@@ -758,7 +816,9 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         var refreshRejection: AuthRecoveryFailure?
         if canRefresh, let token = sendToken, let refresher = request.refresher {
             do {
+                lock.withLock { if unconfirmedSend?.token != token { unconfirmedSend = (token: token, at: now()) } }
                 let tokens = try await refresher(token)
+                clearUnconfirmed(token)
                 let outcome = finalize(tokens, expectedRefresh: expectedRefresh, request: request, via: .refresh)
                 if case .failed = outcome {
                     // The server rotated the pair, so the token we sent is spent whether or not
@@ -769,6 +829,16 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                 return outcome
             } catch {
                 let f = Self.failure(from: error, fallback: .refreshOther)
+                // Only a request that may have reached the server keeps the record (rule 9):
+                // an answer, a gateway answer or a failure that sent nothing clears it.
+                if !f.requestMayHaveReached { clearUnconfirmed(token) }
+                // The pending request failed only after the server's grace: the token is spent
+                // whatever happened to the answer, so heal through the renew leg in this flight.
+                let sentAt = lock.withLock { unconfirmedSend?.token == token ? unconfirmedSend?.at : nil }
+                if f.requestMayHaveReached, let sentAt, request.renewer != nil, renewGate() == nil, !Task.isCancelled,
+                   now().timeIntervalSince(sentAt) > Self.unconfirmedSendLimitSec {
+                    emit(.info, "refresh token unconfirmed trigger=\(trigger) reason=send_unconfirmed age_s=\(Int(now().timeIntervalSince(sentAt).rounded())) limit_s=\(Int(Self.unconfirmedSendLimitSec)) renew_next=1")
+                } else {
                 guard f.reason == .refreshRejected else {
                     // Network error, 5xx, 429, anything but a rejection: the refresh token may
                     // well be alive, and the renew leg is rate-limited far harder than refresh.
@@ -779,6 +849,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
                 refreshRejection = f
                 markRefreshTokenDead(token, epoch: startEpoch)
                 emit(.warn, "refresh step failed trigger=\(trigger) \(f.logFields) renew_next=\(canRenew ? 1 : 0)")
+                }
             }
         }
 
@@ -808,16 +879,7 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
         }
 
         // The renew leg has its own, much smaller, budget on the server (see the header).
-        let gate: AuthRecoveryFailure? = lock.withLock {
-            guard let until = renewBlockedUntil, now() < until else { return nil }
-            let remaining = max(1, Int(until.timeIntervalSince(now()).rounded(.up)))
-            return AuthRecoveryFailure(reason: .renewBudget,
-                                       status: lastRenewFailure?.status,
-                                       isFinal: lastRenewFailure?.isFinal ?? false,
-                                       retryAfterSec: remaining,
-                                       underlyingReason: lastRenewFailure?.reason)
-        }
-        if let gate {
+        if let gate = renewGate() {
             emit(.info, "renew skipped trigger=\(trigger) \(gate.logFields) retry_in=\(gate.retryAfterSec)")
             return .failed(gate)
         }
@@ -841,6 +903,23 @@ public final class AuthRefreshCoordinator: @unchecked Sendable {
             emit(.warn, "renew step failed trigger=\(trigger) \(f.logFields)")
             return .failed(noteRenewFailure(f, epoch: startEpoch))
         }
+    }
+
+    /// The renew cooldown as a failure, or nil when the renew leg may run.
+    private func renewGate() -> AuthRecoveryFailure? {
+        lock.withLock {
+            guard let until = renewBlockedUntil, now() < until else { return nil }
+            let remaining = max(1, Int(until.timeIntervalSince(now()).rounded(.up)))
+            return AuthRecoveryFailure(reason: .renewBudget,
+                                       status: lastRenewFailure?.status,
+                                       isFinal: lastRenewFailure?.isFinal ?? false,
+                                       retryAfterSec: remaining,
+                                       underlyingReason: lastRenewFailure?.reason)
+        }
+    }
+
+    private func clearUnconfirmed(_ token: String) {
+        lock.withLock { if unconfirmedSend?.token == token { unconfirmedSend = nil } }
     }
 
     /// - Parameter serverAccepted: the server ANSWERED THE REFRESH WITH A NEW PAIR, so the sent

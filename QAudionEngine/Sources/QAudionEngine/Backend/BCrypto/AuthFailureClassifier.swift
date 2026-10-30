@@ -27,8 +27,28 @@ enum AuthFailureClassifier {
                 return AuthRecoveryFailure(reason: .refreshOther)
             }
         }
-        if isNetwork(error) { return AuthRecoveryFailure(reason: .refreshNetwork) }
-        return AuthRecoveryFailure(reason: .refreshOther)
+        let reached = mayHaveReachedServer(error)
+        if isNetwork(error) { return AuthRecoveryFailure(reason: .refreshNetwork, requestMayHaveReached: reached) }
+        return AuthRecoveryFailure(reason: .refreshOther, requestMayHaveReached: reached)
+    }
+
+    /// True for a transport failure after which the request may well have been processed by the
+    /// server: a timeout, a connection lost while the request was on the wire, a cancellation
+    /// (a network handoff, the app being suspended), an unreadable 2xx body. False for the ones that provably sent
+    /// nothing (offline, DNS, no route, TLS setup) and for everything that is not transport.
+    static func mayHaveReachedServer(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        // A 2xx whose body could not be read: the server did process the request.
+        if error is DecodingError { return true }
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain else { return false }
+        switch ns.code {
+        case NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorCancelled,
+             NSURLErrorBadServerResponse, NSURLErrorCannotParseResponse, NSURLErrorZeroByteResource:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func refreshHTTP(_ status: Int) -> AuthRecoveryFailure {
