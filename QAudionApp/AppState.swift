@@ -18095,10 +18095,10 @@ final class AppState: ObservableObject {
         return spec
     }
 
-    /// W-GRPRING group push: ring through the same invite path as the WS, report
+    /// W-GRPRING group push: ring through the same invite path as the WS and report
     /// the uuid DERIVED from the call_id (a WS invite and a push for the same room
-    /// resolve to the same uuid), and end it at once when there is nothing to ring
-    /// (already handled, or busy in another call).
+    /// resolve to the same uuid). When there is nothing to ring (already handled, or
+    /// busy in another call) the report uses a fresh report-only uuid instead, ended at once.
     private func prepareVoipGroupReport(
         _ payload: PushKitProvider.ParsedGroupPayload
     ) -> PushKitProvider.ReportSpec {
@@ -18118,9 +18118,25 @@ final class AppState: ObservableObject {
         let grpCarPlayFlag: String = grpCarPlay ? "1" : "0"
         let grpDiag: String = "[AppState] W-GRPRING PushKit→report group uuid=" + grpUuid + " presented=" + grpPresented + " carplay=" + grpCarPlayFlag
         print(grpDiag)
-        let endReason: CallEndReason? = prepared.presented ? nil : .failed("group-call-not-presentable")
+        // Nothing to ring: the report still has to be made, but under a fresh uuid. The uuid derived from the
+        // call id may be the one of the call that is live on this device (a push that arrives after the
+        // invite was joined), and ending it would end that call's CallKit entry and drain its audio session.
+        // The throwaway owns no audio, so its end leaves every live call alone.
+        guard prepared.presented else {
+            let spec: PushKitProvider.ReportSpec
+            if let provider = callKit as? CallKitProvider {
+                spec = provider.groupNotPresentableReport(derivedUuid: prepared.uuid)
+            } else {
+                spec = PushKitProvider.groupNotPresentableSpec()
+            }
+            // A late Answer or End for the fading ring must not reach a live call (same as the blocked spec).
+            ghostPlaceholderCallIds.recordEnded(spec.uuid)
+            let grpReport: String = String(spec.uuid.uuidString.prefix(8)) + "…"
+            print("[AppState] W-GRPRING PushKit→not presentable report=" + grpReport)
+            return spec
+        }
         return PushKitProvider.ReportSpec(
-            uuid: prepared.uuid, callerName: prepared.display, hasVideo: grpReportedVideo, endReason: endReason)
+            uuid: prepared.uuid, callerName: prepared.display, hasVideo: grpReportedVideo, endReason: nil)
     }
 
     /// TRUST-6 opaque wake: no identity, no call_id in the push, so a GENERIC
@@ -27615,8 +27631,8 @@ extension AppState {
     /// PushKit VoIP entry point for a group call: build the invite, ring, and
     /// hand the caller what it needs for the MANDATORY `reportNewIncomingCall`
     /// (a VoIP push that does not report an incoming call gets the app killed
-    /// and future VoIP pushes throttled — so the caller reports the returned
-    /// uuid unconditionally, and ends it at once when `presented == false`).
+    /// and future VoIP pushes throttled — so the caller always reports; when
+    /// `presented == false` it reports a fresh report-only uuid, not the returned one).
     /// The CallKit uuid is DERIVED from the call_id, so a WS invite and a push
     /// for the same room resolve to the same uuid (idempotent report).
     /// Body extracted from the closure per CLAUDE.md §13/§14 (keep nested
@@ -27652,8 +27668,8 @@ extension AppState {
             groupCallKitId = uuid
         }
         // Not presented (busy / already handled): the caller STILL reports to
-        // CallKit — the PushKit contract is non-negotiable — and then ends that
-        // uuid immediately, without touching the live call's id.
+        // CallKit — the PushKit contract is non-negotiable — under a fresh
+        // report-only uuid that it ends at once, without touching the live call.
         return (uuid, invite.displayTitle, presented)
     }
 

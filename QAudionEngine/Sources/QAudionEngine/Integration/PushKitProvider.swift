@@ -304,6 +304,18 @@ public final class PushKitProvider {
                    endReason: .failed(blockedCallerEndReason))
     }
 
+    /// The reason a group push that cannot ring is ended with.
+    public static let groupNotPresentableEndReason: String = "group-call-not-presentable"
+
+    /// The report for a group push that has nothing to ring (the call was already handled here, or the
+    /// device is busy). It carries a fresh uuid, never the one derived from the call id: that one may
+    /// belong to the call that is live right now, and ending it would end that call's CallKit entry and
+    /// consume its audio end balance. Reported and ended at once, under the generic name.
+    public static func groupNotPresentableSpec(uuid: UUID = UUID()) -> ReportSpec {
+        ReportSpec(uuid: uuid, callerName: placeholderCallerName, hasVideo: false,
+                   endReason: .failed(groupNotPresentableEndReason))
+    }
+
     /// BLOCK — true for a spec built by `blockedCallerSpec` (the app skips what only a ringing call needs,
     /// such as waking the signalling socket for the offer that follows).
     public static func isBlockedCallerSpec(_ spec: ReportSpec) -> Bool {

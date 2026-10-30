@@ -102,6 +102,13 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// uuids are never reused.
     private var selfActivatedNativeUUIDs: Set<UUID> = []
 
+    /// CallKit uuids reported only to satisfy the one-report-per-push rule and ended at once (a repeated
+    /// group invite for a call this device already handled). They own no audio: ending one must neither
+    /// consume the end balance of a live call nor take the process-wide self-activation flag. Kept (not
+    /// consumed) so a repeated end of the same uuid stays inert too; bounded like `endedUUIDs`, oldest first
+    /// (a uuid is never reused, so an aged-out entry only loses protection against an end that late).
+    private var reportOnlyUUIDs: [UUID] = []
+
     /// W-NATIVEEVICT (2026-09-27) — every CallKit uuid this process has ever
     /// recorded as a native-SRTP call (``recordNativeBalance(_:)``), kept for
     /// the LIFETIME of the process, unlike `nativeBalanceUUIDs` (cleared at
@@ -176,6 +183,26 @@ final class CallKitCallLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return nativeBalanceUUIDs.remove(uuid) != nil
+    }
+
+    /// Marks `uuid` as a report that owns no audio (see ``reportOnlyUUIDs``). Call before the report.
+    func markReportOnly(_ uuid: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !reportOnlyUUIDs.contains(uuid) else { return }
+        reportOnlyUUIDs.append(uuid)
+        if reportOnlyUUIDs.count > Self.endedCapacity {
+            reportOnlyUUIDs.removeFirst(reportOnlyUUIDs.count - Self.endedCapacity)
+        }
+    }
+
+    /// The report for a group push that cannot ring: a fresh generic spec (never `derivedUuid`, which may be
+    /// the uuid of the live call) already marked as owning no audio.
+    func groupNotPresentableReport(derivedUuid: UUID) -> PushKitProvider.ReportSpec {
+        var spec: PushKitProvider.ReportSpec = PushKitProvider.groupNotPresentableSpec()
+        while spec.uuid == derivedUuid { spec = PushKitProvider.groupNotPresentableSpec() }
+        markReportOnly(spec.uuid)
+        return spec
     }
 
     /// Called the instant `activateAudioSession` successfully calls
@@ -280,6 +307,9 @@ final class CallKitCallLedger: @unchecked Sendable {
     func consumeEndBalance(_ uuid: UUID) -> EndBalance {
         lock.lock()
         defer { lock.unlock() }
+        if reportOnlyUUIDs.contains(uuid) {
+            return EndBalance(nativeManualCall: false, selfActivated: false, duplicateNative: false)
+        }
         // W-CALLERBUSY — from here on an activation for this uuid is late (see `endedUUIDs`).
         markEndedLocked(uuid)
         if nativeBalanceUUIDs.remove(uuid) != nil {
