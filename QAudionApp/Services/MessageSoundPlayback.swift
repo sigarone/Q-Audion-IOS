@@ -47,25 +47,41 @@ final class MessageSoundPlayback {
         }
     }
 
-    func play(_ sound: MessageSound, settings: MessageSoundSettings) {
+    /// What one call to `play` did, for the diagnostics only.
+    struct Outcome: Equatable {
+        /// `none`, `player` or `systemSound`.
+        let plan: String
+        let busy: Bool
+        /// Result of `AVAudioPlayer.play()`: 1 played, 0 refused or failed to start, -1 no player used.
+        let playOk: Int
+        /// True when the system sound service played instead of the player.
+        let fallback: Bool
+    }
+
+    @discardableResult
+    func play(_ sound: MessageSound, settings: MessageSoundSettings) -> Outcome {
         let volume = MessageSoundPreviewPolicy.playerVolume(for: settings)
-        switch Self.plan(for: sound, volume: volume, busy: !AppAudioSession.isIdleNow(callInFlight: callOrRingActive())) {
+        let busy = !AppAudioSession.isIdleNow(callInFlight: callOrRingActive())
+        switch Self.plan(for: sound, volume: volume, busy: busy) {
         case .none:
-            return
+            return Outcome(plan: "none", busy: busy, playOk: -1, fallback: false)
         case .systemSound:
             MessageSoundPlayer.shared.play(sound)
+            return Outcome(plan: "systemSound", busy: busy, playOk: -1, fallback: false)
         case .player(let source, let volume):
             guard let url = Self.url(for: source) else {
                 MessageSoundPlayer.shared.play(sound)
-                return
+                return Outcome(plan: "player", busy: busy, playOk: -1, fallback: true)
             }
-            start(url: url, volume: volume, fallback: sound)
+            let ok = start(url: url, volume: volume, fallback: sound)
+            return Outcome(plan: "player", busy: busy, playOk: ok ? 1 : 0, fallback: !ok)
         }
     }
 
     func stopForCall() { release(callStarting: true) }
 
-    private func start(url: URL, volume: Float, fallback: MessageSound) {
+    /// True when the player is playing; false when the system sound service played instead.
+    private func start(url: URL, volume: Float, fallback: MessageSound) -> Bool {
         release(callStarting: false)
         session.begin(inCall: false, ignoreSilentSwitch: false)
         do {
@@ -74,16 +90,18 @@ final class MessageSoundPlayback {
             guard p.play() else {
                 session.end(inCall: callOrRingActive())
                 MessageSoundPlayer.shared.play(fallback)
-                return
+                return false
             }
             player = p
             SoundPreviewCoordinator.register(self) { [weak self] in self?.stopForCall() }
             let work = DispatchWorkItem { [weak self] in self?.release(callStarting: false) }
             releaseWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + min(6, p.duration + 0.15), execute: work)
+            return true
         } catch {
             session.end(inCall: callOrRingActive())
             MessageSoundPlayer.shared.play(fallback)
+            return false
         }
     }
 

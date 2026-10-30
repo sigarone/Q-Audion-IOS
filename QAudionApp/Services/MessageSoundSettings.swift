@@ -108,6 +108,24 @@ struct MessageSoundStore {
         return MessageSoundSettings(soundEnabled: enabled, soundId: id, hapticEnabled: haptic, volume: volume)
     }
 
+    /// What the diagnostics need to know about the stored choices.
+    struct Snapshot: Equatable {
+        let settings: MessageSoundSettings
+        /// Whether the on/off switch was ever stored (until then it follows the older in-app sound switch).
+        let keyPresent: Bool
+    }
+
+    func snapshot(legacyInAppSound: Bool) -> Snapshot {
+        Snapshot(settings: load(legacyInAppSound: legacyInAppSound), keyPresent: defaults.object(forKey: Self.keyEnabled) != nil)
+    }
+
+    /// True when the App Group is really available (its container exists), false when the defaults fall back to
+    /// `.standard`.
+    static var groupAvailable: Bool {
+        UserDefaults(suiteName: appGroupId) != nil
+            && FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) != nil
+    }
+
     func save(_ settings: MessageSoundSettings) {
         defaults.set(settings.soundEnabled, forKey: Self.keyEnabled)
         defaults.set(MessageSoundCatalog.normalized(settings.soundId), forKey: Self.keySoundId)
@@ -297,15 +315,44 @@ enum MessageAlertSoundFile {
         }
     }
 
+    /// The file as it is now, for the diagnostics: the action the choice calls for, whether the file exists, its size.
+    struct FileState: Equatable {
+        let action: String
+        let exists: Bool
+        let bytes: Int
+    }
+
+    static func actionName(_ action: Action) -> String {
+        switch action {
+        case .remove: return "remove"
+        case .writeSilence: return "writeSilence"
+        case .copyBundled: return "copyBundled"
+        }
+    }
+
+    static func fileState(for settings: MessageSoundSettings, in directory: URL?) -> FileState {
+        let name = actionName(action(for: settings))
+        guard let directory else { return FileState(action: name, exists: false, bytes: 0) }
+        let path = directory.appendingPathComponent(fileName).path
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return FileState(action: name, exists: false, bytes: 0)
+        }
+        return FileState(action: name, exists: true, bytes: (attributes[.size] as? NSNumber)?.intValue ?? 0)
+    }
+
     #if !QAUDION_NOTIFICATION_SERVICE
     /// Brings the real `Library/Sounds` in line with the stored choices. Call at launch and after every change.
-    static func syncCurrent() {
-        guard let directory = soundsDirectory() else { return }
-        sync(MessageSoundStore.current, in: directory) { name in
+    /// Returns the state of the file afterwards, for the diagnostics.
+    @discardableResult
+    static func syncCurrent() -> FileState {
+        let settings = MessageSoundStore.current
+        guard let directory = soundsDirectory() else { return fileState(for: settings, in: nil) }
+        sync(settings, in: directory) { name in
             let base = (name as NSString).deletingPathExtension
             let ext = (name as NSString).pathExtension
             return Bundle.main.url(forResource: base, withExtension: ext)
         }
+        return fileState(for: settings, in: directory)
     }
     #endif
 }

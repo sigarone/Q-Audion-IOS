@@ -13,6 +13,18 @@ final class NotificationService: UNNotificationServiceExtension {
     private let lock = NSLock()
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var best: UNNotificationContent?
+    /// What the diagnostics breadcrumb needs, filled while the alert is handled (under `lock`).
+    private var diag = DiagContext()
+
+    private struct DiagContext {
+        var enabled = true
+        var keyPresent = false
+        var soundId = "system"
+        var kindBefore = "silent"
+        var muted = false
+        var origSound = false
+        var sndBefore = "none"
+    }
 
     override func didReceive(_ request: UNNotificationRequest,
                              withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
@@ -22,27 +34,38 @@ final class NotificationService: UNNotificationServiceExtension {
 
         let original = request.content
         let generic = (original.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
-        let soundSettings = MessageSoundStore().load(legacyInAppSound: true)
+        let soundStore = MessageSoundStore()
+        let soundSnapshot = soundStore.snapshot(legacyInAppSound: true)
+        let soundSettings = soundSnapshot.settings
+        lock.lock()
+        diag = DiagContext(enabled: soundSettings.soundEnabled, keyPresent: soundSnapshot.keyPresent,
+                           soundId: soundSettings.soundId, kindBefore: NotifySoundDiag.kind(of: original.sound),
+                           muted: false, origSound: original.sound != nil,
+                           sndBefore: NotifySoundDiag.info(of: original.sound).snd)
+        lock.unlock()
         NotificationContentBuilder.applyGeneric(to: generic, settings: soundSettings)
         setBest(generic)
 
         guard let plan = Self.openPlan(userInfo: original.userInfo) else {
-            deliver(generic)
+            deliver(generic, step: "generic")
             return
         }
+        lock.lock()
+        diag.muted = plan.muted
+        lock.unlock()
         let bundle = NotificationContentBuilder.appBundle(from: .main)
         let rewritten = (original.mutableCopy() as? UNMutableNotificationContent) ?? generic
         NotificationContentBuilder.apply(plan, to: rewritten, settings: soundSettings,
                                          body: NotificationContentBuilder.newMessageBody(bundle: bundle))
         // Muted conversations: the place where the filtering entitlement will return an empty content.
         if NotificationContentBuilder.suppressesMutedConversations && plan.muted {
-            deliver(UNNotificationContent())
+            deliver(UNNotificationContent(), step: "rewritten")
             return
         }
         setBest(rewritten)
 
         guard NotifyPreferences().siriDonationsEnabled else {
-            deliver(rewritten)
+            deliver(rewritten, step: "rewritten")
             return
         }
         donate(plan, content: rewritten)
@@ -52,7 +75,7 @@ final class NotificationService: UNNotificationServiceExtension {
         lock.lock()
         let content = best
         lock.unlock()
-        if let content { deliver(content) }
+        if let content { deliver(content, step: "expired") }
     }
 
     // MARK: - Opening
@@ -93,9 +116,9 @@ final class NotificationService: UNNotificationServiceExtension {
         interaction.donate { [weak self] _ in
             guard let self else { return }
             do {
-                self.deliver(try content.updating(from: intent))
+                self.deliver(try content.updating(from: intent), step: "donated")
             } catch {
-                self.deliver(content)
+                self.deliver(content, step: "donateFailed")
             }
         }
     }
@@ -108,12 +131,22 @@ final class NotificationService: UNNotificationServiceExtension {
         lock.unlock()
     }
 
-    /// Hands the content to the system once.
-    private func deliver(_ content: UNNotificationContent) {
+    /// Hands the content to the system once. `step` names the path for the diagnostics breadcrumb, written (one small
+    /// synchronous defaults write, nothing awaited) before the handler runs and only for the delivery that counts.
+    private func deliver(_ content: UNNotificationContent, step: String) {
         lock.lock()
         let handler = contentHandler
         contentHandler = nil
+        let context = diag
         lock.unlock()
-        handler?(content)
+        guard let handler else { return }
+        var level = "active"
+        if #available(iOS 15.0, *) { level = NotifySoundDiag.interruption(content.interruptionLevel) }
+        NotifySoundDiag.record(NotifySoundDiag.Breadcrumb(
+            step: step, enabled: context.enabled, keyPresent: context.keyPresent, soundId: context.soundId,
+            kindBefore: context.kindBefore, kindAfter: NotifySoundDiag.kind(of: content.sound), muted: context.muted,
+            interruption: level, origSound: context.origSound, sndBefore: context.sndBefore,
+            snd: NotifySoundDiag.info(of: content.sound).snd, time: Int(Date().timeIntervalSince1970)))
+        handler(content)
     }
 }

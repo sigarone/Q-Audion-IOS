@@ -267,6 +267,7 @@ targets:
       - path: ../QAudionNotificationService
       - path: ../QAudionApp/Notify/NotifyPreferences.swift
       - path: ../QAudionApp/Notify/NotificationContentBuilder.swift
+      - path: ../QAudionApp/Notify/NotifySoundDiag.swift
       - path: ../QAudionApp/Services/MessageSoundSettings.swift
       - path: ../QAudionEngine/Sources/QAudionEngine/Notify/NotifyEnvelope.swift
       - path: ../QAudionEngine/Sources/QAudionEngine/Notify/NotifyRubrica.swift
