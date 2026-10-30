@@ -45,6 +45,15 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(level.rawValue, RTCLoggingSeverity.warning.rawValue)
     }
 
+    /// The stderr severity is exactly `.warning` and the factory offers no
+    /// call-time raise/restore pair: a call start (native SRTP on or off)
+    /// leaves the level where `installNativeAudioUnitLogBridge()` put it.
+    func testStderrDebugLogLevelIsWarningAndNotChangedPerCall() {
+        XCTAssertEqual(QAudionPeerConnectionFactory.stderrDebugLogLevel, .warning)
+        let names = Mirror(reflecting: QAudionPeerConnectionFactory.shared).children.compactMap { $0.label }
+        XCTAssertFalse(names.contains { $0.contains("DebugLogLevel") })
+    }
+
     func testDefaultConfigurationHasUnifiedPlan() {
         let cfg = QAudionPeerConnectionFactory.defaultConfiguration(iceServers: [])
         XCTAssertEqual(cfg.sdpSemantics, .unifiedPlan)

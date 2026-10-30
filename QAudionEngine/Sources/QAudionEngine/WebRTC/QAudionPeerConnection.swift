@@ -202,14 +202,6 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
     /// intersection, not from this switch again), so this `init` gate was
     /// the only site with the bug.
     private var audioTransceiver: RTCRtpTransceiver?
-    /// W-NATIVESRTPDIAG (this task) — true once THIS instance has raised the
-    /// process-wide WebRTC debug log level for its own native-SRTP session
-    /// (see `init`'s gated block). `close()` reads this to decide whether it
-    /// owes a restore — never restores unconditionally, so a call that never
-    /// raised the level (native SRTP off) cannot clobber another call's
-    /// raise/restore pairing (only one 1:1 call runs at a time today, but the
-    /// guard costs nothing and keeps the pairing self-contained per instance).
-    private var didRaiseDebugLogLevelForSession = false
     /// I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) —
     /// M150-DEPENDENT: the observer that keeps this call's native Opus
     /// encoder/decoder complexity (`QaudionRuntimeTuning`) tracking the
@@ -219,7 +211,7 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
     /// Opus encoder, which only carries real audio on this path (the legacy
     /// sealed-DataChannel path uses the CUSTOM `OpusCodec`, tuned separately
     /// via that class's own `setComplexity`). Torn down in `close()`, same
-    /// lifetime discipline as `didRaiseDebugLogLevelForSession` above.
+    /// lifetime discipline as the other per-call observers.
     private var runtimeTuningThermalObserver: NSObjectProtocol?
     private var runtimeTuningPowerObserver: NSObjectProtocol?
     /// Token of this call's hold on `EncoderBandHintController` (the optional ceiling on the band the native
@@ -798,13 +790,6 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
             if let preAttachedSender = nativeAudioSender {
                 applyNativeAudioSenderBitrateCap(on: preAttachedSender, source: 1)
             }
-            // W-NATIVESRTPDIAG (this task) — raise the WebRTC stderr debug
-            // severity for this call's whole lifetime (restored in `close()`
-            // below). Gated on the SAME condition as the transceiver
-            // pre-creation above, so a normal call (native SRTP off) never
-            // touches the global log level at all.
-            QAudionPeerConnectionFactory.shared.raiseDebugLogLevelForNativeSrtpSession()
-            didRaiseDebugLogLevelForSession = true
         }
     }
 
@@ -2379,16 +2364,6 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
         // this instance is discarded on call end (deinit calls close()), so
         // this mainly guards a hypothetical future reuse.
         nativeSenderCryptorAttached = false
-        // W-NATIVESRTPDIAG — restore the process-wide WebRTC debug log level
-        // this instance raised at `init`, if it did. Runs BEFORE
-        // `peerConnection?.close()` below only because every other teardown
-        // line in this function does too — the two are independent (the log
-        // level is a global WebRTC setting, not tied to this specific
-        // RTCPeerConnection's own lifetime).
-        if didRaiseDebugLogLevelForSession {
-            QAudionPeerConnectionFactory.shared.restoreDefaultDebugLogLevel()
-            didRaiseDebugLogLevelForSession = false
-        }
         // I4 (2026-09-29) — tear down this call's runtime-tuning observers.
         // No corresponding native "un-set" for the P8 complexity/FEC values
         // themselves (they are process-wide and simply get re-applied at the

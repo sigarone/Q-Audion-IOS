@@ -81,8 +81,7 @@ enum LogRedactor {
     /// lines this file's own doc comment names as flowing through the
     /// stdout/stderr tee (`port.cc`, `connection.cc`, `turn_port.cc` — ICE
     /// candidate/pair diagnostics, reachable whenever
-    /// `raiseDebugLogLevelForNativeSrtpSession()` is active or the callback
-    /// logger's own `.info` severity picks them up) print the candidate's
+    /// the callback logger's own `.info` severity picks them up) print the candidate's
     /// connection address and port in the clear — the same field the
     /// Android-side privacy fix reduces to type/protocol/relay/cost only
     /// (`PeerConnectionHolder.kt`'s `redactCandidateSdp`). `<ip>` covers a

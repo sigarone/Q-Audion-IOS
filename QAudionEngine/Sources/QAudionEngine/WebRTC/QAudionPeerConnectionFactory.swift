@@ -296,48 +296,13 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// Pinned by `QAudionPeerConnectionFactoryTests`; do not lower it.
     static let stderrDebugLogLevel: RTCLoggingSeverity = .warning
 
-    /// W-NATIVESRTPDIAG (this task) — raises the WebRTC stderr DEBUG severity
-    /// (``stderrDebugLogLevel``, normally `.warning`) to `.info` for the
-    /// duration of a call that has native SRTP enabled locally
-    /// (``CallCapabilities/isNativeSrtpEnabledLocally``), so the extra
-    /// libwebrtc INFO lines W-KEYLOGGATE silenced (`channel.cc` state
-    /// changes, `thread.cc` dispatch timing, `connection.cc` candidate
-    /// updates, ...) are available again while this feature is being
-    /// exercised/diagnosed — see ``restoreDefaultDebugLogLevel()`` for the
-    /// counterpart and for why this is safe.
+    /// The stderr severity is set once, by `installNativeAudioUnitLogBridge()`,
+    /// and stays at ``stderrDebugLogLevel`` for the whole process, calls
+    /// included: at `.info` some audio-route states make libwebrtc print
+    /// several lines per second for the entire call, all of which the
+    /// stdout/stderr tee would copy into the log ring. Nothing else changes
+    /// the level.
     ///
-    /// Deliberately a GLOBAL severity change (`RTCSetMinDebugLogLevel` sets
-    /// process-wide state, per its own header — there is no per-PeerConnection
-    /// scope), same as `installNativeAudioUnitLogBridge()`'s own call to it.
-    /// A 1:1 call is the only caller of the native SRTP audio path today, so
-    /// there is no concurrent-call scenario where raise/restore from two
-    /// different calls could race; if that ever changes, this needs a
-    /// reference count instead of a bare set/restore pair.
-    ///
-    /// SAFE despite raising the callback logger's own already-`.info`
-    /// severity's reach to stderr too: the two lines W-KEYLOGGATE exists for
-    /// (`api/crypto/frame_crypto_transformer.cc`'s `RTC_LOG(LS_INFO)` key
-    /// prints) are gone from the bundled `WebRTC.xcframework` at the SOURCE —
-    /// `Package.swift`'s binaryTarget comment pins it to the
-    /// `webrtc-ios-m150-a256-dplc-10` release (patch P3 no-key-log, gate G1), built from a tree with
-    /// commit that removed both prints, and `scripts/ci/assert-no-key-logging.sh`
-    /// gates every build of that release on `RTC_LOG(LS_INFO)` no longer
-    /// appearing in `frame_crypto_transformer.cc`. `KeyMaterialScrubber`
-    /// (`Diagnostics/KeyMaterialScrubber.swift`) and `LogRedactor` still
-    /// sanitize every ring/egress point as defence in depth regardless.
-    public func raiseDebugLogLevelForNativeSrtpSession() {
-        RTCSetMinDebugLogLevel(.info)
-    }
-
-    /// Counterpart to ``raiseDebugLogLevelForNativeSrtpSession()`` — restores
-    /// the compiled default (``stderrDebugLogLevel``, `.warning`). Called
-    /// whenever a call that raised the level ends, so a call that never
-    /// touches native SRTP is never affected and the raised level never
-    /// outlives the session it was raised for.
-    public func restoreDefaultDebugLogLevel() {
-        RTCSetMinDebugLogLevel(Self.stderrDebugLogLevel)
-    }
-
     /// W-AUNITTRACE (2026-09-10) — the persistent-factory fix (this file's
     /// own W-PERSISTENTFACTORY, shipped and live-tested v1.0.1129) did NOT
     /// resolve the dead-TX-at-call-2 defect: the same symptom reproduced
