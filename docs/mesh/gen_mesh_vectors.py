@@ -25,7 +25,9 @@ import struct
 import sys
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 SPEC_VERSION = "mesh-link-spec/1"
 
@@ -45,7 +47,7 @@ MAX_FRAMES = 255
 DEFAULT_TTL = 5
 MAX_PACKET_BYTES = 1 + 1 + 8 + 8 + 1 + 1 + 1 + 255 * 8 + 8 + 4 + MAX_PAYLOAD
 
-TYPES = {"DATA": 0x01, "FRAGMENT": 0x02, "ANNOUNCE": 0x03, "ACK": 0x04, "RECEIPT": 0x05}
+TYPES = {"DATA": 0x01, "FRAGMENT": 0x02, "ANNOUNCE": 0x03, "ACK": 0x04, "RECEIPT": 0x05, "ANNOUNCE_PROOF": 0x06}
 BROADCAST = "ff" * NODE_BYTES
 
 DISCOVERY_IKM = "Q-Audion-Mesh-Discovery-Shared-Seed-v1"
@@ -72,6 +74,19 @@ def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int) -> bytes:
 
 def node_id_from_key(raw: bytes) -> str:
     return hashlib.sha256(raw).digest()[:NODE_BYTES].hex()
+
+
+PROOF_DOMAIN = b"qaudion-mesh-announce-v1"
+PROOF_PAYLOAD_VERSION = 1
+
+
+def proof_message(prover_node: str, verifier_node: str, prover_nonce: bytes, verifier_nonce: bytes,
+                  prover_is_central: bool) -> bytes:
+    """Fixed layout, 73 bytes: domain(24) role(1) proverNode(8) verifierNode(8) proverNonce(16) verifierNonce(16).
+    The role byte is 1 when the prover is the central of the link, 2 when it is the peripheral."""
+    assert len(prover_nonce) == 16 and len(verifier_nonce) == 16
+    return (PROOF_DOMAIN + bytes([1 if prover_is_central else 2]) + bytes.fromhex(prover_node)
+            + bytes.fromhex(verifier_node) + prover_nonce + verifier_nonce)
 
 
 def canonical_json(obj) -> bytes:
@@ -287,7 +302,7 @@ def build():
     negcase("three_bytes", b"\x01\x01\xff", "truncated")
     negcase("version_0", b"\x00" + good[1:], "unsupported_version")
     negcase("version_2", b"\x02" + good[1:], "unsupported_version")
-    negcase("unknown_type_0x06", good[:1] + b"\x06" + good[2:], "unknown_type")
+    negcase("unknown_type_0x07", good[:1] + b"\x07" + good[2:], "unknown_type")
     negcase("unknown_flag_bit_0x04", good[:18] + bytes([good[18] | 0x04]) + good[19:], "unknown_flag_bits")
     negcase("truncated_payload", good[:-1], "truncated")
     negcase("trailing_byte", good + b"\x00", "trailing_bytes")
@@ -484,6 +499,94 @@ def build():
     run("total_zero", [bytes.fromhex("0001000041")])
     run("header_only_frame", [bytes.fromhex("00010001")])
     v["reassembly"] = scen
+
+    # ---- ANNOUNCE with a challenge (section 8.2, field ch) ----
+    challenge_cases = []
+    for name, node, nbrs, ch, pv in [
+        ("no_neighbors", NODE_A, [], bytes(range(16)), False),
+        ("two_neighbors", NODE_B, [NODE_A, NODE_C], bytes(range(16, 32)), False),
+        ("peer_verified", NODE_B, [NODE_A], bytes(range(32, 48)), True),
+    ]:
+        obj = {"v": 1, "node": node, "fp": node, "nbrs": nbrs, "ch": ch.hex()}
+        if pv:
+            obj["pv"] = 1
+        pt = canonical_json(obj)
+        challenge_cases.append({"name": name, "nodeIdHex": node, "neighborNodeIdsHex": nbrs, "challengeHex": ch.hex(),
+                                "peerVerified": pv, "canonicalJson": pt.decode("utf-8"), "canonicalJsonHex": pt.hex()})
+    v["announceChallenge"] = challenge_cases
+
+    # ---- ANNOUNCE_PROOF (section 8.5) ----
+    seeds = {"a": bytes(range(32)), "b": bytes(range(32, 64)), "c": bytes(range(64, 96))}
+    keys = {k: Ed25519PrivateKey.from_private_bytes(sd) for k, sd in seeds.items()}
+    pubs = {k: kk.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw) for k, kk in keys.items()}
+    nodes = {k: node_id_from_key(pb) for k, pb in pubs.items()}
+
+    def make_payload(signer, prover_node, verifier_node, prover_nonce, verifier_nonce, prover_is_central):
+        msg = proof_message(prover_node, verifier_node, prover_nonce, verifier_nonce, prover_is_central)
+        sig = keys[signer].sign(msg)
+        return msg, sig, bytes([PROOF_PAYLOAD_VERSION]) + pubs[signer] + sig
+
+    nonce_a = bytes(range(0xA0, 0xB0))
+    nonce_b = bytes(range(0xB0, 0xC0))
+    nonce_other = bytes(range(0xC0, 0xD0))
+    proof_cases = []
+    for name, signer, verifier, pn, vn, central in [
+        ("a_proves_to_b_as_central", "a", "b", nonce_a, nonce_b, True),
+        ("b_proves_to_a_as_peripheral", "b", "a", nonce_b, nonce_a, False),
+    ]:
+        msg, sig, payload = make_payload(signer, nodes[signer], nodes[verifier], pn, vn, central)
+        pkt = encode_packet(TYPES["ANNOUNCE_PROOF"], nodes[signer], nodes[verifier], None, [], TS + 10, payload)
+        proof_cases.append({
+            "name": name, "proverSeedHex": seeds[signer].hex(), "proverPublicKeyHex": pubs[signer].hex(),
+            "proverNodeIdHex": nodes[signer], "verifierNodeIdHex": nodes[verifier],
+            "proverNonceHex": pn.hex(), "verifierNonceHex": vn.hex(), "proverIsCentral": central,
+            "signedBytesHex": msg.hex(), "signedBytesLength": len(msg), "signatureHex": sig.hex(),
+            "payloadHex": payload.hex(), "payloadLength": len(payload),
+            "packetTimestampMs": TS + 10, "packetHex": pkt.hex(), "valid": True,
+        })
+    base = proof_cases[0]
+    base_payload = bytes.fromhex(base["payloadHex"])
+
+    def neg(name, reason, payload, prover=None, verifier=None, pn=None, vn=None, central=None):
+        return {
+            "name": name, "reason": reason, "payloadHex": payload.hex(),
+            "proverNodeIdHex": prover or base["proverNodeIdHex"], "verifierNodeIdHex": verifier or base["verifierNodeIdHex"],
+            "proverNonceHex": (pn or bytes.fromhex(base["proverNonceHex"])).hex(),
+            "verifierNonceHex": (vn or bytes.fromhex(base["verifierNonceHex"])).hex(),
+            "proverIsCentral": base["proverIsCentral"] if central is None else central, "valid": False,
+        }
+
+    # an attacker holding key C signs for the node id of A: valid signature, wrong fingerprint
+    _, _, claim_payload = make_payload("c", nodes["a"], nodes["b"], nonce_a, nonce_b, True)
+    flipped_sig = bytearray(base_payload)
+    flipped_sig[-1] ^= 0x01
+    wrong_version = bytearray(base_payload)
+    wrong_version[0] = 2
+    negatives = [
+        neg("wrong_role", "bad_signature", base_payload, central=False),
+        neg("replay_on_other_link_verifier_nonce", "bad_signature", base_payload, vn=nonce_other),
+        neg("replay_with_other_prover_nonce", "bad_signature", base_payload, pn=nonce_other),
+        neg("wrong_verifier_node", "bad_signature", base_payload, verifier=nodes["c"]),
+        neg("key_does_not_match_node_id", "node_mismatch", claim_payload),
+        neg("bad_signature", "bad_signature", bytes(flipped_sig)),
+        neg("bad_length", "bad_length", base_payload[:-1]),
+        neg("bad_payload_version", "bad_version", bytes(wrong_version)),
+    ]
+    # One signature made by CryptoKit on iOS (it hedges Ed25519 with randomness, so it differs from the deterministic one
+    # above). Not produced by this script: it is a fixed vector that every implementation must verify.
+    ios_sig = bytes.fromhex("be4a7b683569a615d34270ad6a98544b675990d813d0130f209e5957f194c74e0dfc8b45a70373599bfbe9828dfbff2545553c1ccf872fc4eb776ffbf9b26b08")
+    case_a = proof_cases[0]
+    keys["a"].public_key().verify(ios_sig, bytes.fromhex(case_a["signedBytesHex"]))
+    assert ios_sig.hex() != case_a["signatureHex"]
+    external_signatures = [{
+        "name": "cryptokit_a_proves_to_b_as_central", "caseName": case_a["name"], "producedBy": "CryptoKit on iOS (hedged)",
+        "signatureHex": ios_sig.hex(),
+    }]
+    v["announceProof"] = {
+        "domain": PROOF_DOMAIN.decode("ascii"), "domainHex": PROOF_DOMAIN.hex(), "payloadVersion": PROOF_PAYLOAD_VERSION,
+        "payloadLength": 97, "signedBytesLength": 73, "roleCentral": 1, "rolePeripheral": 2,
+        "cases": proof_cases, "negatives": negatives, "externalSignatures": external_signatures,
+    }
 
     # ---- relay probability ----
     v["relayProbability"] = [

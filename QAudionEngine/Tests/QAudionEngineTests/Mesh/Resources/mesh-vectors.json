@@ -18,7 +18,8 @@
       "FRAGMENT": 2,
       "ANNOUNCE": 3,
       "ACK": 4,
-      "RECEIPT": 5
+      "RECEIPT": 5,
+      "ANNOUNCE_PROOF": 6
     }
   },
   "nodeIds": [
@@ -159,8 +160,8 @@
       "reason": "unsupported_version"
     },
     {
-      "name": "unknown_type_0x06",
-      "hex": "010621fe31dfa154a26139f713d0a644253f010500000199c82cc00100000004deadbeef",
+      "name": "unknown_type_0x07",
+      "hex": "010721fe31dfa154a26139f713d0a644253f010500000199c82cc00100000004deadbeef",
       "expect": "reject",
       "reason": "unknown_type"
     },
@@ -842,6 +843,185 @@
       "pendingSetsAtEnd": 0
     }
   ],
+  "announceChallenge": [
+    {
+      "name": "no_neighbors",
+      "nodeIdHex": "21fe31dfa154a261",
+      "neighborNodeIdsHex": [],
+      "challengeHex": "000102030405060708090a0b0c0d0e0f",
+      "peerVerified": false,
+      "canonicalJson": "{\"v\":1,\"node\":\"21fe31dfa154a261\",\"fp\":\"21fe31dfa154a261\",\"nbrs\":[],\"ch\":\"000102030405060708090a0b0c0d0e0f\"}",
+      "canonicalJsonHex": "7b2276223a312c226e6f6465223a2232316665333164666131353461323631222c226670223a2232316665333164666131353461323631222c226e627273223a5b5d2c226368223a223030303130323033303430353036303730383039306130623063306430653066227d"
+    },
+    {
+      "name": "two_neighbors",
+      "nodeIdHex": "39f713d0a644253f",
+      "neighborNodeIdsHex": [
+        "21fe31dfa154a261",
+        "dac073e0123bdea5"
+      ],
+      "challengeHex": "101112131415161718191a1b1c1d1e1f",
+      "peerVerified": false,
+      "canonicalJson": "{\"v\":1,\"node\":\"39f713d0a644253f\",\"fp\":\"39f713d0a644253f\",\"nbrs\":[\"21fe31dfa154a261\",\"dac073e0123bdea5\"],\"ch\":\"101112131415161718191a1b1c1d1e1f\"}",
+      "canonicalJsonHex": "7b2276223a312c226e6f6465223a2233396637313364306136343432353366222c226670223a2233396637313364306136343432353366222c226e627273223a5b2232316665333164666131353461323631222c2264616330373365303132336264656135225d2c226368223a223130313131323133313431353136313731383139316131623163316431653166227d"
+    },
+    {
+      "name": "peer_verified",
+      "nodeIdHex": "39f713d0a644253f",
+      "neighborNodeIdsHex": [
+        "21fe31dfa154a261"
+      ],
+      "challengeHex": "202122232425262728292a2b2c2d2e2f",
+      "peerVerified": true,
+      "canonicalJson": "{\"v\":1,\"node\":\"39f713d0a644253f\",\"fp\":\"39f713d0a644253f\",\"nbrs\":[\"21fe31dfa154a261\"],\"ch\":\"202122232425262728292a2b2c2d2e2f\",\"pv\":1}",
+      "canonicalJsonHex": "7b2276223a312c226e6f6465223a2233396637313364306136343432353366222c226670223a2233396637313364306136343432353366222c226e627273223a5b2232316665333164666131353461323631225d2c226368223a223230323132323233323432353236323732383239326132623263326432653266222c227076223a317d"
+    }
+  ],
+  "announceProof": {
+    "domain": "qaudion-mesh-announce-v1",
+    "domainHex": "71617564696f6e2d6d6573682d616e6e6f756e63652d7631",
+    "payloadVersion": 1,
+    "payloadLength": 97,
+    "signedBytesLength": 73,
+    "roleCentral": 1,
+    "rolePeripheral": 2,
+    "cases": [
+      {
+        "name": "a_proves_to_b_as_central",
+        "proverSeedHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "proverPublicKeyHex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": true,
+        "signedBytesHex": "71617564696f6e2d6d6573682d616e6e6f756e63652d76310156475aa75463474c24f6ed6acbfe1009a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "signedBytesLength": 73,
+        "signatureHex": "bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "payloadHex": "0103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "payloadLength": 97,
+        "packetTimestampMs": 1760000000010,
+        "packetHex": "010656475aa75463474c24f6ed6acbfe10090000000199c82cc00a000000610103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "valid": true
+      },
+      {
+        "name": "b_proves_to_a_as_peripheral",
+        "proverSeedHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "proverPublicKeyHex": "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7",
+        "proverNodeIdHex": "24f6ed6acbfe1009",
+        "verifierNodeIdHex": "56475aa75463474c",
+        "proverNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "verifierNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "proverIsCentral": false,
+        "signedBytesHex": "71617564696f6e2d6d6573682d616e6e6f756e63652d76310224f6ed6acbfe100956475aa75463474cb0b1b2b3b4b5b6b7b8b9babbbcbdbebfa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "signedBytesLength": 73,
+        "signatureHex": "3e475107b98e86ea004c2867ebcd5dcffe9bc135b547e7298d3bc1573b2fa3a17e253c21d08ebdd6ac2ec33cecdacebf4733289463f38fb0d2817ca2f39d3203",
+        "payloadHex": "0129acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd73e475107b98e86ea004c2867ebcd5dcffe9bc135b547e7298d3bc1573b2fa3a17e253c21d08ebdd6ac2ec33cecdacebf4733289463f38fb0d2817ca2f39d3203",
+        "payloadLength": 97,
+        "packetTimestampMs": 1760000000010,
+        "packetHex": "010624f6ed6acbfe100956475aa75463474c0000000199c82cc00a000000610129acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd73e475107b98e86ea004c2867ebcd5dcffe9bc135b547e7298d3bc1573b2fa3a17e253c21d08ebdd6ac2ec33cecdacebf4733289463f38fb0d2817ca2f39d3203",
+        "valid": true
+      }
+    ],
+    "negatives": [
+      {
+        "name": "wrong_role",
+        "reason": "bad_signature",
+        "payloadHex": "0103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": false,
+        "valid": false
+      },
+      {
+        "name": "replay_on_other_link_verifier_nonce",
+        "reason": "bad_signature",
+        "payloadHex": "0103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+        "proverIsCentral": true,
+        "valid": false
+      },
+      {
+        "name": "replay_with_other_prover_nonce",
+        "reason": "bad_signature",
+        "payloadHex": "0103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": true,
+        "valid": false
+      },
+      {
+        "name": "wrong_verifier_node",
+        "reason": "bad_signature",
+        "payloadHex": "0103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "03396219237f75a6",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": true,
+        "valid": false
+      },
+      {
+        "name": "key_does_not_match_node_id",
+        "reason": "node_mismatch",
+        "payloadHex": "012543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559daf3c384cf327166ff0f16bbfce052cacb297f5647c69b5ab5025e688c250714fdde90f9eec7f20e6abe344554fa757bf4c7f3749ca5775e05a59ec9e727ed30d",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": true,
+        "valid": false
+      },
+      {
+        "name": "bad_signature",
+        "reason": "bad_signature",
+        "payloadHex": "0103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a07",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": true,
+        "valid": false
+      },
+      {
+        "name": "bad_length",
+        "reason": "bad_length",
+        "payloadHex": "0103a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": true,
+        "valid": false
+      },
+      {
+        "name": "bad_payload_version",
+        "reason": "bad_version",
+        "payloadHex": "0203a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8bfffbb48b5e4dfa273be9182e48aeed68b7cb26b7bdff053f60b27c04ea91ef643ee20f15d7ca5ce5cb63287d323fb21bfb752fd9bff65ef2823e53399dd6a06",
+        "proverNodeIdHex": "56475aa75463474c",
+        "verifierNodeIdHex": "24f6ed6acbfe1009",
+        "proverNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "verifierNonceHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "proverIsCentral": true,
+        "valid": false
+      }
+    ],
+    "externalSignatures": [
+      {
+        "name": "cryptokit_a_proves_to_b_as_central",
+        "caseName": "a_proves_to_b_as_central",
+        "producedBy": "CryptoKit on iOS (hedged)",
+        "signatureHex": "be4a7b683569a615d34270ad6a98544b675990d813d0130f209e5957f194c74e0dfc8b45a70373599bfbe9828dfbff2545553c1ccf872fc4eb776ffbf9b26b08"
+      }
+    ]
+  },
   "relayProbability": [
     {
       "visiblePeers": 1,

@@ -37,6 +37,7 @@ public enum MeshLog {
         case annTx = "ann.tx"
         case annRx = "ann.rx"
         case annSum = "ann.sum"
+        case annProof = "ann.proof"
         case tx
         case txFrameFail = "tx.frame.fail"
         case rx

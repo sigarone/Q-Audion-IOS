@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import QAudionEngine
 
@@ -166,9 +167,18 @@ final class MeshRuntime: ObservableObject {
     private let consent: MeshConsent
     private var flagRefreshObserver: NSObjectProtocol?
 
+    /// Signs `message` with the device identity key (the key whose fingerprint is the node id) and returns the public key with
+    /// the signature; nil when the key cannot be read. Used for the proof of the node id (section 8.5).
+    nonisolated static func signWithIdentity(_ message: Data) -> (publicKey: Data, signature: Data)? {
+        guard let identity = SovereignIdentityManager().loadIdentity(), identity.signingPublic.count == 32,
+              let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: identity.signingPrivate),
+              let signature = try? key.signature(for: message) else { return nil }
+        return (identity.signingPublic, Data(signature))
+    }
+
     private static func makeSlot() -> MeshTransportSlot<BleMeshTransport> {
         MeshTransportSlot<BleMeshTransport>(
-            factory: { nodeId in BleMeshTransport(localNodeId: nodeId) },
+            factory: { nodeId in BleMeshTransport(localNodeId: nodeId, signProof: { message in MeshRuntime.signWithIdentity(message) }) },
             retire: { transport in
                 transport.delegate = nil
                 transport.stop()

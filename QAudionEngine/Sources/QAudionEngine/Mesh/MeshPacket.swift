@@ -22,6 +22,10 @@ public enum MeshPacketType: UInt8, Equatable, Sendable {
     /// says nothing about whether the destination stored the message. Sealed
     /// with the peer's message key exactly like ``data``.
     case receipt = 0x05
+    /// The proof of a node id (docs/mesh/MESH_LINK_SPEC.md section 8.5): this transport's own control data
+    /// (``MeshAnnounceProof``), sent to the peer of one link and never relayed. Its payload is not `MessageCrypto`
+    /// ciphertext.
+    case announceProof = 0x06
 }
 
 /// The mesh wire envelope: version, type, sender, recipient (with

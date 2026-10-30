@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import QAudionEngine
 
@@ -434,7 +435,7 @@ final class MeshLinkPolicyTests: XCTestCase {
         summary.flushIfDue(nowMs: 59_000, links: 4)
         XCTAssertTrue(box.got.isEmpty)
         summary.flushIfDue(nowMs: 60_000, links: 4)
-        XCTAssertEqual(box.got.map { $0.1 }, ["ann.sum tx=30 fail=1 rx=30 links=4 claim=2 s=60"])
+        XCTAssertEqual(box.got.map { $0.1 }, ["ann.sum tx=30 fail=1 rx=30 links=4 claim=2 ver=0 unv=0 badsig=0 s=60"])
         XCTAssertEqual(box.got.first?.0, .info)
         summary.flushIfDue(nowMs: 120_000, links: 4)
         XCTAssertEqual(box.got.count, 1)
@@ -463,5 +464,272 @@ final class MeshLinkPolicyTests: XCTestCase {
         throttle.warn(link: "c5", ph: "aa", idx: 0, total: 1, reason: "timeout", nowMs: 0)
         throttle.warn(link: "c4", ph: "aa", idx: 0, total: 1, reason: "rejected", nowMs: 0)
         XCTAssertEqual(box.got.count, 3)
+    }
+
+    // MARK: - Signed ANNOUNCE (section 8.5)
+
+    private func proofLink(_ key: String, bound: Int64, verified: Bool = false, failed: Bool = false, data: Int64 = 0,
+                           node: String? = "N", central: Bool = false) -> MeshLinkCandidate {
+        MeshLinkCandidate(key: key, central: central, address: "addr-\(key)", subscribed: true, lastActivityMs: now - 1_000,
+                          boundAtMs: bound, lastDataMs: data, nodeHex: node, verified: verified, failed: failed)
+    }
+
+    func testAVerifiedLinkRanksFirstButNothingIsLeftOutOfASend() {
+        let claimantFirst = proofLink("claimant", bound: 100)
+        let real = proofLink("real", bound: 900, verified: true)
+        // The verified link is first, the unverified one is still a target: a link believed verified may be dead or relayed.
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [claimantFirst, real], nowMs: now), ["real", "claimant"])
+        XCTAssertEqual(MeshNodeLinkPolicy.floodTargets(links: [claimantFirst, real], excludingKey: nil, excludingNode: nil, nowMs: now),
+                       ["real", "claimant"])
+        // Without a verified link every healthy one is used, as before.
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [claimantFirst, proofLink("other", bound: 200)], nowMs: now), ["claimant", "other"])
+        XCTAssertEqual(MeshNodeLinkPolicy.relayTargets(links: [claimantFirst, real], recipientNode: "N", arrivalKey: nil, arrivalNode: nil, nowMs: now),
+                       ["real", "claimant"])
+    }
+
+    func testADeadVerifiedLinkCannotBlackholeTheNodeTheUnverifiedOneStillGetsTheFrame() {
+        let deadVerified = MeshLinkCandidate(key: "dead", central: false, address: "a", subscribed: true, lastActivityMs: now - 200_000,
+                                             boundAtMs: 10, lastDataMs: 0, nodeHex: "N", verified: true)
+        let live = proofLink("live", bound: 500)
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [deadVerified, live], nowMs: now), ["live"])
+        // Within the 120 s a link not yet reaped still counts, but it no longer excludes the live one.
+        let fresh = MeshLinkCandidate(key: "dead", central: false, address: "a", subscribed: true, lastActivityMs: now - 100_000,
+                                      boundAtMs: 10, lastDataMs: 0, nodeHex: "N", verified: true)
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [fresh, live], nowMs: now), ["dead", "live"])
+    }
+
+    func testABadSignatureNeverWinsButTheLinkStillWorks() {
+        let failed = proofLink("failed", bound: 10, failed: true)
+        let plain = proofLink("plain", bound: 500)
+        let verified = proofLink("ok", bound: 900, verified: true)
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [failed, plain, verified], nowMs: now), ["ok", "plain", "failed"])
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [failed, plain], nowMs: now), ["plain", "failed"])
+        // Alone, a link whose proof failed is still a target: messaging is never blocked.
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [failed], nowMs: now), ["failed"])
+        // Above the cap a failed link ranks last.
+        let many = (1...5).map { proofLink("u\($0)", bound: 100 + Int64($0)) } + [failed]
+        XCTAssertFalse(MeshNodeLinkPolicy.fanOut(links: many, nowMs: now).contains("failed"))
+    }
+
+    func testAMissingProofDoesNotBreakSending() {
+        let a = proofLink("a", bound: 100)
+        let b = proofLink("b", bound: 200)
+        XCTAssertEqual(MeshNodeLinkPolicy.fanOut(links: [a, b], nowMs: now), ["a", "b"])
+        XCTAssertEqual(MeshNodeLinkPolicy.floodTargets(links: [a, b], excludingKey: nil, excludingNode: nil, nowMs: now).sorted(), ["a", "b"])
+    }
+
+    func testAboveFourLinksTheVerifiedOnesRankFirstAndAnUnverifiedNewcomerCannotEvictOne() {
+        let unverified = (1...6).map { proofLink("u\($0)", bound: 100 + Int64($0)) }
+        let ver = proofLink("v", bound: 5_000, verified: true)
+        let out = MeshNodeLinkPolicy.fanOut(links: unverified + [ver], nowMs: now)
+        XCTAssertEqual(out.first, "v")
+        XCTAssertEqual(out.count, 4)
+        // The earliest-bound verified link of a node is protected; a verified link that is not the earliest of its node is not.
+        let old = MeshLinkCandidate(key: "w:old", central: true, address: "a", subscribed: true, lastActivityMs: now - 1_000,
+                                    boundAtMs: now - 300_000, lastDataMs: 0, nodeHex: "A", verified: true)
+        let sibling = MeshLinkCandidate(key: "n:sib", central: false, address: "b", subscribed: true, lastActivityMs: now - 1_000,
+                                        boundAtMs: now - 600_000, lastDataMs: 0, nodeHex: "A")
+        let newcomer = MeshLinkCandidate(key: "w:new", central: true, address: "c", subscribed: true, lastActivityMs: now - 1_000,
+                                         boundAtMs: now - 1_000, lastDataMs: 0, nodeHex: "B")
+        XCTAssertNil(MeshNodeLinkPolicy.evictionVictim(links: [old, sibling, newcomer], centralRole: true, excludingKey: "w:new", nowMs: now))
+    }
+
+    func testInAFullyVerifiedMeshANonEarliestIdleLinkOfANodeCanBeEvicted() {
+        func v(_ key: String, _ node: String, _ bound: Int64) -> MeshLinkCandidate {
+            MeshLinkCandidate(key: key, central: true, address: "addr-\(key)", subscribed: true, lastActivityMs: now - 1_000,
+                              boundAtMs: bound, lastDataMs: 0, nodeHex: node, verified: true)
+        }
+        let a1 = v("w:a1", "A", now - 400_000)
+        let a2 = v("w:a2", "A", now - 300_000)
+        let b1 = v("w:b1", "B", now - 350_000)
+        let newcomer = MeshLinkCandidate(key: "w:new", central: true, address: "c", subscribed: true, lastActivityMs: now - 1_000,
+                                         boundAtMs: now - 1_000, lastDataMs: 0, nodeHex: "C")
+        XCTAssertEqual(MeshNodeLinkPolicy.evictionVictim(links: [a1, a2, b1, newcomer], centralRole: true, excludingKey: "w:new", nowMs: now), "w:a2")
+        // With one link per node every link is the earliest of its node, so none is evictable.
+        XCTAssertNil(MeshNodeLinkPolicy.evictionVictim(links: [a1, b1, newcomer], centralRole: true, excludingKey: "w:new", nowMs: now))
+    }
+
+    func testTheEarliestVerifiedLinkOfANodeStaysProtectedEvenIfASpooferBoundEarlier() {
+        func link(_ key: String, _ bound: Int64, verified: Bool = false, node: String = "X") -> MeshLinkCandidate {
+            MeshLinkCandidate(key: key, central: true, address: "addr-\(key)", subscribed: true, lastActivityMs: now - 1_000,
+                              boundAtMs: bound, lastDataMs: 0, nodeHex: node, verified: verified)
+        }
+        let spoofer = link("w:spoof", now - 500_000)
+        let real = link("w:real", now - 300_000, verified: true)
+        let third = link("w:third", now - 200_000)
+        let newcomer = link("w:new", now - 1_000, node: "Y")
+        XCTAssertEqual(MeshNodeLinkPolicy.evictionVictim(links: [spoofer, real, third, newcomer], centralRole: true, excludingKey: "w:new", nowMs: now), "w:third")
+        XCTAssertNil(MeshNodeLinkPolicy.evictionVictim(links: [spoofer, real, newcomer], centralRole: true, excludingKey: "w:new", nowMs: now))
+    }
+
+    func testTheDryRunTreatsVerifiedLinksLikeTheEvictionDoes() {
+        func v(_ key: String, _ node: String, _ bound: Int64) -> MeshLinkCandidate {
+            MeshLinkCandidate(key: key, central: true, address: "addr-\(key)", subscribed: true, lastActivityMs: now - 1_000,
+                              boundAtMs: bound, lastDataMs: 0, nodeHex: node, verified: true)
+        }
+        let onePerNode = (1...6).map { v("w:\($0)", "N\($0)", now - 300_000) }
+        XCTAssertFalse(MeshNodeLinkPolicy.probationUseful(links: onePerNode, centralRole: true, nowMs: now, limiterAllows: true))
+        let withSecond = onePerNode + [v("w:extra", "N1", now - 200_000)]
+        XCTAssertTrue(MeshNodeLinkPolicy.probationUseful(links: withSecond, centralRole: true, nowMs: now, limiterAllows: true))
+        XCTAssertFalse(MeshNodeLinkPolicy.probationUseful(links: withSecond, centralRole: true, nowMs: now, limiterAllows: false))
+    }
+
+    func testVerificationNeverDecidesWhichOfASameDevicePairIsClosed() {
+        func pair(first: Bool, second: Bool) -> [MeshLinkCandidate] {
+            [MeshLinkCandidate(key: "w:1", central: true, address: "X", subscribed: true, lastActivityMs: now, boundAtMs: 10,
+                               nodeHex: "N", verified: first),
+             MeshLinkCandidate(key: "n:2", central: false, address: "X", subscribed: true, lastActivityMs: now, boundAtMs: 20,
+                               nodeHex: "N", verified: second)]
+        }
+        // The two ends may have verified different things; only the role rule decides, so both close the same link.
+        XCTAssertEqual(Set(MeshNodeLinkPolicy.sameDeviceDuplicates(localHex: "aa", peerHex: "bb", links: pair(first: false, second: true))), ["n:2"])
+        XCTAssertEqual(Set(MeshNodeLinkPolicy.sameDeviceDuplicates(localHex: "bb", peerHex: "aa", links: pair(first: false, second: true))), ["w:1"])
+        XCTAssertEqual(Set(MeshNodeLinkPolicy.sameDeviceDuplicates(localHex: "aa", peerHex: "bb", links: pair(first: true, second: false))), ["n:2"])
+    }
+
+    func testAKeyIsPinnedToItsNodeIdAndADifferentKeyNeverReplacesThePin() {
+        var cache = MeshVerifiedCache()
+        let keyA = Data(repeating: 1, count: 32)
+        let keyB = Data(repeating: 2, count: 32)
+        XCTAssertTrue(cache.keyMatches("node", key: keyA, nowMs: now))
+        cache.put("node", key: keyA, nowMs: now)
+        XCTAssertTrue(cache.keyMatches("node", key: keyA, nowMs: now + 1))
+        XCTAssertFalse(cache.keyMatches("node", key: keyB, nowMs: now + 1))
+        // A different key does not replace a live pin, and the pin is not deleted before it expires.
+        cache.put("node", key: keyB, nowMs: now + 2)
+        XCTAssertTrue(cache.keyMatches("node", key: keyA, nowMs: now + 3))
+        XCTAssertFalse(cache.keyMatches("node", key: keyB, nowMs: now + MeshLinkTiming.verifiedCacheTtlMs - 1))
+        XCTAssertTrue(cache.keyMatches("node", key: keyB, nowMs: now + MeshLinkTiming.verifiedCacheTtlMs))
+        XCTAssertTrue(cache.keyMatches("other", key: keyB, nowMs: now))
+        for i in 0..<200 { cache.put("n\(i)", key: keyA, nowMs: now + Int64(i)) }
+        XCTAssertLessThanOrEqual(cache.count, MeshLinkTiming.tableCap)
+    }
+
+    func testTheCacheIsNotATrustWindowOnlyAVerifiedProofMakesALinkVerified() {
+        let state = MeshLinkProofState()
+        XCTAssertFalse(state.verifiedAt(now))
+        state.state = .failed
+        XCTAssertFalse(state.verifiedAt(now))
+        state.state = .verified
+        XCTAssertTrue(state.verifiedAt(now))
+    }
+
+    func testTheProofIsResentEveryAnnouncePeriodUntilThePeerSaysItVerifiedUs() {
+        let state = MeshLinkProofState()
+        // Nothing to answer before the peer's challenge is known and our own ANNOUNCE went out.
+        XCTAssertFalse(state.proofDue(nowMs: now, bound: true))
+        state.peerNonce = Data(count: 16)
+        XCTAssertFalse(state.proofDue(nowMs: now, bound: true))
+        state.announceSent = true
+        XCTAssertFalse(state.proofDue(nowMs: now, bound: false))
+        XCTAssertTrue(state.proofDue(nowMs: now, bound: true))
+        // An attempt (that may have failed to sign or to write) is retried at the next ANNOUNCE, not sooner.
+        state.lastProofAttemptMs = now
+        XCTAssertFalse(state.proofDue(nowMs: now + MeshLinkTiming.announceIntervalMs - 1, bound: true))
+        XCTAssertTrue(state.proofDue(nowMs: now + MeshLinkTiming.announceIntervalMs, bound: true))
+        // What we verified of the peer does not stop it: the peer may still lack OUR proof.
+        state.state = .verified
+        XCTAssertTrue(state.proofDue(nowMs: now + MeshLinkTiming.announceIntervalMs, bound: true))
+        // pv=1 from the peer stops it.
+        state.peerVerifiedUs = true
+        XCTAssertFalse(state.proofDue(nowMs: now + 10 * MeshLinkTiming.announceIntervalMs, bound: true))
+    }
+
+    func testTheProofIsSentAtMostEightTimesPerLink() {
+        let state = MeshLinkProofState()
+        state.peerNonce = Data(count: 16)
+        state.announceSent = true
+        var t = now
+        var sent = 0
+        for _ in 0..<40 {
+            if state.proofDue(nowMs: t, bound: true) {
+                state.lastProofAttemptMs = t
+                state.proofSends += 1
+                sent += 1
+            }
+            t += MeshLinkTiming.announceIntervalMs
+        }
+        XCTAssertEqual(sent, MeshLinkTiming.proofMaxSends)
+    }
+
+    func testPvIsReadStrictlyAndEncodedOnlyWithAChallenge() {
+        let node = "21fe31dfa154a261"
+        func parse(_ pv: String) -> Bool? {
+            let json = #"{"v":1,"node":"\#(node)","fp":"\#(node)","nbrs":[],"ch":"00112233445566778899aabbccddeeff","pv":\#(pv)}"#
+            return MeshAnnounce.decode(Data(json.utf8))?.peerVerified
+        }
+        XCTAssertEqual(parse("1"), true)
+        for bad in [#""1""#, "true", "1.0", "2", "0", "null", "[1]"] { XCTAssertEqual(parse(bad), false, "pv=\(bad)") }
+        let announce = MeshAnnounce(nodeIdHex: node, identityFingerprintHex: node, challengeHex: "00112233445566778899aabbccddeeff", peerVerified: true)
+        XCTAssertTrue(String(decoding: announce.encode(), as: UTF8.self).hasSuffix(#","ch":"00112233445566778899aabbccddeeff","pv":1}"#))
+        // Without a challenge there is nothing to confirm: pv is not written.
+        XCTAssertFalse(String(decoding: MeshAnnounce(nodeIdHex: node, identityFingerprintHex: node, peerVerified: true).encode(), as: UTF8.self).contains("pv"))
+    }
+
+    func testAtMostThreeProofsAreCheckedPerLink() {
+        let state = MeshLinkProofState()
+        XCTAssertTrue(state.takeVerifyAttempt())
+        XCTAssertTrue(state.takeVerifyAttempt())
+        XCTAssertTrue(state.takeVerifyAttempt())
+        XCTAssertFalse(state.takeVerifyAttempt())
+        XCTAssertFalse(state.takeVerifyAttempt())
+    }
+
+    func testProofsGoThroughThePerLinkRateLimit() {
+        var gate = MeshRelayGate()
+        var allowed = 0
+        for _ in 0..<(MeshRelayGate.maxPerWindow + 10) {
+            if gate.allowControl(linkKey: "l", nowMs: now) { allowed += 1 }
+        }
+        XCTAssertEqual(allowed, MeshRelayGate.maxPerWindow)
+        XCTAssertTrue(gate.allowControl(linkKey: "other", nowMs: now))
+        XCTAssertTrue(gate.allowControl(linkKey: "l", nowMs: now + MeshRelayGate.windowMs + 1))
+    }
+
+    func testAReplayedProofDoesNotVerifyOnAnotherLink() throws {
+        let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data((0..<32).map { UInt8($0) }))
+        let prover = try XCTUnwrap(MeshNodeId.from(identityKeyRaw: key.publicKey.rawRepresentation))
+        let verifier = try MeshNodeId(hex: "21fe31dfa154a261")
+        let pn = Data(repeating: 1, count: 16)
+        let vn = Data(repeating: 2, count: 16)
+        let message = try XCTUnwrap(MeshAnnounceProof.message(prover: prover, verifier: verifier, proverNonce: pn, verifierNonce: vn, proverIsCentral: true))
+        let payload = try XCTUnwrap(MeshAnnounceProof.payload(publicKey: key.publicKey.rawRepresentation, signature: Data(try key.signature(for: message))))
+        XCTAssertEqual(MeshAnnounceProof.verify(payload: payload, prover: prover, verifier: verifier, proverNonce: pn, verifierNonce: vn, proverIsCentral: true), .ok)
+        // Another link has another challenge of ours: the captured proof fails there.
+        XCTAssertEqual(MeshAnnounceProof.verify(payload: payload, prover: prover, verifier: verifier, proverNonce: pn,
+                                                verifierNonce: Data(repeating: 9, count: 16), proverIsCentral: true), .badSignature)
+        // A proof for another node id fails on the fingerprint check before the signature.
+        XCTAssertEqual(MeshAnnounceProof.verify(payload: payload, prover: try MeshNodeId(hex: "0000000000000001"), verifier: verifier,
+                                                proverNonce: pn, verifierNonce: vn, proverIsCentral: true), .nodeMismatch)
+    }
+
+    func testADryRunSaysTheProbationSlotIsUselessWhenNothingCouldBeEvicted() {
+        let busy = (1...6).map {
+            MeshLinkCandidate(key: "w:\($0)", central: true, address: "a\($0)", subscribed: true, lastActivityMs: now,
+                              boundAtMs: now - 300_000, lastDataMs: now - 1_000, nodeHex: "N\($0)")
+        }
+        XCTAssertFalse(MeshNodeLinkPolicy.probationUseful(links: busy, centralRole: true, nowMs: now, limiterAllows: true))
+        let quietOnly = busy.map {
+            MeshLinkCandidate(key: $0.key, central: true, address: $0.address, subscribed: true, lastActivityMs: now,
+                              boundAtMs: $0.boundAtMs, lastDataMs: 0, nodeHex: $0.nodeHex)
+        }
+        // Every quiet link is the only link of its node, so none may go.
+        XCTAssertFalse(MeshNodeLinkPolicy.probationUseful(links: quietOnly, centralRole: true, nowMs: now, limiterAllows: true))
+        let sibling = MeshLinkCandidate(key: "n:s", central: false, address: "s", subscribed: true, lastActivityMs: now,
+                                        boundAtMs: now - 600_000, lastDataMs: 1, nodeHex: "N1")
+        XCTAssertTrue(MeshNodeLinkPolicy.probationUseful(links: quietOnly + [sibling], centralRole: true, nowMs: now, limiterAllows: true))
+        XCTAssertFalse(MeshNodeLinkPolicy.probationUseful(links: quietOnly + [sibling], centralRole: true, nowMs: now, limiterAllows: false))
+    }
+
+    func testTheIncomingRefusalAfterAnEvictionGrowsWithTheEvictionMemory() {
+        var memory = MeshEvictionMemory()
+        let first = memory.note("addr", nowMs: now)
+        let second = memory.note("addr", nowMs: now + 61_000)
+        let third = memory.note("addr", nowMs: now + 200_000)
+        XCTAssertEqual(first, 30_000)
+        XCTAssertEqual(second, 60_000)
+        XCTAssertEqual(third, 120_000)
+        XCTAssertEqual(max(MeshLinkTiming.evictRefuseMs, first), 60_000)
+        XCTAssertEqual(max(MeshLinkTiming.evictRefuseMs, third), 120_000)
     }
 }

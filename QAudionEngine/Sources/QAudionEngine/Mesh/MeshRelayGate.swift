@@ -47,6 +47,18 @@ public struct MeshRelayGate {
     /// Number of relay identities currently remembered.
     public var rememberedCount: Int { identityOrder.count }
 
+    /// Counts one control packet (a proof) in the per-link window the relay path uses, and says whether the link is still
+    /// within the limit.
+    public mutating func allowControl(linkKey: String, nowMs: Int64) -> Bool {
+        if var window = windows[linkKey], nowMs - window.startMs <= Self.windowMs {
+            window.count += 1
+            windows[linkKey] = window
+            return window.count <= Self.maxPerWindow
+        }
+        windows[linkKey] = Window(startMs: nowMs, count: 1)
+        return true
+    }
+
     /// Forgets the per-link window of a link that went away.
     public mutating func linkGone(_ linkKey: String) {
         windows.removeValue(forKey: linkKey)

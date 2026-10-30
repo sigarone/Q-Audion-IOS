@@ -118,6 +118,9 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private var collapseGuard = MeshCollapseGuard()
     private var evictionLimiter = MeshEvictionLimiter()
     private var evictionMemory = MeshEvictionMemory()
+    /// Verified (address, node, key) triples, so a reconnect is trusted at once while its proof is pending (section 8.5).
+    private var verifiedCache = MeshVerifiedCache()
+    private let signProof: @Sendable (Data) -> (publicKey: Data, signature: Data)?
     private var annSummary = MeshAnnounceSummary(startMs: 0)
     private var txFailThrottle = MeshTxFailThrottle()
     private var malformedGuard = MeshMalformedGuard()
@@ -169,6 +172,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
         var unroutable = false
         /// The last time a validated DATA or RECEIPT packet arrived on this link (spec 3.6), 0 if never.
         var lastDataMs: Int64 = 0
+        /// The challenge and proof state of this link (section 8.5).
+        let proof = MeshLinkProofState()
         /// When the subscription was confirmed, 0 before (spec 3.3 / 3.4: no ANNOUNCE within 35 s closes the link).
         var subscribedAtMs: Int64 = 0
         /// When the last ANNOUNCE went out on this link, for the pacing of spec 8.4 (0: none yet).
@@ -244,8 +249,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     // MARK: - Init
 
-    init(localNodeId: MeshNodeId) {
+    /// `signProof` signs a message with this device's identity key and returns the public key with the signature (section
+    /// 8.5); nil when the key cannot be read. It is called off `bleQueue` and nothing waits for it.
+    init(localNodeId: MeshNodeId, signProof: @escaping @Sendable (Data) -> (publicKey: Data, signature: Data)? = { _ in nil }) {
         self.localNodeId = localNodeId
+        self.signProof = signProof
         super.init()
         bleQueue.setSpecific(key: queueKey, value: true)
         // CBCentralManager / CBPeripheralManager are created in start(), not
@@ -527,7 +535,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
         MeshLinkCandidate(key: (link.isOutgoing ? "w:" : "n:") + link.identifier.uuidString, central: link.isOutgoing,
                           address: link.identifier.uuidString, subscribed: link.subscribed,
                           lastActivityMs: link.lastActivityMs, boundAtMs: link.boundAtMs > 0 ? link.boundAtMs : link.createdAtMs,
-                          lastDataMs: link.lastDataMs, nodeHex: link.nodeHex)
+                          lastDataMs: link.lastDataMs, nodeHex: link.nodeHex, verified: link.proof.verifiedAt(nowMs()),
+                          failed: link.proof.state == .failed)
     }
 
     private func links(forKeys keys: [String]) -> [Link] {
@@ -583,7 +592,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
             disconnect(target, reason: "evicted")
         } else {
             // The same for a central that connects to us (spec 3.4).
-            inboundRefusals.refuse(target.identifier.uuidString, untilMs: now + MeshLinkTiming.evictRefuseMs)
+            let wait = max(MeshLinkTiming.evictRefuseMs, evictionMemory.note(target.identifier.uuidString, nowMs: now))
+            inboundRefusals.refuse(target.identifier.uuidString, untilMs: now + wait)
             tearDown(target, reason: "evicted", cancelConnection: false)
             recomputeAndNotifyPeers()
         }
@@ -663,7 +673,9 @@ final class BleMeshTransport: NSObject, MeshTransport {
         if let key = MeshAnnouncePacer.next(lastSentMs: last, nowMs: now), let link = byKey[key] {
             sendAnnounce(on: link, intro: false)
         }
-        annSummary.flushIfDue(nowMs: now, links: allLinks().count)
+        let boundLinks = allLinks().filter { $0.nodeHex != nil }
+        annSummary.flushIfDue(nowMs: now, links: allLinks().count, verified: boundLinks.filter { $0.proof.verifiedAt(now) }.count,
+                              unverified: boundLinks.filter { !$0.proof.verifiedAt(now) }.count)
         inboundRefusals.prune(nowMs: now)
         bleQueue.asyncAfter(deadline: .now() + .milliseconds(Int(MeshLinkTiming.announceTickMs))) { [weak self] in
             self?.runAnnounceTick()
@@ -716,12 +728,14 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     // MARK: - ANNOUNCE
 
-    private func buildAnnouncePacket() -> MeshPacket {
+    private func buildAnnouncePacket(challenge: Data, peerVerified: Bool) -> MeshPacket {
         let neighbors: [String] = Array(Set(writableLinks().compactMap { $0.nodeHex })).sorted().prefix(MeshAnnounce.maxNeighbors).map { $0 }
         let announce = MeshAnnounce(
             nodeIdHex: localNodeId.hex,
             identityFingerprintHex: localNodeId.hex,
-            neighborNodeIdsHex: neighbors
+            neighborNodeIdsHex: neighbors,
+            challengeHex: challenge.map { String(format: "%02x", $0) }.joined(),
+            peerVerified: peerVerified
         )
         // Wrapped with MeshDiscoveryCipher (an app-recognition boundary, not a
         // secret). Force-unwraps: AES-GCM with the fixed key cannot fail on
@@ -737,7 +751,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private func sendAnnounce(on link: Link, intro: Bool = true) {
         guard isWritable(link) else { return }
         link.lastAnnounceTxMs = nowMs()
-        let packet = buildAnnouncePacket()
+        let packet = buildAnnouncePacket(challenge: link.proof.nonce, peerVerified: link.proof.state == .verified)
         let bytes = packet.encode()
         let neighborCount = min(linkedNodeCount(), MeshAnnounce.maxNeighbors)
         let handle = link.handle
@@ -745,6 +759,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
         transmit(bytes, ph: ph, links: [link], chosen: nil) { [weak self] summary in
             let ok = summary.okLinks > 0
             self?.annSummary.recordTx(ok: ok)
+            if ok {
+                link.proof.announceSent = true
+                self?.maybeSendProof(on: link)
+            }
             if intro {
                 self?.log(.annTx, [("link", handle), ("nbrs", String(neighborCount)), ("bytes", String(bytes.count)), ("ok", MeshLog.flag(ok))])
             }
@@ -1060,6 +1078,11 @@ final class BleMeshTransport: NSObject, MeshTransport {
             handleAnnounce(on: link, packet: packet)
             return
         }
+        // Section 8.5: a proof never counts as data, is never relayed and is never malformed for being wrong.
+        if packet.type == .announceProof {
+            handleProof(on: link, packet: packet)
+            return
+        }
         malformedGuard.registerWellFormed(key)
         let ph = MeshLog.payloadHash(packet.payload)
         let typeToken = String(packet.type.rawValue)
@@ -1116,6 +1139,23 @@ final class BleMeshTransport: NSObject, MeshTransport {
                 link.boundAtMs = nowMs()
                 makeRoom(for: link)
             }
+            // Section 8.5: the peer's challenge, from the first ANNOUNCE that has one. A peer without one stays unverified.
+            if let hex = announce.challengeHex {
+                // `pv=1`: the peer verified us, so our proof need not be resent (it never changes routing).
+                if announce.peerVerified { link.proof.peerVerifiedUs = true }
+                if link.proof.peerNonce == nil {
+                    var raw = Data(capacity: MeshAnnounceProof.nonceBytes)
+                    var index = hex.startIndex
+                    while index < hex.endIndex {
+                        let next = hex.index(index, offsetBy: 2)
+                        raw.append(UInt8(hex[index..<next], radix: 16) ?? 0)
+                        index = next
+                    }
+                    link.proof.peerNonce = raw
+                }
+                // Later ANNOUNCEs resend the proof until the link is verified, at most once per period (8.5).
+                maybeSendProof(on: link)
+            }
             announcedNeighborsByNode[announce.nodeIdHex] = Set(announce.neighborNodeIdsHex)
         }
         // Spec 13: only a change of the link-to-node mapping gets its own line; the rest is counted in `ann.sum`.
@@ -1125,6 +1165,67 @@ final class BleMeshTransport: NSObject, MeshTransport {
         }
         if announce.nodeIdHex != localNodeId.hex { collapseLinks(to: announce.nodeIdHex) }
         recomputeAndNotifyPeers()
+    }
+
+    /// Section 8.5: answers the peer's challenge once its node is known and our own ANNOUNCE (with our challenge) went out on this
+    /// link, and sends it again on later ANNOUNCEs (at most once per ANNOUNCE period) until the link is verified. A signature or
+    /// a write that failed, a locked Keychain included, is retried the same way. The signature is made off `bleQueue` and
+    /// nothing waits for it: the link works meanwhile.
+    private func maybeSendProof(on link: Link) {
+        guard let peerNonce = link.proof.peerNonce, let peerHex = link.nodeHex,
+              link.proof.proofDue(nowMs: nowMs(), bound: true),
+              let verifier = try? MeshNodeId(hex: peerHex),
+              let message = MeshAnnounceProof.message(prover: localNodeId, verifier: verifier, proverNonce: link.proof.nonce,
+                                                      verifierNonce: peerNonce, proverIsCentral: link.isOutgoing) else { return }
+        link.proof.lastProofAttemptMs = nowMs()
+        link.proof.proofSends += 1
+        let sign = signProof
+        DispatchQueue.global(qos: .utility).async { [weak self, weak link] in
+            guard let signed = sign(message),
+                  let payload = MeshAnnounceProof.payload(publicKey: signed.publicKey, signature: signed.signature) else { return }
+            self?.bleQueue.async {
+                guard let self, let link, self.active, self.isWritable(link),
+                      let packet = try? MeshPacket(type: .announceProof, senderId: self.localNodeId, recipientId: verifier,
+                                                   timestampMs: self.wallMs(), payload: payload) else { return }
+                self.transmit(packet.encode(), ph: MeshLog.payloadHash(payload), links: [link], chosen: nil) { _ in }
+            }
+        }
+    }
+
+    /// Section 8.5: checks a proof received on `link`; the link is never closed for a proof that does not verify.
+    private func handleProof(on link: Link, packet: MeshPacket) {
+        guard let nodeHex = link.nodeHex, let peerNonce = link.proof.peerNonce, link.proof.state != .verified,
+              let prover = try? MeshNodeId(hex: nodeHex) else { return }
+        // At most 3 proofs are checked per link, and they go through the per-link rate limit of the relay path.
+        // The cap of 3 comes first, so a proof beyond it does not use up the relay budget of the link.
+        guard link.proof.takeVerifyAttempt(), relayGate.allowControl(linkKey: link.identifier.uuidString, nowMs: nowMs()) else { return }
+        var result: MeshAnnounceProof.Result
+        if packet.senderId.hex != nodeHex {
+            result = .nodeMismatch
+        } else {
+            result = MeshAnnounceProof.verify(payload: packet.payload, prover: prover, verifier: localNodeId, proverNonce: peerNonce,
+                                              verifierNonce: link.proof.nonce, proverIsCentral: !link.isOutgoing)
+        }
+        // The key is pinned per node id (8.5): a valid proof with another key than the pinned one is not accepted.
+        let key = MeshAnnounceProof.publicKey(of: packet.payload)
+        if result == .ok, let key, !verifiedCache.keyMatches(nodeHex, key: key, nowMs: nowMs()) {
+            result = .keyChanged
+        }
+        if result == .ok {
+            link.proof.state = .verified
+            if let key { verifiedCache.put(nodeHex, key: key, nowMs: nowMs()) }
+            // The ranking and the collapse change with a verified link.
+            collapseLinks(to: nodeHex)
+            recomputeAndNotifyPeers()
+        } else {
+            link.proof.state = .failed
+            annSummary.recordBadSig()
+            // One line per link, and no key, challenge or signature on it.
+            if !link.proof.badLogged {
+                link.proof.badLogged = true
+                log(.annProof, [("link", link.handle), ("reason", result.rawValue)])
+            }
+        }
     }
 
     private func isHealthy(_ link: Link, at now: Int64) -> Bool {
@@ -1375,7 +1476,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
                 .min(by: { $0.createdAtMs < $1.createdAtMs }) {
                 stale.downReason = "evicted"
                 tearDown(stale, reason: "evicted", cancelConnection: false)
-            } else if incoming.count >= Self.maxIncomingLinks + Self.probationSlots {
+            } else if incoming.count >= Self.maxIncomingLinks + Self.probationSlots
+                        || !MeshNodeLinkPolicy.probationUseful(
+                            links: allLinks().map { candidate(of: $0) }, centralRole: false, nowMs: now,
+                            limiterAllows: evictionLimiter.wouldAllow(centralRole: false, nowMs: now)) {
                 log(.linkRefused, [("reason", "cap"), ("role", "p")])
                 return nil
             }
@@ -1491,8 +1595,15 @@ extension BleMeshTransport: CBCentralManagerDelegate {
         guard outgoing.count < Self.maxOutgoingLinks + Self.probationSlots else { return }
         if evictionMemory.blocks(identifier.uuidString, nowMs: healthyNow) { return }
         // Beyond the cap only a node that is not linked yet is worth the probation slot.
-        if outgoing.count >= Self.maxOutgoingLinks,
-           let known = allLinks().first(where: { $0.identifier == identifier })?.nodeHex, hasHealthyLink(to: known, at: healthyNow) { return }
+        if outgoing.count >= Self.maxOutgoingLinks {
+            if let known = allLinks().first(where: { $0.identifier == identifier })?.nodeHex, hasHealthyLink(to: known, at: healthyNow) { return }
+            // Only when there would be a link to make room (dry run), otherwise the newcomer could only evict itself.
+            let candidates = allLinks().map { candidate(of: $0) }
+            guard MeshNodeLinkPolicy.probationUseful(
+                links: candidates, centralRole: true, nowMs: healthyNow,
+                limiterAllows: evictionLimiter.wouldAllow(centralRole: true, nowMs: healthyNow)
+            ) else { return }
+        }
         // Two phones may open a link to each other at the same time; both links are used, and one is closed only when it
         // provably is the same device in the other role (spec 3.6).
         let link = Link(handle: linkHandle(outgoing: true), identifier: identifier, isOutgoing: true, nowMs: nowMs(), state: .connecting)

@@ -1245,7 +1245,8 @@ def _is_pair_format_body(tag, norm_body):
 #   link.up link=<handle> role=<c|p> n=<n>            link.ready link=.. mtu=0 l=<n> sub=<0|1>
 #   link.down link=.. reason=<token> heldMs=<n>        link.refused reason=<cap|blocked> role=<c|p>
 #   ann.tx link=.. nbrs=<n> bytes=<n> ok=<0|1>         ann.rx link=.. nh=<6 hex> nbrs=<n> bound=<0|1>
-#   ann.sum tx=<n> fail=<n> rx=<n> links=<n> claim=<n> s=<n>
+#   ann.sum tx=<n> fail=<n> rx=<n> links=<n> claim=<n> ver=<n> unv=<n> badsig=<n> s=<n>
+#   ann.proof link=.. reason=<bad_sig|bad_node|bad_len|bad_ver>
 #   tx ph=<8 hex> type=<n> bytes=<n> route=<direct|flood> links=<n> okLinks=<n> frames=<n> l=<n> result=<token> reason=<token> ms=<n>
 #   tx.frame.fail link=.. ph=<8 hex> idx=<n> total=<n> reason=<token> [rep=<n>]
 #   rx link=.. ph=<8 hex> type=<n> bytes=<n> frames=<n> forUs=<0|1> relay=<0|1>
@@ -1285,7 +1286,8 @@ _RE_MESH_FULL = re.compile(
     r"|link\.refused reason=(?:cap|blocked) role=[cp]"
     r"|ann\.tx " + _MESH_LINK + r" nbrs=\d{1,2} bytes=\d{1,5} ok=[01]"
     r"|ann\.rx " + _MESH_LINK + r" nh=[0-9a-f]{6} nbrs=\d{1,2} bound=[01]"
-    r"|ann\.sum tx=\d{1,6} fail=\d{1,6} rx=\d{1,6} links=\d{1,3} claim=\d{1,3} s=\d{1,4}"
+    r"|ann\.sum tx=\d{1,6} fail=\d{1,6} rx=\d{1,6} links=\d{1,3} claim=\d{1,3} ver=\d{1,3} unv=\d{1,3} badsig=\d{1,6} s=\d{1,4}"
+    r"|ann\.proof " + _MESH_LINK + r" reason=(?:bad_sig|bad_node|bad_len|bad_ver)"
     r"|tx " + _MESH_PH + r" type=\d{1,3} bytes=\d{1,5} route=(?:direct|flood) links=\d{1,2} okLinks=\d{1,2}"
     r" frames=\d{1,3} l=\d{1,5} result=(?:sent|queued|failed) reason=" + _MESH_TX_REASONS + r" ms=\d{1,7}"
     r"|tx\.frame\.fail " + _MESH_LINK + " " + _MESH_PH + r" idx=\d{1,3} total=\d{1,3} reason=" + _MESH_FRAME_REASONS + r"(?: rep=\d{1,6})?" +
