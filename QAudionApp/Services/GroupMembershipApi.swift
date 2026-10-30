@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import QAudionEngine
 
 /// Fase 1A — client for the server-authoritative group membership REST
@@ -52,6 +53,11 @@ enum GroupMembershipEnvelope {
     static let opAdminAdd = "admin_added"
     static let opAdminRemove = "admin_removed"
 
+    /// Every envelope `build` renders starts with these bytes.
+    static let prefix = Data("{\"by\":\"".utf8)
+
+    enum SigningError: Error, Equatable { case notAnEnvelope }
+
     /// Render the canonical envelope bytes.
     /// - Parameters:
     ///   - actorUserId: `by` — the user signing this envelope.
@@ -104,6 +110,21 @@ enum GroupMembershipEnvelope {
             }
         }
         s += "\""
+    }
+}
+
+// MARK: - Envelope signing
+
+extension SovereignIdentityManager {
+    /// Signs a group membership envelope built by ``GroupMembershipEnvelope/build``.
+    /// Internal to the app on purpose: the identity key signs nothing else through this path,
+    /// and anything that does not start like a built envelope is refused.
+    func signGroupMembershipEnvelope(_ envelope: Data, identity: SovereignIdentity) throws -> Data {
+        guard envelope.starts(with: GroupMembershipEnvelope.prefix) else {
+            throw GroupMembershipEnvelope.SigningError.notAnEnvelope
+        }
+        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: identity.signingPrivate)
+        return try privateKey.signature(for: envelope)
     }
 }
 

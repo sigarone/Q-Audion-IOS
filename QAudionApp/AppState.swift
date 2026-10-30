@@ -25849,7 +25849,7 @@ extension AppState {
             operation: GroupMembershipEnvelope.opLeave,
             tsUnixSeconds: now,
             subjectUserId: selfId)
-        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else {
+        guard let sig = try? sovereignIdentity.signGroupMembershipEnvelope(envelope, identity: identity) else {
             RTLog.warn("groupdel", "leave not attempted g=\(groupHex.prefix(8)) why=sign_failed")
             return .notAttempted
         }
@@ -26063,7 +26063,7 @@ extension AppState {
                 actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
                 operation: GroupMembershipEnvelope.opAdd,
                 tsUnixSeconds: now, subjectUserId: newMember)
-            guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { continue }
+            guard let sig = try? sovereignIdentity.signGroupMembershipEnvelope(envelope, identity: identity) else { continue }
             let envB64 = envelope.base64EncodedString()
             let sigB64 = sig.base64EncodedString()
             Task { @MainActor [weak self] in
@@ -26136,7 +26136,7 @@ extension AppState {
             actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
             operation: GroupMembershipEnvelope.opRemove,
             tsUnixSeconds: now, subjectUserId: removed)
-        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { return }
+        guard let sig = try? sovereignIdentity.signGroupMembershipEnvelope(envelope, identity: identity) else { return }
         let envB64 = envelope.base64EncodedString()
         let sigB64 = sig.base64EncodedString()
         Task { @MainActor in
@@ -26178,7 +26178,7 @@ extension AppState {
             actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
             operation: GroupMembershipEnvelope.opAdminAdd,
             tsUnixSeconds: now, subjectUserId: uid)
-        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { return }
+        guard let sig = try? sovereignIdentity.signGroupMembershipEnvelope(envelope, identity: identity) else { return }
         let envB64 = envelope.base64EncodedString()
         let sigB64 = sig.base64EncodedString()
         Task { @MainActor in
@@ -26217,7 +26217,7 @@ extension AppState {
             actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
             operation: GroupMembershipEnvelope.opAdminRemove,
             tsUnixSeconds: now, subjectUserId: uid)
-        guard let sig = try? sovereignIdentity.signChallenge(envelope, identity: identity) else { return }
+        guard let sig = try? sovereignIdentity.signGroupMembershipEnvelope(envelope, identity: identity) else { return }
         let envB64 = envelope.base64EncodedString()
         let sigB64 = sig.base64EncodedString()
         Task { @MainActor in
@@ -26323,7 +26323,7 @@ extension AppState {
                 actorUserId: selfId, eProposed: eProposed, groupIdWire: groupIdWire,
                 operation: GroupMembershipEnvelope.opMetadataUpdated,
                 tsUnixSeconds: now, subjectUserId: blobHashHex)
-            guard let sig = try? identityMgr.signChallenge(envelope, identity: identity) else { return }
+            guard let sig = try? identityMgr.signGroupMembershipEnvelope(envelope, identity: identity) else { return }
 
             guard let res = await api.updateMetadata(
                 groupIdWire: groupIdWire, metadataBlobB64: blobB64,

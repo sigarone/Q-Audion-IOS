@@ -119,13 +119,7 @@ public final class SovereignIdentityManager {
         return decodePublicIdentity(data)
     }
 
-    // MARK: - Challenge-Response Auth (Ed25519)
-
-    /// Sign a 32-byte challenge from the server.
-    public func signChallenge(_ challenge: Data, identity: SovereignIdentity) throws -> Data {
-        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: identity.signingPrivate)
-        return try privateKey.signature(for: challenge)
-    }
+    // MARK: - Signature verification (Ed25519)
 
     /// Verify a signed challenge from a contact.
     public func verifySignature(publicKey: Data, challenge: Data, signature: Data) -> Bool {
@@ -141,72 +135,6 @@ public final class SovereignIdentityManager {
         let remotePub = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: remotePublicKey)
         let shared = try privateKey.sharedSecretFromKeyAgreement(with: remotePub)
         return shared.withUnsafeBytes { Data($0) }
-    }
-
-    // MARK: - Sovereign Server Registration
-
-    /// Register sovereign identity with server.
-    /// POST /api/v1/register/sovereign
-    ///
-    /// `ageDeclared` is whether the person ticked the age declaration box. When true the body carries
-    /// `age_declaration: true`; when false (the default) it carries no such key, never
-    /// `age_declaration: false`. `termsAcceptance` travels as `terms_acceptance` (see `AgeDeclaration`). The caller passes on what its screen holds: no box exists
-    /// in the engine's own demo UI, which relies on the default.
-    public func registerWithServer(identity: SovereignIdentity, rest: BCryptoRestClient,
-                                   ageDeclared: Bool = false,
-                                   termsAcceptance: TermsAcceptance? = nil) async throws -> (userId: String, challenge: String) {
-        var dict: [String: Any] = [
-            "signing_pub_key": identity.signingPublic.map { String(format: "%02x", $0) }.joined(),
-            "encryption_pub_key": identity.encryptionPublic.map { String(format: "%02x", $0) }.joined(),
-            "display_name": identity.displayName ?? "",
-            "server_url": identity.serverUrl
-        ]
-        AgeDeclaration.add(to: &dict, declared: ageDeclared, acceptance: termsAcceptance)
-        let body = try JSONSerialization.data(withJSONObject: dict)
-        let data = try await rest.post("/api/v1/register/sovereign", body: body)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let userId = json["user_id"] as? String,
-              let challenge = json["challenge"] as? String else {
-            throw BCryptoError.decodingError
-        }
-        return (userId, challenge)
-    }
-
-    /// Verify sovereign registration by signing the challenge.
-    /// POST /api/v1/register/sovereign/verify
-    public func verifySovereignRegistration(userId: String, signature: Data, rest: BCryptoRestClient) async throws -> AuthCredentials {
-        let dict: [String: Any] = [
-            "user_id": userId,
-            "signature": signature.map { String(format: "%02x", $0) }.joined()
-        ]
-        let body = try JSONSerialization.data(withJSONObject: dict)
-        let data = try await rest.post("/api/v1/register/sovereign/verify", body: body)
-        return try JSONDecoder().decode(AuthCredentials.self, from: data)
-    }
-
-    /// Request auth challenge for existing sovereign user.
-    /// POST /api/v1/auth/challenge
-    public func requestAuthChallenge(userId: String, rest: BCryptoRestClient) async throws -> String {
-        let dict = ["user_id": userId]
-        let body = try JSONSerialization.data(withJSONObject: dict)
-        let data = try await rest.post("/api/v1/auth/challenge", body: body)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let challenge = json["challenge"] as? String else {
-            throw BCryptoError.decodingError
-        }
-        return challenge
-    }
-
-    /// Verify auth challenge.
-    /// POST /api/v1/auth/challenge/verify
-    public func verifyAuthChallenge(userId: String, signature: Data, rest: BCryptoRestClient) async throws -> AuthCredentials {
-        let dict: [String: Any] = [
-            "user_id": userId,
-            "signature": signature.map { String(format: "%02x", $0) }.joined()
-        ]
-        let body = try JSONSerialization.data(withJSONObject: dict)
-        let data = try await rest.post("/api/v1/auth/challenge/verify", body: body)
-        return try JSONDecoder().decode(AuthCredentials.self, from: data)
     }
 
     // MARK: - Keychain Storage
