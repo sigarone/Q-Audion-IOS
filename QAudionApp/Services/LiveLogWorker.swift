@@ -84,7 +84,7 @@ actor LiveLogWorker {
         /// Reads token, user id and kill-switch. Runs on the main actor.
         let authProvider: @MainActor () -> AuthSnapshot
         /// Runs the app's own single-flight token refresh. Runs on the main actor.
-        let refreshProvider: @MainActor () async -> Void
+        let refreshProvider: @MainActor (_ rejectedAccessToken: String) async -> Void
     }
 
     // MARK: - Tunables
@@ -497,7 +497,7 @@ actor LiveLogWorker {
         // once. A dead refresh token falls straight through to the normal failure path.
         if !isRetryAfterRefresh, status == 401 {
             let refresh = cfg.refreshProvider
-            await refresh()
+            await refresh(token)
             let fresh: AuthSnapshot = await currentAuth(cfg: cfg, force: true)
             // Both awaits above went through the main thread: the run may have been stopped (or
             // stopped and started again) meanwhile, and the state below then belongs to the newer

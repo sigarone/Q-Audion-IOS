@@ -143,7 +143,8 @@ public final class LiveLogStreamer {
     /// low-priority telemetry pipeline could race it and burn that
     /// single-use token out from under a real, in-flight refresh. See
     /// `LiveLogWorker.uploadFailed` for how a 401 uses this.
-    public typealias RefreshRequestProvider = @MainActor () async -> Void
+    /// Receives the access token the server rejected, so a newer stored one is adopted instead of rotating again.
+    public typealias RefreshRequestProvider = @MainActor (_ rejectedAccessToken: String) async -> Void
 
     private var serverUrl: String?
     private var tokenProvider: TokenProvider?

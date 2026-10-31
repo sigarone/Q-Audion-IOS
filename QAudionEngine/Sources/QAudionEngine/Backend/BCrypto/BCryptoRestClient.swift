@@ -651,7 +651,8 @@ public final class BCryptoRestClient {
     /// client that merely joined the flight (or adopted a pair rotated elsewhere) ends up
     /// on the same tokens as the one that did the network call.
     public func refreshSession(trigger: AuthRefreshTrigger,
-                               ignoreCooldown: Bool = false) async -> AuthRefreshOutcome {
+                               ignoreCooldown: Bool = false,
+                               staleAccessToken: String? = nil) async -> AuthRefreshOutcome {
         // One snapshot under the lock: the two tokens belong to the same pair, and the store
         // and closures are the ones installed at that moment.
         let (current, store, refresher, renewer) = configLock.withLock {
@@ -659,7 +660,7 @@ public final class BCryptoRestClient {
         }
         let request = AuthRefreshRequest(
             trigger: trigger,
-            staleAccessToken: trigger.adoptsNewerStoredAccess ? current.accessToken : nil,
+            staleAccessToken: trigger.adoptsNewerStoredAccess ? (staleAccessToken ?? current.accessToken) : nil,
             callerRefreshToken: current.refreshToken,
             store: store,
             refresher: refresher.map { Self.wrapRefresher($0) },
