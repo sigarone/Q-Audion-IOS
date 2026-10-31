@@ -1,4 +1,28 @@
 import Foundation
+
+/// Why a cue did not start (`QAudionRingtonePlayer.lastFailure`).
+public enum CueStartFailure: String, Equatable, Sendable {
+    /// Switched off in the call-sound settings.
+    case disabled
+    case missingFile = "missing_file"
+    /// The player could not be built from the file.
+    case initFailed = "init"
+    /// `play()` returned false, typically right after the audio session became active.
+    case playFalse = "play_false"
+}
+
+/// When a cue that failed to start is tried again: once, shortly after, and only for a failure that can pass by
+/// itself (the audio session was not ready to play yet).
+public enum CueRetryPolicy {
+    public static let delaySeconds: TimeInterval = 0.3
+    public static let maxRetries = 1
+
+    public static func shouldRetry(failure: CueStartFailure?, attempt: Int) -> Bool {
+        guard let failure, attempt < maxRetries else { return false }
+        return failure == .playFalse
+    }
+}
+
 #if canImport(AVFoundation)
 import AVFoundation
 
@@ -47,6 +71,9 @@ public final class QAudionRingtonePlayer {
     /// Diagnostics sink: the line and whether it reports a problem.
     public var log: ((String, Bool) -> Void)?
 
+    /// Why the last `loop` / `play` did not start; nil when it started.
+    public private(set) var lastFailure: CueStartFailure?
+
     private var loopPlayer: AVAudioPlayer?
     private var shotPlayer: AVAudioPlayer?
     private var dataCache: [String: Data] = [:]
@@ -80,9 +107,11 @@ public final class QAudionRingtonePlayer {
     }
 
     private func start(_ cue: Cue, looping: Bool) -> Bool {
+        lastFailure = nil
         let kind = cue.kind
         let settings = settingsProvider()
         guard CallCueGate.shouldPlay(kind, settings: settings) else {
+            lastFailure = .disabled
             log?("cue skip name=\(kind.rawValue) disabled=1", false)
             // A switched-off cue must still replace the cue it follows.
             if looping || kind != .dialingTick { stopLoop() }
@@ -90,6 +119,7 @@ public final class QAudionRingtonePlayer {
         }
         let gain = CallCueGate.gain(kind, settings: settings)
         guard let data = cueData(kind) else {
+            lastFailure = .missingFile
             log?("cue fail name=\(kind.rawValue) reason=missing_file", true)
             return false
         }
@@ -98,6 +128,7 @@ public final class QAudionRingtonePlayer {
             player = try AVAudioPlayer(data: data)
         } catch {
             let code: Int = (error as NSError).code
+            lastFailure = .initFailed
             let line: String = "cue fail name=\(kind.rawValue) reason=init err=\(code)"
             log?(line, true)
             return false
@@ -108,7 +139,8 @@ public final class QAudionRingtonePlayer {
         // The loop slot holds loops; every one-shot except the tick replaces the loop, as it did before.
         if looping || kind != .dialingTick { stopLoop() }
         guard player.play() else {
-            log?("cue fail name=\(kind.rawValue) reason=play_false", true)
+            lastFailure = .playFalse
+            log?("cue fail name=\(kind.rawValue) reason=play_false \(Self.sessionState())", true)
             return false
         }
         lock.lock()
@@ -123,6 +155,18 @@ public final class QAudionRingtonePlayer {
         lock.unlock()
         log?(String(format: "cue start name=%@ gain=%.2f loop=%d", kind.rawValue, gain, looping ? 1 : 0), false)
         return true
+    }
+
+    /// Session facts that explain a refused `play()`: category, whether another app's audio runs, the output route
+    /// types. Nothing that names the user or the device.
+    private static func sessionState() -> String {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        return "cat=\(session.category.rawValue) mode=\(session.mode.rawValue) other_audio=\(session.isOtherAudioPlaying ? 1 : 0) out=\(outputs.isEmpty ? "none" : outputs)"
+        #else
+        return "session=n/a"
+        #endif
     }
 
     private func stopLoop() {

@@ -342,6 +342,16 @@ public final class RuntimeLogSink: ObservableObject {
         let source = DispatchSource.makeReadSource(fileDescriptor: readFd, queue: queue)
         // Complete lines out of the 4096-byte chunks: only this handler (one serial queue) touches it.
         let assembler = StdoutTeeLines.Assembler()
+        // Repeated native output (a line the audio engine prints dozens of times a second) is cut to one line per
+        // window plus a summary: same single-queue rule as the assembler.
+        // Its pending summaries are also flushed by a timer on this same queue when no later line arrives.
+        let limiter = StdoutTeeLines.RateLimiter(queue: queue) { [weak self] lines in
+            for out in lines {
+                Task { @MainActor [weak self] in
+                    self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee)
+                }
+            }
+        }
         source.setEventHandler { [weak self] in
             guard let self = self else { return }
             var buf = [UInt8](repeating: 0, count: 4096)
@@ -368,14 +378,18 @@ public final class RuntimeLogSink: ObservableObject {
                     // so the key bytes are already gone before the hop to the
                     // main actor; `record` scrubs once more (idempotent).
                     let safe: String = RuntimeLogSink.redact(line)
-                    Task { @MainActor [weak self] in
-                        // `.stdoutTee`: a captured line is never mirrored back to OSLog (second defence).
-                        self?.record(level: .info, tag: "stdout", safe, origin: .stdoutTee)
+                    // Repeats of the same native line inside a window are counted, not recorded.
+                    for out in limiter.admit(safe, now: ProcessInfo.processInfo.systemUptime) {
+                        Task { @MainActor [weak self] in
+                            // `.stdoutTee`: a captured line is never mirrored back to OSLog (second defence).
+                            self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee)
+                        }
                     }
                 }
             }
         }
         source.setCancelHandler {
+            limiter.stop()
             close(readFd)
         }
         source.resume()
@@ -447,6 +461,144 @@ enum StdoutTeeLines {
         guard let regex = ownMirrorPrefix else { return false }
         let head = NSRange(location: 0, length: min(line.utf16.count, 160))
         return regex.firstMatch(in: line, options: [], range: head) != nil
+    }
+
+    /// Caps repeated lines. Lines are grouped by a key (the line with every run of digits replaced by `#`): the first
+    /// line of a key in a window passes, the following ones in the same window are counted, and when the window is
+    /// over a single summary line says how many were left out, the last number of the line and the largest one seen
+    /// (e.g. a glitch counter and a gap in ms). A line that starts with `[` is a tagged line of the app, and a line
+    /// that reads as a warning or an error (`LogSeverity`), and always passes. Used by ONE serial queue only.
+    final class RateLimiter: @unchecked Sendable {
+        static let windowSeconds: TimeInterval = 1.0
+        static let maxKeys = 64
+        static let maxKeyLength = 200
+
+        private struct Slot {
+            var windowStart: TimeInterval
+            var suppressed: Int = 0
+            var lastNumber: Int?
+            var maxNumber: Int?
+            var sample: String
+        }
+
+        private var slots: [String: Slot] = [:]
+        private let queue: DispatchQueue?
+        private let onFlush: (([String]) -> Void)?
+        private var timer: DispatchSourceTimer?
+
+        /// Number of keys currently tracked (never above `maxKeys`).
+        var trackedKeyCount: Int { slots.count }
+
+        /// With a `queue` (the one that calls `admit`) and `onFlush`, a window that ends with no later line still
+        /// has its summary delivered: a timer on that queue fires when the oldest suppressing window ends.
+        init(queue: DispatchQueue? = nil, onFlush: (([String]) -> Void)? = nil) {
+            self.queue = queue
+            self.onFlush = onFlush
+        }
+
+        /// Cancel the timer. Call from the owning queue when the tee is torn down.
+        func stop() {
+            timer?.cancel()
+            timer = nil
+        }
+
+        /// The lines to record for `line` read at `now` (monotonic seconds): the summaries of the windows that ended
+        /// (any key), then the line itself unless it is a repeat inside its window.
+        func admit(_ line: String, now: TimeInterval) -> [String] {
+            var out = flushExpired(now: now)
+            if line.hasPrefix("[") || LogSeverity.looksSevere(line) {
+                out.append(line)
+                return out
+            }
+            let key = Self.normalizedKey(line)
+            if var slot = slots[key], now - slot.windowStart < Self.windowSeconds {
+                slot.suppressed += 1
+                if let n = Self.lastNumber(in: line) {
+                    slot.lastNumber = n
+                    slot.maxNumber = max(slot.maxNumber ?? n, n)
+                }
+                slots[key] = slot
+                if slot.suppressed == 1 { armTimer(now: now) }
+                return out
+            }
+            if slots[key] == nil && slots.count >= Self.maxKeys {
+                // Too many distinct lines to track: let this one through untracked.
+                out.append(line)
+                return out
+            }
+            slots[key] = Slot(windowStart: now, sample: String(key.prefix(Self.maxKeyLength)))
+            out.append(line)
+            return out
+        }
+
+        /// Fire once when the oldest window with suppressed lines ends (the timer is re-armed after each flush).
+        private func armTimer(now: TimeInterval) {
+            guard let queue = queue, onFlush != nil, timer == nil else { return }
+            let due = slots.values.filter { $0.suppressed > 0 }.map { $0.windowStart }.min() ?? now
+            let delay = max(0.0, due + Self.windowSeconds - now) + 0.02
+            let t = DispatchSource.makeTimerSource(queue: queue)
+            t.schedule(deadline: .now() + delay)
+            t.setEventHandler { [weak self] in
+                guard let self = self else { return }
+                self.timer?.cancel()
+                self.timer = nil
+                let lines = self.flushExpired(now: ProcessInfo.processInfo.systemUptime)
+                if !lines.isEmpty { self.onFlush?(lines) }
+                if self.slots.values.contains(where: { $0.suppressed > 0 }) {
+                    self.armTimer(now: ProcessInfo.processInfo.systemUptime)
+                }
+            }
+            timer = t
+            t.resume()
+        }
+
+        private func flushExpired(now: TimeInterval) -> [String] {
+            var out: [String] = []
+            // Summaries that end together go out in the order their windows started.
+            let expired = slots.sorted { $0.value.windowStart < $1.value.windowStart }
+                .filter { now - $0.value.windowStart >= Self.windowSeconds }
+            for (key, slot) in expired {
+                if slot.suppressed > 0 {
+                    var summary = "[repeated x\(slot.suppressed)]"
+                    if let last = slot.lastNumber, let peak = slot.maxNumber {
+                        summary += " last=\(last) max=\(peak)"
+                    }
+                    out.append(summary + " " + slot.sample)
+                }
+                slots[key] = nil
+            }
+            return out
+        }
+
+        static func normalizedKey(_ line: String) -> String {
+            var result = String.UnicodeScalarView()
+            var inDigits = false
+            for scalar in line.unicodeScalars {
+                if scalar.value >= 0x30 && scalar.value <= 0x39 {
+                    if !inDigits { result.append("#") }
+                    inDigits = true
+                } else {
+                    inDigits = false
+                    result.append(scalar)
+                }
+            }
+            return String(result)
+        }
+
+        static func lastNumber(in line: String) -> Int? {
+            var digits = ""
+            var found = ""
+            for ch in line.unicodeScalars {
+                if ch.value >= 0x30 && ch.value <= 0x39 {
+                    digits.unicodeScalars.append(ch)
+                } else if !digits.isEmpty {
+                    found = digits
+                    digits = ""
+                }
+            }
+            if !digits.isEmpty { found = digits }
+            return found.isEmpty ? nil : Int(found.prefix(9))
+        }
     }
 
     /// Turns the chunks read from the pipe into complete lines. A read ends wherever the pipe's buffer ends, so a

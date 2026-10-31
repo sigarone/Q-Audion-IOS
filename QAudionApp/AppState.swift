@@ -3465,6 +3465,8 @@ final class AppState: ObservableObject {
     /// buffer on a redundant `updateOutgoingRingCue()` call (e.g. a second
     /// `onAudioSessionActivated` re-fire mid-ring from a route change).
     private var outgoingRingCurrentCue: QAudionRingtonePlayer.Cue?
+    /// The one delayed retry of a cue whose `play()` was refused (see `CueRetryPolicy`).
+    private var outgoingCueRetry: DispatchWorkItem?
 
     /// W-CALLERBUSY (2026-10-03) — why the outgoing call that just ended could not be completed (`call_busy` /
     /// `call_peer_offline`), non-nil only for the few seconds the outgoing screen keeps the outcome on screen
@@ -4973,7 +4975,7 @@ final class AppState: ObservableObject {
                     if self.ignoreEndForStaleUuid(uuid: uuid) {
                         return
                     }
-                    self.endCall()
+                    self.endCall(origin: "callkit")
                 }
             }
             provider.onMutedChanged = { [weak self] uuid, muted in
@@ -20969,7 +20971,7 @@ final class AppState: ObservableObject {
     /// once the call leaves the pre-connect phase (`finalizeCallActive()`
     /// takes over from there) — so neither a late `call_ready` nor the
     /// fallback timer can resurrect a ring under a finished/connected call.
-    private func updateOutgoingRingCue() {
+    private func updateOutgoingRingCue(attempt: Int = 0) {
         guard outgoingAudioSessionReady, originalCallRole == .caller else { return }
         let preConnect: Bool
         switch callState {
@@ -20981,7 +20983,21 @@ final class AppState: ObservableObject {
             ? .keyExchange
             : (outgoingRingConfirmed ? .confirmedRingback : .outgoingRing)
         guard want != outgoingRingCurrentCue else { return }
-        outgoingRingtone.loop(want)
+        let started = outgoingRingtone.loop(want)
+        if !started, CueRetryPolicy.shouldRetry(failure: outgoingRingtone.lastFailure, attempt: attempt) {
+            // The session had just become active and refused to play: try once more shortly after. The re-run
+            // checks the same guards, so a call that left the ringing phase meanwhile starts nothing.
+            RTLog.info("call", "cue retry name=\(want.kind.rawValue) attempt=\(attempt + 1)")
+            outgoingCueRetry?.cancel()
+            let retry = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.outgoingCueRetry = nil
+                self.updateOutgoingRingCue(attempt: attempt + 1)
+            }
+            outgoingCueRetry = retry
+            DispatchQueue.main.asyncAfter(deadline: .now() + CueRetryPolicy.delaySeconds, execute: retry)
+            return
+        }
         outgoingRingCurrentCue = want
     }
 
@@ -20989,6 +21005,8 @@ final class AppState: ObservableObject {
     /// nothing was ever started (e.g. a callee's own `endCall()`, or an
     /// outgoing call that ended before the audio session ever activated).
     private func stopOutgoingRingCue() {
+        outgoingCueRetry?.cancel()
+        outgoingCueRetry = nil
         outgoingRingtone.stop()
         outgoingRingCurrentCue = nil
     }
@@ -22811,6 +22829,13 @@ extension AppState {
         } catch {
             print("[AppState] voice-confidence announce failed: \(error)")
         }
+    }
+
+    /// `endCall()` for a path that knows who asked: `button` (a hang-up control) or `callkit` (the system call UI).
+    /// The origin is only logged, so an analysis can tell a tap from an automatic end.
+    func endCall(origin: String) {
+        RTLog.info("call", "endCall origin=\(origin)")
+        endCall()
     }
 
     /// `notifyPeerInBand`: whether to fire the W-DCHANGUP in-band control

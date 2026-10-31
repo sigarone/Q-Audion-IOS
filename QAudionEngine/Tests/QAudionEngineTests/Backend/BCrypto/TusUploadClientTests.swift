@@ -633,6 +633,59 @@ final class TusUploadClientTests: XCTestCase {
         XCTAssertEqual(result.attempts, TusUploadClient.maxChunkAttempts)
         XCTAssertEqual(result.code, 503)
     }
+
+    // MARK: - 409 offset mismatch: realign with HEAD instead of resending the same chunk
+
+    func test_chunkRealign_decisions() {
+        typealias R = TusUploadClient.ChunkRealign
+        XCTAssertEqual(R.decide(chunkOffset: 10, chunkLength: 10, serverOffset: 20), .alreadyComplete(20))
+        XCTAssertEqual(R.decide(chunkOffset: 10, chunkLength: 10, serverOffset: 14), .resend(skip: 4))
+        XCTAssertEqual(R.decide(chunkOffset: 10, chunkLength: 10, serverOffset: 10), .resend(skip: 0))
+        XCTAssertEqual(R.decide(chunkOffset: 10, chunkLength: 10, serverOffset: 9), .unrecoverable)
+        XCTAssertEqual(R.decide(chunkOffset: 10, chunkLength: 10, serverOffset: 21), .unrecoverable)
+    }
+
+    /// Runs one 20-byte chunk whose first PATCH is answered 409 while HEAD reports `headOffset`; returns the
+    /// `(Upload-Offset, body length)` of every PATCH the client sent, and the number of HEADs.
+    private func conflictRun(headOffset: Int) async throws -> (patches: [(offset: Int, length: Int)], heads: Int) {
+        var patches: [(offset: Int, length: Int)] = []
+        var heads = 0
+        TusStubProtocol.responseHandler = { request in
+            func reply(_ status: Int, _ headers: [String: String]) -> (HTTPURLResponse, Data?) {
+                // swiftlint:disable:next force_unwrapping
+                (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!, nil)
+            }
+            switch request.httpMethod {
+            case "POST":
+                return reply(201, ["Location": "/api/v1/files/tus/conflict-1"])
+            case "HEAD":
+                heads += 1
+                return reply(200, ["Upload-Offset": String(headOffset), "Upload-Length": "20"])
+            default:
+                let offset = Int(request.value(forHTTPHeaderField: "Upload-Offset") ?? "0") ?? 0
+                patches.append((offset, request.httpBodyLength))
+                if patches.count == 1 { return reply(409, [:]) }
+                return reply(204, ["Upload-Offset": String(offset + request.httpBodyLength)])
+            }
+        }
+        let client = TusUploadClient(session: session, serverUrl: "https://test", getToken: { "tok" }, chunkSize: 1024)
+        _ = try await withTimeout(seconds: 10) { try await client.upload(data: Data(repeating: 0x41, count: 20)) }
+        return (patches, heads)
+    }
+
+    func test_409_whenTheServerAlreadyHoldsTheChunk_noSecondPatchIsSent() async throws {
+        let run = try await conflictRun(headOffset: 20)
+        XCTAssertEqual(run.heads, 1)
+        XCTAssertEqual(run.patches.count, 1)
+    }
+
+    func test_409_whenTheServerHoldsPartOfTheChunk_onlyTheRestIsSentAtTheServerOffset() async throws {
+        let run = try await conflictRun(headOffset: 8)
+        XCTAssertEqual(run.heads, 1)
+        XCTAssertEqual(run.patches.count, 2)
+        XCTAssertEqual(run.patches[1].offset, 8)
+        XCTAssertEqual(run.patches[1].length, 12)
+    }
 }
 
 // MARK: - Test timeout helper

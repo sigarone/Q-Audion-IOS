@@ -317,7 +317,10 @@ actor LiveLogWorker {
                                                     levelInitial: levelInitial,
                                                     tag: entry.tag,
                                                     message: redacted)
-            backlog.append(seq: entry.seq, line: line)
+            backlog.append(seq: entry.seq,
+                           line: line,
+                           disposable: LiveLogBacklog.isDisposable(levelInitial: levelInitial, tag: entry.tag,
+                                                                    message: entry.message))
         }
         if highest > collectedSeq { collectedSeq = highest }
     }

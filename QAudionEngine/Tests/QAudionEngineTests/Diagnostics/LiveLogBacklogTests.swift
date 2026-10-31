@@ -189,4 +189,90 @@ final class LiveLogBacklogTests: XCTestCase {
         XCTAssertEqual(backlog.removeThrough(seq: 949), 50)
         XCTAssertEqual(backlog.peekBatch(maxLines: 1, byteBudget: 1_000)?.lines ?? [], ["line-950"])
     }
+
+    // MARK: - Priority eviction
+
+    func test_aFullBacklogDropsDisposableLinesBeforeProtectedOnes() {
+        var backlog = LiveLogBacklog(maxEntries: 4, maxBytes: 10_000)
+        backlog.append(seq: 1, line: "call-1")
+        backlog.append(seq: 2, line: "noise-2", disposable: true)
+        backlog.append(seq: 3, line: "call-3")
+        backlog.append(seq: 4, line: "noise-4", disposable: true)
+        backlog.append(seq: 5, line: "call-5")
+        XCTAssertEqual(backlog.droppedTotal, 1)
+        let batch = backlog.peekBatch(maxLines: 10, byteBudget: 10_000)
+        XCTAssertEqual(batch?.lines ?? [], ["call-1", "call-3", "noise-4", "call-5"],
+                       "the OLDEST disposable line goes, not the oldest line")
+        backlog.append(seq: 6, line: "call-6")
+        let next = backlog.peekBatch(maxLines: 10, byteBudget: 10_000)
+        XCTAssertEqual(next?.lines ?? [], ["call-1", "call-3", "call-5", "call-6"])
+    }
+
+    func test_withNothingDisposableLeftTheOldestLineGoes() {
+        var backlog = LiveLogBacklog(maxEntries: 2, maxBytes: 10_000)
+        backlog.append(seq: 1, line: "a")
+        backlog.append(seq: 2, line: "b")
+        backlog.append(seq: 3, line: "c")
+        XCTAssertEqual(backlog.peekBatch(maxLines: 10, byteBudget: 10_000)?.lines ?? [], ["b", "c"])
+        XCTAssertEqual(backlog.droppedTotal, 1)
+    }
+
+    func test_theByteBoundAlsoEvictsDisposableLinesFirstAndKeepsTheByteCountRight() {
+        var backlog = LiveLogBacklog(maxEntries: 100, maxBytes: 12)
+        backlog.append(seq: 1, line: "keep", disposable: false)   // 5 bytes
+        backlog.append(seq: 2, line: "junk", disposable: true)    // 5 bytes
+        backlog.append(seq: 3, line: "more", disposable: false)   // 5 bytes -> 15 > 12
+        XCTAssertEqual(backlog.peekBatch(maxLines: 10, byteBudget: 100)?.lines ?? [], ["keep", "more"])
+        XCTAssertEqual(backlog.byteCount, 10)
+        XCTAssertEqual(backlog.removeThrough(seq: 3), 2, "sequence-keyed removal still works after a middle drop")
+        XCTAssertTrue(backlog.isEmpty)
+    }
+
+    func test_aFloodOfNoiseCannotPushOutTheCallLines() {
+        var backlog = LiveLogBacklog(maxEntries: 50, maxBytes: 1_000_000)
+        var seq: Int64 = 0
+        for round in 0..<20 {
+            seq += 1
+            backlog.append(seq: seq, line: "hb-\(round)", disposable: false)
+            for _ in 0..<20 {
+                seq += 1
+                backlog.append(seq: seq, line: "glitch", disposable: true)
+            }
+        }
+        let lines = backlog.peekBatch(maxLines: 1_000, byteBudget: 1_000_000)?.lines ?? []
+        XCTAssertEqual(lines.filter { $0.hasPrefix("hb-") }.count, 20, "every protected line survived")
+    }
+
+    func test_summariesGlitchCountsAndCallDiagnosticsSurvive() {
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "stdout", message: "[repeated x5] last=9 max=9 x"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "stdout", message: "Number of detected playout glitches: 4"))
+        XCTAssertTrue(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "stdout", message: "plain native chatter"))
+        for tag in ["VIDEODIAG", "pair", "chat", "bugreport"] {
+            XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: tag))
+        }
+    }
+
+    func test_aNativeLineThatReadsAsAWarningOrAnErrorIsNotDisposable() {
+        for word in ["error", "WARNING", "Failed", "fatal", "Assertion"] {
+            XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "stdout", message: "native \(word) 12"), word)
+            XCTAssertTrue(LogSeverity.looksSevere("native \(word) 12"), word)
+        }
+        XCTAssertFalse(LogSeverity.looksSevere("plain native chatter"))
+    }
+
+    func test_anAppTaggedLineArrivingThroughStdoutIsNotDisposable() {
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "stdout", message: "[avatar] cache refreshed"))
+    }
+
+    func test_whichLinesAreDisposable() {
+        XCTAssertTrue(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "stdout"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "D", tag: "call"))
+        XCTAssertTrue(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "avatar"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "call"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "Net"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "rekey"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "I", tag: "security"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "W", tag: "stdout"))
+        XCTAssertFalse(LiveLogBacklog.isDisposable(levelInitial: "E", tag: "avatar"))
+    }
 }
