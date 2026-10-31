@@ -2105,6 +2105,8 @@ final class AppState: ObservableObject {
     /// socket. The watchdog is cancelled at call teardown; the delivered id is the link-health evidence it needs.
     private var calleeOfferWatchdogTask: Task<Void, Never>?
     private var calleeAcceptDeliveredCallId: String?
+    /// The accepted call whose `call_accepted` could not be handed to a provider yet; sent once the socket authenticates.
+    private var pendingCallAccept = PendingCallAccept()
     /// The 30 s deadline of the group media (`GroupHandOverPolicy.mediaDeadlineSeconds`).
     var groupPromotionMediaCheck: DispatchWorkItem?
 
@@ -3837,6 +3839,19 @@ final class AppState: ObservableObject {
         proactiveRefreshTask = nil
     }
 
+    /// A caller outside the REST client was rejected with `staleAccessToken`: the coordinator adopts a newer
+    /// stored token when one exists (spending no refresh token) and refreshes only otherwise. Joins a
+    /// proactive refresh already running.
+    func runRefreshAfterRejection(staleAccessToken: String) async {
+        guard !staleAccessToken.isEmpty, proactiveRefreshTask == nil, let provider = liveProvider else {
+            await runProactiveRefresh()
+            return
+        }
+        let outcome = await provider.refreshSession(
+            trigger: .external, ignoreCooldown: true, staleAccessToken: staleAccessToken)
+        if outcome.isSuccess { scheduleProactiveTokenRefresh() }
+    }
+
     /// Run the refresh cascade ahead of expiry. NEVER clears the session on
     /// failure — a failed proactive refresh just reschedules with backoff so
     /// the eventual on-demand 401 cascade (or the next launch) can recover.
@@ -4079,9 +4094,9 @@ final class AppState: ObservableObject {
             // its own; on a 401 it awaits THIS existing single-flight
             // refresh cascade instead, then re-reads getToken() and retries
             // once. See LiveLogStreamer.RefreshRequestProvider's kdoc.
-            requestTokenRefresh: { [weak self] in
+            requestTokenRefresh: { [weak self] rejectedToken in
                 guard let self else { return }
-                await self.runProactiveRefresh()
+                await self.runRefreshAfterRejection(staleAccessToken: rejectedToken)
             }
         )
 
@@ -6729,6 +6744,11 @@ final class AppState: ObservableObject {
                     // and queued delivery receipts now that a socket can
                     // actually carry them (`send` DROPS frames before
                     // `.authenticated`). Single-flight inside the drainer.
+                    if prev != .authenticated {
+                        Task { @MainActor [weak self] in
+                            self?.flushPendingCallAccepted()
+                        }
+                    }
                     if prev != .authenticated {
                         Task { @MainActor in
                             ChatOutboxDrain.shared.kick(reason: "ws-authenticated")
@@ -21739,6 +21759,34 @@ extension AppState {
         applyAcceptLatchAnswerStep(replay.step, callId: replay.callId, carriedSdp: replay.carriedSdp)
     }
 
+    /// Puts `call_accepted` for `callId` on the wire through `calling` and records delivery.
+    @MainActor
+    private func sendCallAcceptedNow(_ calling: CallingApi, callId acceptedCallId: String) {
+        Task {
+            do {
+                try await calling.sendCallAccepted(callId: acceptedCallId)
+                // Sent on an authenticated socket: the link was healthy when the user answered.
+                await MainActor.run { [weak self] in self?.calleeAcceptDeliveredCallId = acceptedCallId }
+            } catch {
+                // W-SIGSWALLOW (2026-09-01) — a fast-path miss now sends best-effort and arms the resend
+                // for the authenticated socket before throwing (see `CallSignalingFailurePolicy`), so this
+                // line marks the miss, not necessarily a lost accept.
+                RTLog.warn("call", "sigsend fail kind=call_accepted cid=\(acceptedCallId.prefix(8)) err=\(error)")
+            }
+        }
+    }
+
+    /// Sends the held `call_accepted` once a provider with an authenticated socket exists and the
+    /// held call is still the active one. Called on each transition into `.authenticated`.
+    @MainActor
+    private func flushPendingCallAccepted() {
+        guard pendingCallAccept.callId != nil else { return }
+        guard let calling = liveProvider?.callingApi else { return }
+        guard let id = pendingCallAccept.take(activeCallId: canonicalActiveCallId()) else { return }
+        RTLog.info("call", "callaccepted send pending released cid=\(id.prefix(8))")
+        sendCallAcceptedNow(calling, callId: id)
+    }
+
     /// W478 — answer an incoming call from the in-app ringing banner.
     /// Uses CXCallController so the same `provider(_:perform:CXAnswerCallAction)`
     /// delegate path fires as when the user taps Answer on the system sheet.
@@ -21850,24 +21898,13 @@ extension AppState {
         // call (CallKit answer / in-app banner / CallKit-free path all
         // converge here). Distinct from the automatic call_answer
         // network-readiness signal. Only send site in the app.
+        let acceptedCallId = uuid.uuidString.lowercased()
         if let calling = self.liveProvider?.callingApi {
-            let acceptedCallId = uuid.uuidString.lowercased()
-            Task {
-                do {
-                    try await calling.sendCallAccepted(callId: acceptedCallId)
-                    // Sent on an authenticated socket: the link was healthy when the user answered.
-                    await MainActor.run { [weak self] in self?.calleeAcceptDeliveredCallId = acceptedCallId }
-                } catch {
-                    // W-SIGSWALLOW (2026-09-01) — was `try?`: the one envelope
-                    // that tells the caller a human accepted could fail with no
-                    // trace. On a fast-path miss the impl now sends best-effort
-                    // and arms the W-SETUPRETRY ladder before throwing (see
-                    // `CallSignalingFailurePolicy`), so this line marks the
-                    // miss, not necessarily a lost accept. Audit memory
-                    // reference_ios_stability_audit_2026_09_01, P1 item 7.
-                    RTLog.warn("call", "sigsend fail kind=call_accepted cid=\(acceptedCallId.prefix(8)) err=\(error)")
-                }
-            }
+            self.sendCallAcceptedNow(calling, callId: acceptedCallId)
+        } else {
+            // No provider yet (cold wake): hold the accept and send it when the socket authenticates.
+            RTLog.warn("call", "callaccepted send skipped no_provider cid=\(acceptedCallId.prefix(8))")
+            self.pendingCallAccept.hold(callId: acceptedCallId)
         }
         // W-MEDIAATACCEPT (option b) — §2.1/§4.4 (I3 T4): the human accept.
         // Mark the ring plan accepted (idempotent — first call wins, so a
@@ -22813,6 +22850,7 @@ extension AppState {
         calleeOfferWatchdogTask?.cancel()
         calleeOfferWatchdogTask = nil
         calleeAcceptDeliveredCallId = nil
+        pendingCallAccept.clear()
         if playsEndedCue { playCallCue(.callEnded) }
         // The call's audio session is going away: no later cue (busy, ended) may use the player on it.
         outgoingAudioSessionReady = false

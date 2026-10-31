@@ -50,6 +50,10 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// alongside `activeCallId` on every bind so a new call never inherits
     /// the previous call's latch.
     private var _setupProgressed = false
+    /// `call_accepted` has gone out on an authenticated socket for the bound call.
+    private var _acceptAuthSent = false
+    /// A progression signal arrived after that authenticated send (see `CallAcceptResend`).
+    private var _acceptProven = false
     /// W-ICEBEFOREOFFER (2026-09-08) — the call_id for which `call_offer`'s
     /// own `ws.send()` has actually been made. `sendIceCandidate` waits on
     /// this (bounded) before its own send so a trickled candidate — fired
@@ -756,12 +760,13 @@ public final class BCryptoCallingApiImpl: CallingApi {
             // reference_ios_stability_audit_2026_09_01, P1 item 7).
             if CallSignalingFailurePolicy.socketNotReadyAction(for: .callAccepted) == .bestEffortSendAndArmRetransmit {
                 ws.send(type: "call_accepted", data: data)
-                print("[BCryptoCalling] call_accepted fast-path miss call_id=\(callId.prefix(8))… — best-effort send + retransmit ladder armed")
-                scheduleSetupRetransmit(callId: callId, type: "call_accepted", data: data, label: "call_accepted")
+                print("[BCryptoCalling] call_accepted fast-path miss call_id=\(callId.prefix(8))… — best-effort send, resend armed for the authenticated socket")
+                scheduleAcceptResendOnAuth(callId: callId, data: data)
             }
             throw BCryptoCallingError.wsUnavailable
         }
         ws.send(type: "call_accepted", data: data)
+        markAcceptAuthSent(callId)
         // W-SETUPRETRY — mirrors Android's accept-retransmit (2.5 s / 5 s,
         // CallController.startIncoming): the accept can be WRITTEN into a
         // socket already dead on the wire, and the caller then sits out its
@@ -954,6 +959,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
         callIdLock.lock()
         activeCallId = callId
         _setupProgressed = false
+        _acceptAuthSent = false
+        _acceptProven = false
         // I1/W-ICEBEFOREANSWER — a fresh inbound call_id starts with no
         // answer dispatched yet, same reset `setActiveCallId` does for the
         // caller side's `_offerDispatchedCallId`.
@@ -976,6 +983,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
                   bound.caseInsensitiveCompare(cid) == .orderedSame else { return }
         }
         _setupProgressed = true
+        _acceptProven = CallAcceptResend.provesCallerFinalized(
+            authenticatedSendDone: _acceptAuthSent, signalReceived: true) || _acceptProven
     }
 
     /// W-GLARE (2026-08-25) — synchronous unbind for the glare-loser
@@ -1015,6 +1024,55 @@ public final class BCryptoCallingApiImpl: CallingApi {
         guard let bound = activeCallId,
               bound.caseInsensitiveCompare(callId) == .orderedSame else { return false }
         return !_setupProgressed
+    }
+
+    /// Record that `call_accepted` for `callId` went out on an authenticated
+    /// socket (only if it is still the bound call). Sync helper for the
+    /// Swift 6 NSLock-in-async rule.
+    private func markAcceptAuthSent(_ callId: String) {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        guard let bound = activeCallId,
+              bound.caseInsensitiveCompare(callId) == .orderedSame else { return }
+        _acceptAuthSent = true
+    }
+
+    /// `true` while the bound call is `callId` and nothing proved that the
+    /// caller finalized after our authenticated accept.
+    private func acceptResendShouldContinue(for callId: String) -> Bool {
+        callIdLock.lock(); defer { callIdLock.unlock() }
+        let bound = activeCallId?.caseInsensitiveCompare(callId) == .orderedSame
+        return CallAcceptResend.shouldContinue(isBound: bound, proven: _acceptProven)
+    }
+
+    /// The first `call_accepted` did not leave on an authenticated socket.
+    /// Wait (bounded) for the socket to authenticate, send the same envelope
+    /// again right away, then keep resending on `CallAcceptResend.ladderMs`
+    /// until the call unbinds or the caller is proven to have finalized.
+    /// Same call_id, authenticated socket only: nothing is sent once the
+    /// call is no longer the bound one.
+    private func scheduleAcceptResendOnAuth(callId: String, data: [String: Any]) {
+        Task { [weak self] in
+            var authed = false
+            for _ in 0..<CallAcceptResend.authWaitAttempts {
+                guard let self else { return }
+                guard self.acceptResendShouldContinue(for: callId) else { return }
+                if await self.ws.ensureAuthenticated(timeoutSec: 5) { authed = true; break }
+            }
+            guard authed, let first = self else { return }
+            guard first.acceptResendShouldContinue(for: callId) else { return }
+            first.markAcceptAuthSent(callId)
+            first.ws.send(type: "call_accepted", data: data)
+            print("[BCryptoCalling] call_accepted resent on authenticated socket call_id=\(callId.prefix(8))…")
+            for delayMs in CallAcceptResend.ladderMs {
+                try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                guard let self else { return }
+                guard self.acceptResendShouldContinue(for: callId) else { return }
+                guard await self.ws.ensureAuthenticated(timeoutSec: 2) else { continue }
+                guard self.acceptResendShouldContinue(for: callId) else { return }
+                print("[BCryptoCalling] call_accepted retransmit call_id=\(callId.prefix(8))… (caller not yet proven)")
+                self.ws.send(type: "call_accepted", data: data)
+            }
+        }
     }
 
     /// W-SETUPRETRY — bounded retransmit of one already-sent JSON setup
@@ -1082,6 +1140,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
         callIdLock.lock()
         activeCallId = cid
         _setupProgressed = false
+        _acceptAuthSent = false
+        _acceptProven = false
         _offerDispatchedCallId = nil
         _answerDispatchedCallId = nil
         callIdLock.unlock()
@@ -1134,6 +1194,8 @@ public final class BCryptoCallingApiImpl: CallingApi {
         activeCallId = nil
         _answerSent = false
         _setupProgressed = false
+        _acceptAuthSent = false
+        _acceptProven = false
         _offerDispatchedCallId = nil
         _answerDispatchedCallId = nil
         callIdLock.unlock()

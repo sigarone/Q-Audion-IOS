@@ -228,8 +228,10 @@ public final class BCryptoBackendProvider: BackendProvider {
     /// transport of this provider. Used by the app's proactive refresh, which used to call
     /// `accountApi.refreshToken` directly, outside any single flight.
     public func refreshSession(trigger: AuthRefreshTrigger,
-                               ignoreCooldown: Bool = false) async -> AuthRefreshOutcome {
-        await restClient.refreshSession(trigger: trigger, ignoreCooldown: ignoreCooldown)
+                               ignoreCooldown: Bool = false,
+                               staleAccessToken: String? = nil) async -> AuthRefreshOutcome {
+        await restClient.refreshSession(trigger: trigger, ignoreCooldown: ignoreCooldown,
+                                        staleAccessToken: staleAccessToken)
     }
 
     /// Switch all transport components to a different server URL.
