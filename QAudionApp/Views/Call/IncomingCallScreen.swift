@@ -17,10 +17,10 @@ import SwiftUI
 ///     "LOW RISK · C=0.NN" and PQC pills of the original port are gone, because
 ///     a ringing call has no voice reading and this screen has no key-exchange
 ///     state to show.
-///   - Bottom action row (3 buttons, SpaceEvenly):
-///       • Reject  — `CircularAction(72, riskHigh, "phone.down.fill")`
-///       • Reply   — `CircularAction(56, surfaceVariant, "message.fill")`
+///   - Bottom action row (2 buttons, Decline on the left, Accept on the right, each with its name):
+///       • Decline — `CircularAction(72, riskHigh, "phone.down.fill")`
 ///       • Accept  — `CircularAction(72, success,  "phone.fill")`
+///     There is no "reply with a message" button: it did nothing, so it is gone on both platforms.
 ///   - No footer with an answer deadline. The old fixed "answer within 30s"
 ///     line matched no timer in the app: a group invite rings for 45 s
 ///     (`AppState.armGroupCallRingTimeout`) and a 1:1 ring has no client timer
@@ -42,12 +42,8 @@ struct IncomingCallScreen: View {
     /// "Videochiamata"), es. "Chiamata di gruppo · Mario Rossi" per una group
     /// call. nil = default. Una stringa gia' pronta: non viene localizzata qui.
     let subtitle: String?
-    /// W-GRPRING — nasconde il bottone centrale "Rispondi" (quick reply) su
-    /// superfici dove non esiste una chat 1:1 a cui rispondere (group call).
-    let showReplyAction: Bool
     let onAccept: (_ acceptWithoutVideo: Bool) -> Void
     let onReject: () -> Void
-    let onReplyWithMessage: () -> Void
 
     /// W-VIDPRIVACY — "answer without video" toggle. Only consulted when
     /// `callType == .video`; not persisted (no "always audio-only" setting
@@ -67,19 +63,15 @@ struct IncomingCallScreen: View {
          callType: CallType = .audio,
          peerShortNumber: String? = nil,
          subtitle: String? = nil,
-         showReplyAction: Bool = true,
          onAccept: @escaping (Bool) -> Void,
-         onReject: @escaping () -> Void,
-         onReplyWithMessage: @escaping () -> Void = {}) {
+         onReject: @escaping () -> Void) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.callType = callType
         self.peerShortNumber = peerShortNumber
         self.subtitle = subtitle
-        self.showReplyAction = showReplyAction
         self.onAccept = onAccept
         self.onReject = onReject
-        self.onReplyWithMessage = onReplyWithMessage
         _acceptWithoutVideo = State(initialValue: callType == .video)
     }
 
@@ -218,20 +210,20 @@ struct IncomingCallScreen: View {
                 HStack(spacing: 6) {
                     Image(systemName: acceptWithoutVideo ? "checkmark.square.fill" : "square")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Rispondi senza video").qaudionStyle(type.labelSmall)
+                    Text(CallControlText.answerAudioOnly).qaudionStyle(type.labelSmall)
                 }
                 .foregroundStyle(acceptWithoutVideo ? extras.trustEnterprise : scheme.onSurfaceVariant)
-                // HIG minimum tap target is 44x44pt; the label's own
+                // The tap target is at least 48 pt tall (HIG minimum is 44x44pt); the label's own
                 // bounding box (~16-18pt tall) is far under that.
                 // minHeight only grows the invisible hit area — the
                 // icon/text keep their natural size, centered inside
                 // it — and contentShape extends hit-testing to the
                 // full frame instead of just the drawn glyphs.
-                .frame(minHeight: 44)
+                .frame(minHeight: 48)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Rispondi senza video")
+            .accessibilityLabel(CallControlText.answerAudioOnly)
             .accessibilityValue(acceptWithoutVideo ? String(localized: "call.incoming.toggle_on", defaultValue: "Attivo", comment: "VoiceOver value of the 'answer without video' switch when it is on.") : String(localized: "call.incoming.toggle_off", defaultValue: "Non attivo", comment: "VoiceOver value of the 'answer without video' switch when it is off."))
             .padding(.bottom, 24)
         } else {
@@ -242,38 +234,32 @@ struct IncomingCallScreen: View {
         }
     }
 
+    /// Decline on the left, Accept on the right (the thumb), each 72 pt with its name under it.
     private var actionsRow: some View {
-        HStack(spacing: 36) {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
             CircularAction(
                 icon: "phone.down.fill",
                 action: onReject,
                 diameter: 72,
                 background: extras.riskHigh,
                 iconColor: scheme.onPrimary,
-                caption: String(localized: "Rifiuta"),
+                caption: CallControlText.decline,
                 captionColor: extras.riskHigh
             )
-            if showReplyAction {
-                CircularAction(
-                    icon: "message.fill",
-                    action: onReplyWithMessage,
-                    diameter: 56,
-                    background: scheme.surfaceVariant,
-                    iconColor: scheme.onSurface,
-                    caption: String(localized: "reply.action", defaultValue: "Rispondi", comment: "Label of the reply action button on the incoming call screen (reply with a message)."),
-                    captionColor: scheme.onSurfaceVariant
-                )
-            }
+            Spacer(minLength: 0)
             CircularAction(
                 icon: "phone.fill",
                 action: { onAccept(callType == .video && acceptWithoutVideo) },
                 diameter: 72,
                 background: extras.success,
                 iconColor: extras.onSuccess,
-                caption: (callType == .video && acceptWithoutVideo) ? String(localized: "call.incoming.accept_without_video", defaultValue: "Senza video", comment: "Caption under the green accept button of an incoming video call when the user chose to answer without video.") : String(localized: "Accetta"),
+                caption: (callType == .video && acceptWithoutVideo) ? CallControlText.acceptNoVideo : CallControlText.accept,
                 captionColor: extras.success
             )
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: 320)
     }
 }
 

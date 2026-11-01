@@ -46,7 +46,10 @@ struct VideoCallView: View {
     /// and being derived it needs no remount re-sync at all.
     private var isCameraOn: Bool { appState.localCameraSending }
     @State private var isSpeaker = true
-    @State private var showControls = true
+    /// The "+" of the dock: the same contact picker sheet the audio call screen uses (promotes the call to a group call).
+    @State private var showAddParticipant = false
+    @Environment(\.qaudionScheme) private var scheme
+    @Environment(\.qaudionExtras) private var extras
     @State private var showSas = false
     /// W502: toggle for the diagnostics overlay.
     @State private var showDiagnostics = false
@@ -63,25 +66,22 @@ struct VideoCallView: View {
 
             remoteVideoLayer
 
+            // The top bar and the dock stay on screen (no tap-to-hide): the controls are in the same place in every call
+            // state.
             VStack(spacing: 0) {
-                if showControls {
-                    topBar
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    // Unified call UI — compact trust bar (SAS ✓ / PQC /
-                    // transport chips). Additive: topBar's existing lock
-                    // icon + CallSecurityBadge are untouched; this is a
-                    // second, small row directly under it, matching the
-                    // "trust bar → Guardian ribbon" order from
-                    // call-guardian-reference.html. The Guardian ribbon
-                    // itself lives inside the existing diagnostics sheet
-                    // here (videoDiagPanel) rather than a second overlay,
-                    // to avoid stacking two bottom sheets on the video
-                    // surface.
-                    trustBar
-                        .padding(.horizontal, 16)
-                        .padding(.top, 6)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
+                topBar
+                // Unified call UI — compact trust bar (SAS ✓ / PQC /
+                // transport chips). Additive: the top bar's security badge
+                // is untouched; this is a second, small row directly under
+                // it, matching the "trust bar → Guardian ribbon" order from
+                // call-guardian-reference.html. The Guardian ribbon
+                // itself lives inside the existing diagnostics sheet
+                // here (videoDiagPanel) rather than a second overlay,
+                // to avoid stacking two bottom sheets on the video
+                // surface.
+                trustBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 6)
 
                 // Narrowband Bluetooth notice: a row of the column, between the top bars and the picture area.
                 NarrowbandBluetoothBanner()
@@ -104,16 +104,8 @@ struct VideoCallView: View {
                     }
                 }
 
-                if showControls {
-                    bottomControls
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .padding(.bottom, 40)
-                }
-            }
-        }
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showControls.toggle()
+                bottomControls
+                    .padding(.bottom, 8)
             }
         }
         // W502: diagnostics overlay (bottom sheet, above controls).
@@ -121,7 +113,7 @@ struct VideoCallView: View {
             if showDiagnostics {
                 videoDiagPanel
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .padding(.bottom, 120)
+                    .padding(.bottom, CallDockLayout.overlayClearance)
                     .padding(.horizontal, 16)
             }
         }
@@ -170,13 +162,11 @@ struct VideoCallView: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: showControls)
         .animation(.easeInOut(duration: 0.25), value: showSas)
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
         .animation(.easeInOut(duration: 0.25), value: appState.peerScreenShareActive)
         .animation(.easeInOut(duration: 0.25), value: appState.remoteVideoPaused)
         .animation(.easeInOut(duration: 0.25), value: appState.showPeerVideoInviteBanner)
-        .statusBarHidden(!showControls)
         .onAppear {
             ScreenshotLockService.lock()
             resolveDisplayName()
@@ -217,6 +207,18 @@ struct VideoCallView: View {
         .sheet(item: $upgradeSheetCapability) { capability in
             UpgradeSheet(capability: capability)
                 .environmentObject(appState)
+        }
+        // The "+" of the dock: the same contact picker the audio call screen opens, with the video toggle locked to this
+        // call's own type.
+        .sheet(isPresented: $showAddParticipant) {
+            GroupCallContactPickerSheet(
+                contacts: addParticipantCandidates,
+                onStart: { selectedIds, _ in
+                    showAddParticipant = false
+                    appState.promoteToGroupCall(newPeerIds: selectedIds)
+                },
+                lockedVideo: appState.isVideoCall
+            )
         }
     }
 
@@ -345,7 +347,12 @@ struct VideoCallView: View {
     }
 
     private var topBarContent: some View {
-        HStack {
+        HStack(spacing: 0) {
+            // The shield opens the panel that holds the diagnostics and the session key (the security sheet of this screen).
+            CallTopBarButton(icon: "checkmark.shield",
+                             accessibilityLabel: CallControlText.securityA11y,
+                             action: { showDiagnostics.toggle() })
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(resolvedPeerDisplayName)
                     .font(.headline)
@@ -361,6 +368,7 @@ struct VideoCallView: View {
                         .foregroundColor(.gray)
                 }
             }
+            .padding(.leading, 6)
 
             Spacer()
 
@@ -382,36 +390,20 @@ struct VideoCallView: View {
                     : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Accessibility label — SAS identity verification still pending"))
             }
 
-            // Report a problem or a call error: opens the report sheet over the call.
-            Button {
-                BugReporter.shared.requestReport(source: .inCall)
-            } label: {
-                Image(systemName: "ladybug")
-                    .font(.system(size: 15))
-                    .foregroundColor(.white)
-                    .frame(width: 32, height: 32)
-                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
-            }
-            .padding(.trailing, 4)
-            .accessibilityLabel(String(localized: "Segnala un problema"))
-
-            // W502: diagnostics toggle button.
-            Button {
-                showDiagnostics.toggle()
-            } label: {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 15))
-                    .foregroundColor(.white)
-                    .frame(width: 32, height: 32)
-                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
-            }
-            .padding(.trailing, 4)
-            .accessibilityLabel("Diagnostica")
-
             CallSecurityBadge()
+
+            // Report a problem or a call error: marks the moment in the call telemetry, then opens the report sheet.
+            CallTopBarButton(icon: "ladybug",
+                             accessibilityLabel: CallControlText.reportA11y,
+                             action: reportProblem)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 8)
         .padding(.top, 8)
+    }
+
+    private func reportProblem() {
+        CallMediaTelemetry.shared.recordDisturbanceMarker()
+        BugReporter.shared.requestReport(source: .inCall)
     }
 
     // MARK: - Trust bar (unified call UI)
@@ -560,127 +552,119 @@ struct VideoCallView: View {
                 .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
+        // Flip camera: a 48 pt button on the corner of our own picture (it shows only while our camera is sending).
+        .overlay(alignment: .topTrailing) {
+            Button {
+                appState.videoFlipCamera()
+            } label: {
+                Image(systemName: "camera.rotate.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.black.opacity(0.5)))
+                    .frame(width: 48, height: 48)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(CallControlText.flipA11y)
+        }
         .padding(.trailing, 16)
         .padding(.bottom, 8)
     }
 
-    // MARK: - Bottom controls (unified call UI — cosmetic regroup only)
+    // MARK: - Control dock
     //
-    // Same 5 buttons, same closures (videoFlipCamera / videoSetCameraEnabled
-    // / setMuted / setSpeaker / endCall). Order changed to match the unified
-    // dock's primary-controls-together, hangup-last convention from
-    // call-guardian-reference.html / InCallScreen's regrouped dock: mute ·
-    // speaker · video · invert · end (was: invert · video · mute · end ·
-    // speaker, with hangup stranded in the middle). The "Chat" button (the
-    // chat with the peer over the call, `InCallChatHost`) goes before the
-    // hangup when the call offers it.
-    //
-    // Six buttons do not fit on a 375 pt phone with fixed 24 pt gaps, so the
-    // row shares its width between the buttons (capped for iPad) instead.
+    // The shared `CallControlDock`: 2 rows of 4 cells, the same as the audio call and Android. Row 1: Chat, Share, Add
+    // (Buds: Android only). Row 2: Mute, Audio, Video, End. The flip camera is on the local preview, the report button
+    // and the shield are in the top bar.
+
+    private var dockRows: [[CallDockItem?]] {
+        let style = CallDockStyle(scheme: scheme, extras: extras)
+        var items: [CallDockItem] = []
+        items.append(CallDockItems.mute(style, muted: isMuted, action: toggleMute))
+        items.append(CallDockItems.audio(style, speakerOn: isSpeaker, action: toggleSpeaker))
+        // Entitlements Task 5 parity — Android gates this manual toggle too, not just the banner's "Attiva video".
+        // Turning OFF is never gated.
+        items.append(CallDockItems.video(style,
+                                         callHasVideo: true,
+                                         cameraOn: isCameraOn,
+                                         isLocked: !isCameraOn && !capabilityGate.isUnlocked(.callsVideo),
+                                         action: toggleCamera,
+                                         onLocked: { upgradeSheetCapability = .callsVideo }))
+        items.append(CallDockItems.end(style, action: endCall))
+        if let chat = inCallChat {
+            items.append(CallDockItems.chat(style, unreadDot: chat.hasUnread, action: { chat.open(resolvedPeerDisplayName) }))
+        }
+        // W538: screen-share (hidden on Mac Catalyst).
+        if screenShareAvailable {
+            items.append(CallDockItems.share(style, sharing: appState.isScreenSharing, action: toggleScreenShare))
+        }
+        // Entitlements Task 5 — feat.calls.group, same as the audio call screen.
+        items.append(CallDockItems.add(style,
+                                       isLocked: !capabilityGate.isUnlocked(.callsGroup),
+                                       action: { showAddParticipant = true },
+                                       onLocked: { upgradeSheetCapability = .callsGroup }))
+        return CallDockItems.assemble(mode: .oneToOne, items: items)
+    }
 
     private var bottomControls: some View {
-        HStack(spacing: 0) {
-            videoButton(
-                icon: isMuted ? "mic.slash.fill" : "mic.fill",
-                label: isMuted ? String(localized: "video.control.unmute", defaultValue: "Riattiva", comment: "Label under the microphone button of the video call controls while muted (tapping unmutes).") : String(localized: "video.control.mute", defaultValue: "Muto", comment: "Label under the microphone button of the video call controls while live (tapping mutes)."),
-                isActive: isMuted
-            ) {
-                appState.setMuted(!isMuted)
-            }
-            videoButton(
-                icon: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
-                label: String(localized: "video.control.speaker", defaultValue: "Altoparlante", comment: "Label under the speaker button of the video call controls."),
-                isActive: isSpeaker
-            ) {
-                isSpeaker.toggle()
-                appState.setSpeaker(isSpeaker)
-            }
-            videoButton(
-                icon: isCameraOn ? "video.fill" : "video.slash.fill",
-                label: isCameraOn ? String(localized: "video.control.camera_on", defaultValue: "Video attivo", comment: "Label under the camera button of the video call controls while the camera is on.") : String(localized: "video.control.camera_off", defaultValue: "Video spento", comment: "Label under the camera button of the video call controls while the camera is off."),
-                isActive: !isCameraOn
-            ) {
-                // Entitlements Task 5 parity — Android gates this manual
-                // toggle too, not just the banner's "Attiva video". Same
-                // shape as the banner's `onAcceptLocked` above: turning OFF
-                // is never gated.
-                if !isCameraOn, !capabilityGate.isUnlocked(.callsVideo) {
-                    upgradeSheetCapability = .callsVideo
-                    return
-                }
-                // W-VIDPARITY / BUG (C) — was `videoSetCameraEnabled`,
-                // which is a silent no-op on a `.receiveOnly` pipeline
-                // (`.external` source, no AVCaptureSession). This routes
-                // to the right mechanism for however the call got here.
-                appState.setLocalCameraEnabled(!isCameraOn)
-            }
-            videoButton(icon: "camera.rotate.fill", label: String(localized: "video.control.flip", defaultValue: "Inverti", comment: "Label under the button of the video call controls that switches between front and back camera.")) {
-                appState.videoFlipCamera()
-            }
-            if let chat = inCallChat {
-                chatButton(chat)
-            }
-            videoButton(icon: "phone.down.fill", label: String(localized: "Termina"), isEndCall: true) {
-                appState.endCall()
-            }
-        }
-        .frame(maxWidth: 440)
-        .padding(.horizontal, 8)
-    }
-
-    /// The "Chat" button: opens the chat with the peer over the call. A dot says a message is waiting there.
-    private func chatButton(_ chat: InCallChatAccess) -> some View {
-        videoButton(
-            icon: "bubble.left.fill",
-            label: String(localized: "video_call.chat.button", defaultValue: "Chat", comment: "Label under the button of the video call controls that opens the chat with the person on the call."),
-            badge: chat.hasUnread
-        ) {
-            chat.open(resolvedPeerDisplayName)
-        }
-        .accessibilityLabel(String(localized: "in_call.chat.open", defaultValue: "Apri la chat", comment: "Accessibility label of the button on the call screen that opens the chat with the person on the call."))
-        .accessibilityValue(chat.hasUnread ? String(localized: "in_call.chat.unread", defaultValue: "Nuovo messaggio", comment: "Accessibility value of the chat button on the call screen when a message from the person on the call is waiting.") : "")
-    }
-
-    // MARK: - Video control button helper
-
-    private func videoButton(
-        icon: String,
-        label: String,
-        isActive: Bool = false,
-        isEndCall: Bool = false,
-        badge: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 20))
-                    .frame(width: 50, height: 50)
-                    .background(
-                        isEndCall ? Color.red
-                            : (isActive ? Color.blue : Color.white.opacity(0.15))
-                    )
-                    .clipShape(Circle())
-                    .foregroundColor(.white)
-                    .overlay(alignment: .topTrailing) {
-                        if badge {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 12, height: 12)
-                                .overlay(Circle().stroke(Color.black, lineWidth: 2))
-                                .offset(x: 2, y: -2)
-                                .accessibilityHidden(true)
-                        }
-                    }
-
-                Text(label)
-                    .font(.system(size: 9))
-                    .foregroundColor(.gray)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
+        CallControlDock(rows: dockRows)
+            .padding(.horizontal, 16)
             .frame(maxWidth: .infinity)
+    }
+
+    private func toggleMute() {
+        appState.setMuted(!isMuted)
+    }
+
+    private func toggleSpeaker() {
+        isSpeaker.toggle()
+        appState.setSpeaker(isSpeaker)
+    }
+
+    private func toggleCamera() {
+        // W-VIDPARITY / BUG (C) — was `videoSetCameraEnabled`, which is a silent no-op on a `.receiveOnly` pipeline
+        // (`.external` source, no AVCaptureSession). This routes to the right mechanism for however the call got here.
+        appState.setLocalCameraEnabled(!isCameraOn)
+    }
+
+    private func toggleScreenShare() {
+        if appState.isScreenSharing {
+            Task { @MainActor in await appState.stopScreenShare() }
+        } else {
+            Task { @MainActor in await appState.startScreenShare() }
         }
+    }
+
+    private func endCall() {
+        appState.endCall()
+    }
+
+    /// Screen-share is supported on iOS / iPadOS (ReplayKit's in-app `RPScreenRecorder` path), not on Mac Catalyst.
+    private var screenShareAvailable: Bool {
+        #if targetEnvironment(macCatalyst)
+        return false
+        #else
+        return true
+        #endif
+    }
+
+    /// Contacts selectable from the "+" sheet: every stored contact except ourselves and the peer already on this call.
+    private var addParticipantCandidates: [ContactsListViewModel.Item] {
+        contactsStore.load()
+            .filter { $0.userId != appState.callContactId }
+            .map { contact in
+                ContactsListViewModel.Item(
+                    userId: contact.userId,
+                    displayName: contact.displayName,
+                    phoneHash: contact.phoneHash,
+                    avatarUrl: contact.avatarUrl,
+                    isOnline: false,
+                    unreadMessageCount: 0,
+                    isVerified: contact.isVerified,
+                    extension: contact.`extension`
+                )
+            }
     }
 
     // MARK: - Diagnostics panel (W502)

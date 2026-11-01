@@ -1,7 +1,7 @@
 import Foundation
 
 /// W-HBTELEM (2026-09-21) — the `call.disturbance.marker` telemetry event: the user
-/// pressed "Disturbo" on the in-call screen at the instant they heard something wrong.
+/// reported a problem from the in-call screen at the instant they heard something wrong.
 ///
 /// It exists because the call-quality analysis could not bind any counter to what a person
 /// heard (no listening timestamp existed). The marker carries the counters of the last

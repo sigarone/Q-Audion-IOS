@@ -333,6 +333,7 @@ jobs:
             -only-testing:QAudionAppTests/CallMetricsRedactionTests \
             -only-testing:QAudionAppTests/CallMinimizePolicyTests \
             -only-testing:QAudionAppTests/SasCardPlacementTests \
+            -only-testing:QAudionAppTests/CallControlDockTests \
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \
             -only-testing:QAudionAppTests/CarPlayBridgeTests \

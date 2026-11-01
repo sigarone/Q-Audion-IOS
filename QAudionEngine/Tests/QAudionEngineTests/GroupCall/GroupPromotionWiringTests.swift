@@ -339,7 +339,7 @@ final class GroupPromotionWiringTests: XCTestCase {
         XCTAssertTrue(view.contains("isMicrophoneHeld = controller?.isMicrophoneHeld ?? false"), "a view model bound mid-call starts from the real state")
         XCTAssertTrue(view.contains("var isMicrophoneOff: Bool { isMuted || isMicrophoneHeld }"))
         XCTAssertEqual(view.components(separatedBy: "localMuted: viewModel.isMicrophoneOff,").count - 1, 2, "both self tiles")
-        XCTAssertTrue(view.contains(".disabled(viewModel.isMicrophoneHeld)"))
+        XCTAssertTrue(view.contains("held: viewModel.isMicrophoneHeld,"), "the dock's microphone cell is disabled while the microphone is held")
         XCTAssertTrue(view.contains("\"group_call.mic_held\""))
     }
 
