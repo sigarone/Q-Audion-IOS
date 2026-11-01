@@ -19521,6 +19521,29 @@ final class AppState: ObservableObject {
             RTLog.warn("call", "startCall ignored — another start is in flight")
             return
         }
+        // An incoming call is ringing here: a tap on the phone dialing its caller answers it; dialing someone else
+        // declines it, but only once the call is certain to be placed (below). A start from the car or an assistant is
+        // never confirmed by the user: with a ring up it is refused and the ring is left alone.
+        let ringingUuid: UUID? = liveRingingCallUuid()
+        let ringDecision = DialWhileRingingDecision.decide(
+            ringLive: ringingUuid != nil,
+            ringingPeerId: callContactId,
+            dialedPeerId: contactId,
+            confirmed: origin.mayTouchRingingCall)
+        let ringTag = ringingUuid.map { String($0.uuidString.prefix(8)) } ?? "-"
+        switch ringDecision {
+        case .refuseUnconfirmed:
+            callStartGate.end()
+            RTLog.warn("call", "startCall refused: ring \(ringTag) is live and the start is not a tap on the phone")
+            return
+        case .answerRinging:
+            callStartGate.end()
+            RTLog.info("call", "startCall answers ring \(ringTag) from the same contact video=\(video)")
+            answerIncomingCall(audioOnly: !video)
+            return
+        case .declineRingingThenDial, .dial:
+            break
+        }
         guard !isInCall else {
             callStartGate.end()
             RTLog.warn("call", "startCall ignored — already in call (isInCall=true)")
@@ -19563,6 +19586,26 @@ final class AppState: ObservableObject {
             errorMessage = "Engine not available"
             RTLog.error("call", "engine not available — abort")
             return
+        }
+        // Every gate above has passed: the call will be placed, so the ring of another contact is declined now. It must
+        // still be the same ring (the waits above let the world move) and the decline must really have ended it.
+        if ringDecision == .declineRingingThenDial, let ringing = ringingUuid {
+            let nowRinging = liveRingingCallUuid()
+            if nowRinging == ringing {
+                RTLog.info("call", "startCall declines ring \(ringTag) (live) to dial another contact")
+                declineIncomingCall()
+                if activeCallKitId != nil || incomingCallRingVisible {
+                    callStartGate.end()
+                    RTLog.warn("call", "startCall aborted: decline of ring \(ringTag) did not end it (teardown in flight)")
+                    return
+                }
+            } else if nowRinging != nil {
+                callStartGate.end()
+                RTLog.warn("call", "startCall aborted: a different ring replaced \(ringTag) while waiting")
+                return
+            } else {
+                RTLog.info("call", "startCall: ring \(ringTag) is gone, dialing")
+            }
         }
         let siriDisplayName = cachedContacts.first(where: { $0.userId == contactId })?.displayName ?? contactId
         donateStartCallInteraction(contactId: contactId, displayName: siriDisplayName, video: video)
@@ -28429,6 +28472,13 @@ extension AppState {
             isRecentlyEnded: recentlyEndedCallIds.wasRecentlyEnded(uuid),
             isGhostPlaceholder: ghostPlaceholderCallIds.wasRecentlyEnded(uuid))
         return verdict == .accept
+    }
+
+    /// The uuid of the incoming 1:1 call that rings here and may still be answered (not ended, not a ghost), if any.
+    @MainActor
+    private func liveRingingCallUuid() -> UUID? {
+        guard !isInCall, let uuid = activeCallKitId, isIncomingAnswerStillLive(uuid: uuid) else { return nil }
+        return uuid
     }
 
     /// "Yes": the group is left (or ended, for the last creator), then the 1:1 call goes ahead.
