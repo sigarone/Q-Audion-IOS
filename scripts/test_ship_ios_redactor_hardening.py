@@ -876,7 +876,7 @@ for why in range(1, 6):
 # enum codes and counters only, from words this script already knows. Every shape must
 # ship VERBATIM, and must do so without spending any of the unknown-word allowance
 # (no vocabulary was added for them). The Swift side pins the identical strings in
-# GroupDiagnosticsTests / VolumeGestureDetectorTests; change both together.
+# GroupDiagnosticsTests; change both together.
 #   grp state=<0-3> old=<0-3> count=<n>          group screen state machine
 #   grp error code=<1-10>                        an error the user was shown
 #   grp swap phase=<1-9> ms=<n>                  1:1 -> group hand-over steps
@@ -917,9 +917,7 @@ DIAG_LINES = (
     ("group", "grp hb audio mid=0 bytes=40960 lost=0 rxlvl=12"),
     ("group", "grp hb audio mid=3 bytes=0 lost=9999999 rxlvl=100"),
     ("group", "grp hb tx audio=40960 video=1200000 frames=150"),
-    ("bugreport", "trig src=1 delta=200 vol=56"),
-    ("bugreport", "trig src=2"),
-    ("bugreport", "trig src=1 suppressed=1 why=4"),
+    ("bugreport", "trig src=4"),
     ("bugreport", "report send age=5200 min=5 count=2"),
     ("call", "hang ms=5200 site=1 background=0"),
     ("call", "hang ms=1200 site=1 background=1"),

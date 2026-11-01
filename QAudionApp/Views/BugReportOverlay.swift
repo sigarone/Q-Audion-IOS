@@ -1,21 +1,38 @@
 import SwiftUI
 
 /// W559 — Bug report overlay sheet.
-/// Presented automatically by ContentView when `BugReporter.shared.isShowingOverlay` is true.
+/// Presented when `BugReporter.shared.isShowingOverlay` is true, by the host that matches how the report was opened.
 /// Shows a compact card (not full-screen) with screenshot thumbnail, note field, skip and send buttons.
 struct BugReportOverlay: View {
 
+    /// Which view presents the sheet. A sheet cannot appear over a full-screen cover presented by an ancestor, so the
+    /// group call screen (shown in such a cover) hosts the sheet of its own report button; every other report is
+    /// presented from the root.
+    enum Host {
+        case root
+        case groupCall
+
+        func presents(_ source: Int) -> Bool {
+            let isGroupCall = source == BugReporter.TriggerSource.inGroupCall.rawValue
+            switch self {
+            case .root: return !isGroupCall
+            case .groupCall: return isGroupCall
+            }
+        }
+    }
+
+    let host: Host
     @ObservedObject var reporter = BugReporter.shared
     @State private var note: String = ""
 
     var body: some View {
         Color.clear
             .sheet(isPresented: Binding(
-                get: { reporter.isShowingOverlay },
+                get: { reporter.isShowingOverlay && host.presents(reporter.pendingReport?.source ?? 0) },
                 set: { if !$0 { reporter.dismiss() } }
             )) {
                 BugReportCard(reporter: reporter, note: $note)
-                    .presentationDetents([.height(380)])
+                    .presentationDetents([.height(420)])
                     .presentationDragIndicator(.visible)
             }
     }
@@ -35,6 +52,15 @@ private struct BugReportCard: View {
             contentRow
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
+            Text(String(localized: "bug_report.privacy_hint",
+                        defaultValue: "Il report è cifrato: solo il team di Q-Audion può leggerlo.",
+                        comment: "Bug report sheet — note under the text field: the report is end-to-end encrypted and only the Q-Audion team can read it."))
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
             Spacer(minLength: 0)
             actionRow
                 .padding(.horizontal, 16)
@@ -67,35 +93,7 @@ private struct BugReportCard: View {
                 .accessibilityLabel("Chiudi")
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, openedByText == nil ? 12 : 4)
-            if let openedBy = openedByText {
-                Text(openedBy)
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
-            }
-        }
-    }
-
-    /// W-BUGREPPHANTOM (2026-10-02): the sheet says what opened it. It used to open by
-    /// itself at a 1:1 -> group hand-over (the audio route change moved the volume) and,
-    /// with a red bug and a red button, read like an error of the call; now it also tells
-    /// the user how to leave if they did not mean to report anything.
-    private var openedByText: String? {
-        switch reporter.pendingReport?.source ?? 0 {
-        case BugReporter.TriggerSource.volumeGesture.rawValue:
-            return String(localized: "bug_report.opened_by_volume",
-                          defaultValue: "Si è aperto con i tasti del volume. Se non volevi segnalare nulla, tocca Salta.",
-                          comment: "Bug report sheet — subtitle when the sheet was opened by the volume-button gesture; 'Salta' is the dismiss button of the same sheet")
-        case BugReporter.TriggerSource.shake.rawValue:
-            return String(localized: "bug_report.opened_by_shake",
-                          defaultValue: "Si è aperto scuotendo il telefono. Se non volevi segnalare nulla, tocca Salta.",
-                          comment: "Bug report sheet — subtitle when the sheet was opened by shaking the phone; 'Salta' is the dismiss button of the same sheet")
-        default:
-            return nil
+            .padding(.bottom, 12)
         }
     }
 

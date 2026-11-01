@@ -382,6 +382,19 @@ struct VideoCallView: View {
                     : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Accessibility label — SAS identity verification still pending"))
             }
 
+            // Report a problem or a call error: opens the report sheet over the call.
+            Button {
+                BugReporter.shared.requestReport(source: .inCall)
+            } label: {
+                Image(systemName: "ladybug")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
+            }
+            .padding(.trailing, 4)
+            .accessibilityLabel(String(localized: "Segnala un problema"))
+
             // W502: diagnostics toggle button.
             Button {
                 showDiagnostics.toggle()

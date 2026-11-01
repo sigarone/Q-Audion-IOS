@@ -1,18 +1,14 @@
 import Foundation
 import UIKit
-import AVFoundation
 import QAudionEngine
 
 /// W559 — Cross-platform bug report service.
 ///
 /// **Triggers:**
-///   - Manual: volume up-then-down (or down-then-up) within 400ms, two presses in the same
-///     direction within 600ms, a shake, or the visible "Segnala un problema" row in Settings
-///     → overlay sheet. W-BUGREPPHANTOM (2026-10-02):
-///     only real button presses count (`VolumeGestureDetector`); the output-volume changes
-///     of an audio route change or a call transition used to open the sheet by
-///     themselves at every 1:1 -> group hand-over.
-///   - Auto: 2+ errors with the same tag in monitored categories within 60s → silent banner.
+///   - Manual: the "Segnala un problema" row in Settings, or the report button on the
+///     1:1 and group call screens → overlay sheet. No hidden gesture opens it.
+///   - Auto: 2+ errors with the same tag in monitored categories within 60s → silent upload
+///     (only while the diagnostics opt-in is on), with nothing shown to the user.
 ///
 /// **Capture:** a screenshot and the log tail at trigger time, then AGAIN at send time
 /// (the sheet can stay up for a while): the uploaded image shows both moments side by
@@ -73,12 +69,16 @@ public final class BugReporter: ObservableObject {
         public var screenshotCount: Int = 0
     }
 
-    /// How a manual report was opened. Logged (`trig src=<n>`) and shown on the sheet.
+    /// How a manual report was opened. Logged (`trig src=<n>`) and used to pick the host of the sheet.
+    /// Raw values 1 and 2 belonged to the retired hidden gestures and are not reused.
     public enum TriggerSource: Int {
-        case volumeGesture = 1
-        case shake = 2
-        /// The visible "Segnala un problema" row in Settings (the same sheet, without the gestures).
+        /// The visible "Segnala un problema" row in Settings.
         case settings = 3
+        /// The report button on the 1:1 call screens.
+        case inCall = 4
+        /// The report button on the group call screen. Its sheet is hosted by that screen, because the
+        /// group call is shown in a full-screen cover that a sheet of the root view cannot appear over.
+        case inGroupCall = 5
     }
 
     /// Minutes of log before the trigger that a report carries; group calls ask for more
@@ -130,15 +130,6 @@ public final class BugReporter: ObservableObject {
     /// (30 s doubling to 300 s, or the server's own hint) that is well over ten minutes.
     static let maxUploadAttempts: Int = 6
 
-    /// KVO observation token for AVAudioSession.outputVolume.
-    private var volumeObservation: NSKeyValueObservation?
-    /// `AVAudioSession.routeChangeNotification` observer: a route change is the system
-    /// changing the output volume, never the user.
-    private var routeChangeObserver: NSObjectProtocol?
-    /// Tells real button presses from the system's volume changes (W-BUGREPPHANTOM).
-    private var volumeGesture = VolumeGestureDetector()
-    private var lastVolume: Float = AVAudioSession.sharedInstance().outputVolume
-
     /// Auto-detection error event buffer per tag.
     private var errorEvents: [String: [(Date, String)]] = [:]
     private let monitoredTags: Set<String> = ["call", "crypto", "audio", "network", "security"]
@@ -167,82 +158,9 @@ public final class BugReporter: ObservableObject {
         self.getDiagSnapshot = getDiagSnapshot
     }
 
-    // MARK: - Volume Observer
-
-    public func startVolumeObserver() {
-        let session = AVAudioSession.sharedInstance()
-        lastVolume = session.outputVolume
-        volumeObservation = session.observe(
-            \.outputVolume,
-            options: [.new, .old]
-        ) { [weak self] _, change in
-            // W-BUGREPPHANTOM: the time of the change is the time it was DELIVERED.
-            // Timestamping inside the main-actor hop (as before) squeezed changes that
-            // queued up behind a busy main thread (a call teardown) into a "rapid"
-            // pair.
-            let deliveredAt = ProcessInfo.processInfo.systemUptime
-            let newValue = change.newValue
-            let oldValue = change.oldValue
-            Task { @MainActor [weak self] in
-                self?.handleVolumeChange(newValue: newValue, oldValue: oldValue, at: deliveredAt)
-            }
-        }
-        if routeChangeObserver == nil {
-            routeChangeObserver = NotificationCenter.default.addObserver(
-                forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil
-            ) { [weak self] _ in
-                let deliveredAt = ProcessInfo.processInfo.systemUptime
-                Task { @MainActor [weak self] in
-                    self?.volumeGesture.noteSystemVolumeChange(at: deliveredAt, reason: .routeChange)
-                }
-            }
-        }
-    }
-
-    public func stopVolumeObserver() {
-        volumeObservation?.invalidate()
-        volumeObservation = nil
-        if let observer = routeChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-            routeChangeObserver = nil
-        }
-    }
-
-    /// A call transition the app itself is making (a call ending, a 1:1 -> group
-    /// hand-over, a group call starting or ending) is about to move the audio route, and
-    /// with it the output volume: those changes are not volume-button presses.
-    public func noteAudioTransition() {
-        volumeGesture.noteSystemVolumeChange(at: ProcessInfo.processInfo.systemUptime,
-                                             reason: .transition,
-                                             period: VolumeGestureDetector.transitionQuietPeriod)
-    }
-
     /// Group calls carry a longer log window (see `AppState.bugReportLogWindowMinutes`).
     public func setLogWindowProvider(_ provider: @escaping LogWindowProvider) {
         getLogWindowMinutes = provider
-    }
-
-    private func handleVolumeChange(newValue: Float?, oldValue: Float?, at deliveredAt: TimeInterval) {
-        let current = AVAudioSession.sharedInstance().outputVolume
-        let new = newValue ?? current
-        let old = oldValue ?? lastVolume
-        lastVolume = new
-        // Accepted gestures (unchanged): A) up-then-down or down-then-up within 400ms,
-        // B) two presses in the SAME direction within 600ms (both volume buttons pressed
-        // together register as one direction, twice). What changed is what counts as a
-        // press: see `VolumeGestureDetector`.
-        switch volumeGesture.observe(old: old, new: new, at: deliveredAt) {
-        case .pressed:
-            return
-        case .ignored(let reason):
-            // Only the changes that the old detector would have counted as a press of a
-            // possible gesture are worth a line; a cool-down is the gesture just fired.
-            guard reason != .cooldown else { return }
-            RTLog.info("bugreport", "trig src=1 suppressed=1 why=\(reason.rawValue)")
-        case .gesture(let deltaMs):
-            RTLog.info("bugreport", "trig src=1 delta=\(deltaMs) vol=\(Int((new * 100).rounded()))")
-            triggerManual(source: .volumeGesture)
-        }
     }
 
     // MARK: - Auto-detection
@@ -265,16 +183,14 @@ public final class BugReporter: ObservableObject {
 
     // MARK: - Trigger paths
 
-    /// Public entry point for the shake gesture (ShakeDetectorView in ContentView) and
-    /// for the Settings row. Same as the private triggerManual() but callable from
-    /// outside the class. (The volume gesture logs its own, richer, trigger line.)
-    public func triggerManualPublic(source: TriggerSource = .shake) {
-        if source != .volumeGesture { RTLog.info("bugreport", "trig src=\(source.rawValue)") }
+    /// Opens the report sheet. Called by the Settings row and by the in-call report buttons.
+    public func requestReport(source: TriggerSource) {
+        RTLog.info("bugreport", "trig src=\(source.rawValue)")
         triggerManual(source: source)
     }
 
     private func triggerManual(source: TriggerSource) {
-        // A second gesture while the sheet is up must not replace the report the user
+        // A second tap while the sheet is up must not replace the report the user
         // is looking at (its screenshot and log tail are the ones being described).
         guard !isShowingOverlay else { return }
         // W-DIAGOVERRIDE (2026-08-13, user's explicit call): diagnostic
@@ -285,7 +201,7 @@ public final class BugReporter: ObservableObject {
         // doesn't just block the OS screenshot gesture, it blanks ANY
         // in-process render of that window, including this class's own
         // `captureScreen()` → `window.layer.render(in:)`. That's why the
-        // shake/volume debug capture stopped producing a usable screenshot
+        // debug capture stopped producing a usable screenshot
         // on screens reached from a screenshot-locked chat (e.g. the mesh
         // sheet): the lock silently blanked the diagnostic image too.
         // Bypass it for the duration of this ONE capture, then restore
@@ -334,8 +250,8 @@ public final class BugReporter: ObservableObject {
         // 2026-09-12: the automatic
         // report is diagnostic egress the user never asked for, so it is
         // gated on the same diagnostics opt-in (default OFF) the privacy
-        // manifest and both privacy policies describe. The manual shake /
-        // volume path stays: it ends in an explicit "Invia report" tap.
+        // manifest and both privacy policies describe. The manual path
+        // stays: it ends in an explicit "Invia report" tap.
         guard TelemetryService.isEnabled else {
             RTLog.info("bugreport", "auto report suppressed (diagnostics opt-in OFF): " + tag)
             return
@@ -351,17 +267,7 @@ public final class BugReporter: ObservableObject {
         Task {
             await uploadReport(report: report, note: "auto-detected: " + tag)
         }
-        // Show a non-intrusive snackbar via NotificationCenter so we
-        // don't need to import the snackbar type here.
-        NotificationCenter.default.post(
-            name: BugReporter.autoReportNotification,
-            object: nil,
-            userInfo: ["tag": tag]
-        )
     }
-
-    /// Posted when an automatic (silent) bug report is triggered.
-    public static let autoReportNotification = Notification.Name("qaudion.bugreport.auto")
 
     // MARK: - Abuse report (App Store 1.2 / Play UGC)
 

@@ -403,6 +403,9 @@ struct InCallScreen: View {
     /// audio glitch (telemetry marker `call.disturbance.marker`). nil hides it: only the live
     /// 1:1 call screen (`LiveInCallScreen`) passes it, so previews and group calls never show it.
     let onMarkDisturbance: (() -> Void)?
+    /// "Segnala un problema": opens the report sheet (logs, screenshot, call id, a note) without leaving the call.
+    /// Offered in every call state. nil hides the button (previews).
+    let onReportProblem: (() -> Void)?
     /// Feature B ("voce verificata") — state of the per-contact call-time
     /// voice-learning session, fed from the SAME decoded RX audio as
     /// `voiceBiometrics`/`voiceSpectrum` above. nil ⇒ no session has run
@@ -516,6 +519,7 @@ struct InCallScreen: View {
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
          onMarkDisturbance: (() -> Void)? = nil,
+         onReportProblem: (() -> Void)? = nil,
          voiceLearningState: VoiceLearningSession.State? = nil,
          onStartVoiceLearning: @escaping () -> Void = {},
          voiceConfidenceHistory: [Float] = [],
@@ -579,6 +583,7 @@ struct InCallScreen: View {
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
         self.onMarkDisturbance = onMarkDisturbance
+        self.onReportProblem = onReportProblem
         self.voiceLearningState = voiceLearningState
         self.onStartVoiceLearning = onStartVoiceLearning
         self.voiceConfidenceHistory = voiceConfidenceHistory
@@ -2799,6 +2804,19 @@ struct InCallScreen: View {
             )
             .accessibilityLabel(voiceEnhancement ? "Disattiva miglioramento voce" : "Attiva miglioramento voce")
             Spacer(minLength: 0)
+            // Report a problem or a call error (same place as the Android call screen: after the voice controls,
+            // before "add participant").
+            if let onReportProblem {
+                CircularAction(
+                    icon: "ladybug",
+                    action: onReportProblem,
+                    diameter: 48,
+                    background: scheme.surfaceVariant,
+                    iconColor: scheme.onSurface
+                )
+                .accessibilityLabel(String(localized: "Segnala un problema"))
+                Spacer(minLength: 0)
+            }
             // W-CALLPROMOTE — was disabled/no-op (no API existed). Now opens
             // the add-participant sheet (LiveInCallScreen owns the sheet
             // state + submit handler that calls GroupCallController

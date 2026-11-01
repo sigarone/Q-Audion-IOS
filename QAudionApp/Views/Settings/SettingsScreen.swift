@@ -695,12 +695,11 @@ struct SettingsScreen: View {
             // unconditional in every build type.
             FeedbackSettingsLink()
 
-            // "Segnala un problema": the same report sheet the shake and the
-            // volume-button gestures open (screenshot of the moment, recent log,
-            // a note), as a visible row so the report channel does not depend on
-            // a hidden gesture. The gestures stay.
+            // "Segnala un problema": the report sheet (screenshot of the moment,
+            // recent log, a note), as a visible row. The call screens have the
+            // same entry as a button.
             Button {
-                BugReporter.shared.triggerManualPublic(source: .settings)
+                BugReporter.shared.requestReport(source: .settings)
             } label: {
                 SettingsRow(icon: "ladybug",
                             iconColor: scheme.primary,

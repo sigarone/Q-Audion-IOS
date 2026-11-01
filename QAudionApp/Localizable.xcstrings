@@ -56914,86 +56914,44 @@
         }
       }
     },
-    "bug_report.opened_by_volume": {
+    "bug_report.privacy_hint": {
       "extractionState": "manual",
-      "comment": "Bug report sheet — subtitle when the sheet was opened by the volume-button gesture; 'Salta' is the dismiss button of the same sheet",
+      "comment": "Bug report sheet — note under the text field: the report is end-to-end encrypted and only the Q-Audion team can read it.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Si è aperto con i tasti del volume. Se non volevi segnalare nulla, tocca Salta."
+            "value": "Il report è cifrato: solo il team di Q-Audion può leggerlo."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Opened with the volume buttons. If you did not mean to report anything, tap Skip."
+            "value": "The report is encrypted: only the Q-Audion team can read it."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mit den Lautstärketasten geöffnet. Wenn Sie nichts melden wollten, tippen Sie auf Überspringen."
+            "value": "Der Bericht ist verschlüsselt: Nur das Q-Audion-Team kann ihn lesen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Se abrió con los botones de volumen. Si no querías informar de nada, toca Omitir."
+            "value": "El informe está cifrado: solo el equipo de Q-Audion puede leerlo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ouvert avec les boutons de volume. Si tu ne voulais rien signaler, touche Passer."
+            "value": "Le rapport est chiffré : seule l’équipe Q-Audion peut le lire."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aberto pelos botões de volume. Se você não queria relatar nada, toque em Pular."
-          }
-        }
-      }
-    },
-    "bug_report.opened_by_shake": {
-      "extractionState": "manual",
-      "comment": "Bug report sheet — subtitle when the sheet was opened by shaking the phone; 'Salta' is the dismiss button of the same sheet",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Si è aperto scuotendo il telefono. Se non volevi segnalare nulla, tocca Salta."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Opened by shaking the phone. If you did not mean to report anything, tap Skip."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Durch Schütteln des Telefons geöffnet. Wenn Sie nichts melden wollten, tippen Sie auf Überspringen."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se abrió al agitar el teléfono. Si no querías informar de nada, toca Omitir."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ouvert en secouant le téléphone. Si tu ne voulais rien signaler, touche Passer."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aberto ao sacudir o telefone. Se você não queria relatar nada, toque em Pular."
+            "value": "O relatório é criptografado: somente a equipe do Q-Audion pode lê-lo."
           }
         }
       }
@@ -78759,48 +78717,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Adicionado ao grupo %@ por %@"
-          }
-        }
-      }
-    },
-    "app.report.auto_sent": {
-      "extractionState": "manual",
-      "comment": "Snackbar after an automatic problem report was sent; %@ is a short technical tag.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Report automatico inviato (tag: %@)"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatic report sent (tag: %@)"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reporte automático enviado (tag: %@)"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rapport automatique envoyé (tag : %@)"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Automatischer Bericht gesendet (Tag: %@)"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Relatório automático enviado (tag: %@)"
           }
         }
       }
