@@ -54,6 +54,31 @@ enum CallStartOrigin: Equatable {
     /// Whether a live group call may be answered with the "leave the group?" question on the phone screen. From the car
     /// the start is refused instead, and the car screen says so (`CarCallStartNotice`).
     var mayAskToLeaveGroup: Bool { self == .phone }
+
+    /// Whether a start may answer or decline an incoming call that rings here. Only a tap on the phone is a clear wish
+    /// of the user; a start spoken to the car or an assistant never touches the ring.
+    var mayTouchRingingCall: Bool { self == .phone }
+}
+
+/// What a dial does when an incoming call is ringing on this device.
+enum DialWhileRingingDecision: Equatable {
+    /// Nothing rings: place the call as usual.
+    case dial
+    /// The ringing call is from the contact being dialed: answer it, place nothing.
+    case answerRinging
+    /// A different contact rings: decline that call, then place the new one.
+    case declineRingingThenDial
+    /// A ring is live but the start is not an explicit tap: nothing is placed and the ring is left alone.
+    case refuseUnconfirmed
+
+    static func decide(ringLive: Bool, ringingPeerId: String?, dialedPeerId: String, confirmed: Bool) -> DialWhileRingingDecision {
+        guard ringLive else { return .dial }
+        guard confirmed else { return .refuseUnconfirmed }
+        if let ringing = ringingPeerId, ringing.caseInsensitiveCompare(dialedPeerId) == .orderedSame {
+            return .answerRinging
+        }
+        return .declineRingingThenDial
+    }
 }
 
 /// When a call started from the car screen that left no call up is told to the driver.

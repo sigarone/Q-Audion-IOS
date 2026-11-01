@@ -211,4 +211,24 @@ final class CallStartSupportTests: XCTestCase {
         rig.released.removeAll()
         XCTAssertNil(weakOld, "the lifecycle must not keep the released engine alive")
     }
+
+    private func ringDecision(_ live: Bool, _ ringing: String?, _ dialed: String, _ origin: CallStartOrigin) -> DialWhileRingingDecision {
+        DialWhileRingingDecision.decide(
+            ringLive: live, ringingPeerId: ringing, dialedPeerId: dialed, confirmed: origin.mayTouchRingingCall)
+    }
+
+    func testDialWhileRingingDecisions() {
+        XCTAssertEqual(ringDecision(false, "a", "a", .phone), .dial)
+        XCTAssertEqual(ringDecision(false, "a", "a", .car), .dial)
+        XCTAssertEqual(ringDecision(true, "A", "a", .phone), .answerRinging)
+        XCTAssertEqual(ringDecision(true, "a", "b", .phone), .declineRingingThenDial)
+        XCTAssertEqual(ringDecision(true, nil, "b", .phone), .declineRingingThenDial)
+    }
+
+    func testCarOriginNeverAnswersOrDeclinesARingingCall() {
+        XCTAssertFalse(CallStartOrigin.car.mayTouchRingingCall)
+        XCTAssertTrue(CallStartOrigin.phone.mayTouchRingingCall)
+        XCTAssertEqual(ringDecision(true, "a", "a", .car), .refuseUnconfirmed)
+        XCTAssertEqual(ringDecision(true, "a", "b", .car), .refuseUnconfirmed)
+    }
 }
