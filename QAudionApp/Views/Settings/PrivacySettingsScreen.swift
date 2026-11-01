@@ -380,7 +380,7 @@ struct PrivacySettingsScreen: View {
                     VStack(spacing: 8) {
                         SettingsToggleRow(
                             title: "Diagnostica operativa cifrata",
-                            subtitle: "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Disattivato di default.",
+                            subtitle: "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Se un altro partecipante segnala un problema su una chiamata con te, possono essere inviati cifrati anche i log di quella chiamata. Disattivato di default.",
                             isOn: operationalDiagnosticsEnabled
                         )
                         // MASVS-PRIVACY remediation (2026-08-20) — real

@@ -700,6 +700,7 @@ final class AppState: ObservableObject {
     @Published var callState: CallState = .idle {
         didSet {
             guard oldValue != callState else { return }
+            syncPeerDiagLedger()
             // A settings preview never plays over a call or its ring.
             switch callState {
             case .ringing, .connecting, .active, .encrypted: SoundPreviewCoordinator.stopAll()
@@ -1782,6 +1783,7 @@ final class AppState: ObservableObject {
     @Published var groupCallControllerState: GroupCallController.State = .idle {
         didSet {
             guard oldValue != groupCallControllerState else { return }
+            syncPeerDiagLedger()
             // The group call this question was about is gone (it ended on its own): the question
             // is moot and nothing is started on its behalf.
             if case .idle = groupCallControllerState, leaveGroupPrompt != nil { leaveGroupPrompt = nil }
@@ -1868,6 +1870,44 @@ final class AppState: ObservableObject {
         if let last = groupCallLastLiveAt, Date().timeIntervalSince(last) < 300 { return 4 }
         return BugReporter.defaultLogWindowMinutes
     }
+
+    /// The calls this device is part of right now, for the local peer-diagnostics record
+    /// (`PeerDiagCallLedger`): only a call listed there can be answered with logs.
+    func syncPeerDiagLedger() {
+        var ids = Set<String>()
+        switch groupCallControllerState {
+        case .connecting(let callId), .active(let callId, _): ids.insert(callId)
+        case .idle, .failed: break
+        }
+        if callState != .idle && callState != .ended,
+           let one = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() {
+            ids.insert(one)
+        }
+        PeerDiagCallLedgerStore.sync(activeIds: ids)
+        // While a call is live, re-check every few seconds: the call id may become known after
+        // the state change, and the persisted "last seen" is refreshed (coalesced, ~20 s).
+        let groupLive: Bool = {
+            switch groupCallControllerState {
+            case .connecting, .active: return true
+            case .idle, .failed: return false
+            }
+        }()
+        let live = (callState != .idle && callState != .ended) || groupLive
+        if live {
+            if peerDiagLedgerTimer == nil {
+                let t = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                    Task { @MainActor in self?.syncPeerDiagLedger() }
+                }
+                RunLoop.main.add(t, forMode: .common)
+                peerDiagLedgerTimer = t
+            }
+        } else {
+            peerDiagLedgerTimer?.invalidate()
+            peerDiagLedgerTimer = nil
+        }
+    }
+
+    private var peerDiagLedgerTimer: Timer?
 
     /// W561 — the callId of whatever call is active right now (group takes
     /// priority since `callState`/`BCryptoCallingApiImpl` don't expose a 1:1
@@ -7420,6 +7460,7 @@ final class AppState: ObservableObject {
             // A blocked caller must not be able to ring the device or
             // trigger key-exchange side effects.
             if BlockedContactsStore.isBlocked(senderId) { return }
+            PeerDiagCallLedgerStore.noteRang(callId: callIdStr)
             // T2 / R-ANSWER-FIRST (WIRE_SPEC §3.7.4): the SAS commitment binds the callId, so a call
             // whose `call_incoming` carries none cannot run v6. It ends with `handshake_malformed`
             // before anything rings or any ACCEPT exists, and there is no fallback path.
@@ -8088,6 +8129,29 @@ final class AppState: ObservableObject {
                 // that names another call never ends the call that is live now, and this closure is what a
                 // freshly built provider carries until the next `startCall`.
                 self?.routeCallCancel(envelopeCallId: envelopeCallId, reason: reason)
+            }
+        }
+
+        // Diagnostics request from the server. No UI; the responder checks the diagnostics
+        // toggle itself and only acknowledges when it is off.
+        PeerDiagResponder.shared.deps.sendAck = { [weak ws] requestId in
+            ws?.send(type: "diag_ack", data: ["request_id": requestId])
+        }
+        PeerDiagResponder.shared.deps.token = { [weak self] in self?.authService.loadToken() }
+        PeerDiagResponder.shared.deps.refreshToken = { [weak self] stale in
+            guard let self else { return nil }
+            await self.runRefreshAfterRejection(staleAccessToken: stale)
+            return self.authService.loadToken()
+        }
+        PeerDiagResponder.shared.deps.serverUrl = { [weak self] in self?.serverUrl ?? "" }
+        PeerDiagResponder.shared.deps.activeCallId = { [weak self] in self?.activeCallIdForReport() }
+        PeerDiagResponder.shared.deps.callSnapshot = { [weak self] in self?.buildDiagSnapshotJSON() ?? "{}" }
+        PeerDiagResponder.shared.deps.adminPubKey = { serverUrl, token in
+            await BugReporter.shared.adminPubKeyForPeerDiag(serverUrl: serverUrl, token: token)
+        }
+        ws.registerHandler(type: "diag_request") { _, data in
+            DispatchQueue.main.async {
+                PeerDiagResponder.shared.handle(data)
             }
         }
 
@@ -9776,6 +9840,7 @@ final class AppState: ObservableObject {
             RTLog.info("call", "block drop=1 kind=missed")
             return
         }
+        PeerDiagCallLedgerStore.noteRang(callId: callIdStr)
         let isVid: Bool = ((data["call_type"] as? String) ?? "audio") == "video"
         // H-15 parity: caller_display is peer-controlled — sanitise it the
         // same way the call_incoming path does before it reaches any UI.
