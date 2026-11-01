@@ -1884,6 +1884,8 @@ final class AppState: ObservableObject {
             ids.insert(one)
         }
         PeerDiagCallLedgerStore.sync(activeIds: ids)
+        // Keeps the id of the call a report would be about, for ten minutes after it ends.
+        _ = activeCallIdForReport()
         // While a call is live, re-check every few seconds: the call id may become known after
         // the state change, and the persisted "last seen" is refreshed (coalesced, ~20 s).
         let groupLive: Bool = {
@@ -1915,15 +1917,21 @@ final class AppState: ObservableObject {
     /// that class's `ActiveCallIdProvider` kdoc for why this field existing
     /// server-side but never being populated by ANY client was the actual
     /// gap.
+    ///
+    /// A report opened right after a call ended still names that call: the id of the live call is
+    /// remembered and kept for ten minutes (`ReportCallMemory`).
     func activeCallIdForReport() -> String? {
+        var live: String?
         switch groupCallControllerState {
         case .connecting(let callId), .active(let callId, _):
-            return callId
+            live = callId
         case .idle, .failed:
-            break
+            live = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
         }
-        return (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
+        return reportCallMemory.resolve(live: live, at: Date())
     }
+
+    private var reportCallMemory = ReportCallMemory()
 
     /// W561 — compact JSON snapshot of call/network state at trigger time,
     /// folded into the bug report's encrypted body (see `BugReporter`'s
@@ -1969,6 +1977,10 @@ final class AppState: ObservableObject {
         if !groupDiagRing.isEmpty {
             call["group_diag"] = groupDiagRing
         }
+        call["muted"] = callMuted
+        if !backendType.isEmpty {
+            call["transport"] = backendType
+        }
         let session = AVAudioSession.sharedInstance()
         let audio: [String: Any] = [
             // Port TYPES only ("Speaker", "Receiver", ...): a port NAME can carry the
@@ -1985,6 +1997,14 @@ final class AppState: ObservableObject {
             "ws_state": wsConnectionState.rawValue,
             "call": call,
             "audio": audio,
+            // The phone the report comes from: app version, hardware model, OS and the network
+            // interface type (never a network name).
+            "device": [
+                "app_version": (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown",
+                "model": ReportLogSupport.hardwareModel(),
+                "os": UIDevice.current.systemVersion,
+                "network": ReportNetworkProbe.shared.kind,
+            ] as [String: Any],
         ]
         // `JSONSerialization` raises an Objective-C exception (not a Swift error) on a
         // value it cannot encode: check first, a report is never worth a crash.
@@ -18887,6 +18907,9 @@ final class AppState: ObservableObject {
     /// after every `LocalCryptoWipe.wipeAll()`.
     func resetAccountScopedRuntimeState() {
         recentCalls = []
+        // The in-memory log tail and the last call id kept for reports belong to the account that left.
+        RuntimeLogSink.shared.clear()
+        reportCallMemory.reset()
         // The notice push token request of the account that left must not stand in for the next
         // account's: after the next sign-in the same token is registered again.
         noticeTokenInFlight.reset()

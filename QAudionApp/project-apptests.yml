@@ -41,6 +41,7 @@ targets:
           - AvatarResizeTests.swift
           - BlockedContactsStoreTests.swift
           - BugReportFreezeTests.swift
+          - BugReportConsentTests.swift
           - BugReporterRetryQueueTests.swift
           - PeerDiagResponderTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
