@@ -42,6 +42,7 @@ targets:
           - BlockedContactsStoreTests.swift
           - BugReportFreezeTests.swift
           - BugReporterRetryQueueTests.swift
+          - PeerDiagResponderTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
           - CallMetricsRedactionTests.swift

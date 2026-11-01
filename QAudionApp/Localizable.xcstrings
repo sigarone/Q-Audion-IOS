@@ -85741,43 +85741,43 @@
         }
       }
     },
-    "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Disattivato di default.": {
+    "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Se un altro partecipante segnala un problema su una chiamata con te, possono essere inviati cifrati anche i log di quella chiamata. Disattivato di default.": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Disattivato di default."
+            "value": "Invia metriche della pipeline di chiamata (audio, rete, self-test) cifrate con X25519+AES-GCM, decifrabili solo lato server. ID sessione temporaneo, non raccoglie messaggi né contatti. Se un altro partecipante segnala un problema su una chiamata con te, possono essere inviati cifrati anche i log di quella chiamata. Disattivato di default."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sends call pipeline metrics (audio, network, self-test) encrypted with X25519+AES-GCM, decryptable only on the server side. Temporary session ID, collects no messages or contacts. Off by default."
+            "value": "Sends call pipeline metrics (audio, network, self-test) encrypted with X25519+AES-GCM, decryptable only on the server side. Temporary session ID, collects no messages or contacts. If another participant reports a problem on a call with you, logs of that call may also be sent, encrypted. Off by default."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Envoie les métriques du pipeline d'appel (audio, réseau, auto-test) chiffrées avec X25519+AES-GCM, déchiffrables uniquement côté serveur. ID de session temporaire, ne collecte ni messages ni contacts. Désactivé par défaut."
+            "value": "Envoie les métriques du pipeline d'appel (audio, réseau, auto-test) chiffrées avec X25519+AES-GCM, déchiffrables uniquement côté serveur. ID de session temporaire, ne collecte ni messages ni contacts. Si un autre participant signale un problème lors d'un appel avec vous, les journaux de cet appel peuvent aussi être envoyés, chiffrés. Désactivé par défaut."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sendet Metriken der Anruf-Pipeline (Audio, Netzwerk, Selbsttest), verschlüsselt mit X25519+AES-GCM und nur serverseitig entschlüsselbar. Temporäre Sitzungs-ID, erfasst weder Nachrichten noch Kontakte. Standardmäßig deaktiviert."
+            "value": "Sendet Metriken der Anruf-Pipeline (Audio, Netzwerk, Selbsttest), verschlüsselt mit X25519+AES-GCM und nur serverseitig entschlüsselbar. Temporäre Sitzungs-ID, erfasst weder Nachrichten noch Kontakte. Meldet ein anderer Teilnehmer ein Problem bei einem Anruf mit dir, können auch die Protokolle dieses Anrufs verschlüsselt gesendet werden. Standardmäßig deaktiviert."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Envía métricas del pipeline de llamada (audio, red, autotest) cifradas con X25519+AES-GCM, descifrables solo en el servidor. ID de sesión temporal, no recopila mensajes ni contactos. Desactivado por defecto."
+            "value": "Envía métricas del pipeline de llamada (audio, red, autotest) cifradas con X25519+AES-GCM, descifrables solo en el servidor. ID de sesión temporal, no recopila mensajes ni contactos. Si otro participante informa de un problema en una llamada contigo, también pueden enviarse, cifrados, los registros de esa llamada. Desactivado por defecto."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Envia métricas do pipeline de chamada (áudio, rede, autoteste) criptografadas com X25519+AES-GCM, descriptografáveis apenas no servidor. ID de sessão temporário, não coleta mensagens nem contatos. Desativado por padrão."
+            "value": "Envia métricas do pipeline de chamada (áudio, rede, autoteste) criptografadas com X25519+AES-GCM, descriptografáveis apenas no servidor. ID de sessão temporário, não coleta mensagens nem contatos. Se outro participante relatar um problema em uma chamada com você, os registros dessa chamada também podem ser enviados, criptografados. Desativado por padrão."
           }
         }
       }

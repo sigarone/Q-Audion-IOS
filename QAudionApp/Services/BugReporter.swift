@@ -411,6 +411,13 @@ public final class BugReporter: ObservableObject {
         }
     }
 
+    /// The cached admin public key (hex), fetched when absent; nil when it cannot be had now.
+    /// Used by the diagnostics responder, which never falls back to plaintext.
+    func adminPubKeyForPeerDiag(serverUrl: String, token: String) async -> String? {
+        if case .key(let hex) = await fetchAdminPubKey(serverUrl: serverUrl, token: token) { return hex }
+        return nil
+    }
+
     /// W-RETRYAFTER -- how the admin-pubkey fetch ended.
     private enum AdminPubKeyResult {
         case key(String)
