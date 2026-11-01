@@ -42,6 +42,7 @@ QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Nessun contatto |
 QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Nessuna chiamata | engine demo view that the app target does not instantiate
 QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Nessuna conversazione | engine demo view that the app target does not instantiate
 QAudionEngine/Sources/QAudionEngine/UI/QAudionMainView.swift | Tocca + per iniziare una nuova chat | engine demo view that the app target does not instantiate
-QAudionEngine/Sources/QAudionEngine/UI/VideoCallView.swift | Muto | engine demo view that the app target does not instantiate
 QAudionEngine/Sources/QAudionEngine/UI/ViewModels/ChatViewModel.swift | Tutto bene, grazie. Ci vediamo alle 18? | engine demo view that the app target does not instantiate
 QAudionEngine/Sources/QAudionEngine/UI/ViewModels/ConversationListViewModel.swift | Tutto bene, grazie. Ci vediamo alle 18? | engine demo view that the app target does not instantiate
+QAudionApp/Views/Components/VpnToggleChip.swift | Auto | pending: automatic-mode label of the exit picker, to be localized with the VPN screens
+QAudionApp/Views/Settings/TransportSettingsScreen.swift | Auto | pending: automatic-mode label of the transport mode picker, to be localized with the settings screens

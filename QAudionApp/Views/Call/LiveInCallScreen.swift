@@ -49,9 +49,8 @@ import QAudionEngine
 ///
 /// Stub fields (kept until engine exposes them — see W29 spec from
 /// the parallel agent):
-///   - `voiceEnhancement` — local @State only
-///   - `speakerOn` — local @State only (real AVAudioSession routing
-///                   stays inside legacy InCallView for now)
+///   - `speakerOn` — local @State only (the real AVAudioSession routing
+///                   is `AppState.setSpeaker`)
 @MainActor
 struct LiveInCallScreen: View {
     @EnvironmentObject var appState: AppState
@@ -65,7 +64,6 @@ struct LiveInCallScreen: View {
     private let contactsStore = ContactsStore()
 
     @State private var speakerOn: Bool = false
-    @State private var voiceEnhancement: Bool = false
     /// Camera on/off state for video calls. Starts ON when the call
     /// is a video call; user can mute/unmute the camera mid-call.
     /// W-CAMBTNSRC (2026-07-24) — read LIVE from the ONE authoritative signal,
@@ -122,7 +120,7 @@ struct LiveInCallScreen: View {
             if showDiagnostics {
                 diagPanel
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .padding(.bottom, 160)    // clear the pinned action row
+                    .padding(.bottom, CallDockLayout.overlayClearance)    // clear the pinned control dock
                     .padding(.horizontal, 16)
             }
         }
@@ -224,7 +222,7 @@ struct LiveInCallScreen: View {
         if canReduceCall {
             MinimizeCallButton(action: reduceCall)
                 .padding(.top, 8)
-                .padding(.trailing, 12)
+                .padding(.trailing, 64)
         }
     }
 
@@ -362,7 +360,6 @@ struct LiveInCallScreen: View {
                 transportMode: liveTransportMode,
                 muted: liveMuted,
                 speakerOn: speakerOn,
-                voiceEnhancement: voiceEnhancement,
                 hasVideo: appState.isVideoCall,
                 cameraOn: cameraOn,
                 peerShortNumber: cachedPeerShortNumber,
@@ -396,7 +393,6 @@ struct LiveInCallScreen: View {
                 cryptoOpsPerSec: appState.cryptoOpsPerSec,
                 onToggleMute: handleToggleMute,
                 onToggleSpeaker: handleToggleSpeaker,
-                onToggleVoiceEnhancement: handleToggleVoiceEnhancement,
                 onToggleCamera: handleToggleCamera,
                 onUpgradeToVideo: handleUpgradeToVideo,
                 // Entitlements Task 5 — feat.calls.video for the mid-call
@@ -451,9 +447,6 @@ struct LiveInCallScreen: View {
                 onConfirmSas: handleConfirmSas,
                 // W502: toggle the diagnostics overlay.
                 onToggleDiagnostics: handleToggleDiagnostics,
-                // W-HBTELEM — the "Disturbo" marker pill (1:1 call screen only, and only
-                // while the operational-diagnostics consent is on; see disturbanceMarkAction).
-                onMarkDisturbance: disturbanceMarkAction,
                 onReportProblem: handleReportProblem,
                 // Feature B ("voce verificata") — W-AUTOLEARN parity (item 5):
                 // fed from AppState.voiceLearningState (itself fed from the
@@ -492,10 +485,6 @@ struct LiveInCallScreen: View {
     private func handleToggleSpeaker() {
         speakerOn.toggle()
         appState.setSpeaker(speakerOn)
-    }
-
-    private func handleToggleVoiceEnhancement() {
-        voiceEnhancement.toggle()
     }
 
     private func handleToggleCamera() {
@@ -627,25 +616,10 @@ struct LiveInCallScreen: View {
         showDiagnostics.toggle()
     }
 
-    /// W-HBTELEM (2026-09-21) — "Disturbo" tapped: record the instant through the same
-    /// telemetry emitter as the other call events. The one-per-second debounce and the
-    /// no-op-outside-a-call guard live in `CallMediaTelemetry`.
-    private func handleMarkDisturbance() {
-        CallMediaTelemetry.shared.recordDisturbanceMarker()
-    }
-
-    /// The handler handed to the in-call screen, or nil to hide the "Disturbo" pill. Without the
-    /// operational-diagnostics consent `TelemetryService.emit` discards every event, so a pill that
-    /// showed its green confirmation would tell the person a marker was recorded when nothing was.
-    /// Kept out of the big `InCallScreen(...)` call so that call stays cheap for the type-checker
-    /// (CLAUDE.md lesson 13).
-    private var disturbanceMarkAction: (() -> Void)? {
-        guard TelemetryService.isEnabled else { return nil }
-        return handleMarkDisturbance
-    }
-
-    /// The report button of the call screen: opens the report sheet over the call.
+    /// The report button of the call screen: marks the moment in the call telemetry (the one-per-second debounce and the
+    /// no-op outside a call live in the emitter), then opens the report sheet over the call.
     private func handleReportProblem() {
+        CallMediaTelemetry.shared.recordDisturbanceMarker()
         BugReporter.shared.requestReport(source: .inCall)
     }
 

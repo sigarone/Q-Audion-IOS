@@ -289,8 +289,7 @@ struct ContentView: View {
 
     /// W-GRPRING — the incoming-GROUP-call ring. Reuses the 1:1
     /// `IncomingCallScreen` (same ringing design: dual halo + avatar + identity
-    /// + accept/reject), with the quick-reply button hidden (no 1:1 chat to
-    /// reply into) and a group-specific subtitle. The ringtone is driven by
+    /// + accept/reject) with a group-specific subtitle. The ringtone is driven by
     /// AppState (`startInAppRingtone`), exactly as for a 1:1 call.
     ///
     /// Reject sends `group_call_decline` (spec 2.6) and never `group_call_join`;
@@ -303,7 +302,6 @@ struct ContentView: View {
             avatarUrl: groupAvatarUrl(forGroupId: invite.groupId),
             callType: invite.hasVideo ? .video : .audio,
             subtitle: Self.groupCallSubtitle(invite),
-            showReplyAction: false,
             // W-VIDPRIVACY — accept-without-video is a 1:1-only feature
             // (design non-goal for group calls); the toggle still renders on
             // this shared component, but its result is intentionally ignored
@@ -576,6 +574,10 @@ struct ContentView: View {
             pskMethodLabel: pskMethodLabel,
             sessionFingerprint: sessionFingerprint,
             isVideo: appState.isVideoCall,
+            muted: appState.callMuted,
+            speakerOn: appState.callSpeakerOn,
+            onToggleMute: { appState.setMuted(!appState.callMuted) },
+            onToggleSpeaker: { appState.setSpeaker(!appState.callSpeakerOn) },
             onHangup: { appState.endCall(origin: "button") }
         )
     }

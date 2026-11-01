@@ -23,7 +23,7 @@ import QAudionEngine
 /// W-HBTELEM (2026-09-21) — the heartbeat also carries call-health attributes (jitter
 /// buffer, loss, FEC, transport, main-thread stall; see `HeartbeatAttribute`), and
 /// `recordDisturbanceMarker()` emits `call.disturbance.marker` when the user taps
-/// "Disturbo" on the in-call screen. Both go through the same `TelemetryService.emit`
+/// the report-a-problem button on the in-call screen. Both go through the same `TelemetryService.emit`
 /// (same consent gate, batching and transport). The deltas are computed by the pure,
 /// unit-tested `HeartbeatDeltaTracker`; this class only wires it to the live counters.
 ///
@@ -160,7 +160,7 @@ public final class CallMediaTelemetry {
         )
     }
 
-    /// W-HBTELEM — the user tapped "Disturbo": emit `call.disturbance.marker` with the last
+    /// W-HBTELEM — the user reported a problem from the call screen: emit `call.disturbance.marker` with the last
     /// completed heartbeat window's attributes. At most one marker per second, whoever calls.
     /// No-op outside a connected 1:1 call.
     public func recordDisturbanceMarker() {

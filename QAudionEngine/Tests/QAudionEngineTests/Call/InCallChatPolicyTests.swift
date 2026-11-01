@@ -106,14 +106,15 @@ final class InCallChatPolicyTests: XCTestCase {
         XCTAssertTrue(host.contains("ChatDetailScreen( conversationId: target.conversationId"))
     }
 
-    /// The Chat button is part of the video call controls, before the hangup, and shows the unread dot.
+    /// The Chat button is part of the video call dock (first cell of the top row, over the microphone) and shows the unread dot.
     func testTheVideoControlsOfferTheChat() throws {
         let video = try code("QAudionApp/Views/VideoCallView.swift")
-        XCTAssertTrue(video.contains("if let chat = inCallChat { chatButton(chat) }"))
-        XCTAssertTrue(video.contains("badge: chat.hasUnread"))
-        let chatPos = try XCTUnwrap(video.range(of: "chatButton(chat) }"))
-        let hangupPos = try XCTUnwrap(video.range(of: "label: String(localized: \"Termina\")"))
-        XCTAssertLessThan(chatPos.lowerBound, hangupPos.lowerBound, "Chat goes before the hangup, which stays last")
+        XCTAssertTrue(video.contains("if let chat = inCallChat { items.append(CallDockItems.chat(style, unreadDot: chat.hasUnread,"))
+        XCTAssertTrue(video.contains("chat.open(resolvedPeerDisplayName)"))
+        XCTAssertTrue(video.contains("CallDockItems.assemble(mode: .oneToOne, items: items)"))
+        let dock = try code("QAudionApp/Views/Call/Components/CallControlDock.swift")
+        XCTAssertTrue(dock.contains("case .oneToOne: wanted = [.chat, .share, .add, .buds]"), "Chat is the first cell of the top row")
+        XCTAssertTrue(dock.contains("static let bottomRow: [CallControlKind] = [.mute, .audio, .video, .end]"), "the hangup stays last")
     }
 
     /// The chat host and its cover never reach into the call: no video pipeline, no capture session, no renderers, no audio

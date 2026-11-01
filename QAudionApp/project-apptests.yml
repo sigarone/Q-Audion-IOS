@@ -49,6 +49,7 @@ targets:
           - CallMetricsRedactionTests.swift
           - CallMinimizePolicyTests.swift
           - SasCardPlacementTests.swift
+          - CallControlDockTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
           - CarPlayBridgeTests.swift

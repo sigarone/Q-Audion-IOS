@@ -28,7 +28,9 @@ import SwiftUI
 ///                                            vault; never from the state)
 ///        3. "HKDF session key derived"      (connected AND the session-key
 ///                                            fingerprint exists)
-///   - hangup `CircularAction` (riskHigh, 80) + "Ring MM:SS" label
+///   - "Ring MM:SS" line under the name, then the call dock (the same
+///     `CallControlDock` as the connected call, bottom row only: microphone,
+///     audio, video (disabled) and the red end button, always bottom-right)
 ///
 /// `state`, `pskMethodLabel` and `sessionFingerprint` drive the handshake
 /// checklist, row by row as listed above. `errorMessage` non-nil shows
@@ -69,6 +71,11 @@ struct OutgoingCallScreen: View {
     let sessionFingerprint: String?
     /// True for a video call. Only the line under the name depends on it.
     let isVideo: Bool
+    /// The microphone and the audio output can be set before the other side answers; the dock shows them.
+    let muted: Bool
+    let speakerOn: Bool
+    let onToggleMute: () -> Void
+    let onToggleSpeaker: () -> Void
     let onHangup: () -> Void
 
     init(peerDisplayName: String,
@@ -80,6 +87,10 @@ struct OutgoingCallScreen: View {
          pskMethodLabel: String? = nil,
          sessionFingerprint: String? = nil,
          isVideo: Bool = false,
+         muted: Bool = false,
+         speakerOn: Bool = false,
+         onToggleMute: @escaping () -> Void = {},
+         onToggleSpeaker: @escaping () -> Void = {},
          onHangup: @escaping () -> Void) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
@@ -90,6 +101,10 @@ struct OutgoingCallScreen: View {
         self.pskMethodLabel = pskMethodLabel
         self.sessionFingerprint = sessionFingerprint
         self.isVideo = isVideo
+        self.muted = muted
+        self.speakerOn = speakerOn
+        self.onToggleMute = onToggleMute
+        self.onToggleSpeaker = onToggleSpeaker
         self.onHangup = onHangup
     }
 
@@ -195,7 +210,10 @@ struct OutgoingCallScreen: View {
                             .qaudionStyle(type.bodyLarge)
                             .italic()
                             .foregroundStyle(scheme.onSurfaceVariant)
-                            .padding(.bottom, 20)
+                            .padding(.bottom, 8)
+
+                        ringingLine
+                            .padding(.bottom, 14)
 
                         HStack(spacing: 8) {
                             MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
@@ -216,33 +234,45 @@ struct OutgoingCallScreen: View {
                         errorBanner(err).padding(.top, 12)
                     }
 
-                    Spacer().frame(height: 160) // space for pinned bottom action
+                    Spacer().frame(height: 150) // space for the pinned dock
                 }
                 .padding(.horizontal, 24)
                 .qaudionReadableWidth()
             }
 
-            VStack(spacing: 8) {
+            VStack(spacing: 0) {
                 Spacer()
-                CircularAction(
-                    icon: "phone.down.fill",
-                    action: onHangup,
-                    diameter: 80,
-                    background: extras.riskHigh,
-                    iconColor: scheme.onPrimary
-                )
-                .accessibilityLabel(state == .ended
-                    ? Text(String(localized: "call.outgoing.dismiss", defaultValue: "Chiudi",
-                                  comment: "Accessibility label of the button that closes the outgoing call screen after the call ended (callee busy or unreachable)"))
-                    : Text("Termina chiamata"))
-                if state != .ended {
-                    Text(String(localized: "call.outgoing.ringing_for", defaultValue: "Squillo da \(elapsedSeconds / 60):\(String(format: "%02d", elapsedSeconds % 60))", comment: "Line under the hang-up button of the outgoing call screen. %lld is the minutes, %@ the two-digit seconds of how long it has been ringing."))
-                        .qaudionStyle(type.labelSmall)
-                        .foregroundStyle(extras.success)
-                }
-                Spacer().frame(height: 24)
+                CallControlDock(rows: dockRows)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    /// "Ringing for m:ss", under the name (not under the end button, which stays where it is in the connected call).
+    @ViewBuilder
+    private var ringingLine: some View {
+        let minutes: Int = elapsedSeconds / 60
+        let seconds: String = String(format: "%02d", elapsedSeconds % 60)
+        Text(String(localized: "call.outgoing.ringing_for", defaultValue: "Squillo da \(minutes):\(seconds)", comment: "Line under the hang-up button of the outgoing call screen. %lld is the minutes, %@ the two-digit seconds of how long it has been ringing."))
+            .qaudionStyle(type.labelSmall)
+            .foregroundStyle(extras.success)
+    }
+
+    /// The dock of the ring: only the bottom row (microphone, audio, video disabled, end), so the end button is already where
+    /// it will be when the call connects. After the call ended before it connected only the end cell is left; it closes the
+    /// screen.
+    private var dockRows: [[CallDockItem?]] {
+        let style = CallDockStyle(scheme: scheme, extras: extras)
+        var items: [CallDockItem] = []
+        items.append(CallDockItems.end(style, ended: state == .ended, action: onHangup))
+        if state != .ended {
+            items.append(CallDockItems.mute(style, muted: muted, action: onToggleMute))
+            items.append(CallDockItems.audio(style, speakerOn: speakerOn, action: onToggleSpeaker))
+            items.append(CallDockItems.video(style, callHasVideo: isVideo, cameraOn: false, isDisabled: true, action: {}))
+        }
+        return CallDockItems.assemble(mode: .connecting, items: items)
     }
 
     // MARK: - Handshake log

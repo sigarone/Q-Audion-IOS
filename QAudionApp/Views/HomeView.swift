@@ -14,7 +14,6 @@ struct HomeView: View {
     #else
     @State private var selectedTab: Tab = .chats
     #endif
-    @State private var presentingInCall: Bool = false
     /// W-MISSEDBADGE (2026-10-04) — the number on the Calls tab (unread missed calls) and what tells it the tab is
     /// being looked at. See `MissedCallsBadge`.
     @ObservedObject private var missedCalls = MissedCallsBadge.shared
@@ -112,18 +111,8 @@ struct HomeView: View {
             callsPath = NavigationPath()
             settingsPath = NavigationPath()
         }
-        .fullScreenCover(isPresented: $presentingInCall) {
-            inCallCoverView
-        }
         // First use: one screen with "Continua" before the system microphone request.
         .microphonePrimer()
-        .onChange(of: appState.isInCall) { isInCall in
-            // Single-param form for iOS 16 compat. Auto-dismiss the cover
-            // when the call ends.
-            if !isInCall {
-                presentingInCall = false
-            }
-        }
         // W-CONTACTOPEN (2026-08-06): screens outside the Chats tab
         // (ContactsScreen, CallHistoryView) publish appState.pendingDeepLinkConversationId
         // to open a chat with a peer. ChatListScreen's own onChange (unchanged)
@@ -456,37 +445,6 @@ struct HomeView: View {
                     }
                 }
             #endif
-        }
-    }
-
-    // MARK: - Full-screen in-call cover
-
-    @ViewBuilder
-    private var inCallCoverView: some View {
-        if appState.activeCallKitId != nil {
-            // Present the W12.D CallView (which internally creates InCallContainer
-            // and delegates to InCallView). Interactive dismiss is disabled so the
-            // user cannot accidentally swipe away mid-call; they must use the
-            // in-call hang-up button, after which isInCall → false triggers the
-            // onChange above and dismisses the cover.
-            NavigationStack {
-                CallView()
-            }
-            .environmentObject(appState)
-            .interactiveDismissDisabled(true)
-        } else {
-            // Fallback: activeCallKitId not yet populated (race during call setup).
-            // Show a minimal state and let the user dismiss manually.
-            VStack(spacing: 24) {
-                Image(systemName: "phone.down.fill")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.secondary)
-                Text("Nessuna chiamata attiva")
-                    .font(.title2.weight(.semibold))
-                Button("Chiudi") { presentingInCall = false }
-                    .buttonStyle(.borderedProminent)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

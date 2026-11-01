@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 import QAudionEngine
 
 /// Group call screen with participant grid and controls.
@@ -54,6 +55,8 @@ struct GroupCallView: View {
     /// Clamped back on-screen if a departure shrinks the page count below
     /// this index — see the `.onChange(of: gridPages.count)` below.
     @State private var currentGridPage = 0
+    /// The output the call audio is on, for the icon of the dock's audio button (re-read on every route change).
+    @State private var audioRoute: CallAudioRoute = .speaker
     /// M3 — the participant whose identity verification the "unverified participants" banner opened
     /// (nil while no sheet is up). Identifiable so `.sheet(item:)` can drive it.
     @State private var verificationTarget: VerificationTarget?
@@ -67,8 +70,12 @@ struct GroupCallView: View {
             Color(red: 0.05, green: 0.07, blue: 0.12).ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Header
-                HStack {
+                // Header: the shield on the left (the security sheet), the title in the middle, the layout switch and the
+                // report-a-problem button on the right. The same top bar as the 1:1 call screens.
+                HStack(spacing: 0) {
+                    CallTopBarButton(icon: "checkmark.shield",
+                                     accessibilityLabel: CallControlText.securityA11y,
+                                     action: { showSecuritySheet = true })
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Chiamata di gruppo")
                             .font(.headline).foregroundColor(.white)
@@ -89,51 +96,33 @@ struct GroupCallView: View {
                                 : String(localized: "group_call.participants.many", defaultValue: "\(viewModel.participants.count) partecipanti", comment: "Subtitle of the group call screen: number of participants. %lld is the count.")))
                             .font(.caption).foregroundColor(.gray)
                     }
+                    .padding(.leading, 6)
                     Spacer()
                     if viewModel.callState == .active {
                         Text(viewModel.elapsedTime)
                             .font(.caption).monospacedDigit()
                             .foregroundColor(Color(red: 0, green: 0.9, blue: 0.47))
+                            .padding(.trailing, 6)
                     }
-                    // Report a problem or a call error: opens the report sheet, hosted by this
-                    // screen (see `.background(BugReportOverlay(host: .groupCall))` below).
-                    Button {
-                        BugReporter.shared.requestReport(source: .inGroupCall)
-                    } label: {
-                        Image(systemName: "ladybug")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 30, height: 30)
-                            .background(Color.white.opacity(0.12))
-                            .clipShape(Circle())
-                    }
-                    .padding(.leading, 10)
-                    .accessibilityLabel(String(localized: "Segnala un problema"))
                     // Item 5 (2026-07-16 wire contract) — pure client-side
                     // layout toggle, no wire message at all (the engine's
                     // active-speaker detection, wired through
-                    // `GroupCallController.onActiveSpeakersChanged`). Placed
-                    // in the header rather than the already-crowded control
-                    // bar below; icon shows the CURRENT layout, same
-                    // current-state-not-destination convention as every
-                    // control-bar toggle (mute/video) below.
-                    Button {
-                        viewModel.toggleLayoutMode()
-                    } label: {
-                        Image(systemName: viewModel.layoutMode == .speaker
-                              ? "person.crop.rectangle.fill" : "square.grid.2x2.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 30, height: 30)
-                            .background(Color.white.opacity(0.12))
-                            .clipShape(Circle())
-                    }
-                    .padding(.leading, 10)
-                    .accessibilityLabel(viewModel.layoutMode == .speaker
-                        ? String(localized: "group_call.layout.switch_to_grid", defaultValue: "Passa a vista griglia", comment: "VoiceOver label of the button that switches the group call from speaker view to grid view.")
-                        : String(localized: "group_call.layout.switch_to_speaker", defaultValue: "Passa a vista relatore", comment: "VoiceOver label of the button that switches the group call from grid view to speaker view."))
+                    // `GroupCallController.onActiveSpeakersChanged`). Icon
+                    // shows the CURRENT layout, same current-state-not-
+                    // destination convention as every control-bar toggle
+                    // (mute/video) below.
+                    CallTopBarButton(icon: viewModel.layoutMode == .speaker
+                                        ? "person.crop.rectangle.fill" : "square.grid.2x2.fill",
+                                     accessibilityLabel: viewModel.layoutMode == .speaker
+                                        ? CallControlText.layoutA11yGrid : CallControlText.layoutA11ySpeaker,
+                                     action: { viewModel.toggleLayoutMode() })
+                    // Report a problem or a call error: opens the report sheet, hosted by this
+                    // screen (see `.background(BugReportOverlay(host: .groupCall))` below).
+                    CallTopBarButton(icon: "ladybug",
+                                     accessibilityLabel: CallControlText.reportA11y,
+                                     action: { BugReporter.shared.requestReport(source: .inGroupCall) })
                 }
-                .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
+                .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 4)
 
                 // Unified call UI (group-call adaptation) — always-visible
                 // chip row + shield button, matching the 1:1 screen's
@@ -314,34 +303,17 @@ struct GroupCallView: View {
                 }
                 .padding(.horizontal, 16)
 
-                // Control bar — responsive sizing (2026-07-20, live 5-way
-                // call 694147de): the old fixed `HStack(spacing: 32)` of
-                // 56pt circles needed ~584pt for the full 7-button row
-                // — wider than ANY iPhone in portrait (390-430pt logical),
-                // so the row overflowed the screen on BOTH sides (the mute
-                // and end-call buttons landed fully OFF-SCREEN) and
-                // inflated the enclosing VStack past the device width,
-                // while iPad (≥744pt) happened to fit — "layout fisso che
-                // non fitta il telefono". Same container-driven philosophy
-                // as the grid's `gridPageCapacity` above: derive the button
-                // diameter and gap from the REAL row width, each capped at
-                // the original 56pt/32pt so any screen that already fit
-                // (iPad, landscape) renders exactly as before.
-                GeometryReader { controlGeo in
-                    // mute, camera (once the media link exists), hand,
-                    // reaction, chat, end.
-                    let buttonCount = CGFloat(viewModel.isMediaReady ? 6 : 5)
-                    // max(0, …) guards the zero-size first layout pass a
-                    // GeometryReader can report — a negative frame dimension
-                    // is a SwiftUI runtime error, not just a visual glitch.
-                    let controlSize = max(0, min(56, (controlGeo.size.width - 8 * (buttonCount - 1)) / buttonCount))
-                    let controlSpacing = max(0, min(32, (controlGeo.size.width - controlSize * buttonCount) / max(buttonCount - 1, 1)))
-                    controlBar(buttonSize: controlSize, spacing: controlSpacing)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .frame(height: 56)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 40)
+                // Control dock — the shared 2 x 4 dock of the call screens (it replaced the single row of 56 pt
+                // circles that had to be sized from the width of the row to fit a phone). Row 1: Chat, Share (not offered
+                // on iOS group calls), Hand, Reaction. Row 2: Microphone, Audio, Video, Leave.
+                CallControlDock(rows: dockRows)
+                    // Item 1 — reaction picker: small popup with the fixed 6-emoji set (see `reactionPicker` below).
+                    .popover(isPresented: $showReactionPicker) {
+                        reactionPicker
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity)
             }
 
             // W-GRPSELFGRID (2026-07-20, live 2-way call 3A5A03DE) — REMOVED
@@ -398,6 +370,10 @@ struct GroupCallView: View {
             ScreenshotLockService.lock()
             refreshChatUnreadCount()
             viewModel.refreshVerification(force: true)
+            audioRoute = CallAudioRoute.current()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in
+            audioRoute = CallAudioRoute.current()
         }
         .onDisappear {
             // Unconditional unlock, same pattern as LiveInCallScreen.
@@ -461,154 +437,48 @@ struct GroupCallView: View {
             : GroupMessageStore.shared.unreadCount(forGroupHex: viewModel.activeGroupHex)
     }
 
-    private var muteButtonBackground: Color {
-        if viewModel.isMicrophoneHeld { return Color.orange.opacity(0.35) }
-        return viewModel.isMuted ? Color.red.opacity(0.3) : Color.white.opacity(0.15)
+    /// Accessibility label of the microphone button while the microphone is held off after the app joined the call by itself.
+    private var micHeldLabel: String {
+        String(localized: "group_call.mic_held",
+               defaultValue: "Microfono in attesa",
+               comment: "Group call mute button — accessibility label while the microphone is held off after the app joined the call by itself")
     }
 
-    private var muteButtonAccessibilityLabel: String {
-        if viewModel.isMicrophoneHeld {
-            return String(localized: "group_call.mic_held",
-                          defaultValue: "Microfono in attesa",
-                          comment: "Group call mute button — accessibility label while the microphone is held off after the app joined the call by itself")
-        }
-        return viewModel.isMuted
-            ? String(localized: "group_call.mic.unmute_a11y", defaultValue: "Riattiva microfono", comment: "VoiceOver label of the microphone button of the group call while muted (tapping turns the microphone back on).")
-            : String(localized: "group_call.mic.mute_a11y", defaultValue: "Disattiva microfono", comment: "VoiceOver label of the microphone button of the group call while live (tapping mutes).")
+    /// The cells of the dock. While the microphone is held (an automatic join that has not seen a roster it can trust)
+    /// the microphone cell shows it off, in its own colour, and does nothing: nobody hears this device whatever it is
+    /// set to.
+    private var dockRows: [[CallDockItem?]] {
+        let style = CallDockStyle(scheme: scheme, extras: extras)
+        var items: [CallDockItem] = []
+        items.append(CallDockItems.mute(style,
+                                        muted: viewModel.isMuted,
+                                        held: viewModel.isMicrophoneHeld,
+                                        heldLabel: micHeldLabel,
+                                        action: { viewModel.toggleMute() }))
+        // The group call is hands-free and keeps the loudspeaker: the audio button shows where the sound is going and
+        // opens the system list of outputs.
+        items.append(CallDockItems.audio(style, route: audioRoute, usesRoutePicker: true, action: {}))
+        // W-GRPVIDEO: camera on/off. Enabled once the call has a media link (`isMediaReady`) — before that there is no
+        // publisher to toggle. Works whether the call started as audio or video: switching the camera on mid-call needs
+        // no renegotiation (see `GroupCallController.setVideoEnabled`'s kdoc).
+        items.append(CallDockItems.video(style,
+                                         callHasVideo: true,
+                                         cameraOn: viewModel.isVideoEnabled,
+                                         isDisabled: !viewModel.isMediaReady,
+                                         action: { viewModel.toggleVideo() }))
+        items.append(CallDockItems.end(style, group: true, action: leaveCall))
+        // In-call chat + attachments panel: kept enabled even for an ad-hoc call with no persisted group —
+        // `GroupCallChatPanel` itself renders the "unavailable" explanation in that case rather than hiding the entry
+        // point. The number of unread messages is the badge.
+        items.append(CallDockItems.chat(style, unreadCount: chatUnreadCount, action: { showChatPanel = true }))
+        items.append(CallDockItems.hand(style, raised: viewModel.isHandRaised, action: { viewModel.toggleHandRaised() }))
+        items.append(CallDockItems.reaction(style, action: { showReactionPicker = true }))
+        return CallDockItems.assemble(mode: .group, items: items)
     }
 
-    /// The control-row buttons, extracted from `body` verbatim (2026-07-20
-    /// responsive-control-bar fix — see the call site's comment): every
-    /// button used to hard-code `.frame(width: 56, height: 56)` inside an
-    /// `HStack(spacing: 32)`; both constants now arrive from the call
-    /// site's `GeometryReader`, capped at those same values, so nothing
-    /// changes visually wherever the old row already fit.
-    private func controlBar(buttonSize: CGFloat, spacing: CGFloat) -> some View {
-        HStack(spacing: spacing) {
-            // Mute button
-            // While the microphone is held (an automatic join that has not seen a roster it can trust) the button shows it
-            // off, in its own colour, and does nothing: nobody hears this device whatever it is set to.
-            Button {
-                viewModel.toggleMute()
-            } label: {
-                Image(systemName: viewModel.isMicrophoneOff ? "mic.slash.fill" : "mic.fill")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(muteButtonBackground)
-                    .clipShape(Circle())
-            }
-            .disabled(viewModel.isMicrophoneHeld)
-            .accessibilityLabel(muteButtonAccessibilityLabel)
-
-            // W-GRPVIDEO: camera on/off. Shown once the call has a media
-            // link (`isMediaReady`) — before that there is no publisher to
-            // toggle. Works whether the call started as audio or video:
-            // switching the camera on mid-call needs no renegotiation (see
-            // `GroupCallController.setVideoEnabled`'s kdoc).
-            if viewModel.isMediaReady {
-                Button {
-                    viewModel.toggleVideo()
-                } label: {
-                    Image(systemName: viewModel.isVideoEnabled ? "video.fill" : "video.slash.fill")
-                        .font(.title2)
-                        .foregroundColor(.white)
-                        .frame(width: buttonSize, height: buttonSize)
-                        .background(viewModel.isVideoEnabled ? Color.white.opacity(0.15) : Color.red.opacity(0.3))
-                        .clipShape(Circle())
-                }
-                .accessibilityLabel(viewModel.isVideoEnabled
-                    ? String(localized: "group_call.video.turn_off_a11y", defaultValue: "Disattiva video", comment: "VoiceOver label of the camera button of the group call while the camera is on (tapping turns it off).")
-                    : String(localized: "Attiva video"))
-            }
-
-            // Item 1 (2026-07-16 wire contract) — raise/lower
-            // hand, state-dependent background color exactly like
-            // the mute button above (`Color.red.opacity(0.3)`
-            // muted / `Color.white.opacity(0.15)` unmuted) — same
-            // pattern, orange being the raised-hand's own semantic
-            // (distinct from mute's red)
-            // since it's not an error/alert state.
-            Button {
-                viewModel.toggleHandRaised()
-            } label: {
-                Image(systemName: viewModel.isHandRaised ? "hand.raised.fill" : "hand.raised")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(viewModel.isHandRaised ? Color.orange.opacity(0.35) : Color.white.opacity(0.15))
-                    .clipShape(Circle())
-            }
-            .accessibilityLabel(viewModel.isHandRaised
-                ? String(localized: "group_call.hand.lower_a11y", defaultValue: "Abbassa la mano", comment: "VoiceOver label of the raise-hand button of the group call while the hand is raised.")
-                : String(localized: "group_call.hand.raise_a11y", defaultValue: "Alza la mano", comment: "VoiceOver label of the raise-hand button of the group call while the hand is down."))
-
-            // Item 1 — reaction picker: small popup with the fixed
-            // 6-emoji set (see `reactionPicker` below). `.popover`
-            // gives the "small popup" shape for free.
-            Button {
-                showReactionPicker = true
-            } label: {
-                Image(systemName: "face.smiling")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(Color.white.opacity(0.15))
-                    .clipShape(Circle())
-            }
-            .popover(isPresented: $showReactionPicker) {
-                reactionPicker
-            }
-            .accessibilityLabel("Invia una reazione")
-
-            // In-call chat + attachments panel toggle — same
-            // icon-toggle -> dismissible-sheet mechanism as the
-            // security shield button in `groupTrustBar` above,
-            // reused here per the control-row placement this
-            // feature was specced against (rather than the trust
-            // bar, which is reserved for always-visible crypto
-            // chips). Disabled placement decision: kept enabled
-            // even for an ad-hoc call with no persisted group —
-            // `GroupCallChatPanel` itself renders the "unavailable"
-            // explanation in that case rather than hiding the
-            // entry point (so the user isn't left wondering why a
-            // control silently vanished).
-            Button {
-                showChatPanel = true
-            } label: {
-                Image(systemName: "bubble.left.and.bubble.right.fill")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(Color.white.opacity(0.15))
-                    .clipShape(Circle())
-                    .overlay(alignment: .topTrailing) {
-                        if chatUnreadCount > 0 {
-                            Text(chatUnreadCount > 99 ? "99+" : "\(chatUnreadCount)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(Capsule().fill(Color.red))
-                                .offset(x: 6, y: -4)
-                        }
-                    }
-            }
-            .accessibilityLabel("Chat di gruppo")
-
-            // End call button
-            Button {
-                viewModel.endCall()
-                dismiss()
-            } label: {
-                Image(systemName: "phone.down.fill")
-                    .font(.title2)
-                    .foregroundColor(.white)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .background(Color.red)
-                    .clipShape(Circle())
-            }
-            .accessibilityLabel("Termina chiamata")
-        }
+    private func leaveCall() {
+        viewModel.endCall()
+        dismiss()
     }
 
     /// Item 5: the regular grid's participant list — in `.speaker` layout

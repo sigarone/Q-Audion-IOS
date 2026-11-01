@@ -39,8 +39,10 @@ import QAudionEngine
 ///   9. **Key info panel** — visible only when `keyInfo != nil`.
 ///  10. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
 ///      optional analytics toggle (`onToggleDiagnostics`).
-///  11. **Pinned bottom action row** — 2-row dock: mute / speaker /
-///      video / screen-share · enhance / add-participant / hangup.
+///  11. **Pinned control dock** — the shared `CallControlDock`, 2 rows of 4:
+///      chat / share / add (buds, Android only) over mute / audio / video /
+///      end. The shield (security sheet, which holds the diagnostics) and the
+///      report-a-problem button sit in the top bar.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
 /// `confidence`, `sasWords`, `sasVerified`, `keyInfo`,
@@ -244,7 +246,6 @@ struct InCallScreen: View {
     let transportMode: TransportMode
     let muted: Bool
     let speakerOn: Bool
-    let voiceEnhancement: Bool
     /// Whether the active call has a video track — shows/hides the
     /// camera toggle button. Mirrors Android InCallScreen `hasVideo`.
     let hasVideo: Bool
@@ -292,7 +293,6 @@ struct InCallScreen: View {
     let cryptoOpsPerSec: Int
     let onToggleMute: () -> Void
     let onToggleSpeaker: () -> Void
-    let onToggleVoiceEnhancement: () -> Void
     let onToggleCamera: () -> Void
     /// Upgrade an audio call to video mid-call. Shown only when `!hasVideo`.
     /// Mirrors Android/Desktop "upgrade to video" button. On tap, starts the
@@ -399,10 +399,6 @@ struct InCallScreen: View {
     let onHangup: () -> Void
     let onConfirmSas: () -> Void
     let onToggleDiagnostics: () -> Void
-    /// W-HBTELEM (2026-09-21) — the "Disturbo" pill: marks the instant the user heard an
-    /// audio glitch (telemetry marker `call.disturbance.marker`). nil hides it: only the live
-    /// 1:1 call screen (`LiveInCallScreen`) passes it, so previews and group calls never show it.
-    let onMarkDisturbance: (() -> Void)?
     /// "Segnala un problema": opens the report sheet (logs, screenshot, call id, a note) without leaving the call.
     /// Offered in every call state. nil hides the button (previews).
     let onReportProblem: (() -> Void)?
@@ -483,7 +479,6 @@ struct InCallScreen: View {
          transportMode: TransportMode = .p2pSrtp,
          muted: Bool = false,
          speakerOn: Bool = false,
-         voiceEnhancement: Bool = false,
          hasVideo: Bool = false,
          cameraOn: Bool = false,
          peerShortNumber: String? = nil,
@@ -494,7 +489,6 @@ struct InCallScreen: View {
          cryptoOpsPerSec: Int = 0,
          onToggleMute: @escaping () -> Void = {},
          onToggleSpeaker: @escaping () -> Void = {},
-         onToggleVoiceEnhancement: @escaping () -> Void = {},
          onToggleCamera: @escaping () -> Void = {},
          onUpgradeToVideo: @escaping () -> Void = {},
          upgradeToVideoUnlocked: Bool = true,
@@ -518,7 +512,6 @@ struct InCallScreen: View {
          onHangup: @escaping () -> Void,
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
-         onMarkDisturbance: (() -> Void)? = nil,
          onReportProblem: (() -> Void)? = nil,
          voiceLearningState: VoiceLearningSession.State? = nil,
          onStartVoiceLearning: @escaping () -> Void = {},
@@ -547,7 +540,6 @@ struct InCallScreen: View {
         self.transportMode = transportMode
         self.muted = muted
         self.speakerOn = speakerOn
-        self.voiceEnhancement = voiceEnhancement
         self.hasVideo = hasVideo
         self.cameraOn = cameraOn
         self.peerShortNumber = peerShortNumber
@@ -558,7 +550,6 @@ struct InCallScreen: View {
         self.cryptoOpsPerSec = cryptoOpsPerSec
         self.onToggleMute = onToggleMute
         self.onToggleSpeaker = onToggleSpeaker
-        self.onToggleVoiceEnhancement = onToggleVoiceEnhancement
         self.onToggleCamera = onToggleCamera
         self.onUpgradeToVideo = onUpgradeToVideo
         self.upgradeToVideoUnlocked = upgradeToVideoUnlocked
@@ -582,7 +573,6 @@ struct InCallScreen: View {
         self.onHangup = onHangup
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
-        self.onMarkDisturbance = onMarkDisturbance
         self.onReportProblem = onReportProblem
         self.voiceLearningState = voiceLearningState
         self.onStartVoiceLearning = onStartVoiceLearning
@@ -606,6 +596,9 @@ struct InCallScreen: View {
             // inset: the column ends above it at rest. While scrolling, content still passes under the inset, as
             // under any bar.
             scrollContent
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    callTopBar
+                }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     VStack(spacing: 10) {
                         pinnedSasArea
@@ -2484,19 +2477,26 @@ struct InCallScreen: View {
                      accent: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
                      filled: transportMode == .p2pSrtp)
             Spacer()
-            if let markDisturbance = onMarkDisturbance {
-                DisturbanceMarkButton(action: markDisturbance)
-            }
-            Button(action: onToggleDiagnostics) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(scheme.onSurface)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(scheme.surfaceVariant))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Diagnostica")
         }
+    }
+
+    // MARK: - Top bar
+
+    /// The shield (opens the security sheet, which holds the diagnostics) on the left and the report-a-problem button on
+    /// the right: the same two places on every call screen.
+    private var callTopBar: some View {
+        HStack(spacing: 0) {
+            CallTopBarButton(icon: "checkmark.shield",
+                             accessibilityLabel: CallControlText.securityA11y,
+                             action: { showSecuritySheet = true })
+            Spacer(minLength: 0)
+            if let onReportProblem {
+                CallTopBarButton(icon: "ladybug",
+                                 accessibilityLabel: CallControlText.reportA11y,
+                                 action: onReportProblem)
+            }
+        }
+        .padding(.horizontal, 8)
     }
 
     // MARK: - Security sheet (unified call UI)
@@ -2517,6 +2517,32 @@ struct InCallScreen: View {
         String(localized: "in_call.security.voice_section_title",
                defaultValue: "Voce · \(peerDisplayName)",
                comment: "Call security sheet — title of the voice section; %@ is the display name of the other person")
+    }
+
+    /// The network diagnostics live in the security sheet: tapping closes the sheet and opens the diagnostics panel.
+    private var diagnosticsRow: some View {
+        Button {
+            showSecuritySheet = false
+            onToggleDiagnostics()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(scheme.onSurface)
+                Text("Diagnostica")
+                    .qaudionStyle(type.bodyLarge)
+                    .foregroundStyle(scheme.onSurface)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var securitySheet: some View {
@@ -2542,6 +2568,10 @@ struct InCallScreen: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 18)
                 .padding(.bottom, 12)
+
+                Divider().background(scheme.outline.opacity(0.35))
+
+                diagnosticsRow
 
                 Divider().background(scheme.outline.opacity(0.35))
 
@@ -2675,201 +2705,48 @@ struct InCallScreen: View {
         value > 0 ? Double(value) : -1
     }
 
-    // MARK: - Bottom action row (pinned)
+    // MARK: - Control dock (pinned)
+    //
+    // The shared `CallControlDock`: 2 rows of 4 cells, the same on every call screen and on Android.
+    //   Row 1 (secondary): Chat, Share, Add, Buds (Android only: the cell stays empty here)
+    //   Row 2 (primary):   Mute, Audio, Video, End (red, always the last cell)
+    // Every cell calls the same closure it always did.
+    // The "Chat" cell is there when the caller passes `onOpenChat` (the live 1:1 call screen does), and empty otherwise.
 
-    // MARK: - Control dock (unified call UI — cosmetic regroup only)
-    //
-    // Every button below calls the EXACT SAME closure it did before this
-    // pass (onToggleMute / onToggleSpeaker / onToggleCamera /
-    // onUpgradeToVideo / onToggleScreenShare / onToggleVoiceEnhancement /
-    // onAddParticipant / onHangup) — no new control was invented and no
-    // existing one was removed. Only the grouping changed, to match the
-    // unified dock layout from call-guardian-reference.html:
-    //   Row 1 (primary):   Mute · Speaker · Video · Share screen
-    //   Row 2 (secondary): Enhance · Add(disabled) · End
-    // The reference's Row 2 also has "Chat" as its first button: it is
-    // there when the caller passes `onOpenChat` (the live 1:1 call screen
-    // does), and absent otherwise rather than a non-functional placeholder.
-    //
-    // W557 constraint carried over unchanged: two rows inside a rounded-
-    // rectangle card so 4-5 buttons per row always fit on a 375pt screen
-    // (the previous single-HStack-of-7 design overflowed iPhone SE).
-    //
-    // W-CALLPROMOTE — add-participant is now live (was disabled/no-op
-    // pending an API that now exists: GroupCallController.createCall).
-    // onAddParticipant is still the same 0-arg trigger it always was;
-    // LiveInCallScreen owns the actual sheet + peer-id submit handler.
+    private var dockRows: [[CallDockItem?]] {
+        let style = CallDockStyle(scheme: scheme, extras: extras)
+        var items: [CallDockItem] = []
+        items.append(CallDockItems.mute(style, muted: muted, action: onToggleMute))
+        items.append(CallDockItems.audio(style, speakerOn: speakerOn, action: onToggleSpeaker))
+        // Entitlements Task 5 - feat.calls.video guards the mid-call escalation of an audio call (the camera toggle of a
+        // call that already has video is never gated here).
+        items.append(CallDockItems.video(style,
+                                         callHasVideo: hasVideo,
+                                         cameraOn: cameraOn,
+                                         isLocked: !hasVideo && !upgradeToVideoUnlocked,
+                                         action: hasVideo ? onToggleCamera : onUpgradeToVideo,
+                                         onLocked: onUpgradeToVideoLocked))
+        items.append(CallDockItems.end(style, action: onHangup))
+        if let onOpenChat {
+            items.append(CallDockItems.chat(style, unreadDot: chatHasUnread, action: onOpenChat))
+        }
+        // W538: screen-share (hidden on Mac Catalyst).
+        if screenShareAvailable {
+            items.append(CallDockItems.share(style, sharing: screenSharing, action: onToggleScreenShare))
+        }
+        // W-CALLPROMOTE: opens the add-participant sheet. Entitlements Task 5 - feat.calls.group.
+        items.append(CallDockItems.add(style,
+                                       isLocked: !addParticipantUnlocked,
+                                       action: onAddParticipant,
+                                       onLocked: onAddParticipantLocked))
+        return CallDockItems.assemble(mode: .oneToOne, items: items)
+    }
 
     private var bottomActionRow: some View {
-        VStack(spacing: 10) {
-            primaryControlsRow
-            secondaryControlsRow
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        // The dock floats over the call: one Liquid Glass surface for the whole group (its buttons keep their own
-        // solid state colours on top of it), the opaque card with its outline where glass is not available.
-        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 20),
-                             fallback: scheme.surface.opacity(0.92),
-                             fallbackStroke: scheme.outline.opacity(0.4))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 20)
-        .qaudionReadableWidth()
-    }
-
-    /// Row 1 (primary, top): mute · speaker · video/upgrade · screen-share.
-    /// Same four controls as before the regroup, same closures — only the
-    /// row they live in changed (previously mute/speaker/hangup shared a
-    /// row; hangup now anchors the end of Row 2 instead, matching the
-    /// reference's "End" position).
-    private var primaryControlsRow: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            CircularAction(
-                icon: muted ? "mic.slash.fill" : "mic.fill",
-                action: onToggleMute,
-                diameter: 52,
-                background: muted ? extras.warning : scheme.surfaceVariant,
-                iconColor: muted ? extras.onWarning : scheme.onSurface
-            )
-            .accessibilityLabel(muted ? "Riattiva microfono" : "Disattiva microfono")
-            Spacer(minLength: 0)
-            CircularAction(
-                icon: speakerOn ? "speaker.wave.3.fill" : "speaker.fill",
-                action: onToggleSpeaker,
-                diameter: 52,
-                background: speakerOn ? extras.success : scheme.surfaceVariant,
-                iconColor: speakerOn ? extras.onSuccess : scheme.onSurface
-            )
-            .accessibilityLabel(speakerOn ? "Disattiva altoparlante" : "Attiva altoparlante")
-            Spacer(minLength: 0)
-            if hasVideo {
-                CircularAction(
-                    icon: cameraOn ? "video.fill" : "video.slash.fill",
-                    action: onToggleCamera,
-                    diameter: 52,
-                    background: cameraOn ? extras.success : scheme.surfaceVariant,
-                    iconColor: cameraOn ? extras.onSuccess : scheme.onSurface
-                )
-                .accessibilityLabel(cameraOn ? "Disattiva video" : "Attiva video")
-            } else {
-                // Entitlements Task 5 — feat.calls.video at the mid-call
-                // escalation trigger (Phase 5 server plan Task 7's
-                // call_upgrade_request gate — the same capability as the
-                // pre-call video buttons elsewhere in this app).
-                CircularAction(
-                    icon: "video.badge.plus",
-                    action: onUpgradeToVideo,
-                    diameter: 52,
-                    background: scheme.surfaceVariant,
-                    iconColor: scheme.onSurface,
-                    unlocked: upgradeToVideoUnlocked,
-                    onLockedClick: onUpgradeToVideoLocked
-                )
-                .accessibilityLabel("Passa a videochiamata")
-            }
-            Spacer(minLength: 0)
-            // W538: screen-share (hidden on Mac Catalyst).
-            if screenShareAvailable {
-                CircularAction(
-                    icon: screenSharing ? "square.on.square.fill" : "square.on.square",
-                    action: onToggleScreenShare,
-                    diameter: 52,
-                    background: screenSharing ? extras.success : scheme.surfaceVariant,
-                    iconColor: screenSharing ? extras.onSuccess : scheme.onSurface
-                )
-                .accessibilityLabel(screenSharing ? "Interrompi condivisione schermo" : "Condividi schermo")
-                Spacer(minLength: 0)
-            }
-        }
-    }
-
-    /// Row 2 (secondary, bottom): voice-enhance · add-participant
-    /// (visually present, disabled/no-op) · hangup (prominent, larger,
-    /// anchors the end of the dock — matches the reference's "End"
-    /// position instead of floating mid-row).
-    private var secondaryControlsRow: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            if let onOpenChat {
-                chatButton(action: onOpenChat)
-                Spacer(minLength: 0)
-            }
-            CircularAction(
-                icon: "line.3.horizontal",
-                action: onToggleVoiceEnhancement,
-                diameter: 48,
-                background: voiceEnhancement ? extras.success : scheme.surfaceVariant,
-                iconColor: voiceEnhancement ? extras.onSuccess : scheme.onSurface
-            )
-            .accessibilityLabel(voiceEnhancement ? "Disattiva miglioramento voce" : "Attiva miglioramento voce")
-            Spacer(minLength: 0)
-            // Report a problem or a call error (same place as the Android call screen: after the voice controls,
-            // before "add participant").
-            if let onReportProblem {
-                CircularAction(
-                    icon: "ladybug",
-                    action: onReportProblem,
-                    diameter: 48,
-                    background: scheme.surfaceVariant,
-                    iconColor: scheme.onSurface
-                )
-                .accessibilityLabel(String(localized: "Segnala un problema"))
-                Spacer(minLength: 0)
-            }
-            // W-CALLPROMOTE — was disabled/no-op (no API existed). Now opens
-            // the add-participant sheet (LiveInCallScreen owns the sheet
-            // state + submit handler that calls GroupCallController
-            // .createCall, mirroring Android/Desktop's identical port).
-            // Entitlements Task 5 — feat.calls.group. Escalating a 1:1
-            // call to group reuses the same server-side group-call
-            // creation gate as starting a brand-new group call.
-            CircularAction(
-                icon: "person.badge.plus",
-                action: onAddParticipant,
-                diameter: 48,
-                background: scheme.surfaceVariant,
-                iconColor: scheme.onSurface,
-                unlocked: addParticipantUnlocked,
-                onLockedClick: onAddParticipantLocked
-            )
-            .accessibilityLabel("Aggiungi partecipante")
-            Spacer(minLength: 0)
-            // Hangup — prominent, larger than secondary buttons, anchors
-            // the end of the dock (matches the reference's "End" slot).
-            CircularAction(
-                icon: "phone.down.fill",
-                action: onHangup,
-                diameter: 64,
-                background: extras.riskHigh,
-                iconColor: scheme.onPrimary
-            )
-            .accessibilityLabel("Termina chiamata")
-            Spacer(minLength: 0)
-        }
-    }
-
-    /// The "Chat" slot of the dock: opens the chat with the peer over the call. A dot says a message is waiting there.
-    private func chatButton(action: @escaping () -> Void) -> some View {
-        CircularAction(
-            icon: "bubble.left.fill",
-            action: action,
-            diameter: 48,
-            background: scheme.surfaceVariant,
-            iconColor: scheme.onSurface
-        )
-        .overlay(alignment: .topTrailing) {
-            if chatHasUnread {
-                Circle()
-                    .fill(extras.riskHigh)
-                    .frame(width: 12, height: 12)
-                    .overlay(Circle().stroke(scheme.surface, lineWidth: 2))
-                    .offset(x: 2, y: -2)
-                    .accessibilityHidden(true)
-            }
-        }
-        .accessibilityLabel(String(localized: "in_call.chat.open", defaultValue: "Apri la chat", comment: "Accessibility label of the button on the call screen that opens the chat with the person on the call."))
-        .accessibilityValue(chatHasUnread ? String(localized: "in_call.chat.unread", defaultValue: "Nuovo messaggio", comment: "Accessibility value of the chat button on the call screen when a message from the person on the call is waiting.") : "")
+        CallControlDock(rows: dockRows)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity)
     }
 
     // MARK: - Helpers
