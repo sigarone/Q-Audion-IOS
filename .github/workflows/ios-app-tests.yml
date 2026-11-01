@@ -324,6 +324,7 @@ jobs:
             -only-testing:QAudionAppTests/AvatarSendCopyTests \
             -only-testing:QAudionAppTests/AvatarThumbnailTests \
             -only-testing:QAudionAppTests/BlockedContactsStoreTests \
+            -only-testing:QAudionAppTests/BugReportConsentTests \
             -only-testing:QAudionAppTests/BugReportFreezeTests \
             -only-testing:QAudionAppTests/BugReporterRetryQueueTests \
             -only-testing:QAudionAppTests/PeerDiagResponderTests \

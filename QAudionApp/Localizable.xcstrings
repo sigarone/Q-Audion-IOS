@@ -1,6 +1,30 @@
 {
   "sourceLanguage": "it",
   "strings": {
+    "bug_report.attach_logs": {
+      "extractionState": "manual",
+      "comment": "Bug report sheet — checkbox: attach the app's technical log of the call to this report.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Allega log diagnostici della chiamata" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Attach the call's diagnostic logs" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Joindre les journaux de diagnostic de l'appel" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Diagnoseprotokolle des Anrufs anhängen" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Adjuntar los registros de diagnóstico de la llamada" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Anexar os logs de diagnóstico da chamada" } }
+      }
+    },
+    "bug_report.attach_logs_hint": {
+      "extractionState": "manual",
+      "comment": "Bug report sheet — subtitle of the log checkbox: exactly what is sent when it is on.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Vengono inviati solo gli ultimi minuti del registro tecnico dell'app (eventi, stato di rete e audio, errori), con i dati personali oscurati. Nessun messaggio, nessun contenuto di chiamata. Se lo disattivi non parte nessuna riga di log." } },
+        "en": { "stringUnit": { "state": "translated", "value": "Only the last minutes of the app's technical log are sent (events, network and audio state, errors), with personal data masked. No messages, no call content. If you turn it off, no log line is sent." } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Seules les dernières minutes du journal technique de l'app sont envoyées (événements, état du réseau et de l'audio, erreurs), avec les données personnelles masquées. Aucun message, aucun contenu d'appel. Si vous le désactivez, aucune ligne de journal n'est envoyée." } },
+        "de": { "stringUnit": { "state": "translated", "value": "Gesendet werden nur die letzten Minuten des technischen Protokolls der App (Ereignisse, Netzwerk- und Audiostatus, Fehler), personenbezogene Daten sind maskiert. Keine Nachrichten, keine Anrufinhalte. Wenn du es ausschaltest, wird keine Protokollzeile gesendet." } },
+        "es": { "stringUnit": { "state": "translated", "value": "Solo se envían los últimos minutos del registro técnico de la app (eventos, estado de red y audio, errores), con los datos personales ocultos. Ningún mensaje, ningún contenido de llamada. Si lo desactivas, no se envía ninguna línea de registro." } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Somente os últimos minutos do registro técnico do app são enviados (eventos, estado de rede e áudio, erros), com os dados pessoais ocultados. Nenhuma mensagem, nenhum conteúdo de chamada. Se você desativar, nenhuma linha de log é enviada." } }
+      }
+    },
     "notification.message.new_body": {
       "extractionState": "manual",
       "comment": "Body of a message notification once the sender is known. No message text is ever shown.",

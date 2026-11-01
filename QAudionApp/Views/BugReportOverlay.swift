@@ -24,6 +24,7 @@ struct BugReportOverlay: View {
     let host: Host
     @ObservedObject var reporter = BugReporter.shared
     @State private var note: String = ""
+    @State private var attachLogs: Bool = true
 
     var body: some View {
         Color.clear
@@ -31,8 +32,8 @@ struct BugReportOverlay: View {
                 get: { reporter.isShowingOverlay && host.presents(reporter.pendingReport?.source ?? 0) },
                 set: { if !$0 { reporter.dismiss() } }
             )) {
-                BugReportCard(reporter: reporter, note: $note)
-                    .presentationDetents([.height(420)])
+                BugReportCard(reporter: reporter, note: $note, attachLogs: $attachLogs)
+                    .presentationDetents([.height(520)])
                     .presentationDragIndicator(.visible)
             }
     }
@@ -44,6 +45,7 @@ private struct BugReportCard: View {
 
     @ObservedObject var reporter: BugReporter
     @Binding var note: String
+    @Binding var attachLogs: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +63,9 @@ private struct BugReportCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
+            logConsentRow
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
             Spacer(minLength: 0)
             actionRow
                 .padding(.horizontal, 16)
@@ -153,6 +158,26 @@ private struct BugReportCard: View {
         .frame(height: 160)
     }
 
+    // MARK: Log consent
+
+    /// Per-report consent for the log attachment. On by default; the subtitle says exactly what is sent.
+    private var logConsentRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: $attachLogs) {
+                Text(String(localized: "bug_report.attach_logs",
+                            defaultValue: "Allega log diagnostici della chiamata",
+                            comment: "Bug report sheet — checkbox: attach the app's technical log of the call to this report."))
+                    .font(.system(size: 14, weight: .medium))
+            }
+            Text(String(localized: "bug_report.attach_logs_hint",
+                        defaultValue: "Vengono inviati solo gli ultimi minuti del registro tecnico dell'app (eventi, stato di rete e audio, errori), con i dati personali oscurati. Nessun messaggio, nessun contenuto di chiamata. Se lo disattivi non parte nessuna riga di log.",
+                        comment: "Bug report sheet — subtitle of the log checkbox: exactly what is sent when it is on."))
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: Actions
 
     private var actionRow: some View {
@@ -171,8 +196,9 @@ private struct BugReportCard: View {
 
             Button {
                 let capturedNote = note
-                reporter.send(note: capturedNote)
+                reporter.send(note: capturedNote, attachLogs: attachLogs)
                 note = ""
+                attachLogs = true
             } label: {
                 Text("Invia report")
                     .font(.system(size: 15, weight: .semibold))

@@ -67,6 +67,11 @@ public final class BugReporter: ObservableObject {
         public var sendDelayMs: Int = 0
         public var logWindowMinutes: Double = 0
         public var screenshotCount: Int = 0
+        /// The user's choice on the log attachment (the checkbox of the sheet, on by default). When off
+        /// no log line is sent and the snapshot drops its quoted log lines.
+        public var attachLogs: Bool = true
+        /// The log lines this report carries (none when the user declined them).
+        var attachedLogEntries: [LiveLogRawEntry] { attachLogs ? logEntries : [] }
     }
 
     /// How a manual report was opened. Logged (`trig src=<n>`) and used to pick the host of the sheet.
@@ -156,6 +161,7 @@ public final class BugReporter: ObservableObject {
         self.getServerUrl = getServerUrl
         self.getActiveCallId = getActiveCallId
         self.getDiagSnapshot = getDiagSnapshot
+        ReportNetworkProbe.shared.start()
     }
 
     /// Group calls carry a longer log window (see `AppState.bugReportLogWindowMinutes`).
@@ -214,7 +220,7 @@ public final class BugReporter: ObservableObject {
         // a blank image on a screenshot-locked screen is the correct
         // behaviour for a product marketed on screenshot protection.
         let screenshot = captureScreenForReport()
-        let logEntries = RuntimeLogSink.shared.recentRawEntries(minutes: currentLogWindowMinutes())
+        let logEntries = ReportLogSupport.infoAndAbove(RuntimeLogSink.shared.recentRawEntries(minutes: currentLogWindowMinutes()))
         var report = PendingReport(
             screenshot: screenshot,
             logEntries: logEntries,
@@ -256,7 +262,7 @@ public final class BugReporter: ObservableObject {
             RTLog.info("bugreport", "auto report suppressed (diagnostics opt-in OFF): " + tag)
             return
         }
-        let logEntries = RuntimeLogSink.shared.recentRawEntries(minutes: 2.0)
+        let logEntries = ReportLogSupport.infoAndAbove(RuntimeLogSink.shared.recentRawEntries(minutes: 2.0))
         let report = PendingReport(
             screenshot: nil,
             logEntries: logEntries,
@@ -306,8 +312,9 @@ public final class BugReporter: ObservableObject {
 
     // MARK: - Send (called by overlay UI)
 
-    public func send(note: String) {
-        guard let report = pendingReport else { return }
+    public func send(note: String, attachLogs: Bool = true) {
+        guard var report = pendingReport else { return }
+        report.attachLogs = attachLogs
         isShowingOverlay = false
         pendingReport = nil
         let capturedNote = note
@@ -330,7 +337,7 @@ public final class BugReporter: ObservableObject {
         var out = report
         let sinceTrigger = max(0, Date().timeIntervalSince(report.capturedAt))
         let windowMinutes = currentLogWindowMinutes() + sinceTrigger / 60
-        let logEntries = RuntimeLogSink.shared.recentRawEntries(minutes: windowMinutes)
+        let logEntries = ReportLogSupport.infoAndAbove(RuntimeLogSink.shared.recentRawEntries(minutes: windowMinutes))
         if !logEntries.isEmpty { out.logEntries = logEntries }
         let sendShot = captureScreenForReport()
         out.screenshot = Self.sideBySide(report.screenshot, sendShot)
@@ -622,7 +629,7 @@ public final class BugReporter: ObservableObject {
             callId: callId,
             note: note,
             bodyPlaintext: bodyPlaintext,
-            logEntries: report.logEntries,
+            logEntries: report.attachedLogEntries,
             extraFields: report.extraFields,
             screenshot: report.screenshot
         )
@@ -650,13 +657,19 @@ public final class BugReporter: ObservableObject {
 
         do {
             // W-AUXPIN (2026-09-01): pinned session, see fetchAdminPubKey.
-            let (_, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
+            let (data, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             let http = response as? HTTPURLResponse
             if let http {
                 RTLog.info("bugreport", "E2EE upload status=" + String(describing: http.statusCode))
             }
             switch UploadRetryPolicy.verdict(status: http?.statusCode) {
             case .success:
+                // The id the server gave the report, with the call it is about, so the report can be found
+                // from the call's logs. Only the first 8 characters of each id are written.
+                if let reportId = ReportLogSupport.reportId(fromResponse: data) {
+                    RTLog.info("bugreport", ReportLogSupport.sentLine(
+                        reportId: reportId, callId: callId, logLines: report.attachedLogEntries.count))
+                }
                 return .done
             case .reject:
                 // The server will never take this report (malformed / too large): final.
@@ -673,22 +686,35 @@ public final class BugReporter: ObservableObject {
     }
 
     /// Adds the report's own facts to the diagnostic JSON snapshot: how the sheet was
-    /// opened, how long it stayed up, the log window and how many screenshots the image
+    /// opened, how long it stayed up, the log window, how many screenshots the image
     /// holds (a phantom trigger, or a report sent long after what it describes, is then
-    /// visible without guessing). Numbers only. A snapshot that is not a JSON object is
-    /// left as it is.
-    private static func addingReportBlock(to snapshot: String, report: PendingReport) -> String {
-        guard report.trigger == "manual",
+    /// visible without guessing) and what was done with the logs (`log_capture`,
+    /// `log_lines`). Numbers and short tokens only. When the user declined the log
+    /// attachment the snapshot's own quoted log lines go too. A snapshot that is not a
+    /// JSON object is left as it is; abuse reports carry no block.
+    static func addingReportBlock(to snapshot: String, report: PendingReport) -> String {
+        guard report.trigger == "manual" || report.trigger == "auto",
               let data = snapshot.data(using: .utf8),
               var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return snapshot
         }
-        object["report"] = [
-            "source": report.source,
-            "send_delay_ms": report.sendDelayMs,
-            "log_window_min": Int(report.logWindowMinutes.rounded(.up)),
-            "screenshots": report.screenshotCount,
+        let lines = report.attachedLogEntries.count
+        var block: [String: Any] = [
+            "log_capture": ReportLogCapture.resolve(
+                attach: report.attachLogs, lineCount: lines, automatic: report.trigger == "auto").rawValue,
+            "log_lines": lines,
         ]
+        if report.trigger == "manual" {
+            block["source"] = report.source
+            block["send_delay_ms"] = report.sendDelayMs
+            block["log_window_min"] = Int(report.logWindowMinutes.rounded(.up))
+            block["screenshots"] = report.screenshotCount
+        }
+        object["report"] = block
+        if !report.attachLogs, var call = object["call"] as? [String: Any] {
+            call.removeValue(forKey: "group_diag")
+            object["call"] = call
+        }
         guard let out = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
               let json = String(data: out, encoding: .utf8) else {
             return snapshot
