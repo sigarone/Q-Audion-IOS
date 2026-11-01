@@ -95,6 +95,20 @@ struct GroupCallView: View {
                             .font(.caption).monospacedDigit()
                             .foregroundColor(Color(red: 0, green: 0.9, blue: 0.47))
                     }
+                    // Report a problem or a call error: opens the report sheet, hosted by this
+                    // screen (see `.background(BugReportOverlay(host: .groupCall))` below).
+                    Button {
+                        BugReporter.shared.requestReport(source: .inGroupCall)
+                    } label: {
+                        Image(systemName: "ladybug")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .padding(.leading, 10)
+                    .accessibilityLabel(String(localized: "Segnala un problema"))
                     // Item 5 (2026-07-16 wire contract) — pure client-side
                     // layout toggle, no wire message at all (the engine's
                     // active-speaker detection, wired through
@@ -354,6 +368,9 @@ struct GroupCallView: View {
             // (highlighted border) is now paired with the live feed itself,
             // in the grid, matching Android — no separate view needed here.
         }
+        // The sheet of the header's report button. The group call is shown in a full-screen cover, over which a sheet of
+        // the root view cannot appear, so this screen hosts its own.
+        .background(BugReportOverlay(host: .groupCall))
         // Unified call UI (group-call adaptation) — same aggregating
         // security sheet pattern as `InCallScreen.securitySheet`: system
         // sheet (native drag-to-dismiss), not a custom overlay.

@@ -112,9 +112,20 @@ final class AbuseReportCategoryTests: XCTestCase {
 
     // MARK: - The Settings row
 
-    func test_theSettingsRowHasATriggerSourceOfItsOwn() {
+    func test_theReportEntriesHaveATriggerSourceOfTheirOwn() {
         XCTAssertEqual(BugReporter.TriggerSource.settings.rawValue, 3)
-        let raw = [BugReporter.TriggerSource.volumeGesture, .shake, .settings].map { $0.rawValue }
+        let raw = [BugReporter.TriggerSource.settings, .inCall, .inGroupCall].map { $0.rawValue }
         XCTAssertEqual(Set(raw).count, 3, "the source is logged as trig src=<n>, so the three must differ")
+        XCTAssertFalse([1, 2].contains(where: { raw.contains($0) }), "1 and 2 belonged to the retired gestures")
+    }
+
+    func test_theGroupCallSheetIsHostedByTheGroupCallScreenOnly() {
+        let group = BugReporter.TriggerSource.inGroupCall.rawValue
+        XCTAssertTrue(BugReportOverlay.Host.groupCall.presents(group))
+        XCTAssertFalse(BugReportOverlay.Host.root.presents(group))
+        for source in [BugReporter.TriggerSource.settings, .inCall] {
+            XCTAssertTrue(BugReportOverlay.Host.root.presents(source.rawValue))
+            XCTAssertFalse(BugReportOverlay.Host.groupCall.presents(source.rawValue))
+        }
     }
 }

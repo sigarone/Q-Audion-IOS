@@ -454,6 +454,7 @@ struct LiveInCallScreen: View {
                 // W-HBTELEM — the "Disturbo" marker pill (1:1 call screen only, and only
                 // while the operational-diagnostics consent is on; see disturbanceMarkAction).
                 onMarkDisturbance: disturbanceMarkAction,
+                onReportProblem: handleReportProblem,
                 // Feature B ("voce verificata") — W-AUTOLEARN parity (item 5):
                 // fed from AppState.voiceLearningState (itself fed from the
                 // SAME decoded RX audio the Guardian ribbon above already
@@ -641,6 +642,11 @@ struct LiveInCallScreen: View {
     private var disturbanceMarkAction: (() -> Void)? {
         guard TelemetryService.isEnabled else { return nil }
         return handleMarkDisturbance
+    }
+
+    /// The report button of the call screen: opens the report sheet over the call.
+    private func handleReportProblem() {
+        BugReporter.shared.requestReport(source: .inCall)
     }
 
     // MARK: - Diagnostics panel (W502)
