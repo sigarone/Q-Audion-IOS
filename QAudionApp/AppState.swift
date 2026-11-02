@@ -2459,6 +2459,24 @@ final class AppState: ObservableObject {
     private var videoSealDropCount: Int64 = 0
     /// Escalation ladder state (pure engine, KAT-gated) the tick delegates to.
     private let videoStallLadder = VideoStallEscalationEngine()
+
+    /// True while the black-video stall detector has a stall latched (frames reach the device but not the renderer).
+    /// Read by the in-call diagnostics panel; same meaning as Android's `videoStallActive`.
+    var isVideoStallLatched: Bool { videoStallLadder.isStalled }
+
+    /// True while this call's outgoing video is carried by native WebRTC RTP and confirmed healthy, so the WS-relay
+    /// copy of each fragment is skipped (the send gate in `onOutboundFragment`). When it is false and a video pipeline
+    /// runs, the video goes out over the WS relay. One predicate for the gate and the diagnostics panel.
+    var isVideoSendCarriedByWebRtc: Bool {
+        #if canImport(WebRTC)
+        if let controller = webRtcController as? QAudionWebRtcCallController,
+           controller.webrtcPixelBufferCapturer != nil,
+           controller.isVideoSendConfirmedHealthy() {
+            return true
+        }
+        #endif
+        return false
+    }
     /// Tick memos: last observed counter values + the monotonic ms of
     /// their last increase (stall rule inputs).
     private var videoDiagPrevArrived: Int64 = 0
@@ -28837,9 +28855,7 @@ extension AppState {
             // once ICE is this healthy; see
             // reference_transport_fallback_audit_2026_08_26.md for why a
             // full peer-platform gate could not be added here.
-            if let controller = self?.webRtcController as? QAudionWebRtcCallController,
-               controller.webrtcPixelBufferCapturer != nil,
-               controller.isVideoSendConfirmedHealthy() {
+            if self?.isVideoSendCarriedByWebRtc == true {
                 return
             }
             #endif

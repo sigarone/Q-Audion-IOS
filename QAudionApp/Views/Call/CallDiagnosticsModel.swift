@@ -66,6 +66,19 @@ struct CallDiagnosticsInput: Equatable {
     var wsBytesReceived: Int64 = -1
 }
 
+/// Which state the video leg is in; the same four states, with the same priority, as the Android panel.
+enum VideoPipelineState: Equatable {
+    case active, stalled, relay, idle
+
+    /// `idle` = no video pipeline; otherwise the video going out over the WS relay wins over a latched stall.
+    static func resolve(pipelineRunning: Bool, stalled: Bool, overWsRelay: Bool) -> VideoPipelineState {
+        guard pipelineRunning else { return .idle }
+        if overWsRelay { return .relay }
+        if stalled { return .stalled }
+        return .active
+    }
+}
+
 struct CallDiagnosticsModel: Equatable {
 
     /// One row of the panel. The label is looked up by the view from `field`, so the model stays language-free.
