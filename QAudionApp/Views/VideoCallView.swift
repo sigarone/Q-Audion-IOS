@@ -8,7 +8,8 @@ import WebRTC
 // MARK: - Video Call View
 
 /// Full-screen video call UI. Remote feed fills the screen; local
-/// camera is a PiP in the bottom-right corner. SAS verification panel
+/// camera is a draggable PiP that rests in the top-right corner and snaps
+/// to the nearest corner when released. SAS verification panel
 /// overlays the bottom-left so the user can confirm words without
 /// leaving the call. Mirrors Android InCallScreen (videoActive mode):
 /// transparent mesh background replaced by real video, info minimized.
@@ -52,6 +53,11 @@ struct VideoCallView: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @State private var showSas = false
+    /// Local preview (PiP): the corner it rests in, the live drag offset, and the frames the layout reports (see CallPipLayout).
+    @State private var pipCorner = CallPipLayout.defaultCorner
+    @GestureState private var pipDrag: CGSize = .zero
+    @State private var pipInsets = CallPipInsets()
+    private static let pipSpace = "videoCallPipSpace"
     /// W502: toggle for the diagnostics overlay.
     @State private var showDiagnostics = false
     /// The voice technical-data block of the diagnostics panel is collapsed by default.
@@ -68,27 +74,31 @@ struct VideoCallView: View {
             remoteVideoLayer
 
             VStack(spacing: 0) {
-                if showControls {
-                    topBar
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    // Unified call UI — compact trust bar (SAS ✓ / PQC /
-                    // transport chips). Additive: topBar's existing lock
-                    // icon + CallSecurityBadge are untouched; this is a
-                    // second, small row directly under it, matching the
-                    // "trust bar → Guardian ribbon" order from
-                    // call-guardian-reference.html. The Guardian ribbon
-                    // itself lives inside the existing diagnostics sheet
-                    // here (videoDiagPanel) rather than a second overlay,
-                    // to avoid stacking two bottom sheets on the video
-                    // surface.
-                    trustBar
-                        .padding(.horizontal, 16)
-                        .padding(.top, 6)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
+                VStack(spacing: 0) {
+                    if showControls {
+                        topBar
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                        // Unified call UI — compact trust bar (SAS ✓ / PQC /
+                        // transport chips). Additive: topBar's existing lock
+                        // icon + CallSecurityBadge are untouched; this is a
+                        // second, small row directly under it, matching the
+                        // "trust bar → Guardian ribbon" order from
+                        // call-guardian-reference.html. The Guardian ribbon
+                        // itself lives inside the existing diagnostics sheet
+                        // here (videoDiagPanel) rather than a second overlay,
+                        // to avoid stacking two bottom sheets on the video
+                        // surface.
+                        trustBar
+                            .padding(.horizontal, 16)
+                            .padding(.top, 6)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
 
-                // Narrowband Bluetooth notice: a row of the column, between the top bars and the picture area.
-                NarrowbandBluetoothBanner()
+                    // Narrowband Bluetooth notice: a row of the column, between the top bars and the picture area.
+                    NarrowbandBluetoothBanner()
+                }
+                // The bottom edge of the header: the local preview stays under it.
+                .background(pipFrameReader { CallPipInsets(headerMaxY: $0.maxY) })
 
                 Spacer()
 
@@ -99,22 +109,24 @@ struct VideoCallView: View {
                         sasMiniPanel
                             .transition(.move(edge: .leading).combined(with: .opacity))
                             .padding(.leading, 12)
+                            .background(pipFrameReader { CallPipInsets(sasMinY: $0.minY) })
                     }
 
                     Spacer()
-
-                    if isCameraOn {
-                        localPreview
-                    }
                 }
 
                 if showControls {
                     bottomControls
+                        .background(pipFrameReader { CallPipInsets(dockMinY: $0.minY) })
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .padding(.bottom, 8)
                 }
             }
         }
+        .coordinateSpace(name: Self.pipSpace)
+        .onPreferenceChange(CallPipInsetsKey.self) { pipInsets = $0 }
+        // The local camera preview floats above the picture, in the free area between the header and the dock.
+        .overlay { if isCameraOn { pipLayer } }
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.2)) {
                 showControls.toggle()
@@ -366,6 +378,7 @@ struct VideoCallView: View {
                 Text(resolvedPeerDisplayName)
                     .font(.headline)
                     .foregroundColor(.white)
+                    .lineLimit(1)
 
                 HStack(spacing: 4) {
                     Image(systemName: "lock.fill")
@@ -375,10 +388,13 @@ struct VideoCallView: View {
                     Text(String(localized: "Cifrato · ") + appState.videoCodecLabel)
                         .font(.caption2)
                         .foregroundColor(.gray)
+                        .lineLimit(1)
                 }
             }
+            // The name side gives way first: the security badge keeps its natural width.
+            .layoutPriority(-1)
 
-            Spacer()
+            Spacer(minLength: 8)
 
             // SAS lock button — tapping shows/hides the SAS mini panel.
             if appState.callSasWords.count == 6 {
@@ -467,6 +483,8 @@ struct VideoCallView: View {
             Text(label)
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .tracking(0.4)
+                .lineLimit(1)
+                .fixedSize()
         }
         .foregroundColor(color)
         .padding(.horizontal, 7)
@@ -595,8 +613,52 @@ struct VideoCallView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(CallControlText.flipA11y)
         }
-        .padding(.trailing, 16)
-        .padding(.bottom, 8)
+    }
+
+    /// The floating layer of the preview: rests in a corner of the free area between the header and the dock, follows a
+    /// finger anywhere on the screen and snaps to the nearest corner on release.
+    private var pipLayer: some View {
+        // Coordinate spaces: this layer is an overlay of the same view that declares `pipSpace`, so its local space and
+        // the named space share the same origin and size. The header/dock frames are measured in `pipSpace`, hence in
+        // the same space as `.position` below. The ZStack respects the safe area (only the black backdrop and the
+        // remote video ignore it), so `geo.safeAreaInsets` is 0 here and the measured frames already include the
+        // system bars; the insets stay as a floor for when the header/dock are hidden.
+        GeometryReader { geo in
+            let top = max(pipInsets.headerMaxY, geo.safeAreaInsets.top)
+            let bottom = max(pipInsets.dockMinY.map { geo.size.height - $0 } ?? 0, geo.safeAreaInsets.bottom)
+            let area = CallPipLayout.freeArea(size: geo.size, topInset: top, bottomInset: bottom)
+            let rest = CallPipLayout.origin(corner: pipCorner, area: area,
+                                            leadingBottomLimit: pipInsets.sasMinY.map { $0 - CallPipLayout.gap })
+            let screen = CGRect(x: 0, y: geo.safeAreaInsets.top, width: geo.size.width,
+                                height: geo.size.height - geo.safeAreaInsets.top - geo.safeAreaInsets.bottom)
+            let size = CallPipLayout.size
+            let origin = CallPipLayout.clamped(origin: CGPoint(x: rest.x + pipDrag.width, y: rest.y + pipDrag.height),
+                                               within: screen)
+            localPreview
+                // Simultaneous, so a drag that starts on the flip button still moves the preview (the button drops
+                // its tap once the finger travels), while a plain tap on the button still flips the camera.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 8, coordinateSpace: .named(Self.pipSpace))
+                        // GestureState resets by itself when the system cancels the gesture.
+                        .updating($pipDrag) { value, state, _ in state = value.translation }
+                        .onEnded { value in
+                            let end = CallPipLayout.clamped(origin: CGPoint(x: rest.x + value.translation.width,
+                                                                            y: rest.y + value.translation.height),
+                                                            within: screen)
+                            let centre = CGPoint(x: end.x + size.width / 2, y: end.y + size.height / 2)
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                pipCorner = CallPipLayout.nearestCorner(point: centre, bounds: area)
+                            }
+                        }
+                )
+                .position(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+        }
+    }
+
+    private func pipFrameReader(_ make: @escaping (CGRect) -> CallPipInsets) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(key: CallPipInsetsKey.self, value: make(proxy.frame(in: .named(Self.pipSpace))))
+        }
     }
 
     // MARK: - Control dock
