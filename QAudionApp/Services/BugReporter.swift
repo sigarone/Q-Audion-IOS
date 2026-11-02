@@ -206,7 +206,7 @@ public final class BugReporter: ObservableObject {
         // equivalent" trick (see ScreenshotLockService's own kdoc) — it
         // doesn't just block the OS screenshot gesture, it blanks ANY
         // in-process render of that window, including this class's own
-        // `captureScreen()` → `window.layer.render(in:)`. That's why the
+        // `captureScreen()` → `window.drawHierarchy(in:afterScreenUpdates:)`. That's why the
         // debug capture stopped producing a usable screenshot
         // on screens reached from a screenshot-locked chat (e.g. the mesh
         // sheet): the lock silently blanked the diagnostic image too.
@@ -320,20 +320,17 @@ public final class BugReporter: ObservableObject {
         let capturedNote = note
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Re-sample at SEND time: the sheet can stay up for many seconds and what
-            // the user wants to report may have happened (or still be on screen) after
-            // the trigger. Wait for the sheet to slide away so the second picture shows
-            // the app, not the card.
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            let resampled = self.resampledAtSend(report)
+            // The sheet can stay up for many seconds: refresh the log window at SEND
+            // time so it also covers what happened after the trigger.
+            let resampled = self.withLogsRefreshedAtSend(report)
             RTLog.info("bugreport", "report send age=\(resampled.sendDelayMs) min=\(Int(resampled.logWindowMinutes.rounded(.up))) count=\(resampled.screenshotCount)")
             await self.uploadReport(report: resampled, note: capturedNote)
         }
     }
 
-    /// The trigger-time report (screenshot untouched) with the log from
-    /// `logWindowMinutes` before the trigger up to now.
-    func resampledAtSend(_ report: PendingReport) -> PendingReport {
+    /// The trigger-time report with its log window extended up to now. The
+    /// screenshot taken at trigger time is kept as is; no new capture is made.
+    func withLogsRefreshedAtSend(_ report: PendingReport) -> PendingReport {
         var out = report
         let sinceTrigger = max(0, Date().timeIntervalSince(report.capturedAt))
         let windowMinutes = currentLogWindowMinutes() + sinceTrigger / 60
@@ -704,12 +701,39 @@ public final class BugReporter: ObservableObject {
 
     // MARK: - Screen capture
 
+    struct CaptureSceneInfo {
+        var isForegroundActive: Bool
+        var windowIsKey: [Bool]
+    }
+
+    /// Picks the window to capture: the key window of the foreground-active
+    /// scene; otherwise (control centre, system alert) the key window of any
+    /// scene; otherwise the first window. `usedFallback` is true for the
+    /// latter two. Returns nil only when there is no window at all.
+    static func selectCaptureWindow(_ scenes: [CaptureSceneInfo]) -> (scene: Int, window: Int, usedFallback: Bool)? {
+        if let s = scenes.firstIndex(where: { $0.isForegroundActive && $0.windowIsKey.contains(true) }),
+           let w = scenes[s].windowIsKey.firstIndex(of: true) {
+            return (s, w, false)
+        }
+        if let s = scenes.firstIndex(where: { $0.windowIsKey.contains(true) }),
+           let w = scenes[s].windowIsKey.firstIndex(of: true) {
+            return (s, w, true)
+        }
+        if let s = scenes.firstIndex(where: { !$0.windowIsKey.isEmpty }) {
+            return (s, 0, true)
+        }
+        return nil
+    }
+
     private func captureScreen() -> UIImage? {
-        // Only the key window of the foreground-active scene: never another scene's window.
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive })?
-            .windows.first(where: { $0.isKeyWindow }) else { return nil }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let infos = scenes.map { CaptureSceneInfo(isForegroundActive: $0.activationState == .foregroundActive,
+                                                  windowIsKey: $0.windows.map { $0.isKeyWindow }) }
+        guard let pick = Self.selectCaptureWindow(infos) else { return nil }
+        if pick.usedFallback {
+            RTLog.info("bugreport", "capture fallback window used")
+        }
+        let window = scenes[pick.scene].windows[pick.window]
         // W-BLANKCAPTURE (2026-08-13): `window.layer.render(in:)` is the
         // legacy Core Animation offscreen path — it composites the layer
         // tree's raw bitmap, which does NOT reliably include SwiftUI's own

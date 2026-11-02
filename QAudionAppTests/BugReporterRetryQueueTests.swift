@@ -73,10 +73,43 @@ final class BugReporterRetryQueueTests: XCTestCase {
         }
         var report = makeReport(trigger: "manual")
         report.screenshot = shot
-        let out = BugReporter(forTesting: ()).resampledAtSend(report)
+        let out = BugReporter(forTesting: ()).withLogsRefreshedAtSend(report)
         XCTAssertTrue(out.screenshot === shot)
         XCTAssertEqual(out.screenshot?.size, size)
         XCTAssertEqual(out.screenshotCount, 1)
+    }
+
+    // MARK: - Capture window selection
+
+    func test_captureWindowPrefersTheActiveSceneKeyWindow() {
+        let r = BugReporter.selectCaptureWindow([
+            .init(isForegroundActive: false, windowIsKey: [true]),
+            .init(isForegroundActive: true, windowIsKey: [false, true]),
+        ])
+        XCTAssertEqual(r?.scene, 1)
+        XCTAssertEqual(r?.window, 1)
+        XCTAssertEqual(r?.usedFallback, false)
+    }
+
+    func test_captureWindowFallsBackToAnySceneKeyWindow() {
+        let r = BugReporter.selectCaptureWindow([
+            .init(isForegroundActive: false, windowIsKey: [false]),
+            .init(isForegroundActive: false, windowIsKey: [true]),
+        ])
+        XCTAssertEqual(r?.scene, 1)
+        XCTAssertEqual(r?.window, 0)
+        XCTAssertEqual(r?.usedFallback, true)
+    }
+
+    func test_captureWindowFallsBackToFirstWindowThenNil() {
+        let r = BugReporter.selectCaptureWindow([
+            .init(isForegroundActive: false, windowIsKey: []),
+            .init(isForegroundActive: true, windowIsKey: [false, false]),
+        ])
+        XCTAssertEqual(r?.scene, 1)
+        XCTAssertEqual(r?.window, 0)
+        XCTAssertEqual(r?.usedFallback, true)
+        XCTAssertNil(BugReporter.selectCaptureWindow([]))
     }
 
     // MARK: - The report keeps the call and state of the moment it was queued
