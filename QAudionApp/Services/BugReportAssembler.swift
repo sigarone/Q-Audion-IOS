@@ -7,7 +7,7 @@ import UIKit
 /// (hang ms=32304, `main_stall_ms_max` 27404, 762 live-log lines dropped): `BugReporter` is
 /// `@MainActor` and ran the whole assembly on it -- the redaction of the 1.36 MB log tail
 /// (twice: once per entry, once as one blob for the diagnostic summary), the PNG encode of
-/// the side-by-side screenshot, three AES-GCM seals and the multipart body. Now the main
+/// the screenshot, three AES-GCM seals and the multipart body. Now the main
 /// actor only reads what has to be read there (the ring copy, the app state, the token) and
 /// hands plain values to `assemble`, which `BugReporter.uploadReport` runs in a detached
 /// utility-priority task, then hops back for the network call.

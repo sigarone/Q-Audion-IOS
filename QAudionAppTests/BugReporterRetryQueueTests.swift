@@ -62,6 +62,23 @@ final class BugReporterRetryQueueTests: XCTestCase {
         }
     }
 
+    // MARK: - One screenshot per report
+
+    func test_sendTimeKeepsTheTriggerScreenshotAsIs() {
+        let size = CGSize(width: 100, height: 200)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let shot = UIGraphicsImageRenderer(size: size, format: format).image { c in
+            UIColor.red.setFill(); c.fill(CGRect(origin: .zero, size: size))
+        }
+        var report = makeReport(trigger: "manual")
+        report.screenshot = shot
+        let out = BugReporter(forTesting: ()).resampledAtSend(report)
+        XCTAssertTrue(out.screenshot === shot)
+        XCTAssertEqual(out.screenshot?.size, size)
+        XCTAssertEqual(out.screenshotCount, 1)
+    }
+
     // MARK: - The report keeps the call and state of the moment it was queued
 
     func test_retryCarriesTheCallIdAndSnapshotFromQueueTime() async {
