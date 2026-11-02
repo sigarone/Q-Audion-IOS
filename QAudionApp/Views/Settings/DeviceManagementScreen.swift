@@ -265,7 +265,9 @@ struct DeviceManagementScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     headerHint
-                    linkNewButton.padding(.top, 12)
+                    if StoreComplianceFlags.showLinkNewDevice {
+                        linkNewButton.padding(.top, 12)
+                    }
 
                     SettingsSectionHeader("DISPOSITIVI COLLEGATI")
                     VStack(spacing: 8) {

@@ -8,9 +8,7 @@ import QAudionEngine
 /// Flow (2026-07-29 — SMS-OTP + extension-only registration + recovery
 /// wired end-to-end; previously the phone-entry CTAs dead-ended at a
 /// hardcoded "backend not ready" placeholder):
-///   - lands on `WelcomeScreen` (Q-Audion brand, 5 CTAs)
-///   - "Configurazione rapida (QR)" → `FastSetupOnboardingScreen` (the
-///     original, still-working QR-provisioning path)
+///   - lands on `WelcomeScreen` (Q-Audion brand, 4 CTAs)
 ///   - "Crea un account" → `PhoneEntryScreen(mode: .register)`
 ///     (phone number + age declaration box, no invite code) →
 ///     `OtpVerificationScreen` (SMS code) → `ProfileSetupScreen`
@@ -35,10 +33,6 @@ import QAudionEngine
 struct OnboardingRoot: View {
     @EnvironmentObject var appState: AppState
     @State private var route: Route = .welcome
-    /// W459 — holds the QR text pre-decoded on WelcomeScreen (gallery path).
-    /// Forwarded to FastSetupOnboardingScreen via `initialQrText` so
-    /// payload validation happens in a single shared code path.
-    @State private var fastSetupInitialQrText: String = ""
     /// Backing store for the recovery reveal/restore screens. Held here
     /// (rather than constructed inline in the route switch) so it survives
     /// re-renders of this view while the user is mid-flow — recreating it
@@ -49,7 +43,6 @@ struct OnboardingRoot: View {
 
     private enum Route: Equatable {
         case welcome
-        case fastSetup
         case phoneEntry(PhoneEntryScreen.Mode)
         case otpVerification(e164: String, mode: PhoneEntryScreen.Mode, ageDeclared: Bool, termsAcceptance: TermsAcceptance?)
         case profileSetup
@@ -64,28 +57,11 @@ struct OnboardingRoot: View {
             switch route {
             case .welcome:
                 WelcomeScreen(
-                    onStartFastSetup: { route = .fastSetup },
                     onStartRegister: { route = .phoneEntry(.register) },
                     onStartLogin: { route = .phoneEntry(.login) },
                     onStartExtensionLogin: { route = .extensionLogin },
                     onStartExtensionOnlyRegister: { route = .extensionOnlyRegister },
-                    onStartRecoveryRestore: { startRecoveryRestore() },
-                    // W459: pre-decode QR on WelcomeScreen itself, then
-                    // jump straight to FastSetup carrying the raw text so
-                    // payload validation + login happen in one shared path.
-                    onGalleryQrDecoded: { text in
-                        fastSetupInitialQrText = text
-                        route = .fastSetup
-                    }
-                )
-            case .fastSetup:
-                FastSetupOnboardingScreen(
-                    appState: appState,
-                    onCancel: {
-                        fastSetupInitialQrText = ""
-                        route = .welcome
-                    },
-                    initialQrText: fastSetupInitialQrText
+                    onStartRecoveryRestore: { startRecoveryRestore() }
                 )
             case .phoneEntry(let mode):
                 PhoneEntryScreen(

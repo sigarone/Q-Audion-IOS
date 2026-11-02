@@ -51,6 +51,7 @@ targets:
           - SasCardPlacementTests.swift
           - CallControlDockTests.swift
           - CallPipLayoutTests.swift
+          - CredentialTextParserTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
           - CarPlayBridgeTests.swift

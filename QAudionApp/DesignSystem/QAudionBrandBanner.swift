@@ -32,7 +32,7 @@ struct QAudionBrandBanner: View {
                 .scaledToFit()
                 .frame(height: 32)
                 .accessibilityLabel("Q-Audion")
-            if planStatus != .base {
+            if StoreComplianceFlags.showProBadge && planStatus != .base {
                 Spacer(minLength: 8).frame(maxWidth: 8)
                 ProBadge()
             }
