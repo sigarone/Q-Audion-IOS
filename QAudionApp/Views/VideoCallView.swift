@@ -62,6 +62,11 @@ struct VideoCallView: View {
     @State private var showDiagnostics = false
     /// The voice technical-data block of the diagnostics panel is collapsed by default.
     @State private var showVoiceTechnicalData = false
+    /// As on Android, the stats band is collapsed behind the info toggle during a video call, so nothing covers the
+    /// picture until the user asks for it.
+    @State private var showInfo = false
+    /// The session security sheet ("Sicurezza sessione"), opened by the shield next to the info toggle.
+    @State private var showSecuritySheet = false
 
     // Resolved display name (same lookup pattern as LiveInCallScreen).
     @State private var peerDisplayName: String = ""
@@ -85,13 +90,19 @@ struct VideoCallView: View {
                         // "trust bar → Guardian ribbon" order from
                         // call-guardian-reference.html. The Guardian ribbon
                         // itself lives inside the existing diagnostics sheet
-                        // here (videoDiagPanel) rather than a second overlay,
+                        // here (CallDiagnosticsPanel) rather than a second overlay,
                         // to avoid stacking two bottom sheets on the video
                         // surface.
                         trustBar
                             .padding(.horizontal, 16)
                             .padding(.top, 6)
                             .transition(.move(edge: .top).combined(with: .opacity))
+                        if showInfo {
+                            CallStatsBand()
+                                .padding(.horizontal, 16)
+                                .padding(.top, 6)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
 
                     // Narrowband Bluetooth notice: a row of the column, between the top bars and the picture area.
@@ -135,7 +146,7 @@ struct VideoCallView: View {
         // W502: diagnostics overlay (bottom sheet, above controls).
         .overlay(alignment: .bottom) {
             if showDiagnostics {
-                videoDiagPanel
+                CallDiagnosticsPanel(onClose: { showDiagnostics = false }) { videoDiagExtra }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .padding(.bottom, CallDockLayout.overlayClearance)
                     .padding(.horizontal, 16)
@@ -189,6 +200,7 @@ struct VideoCallView: View {
         .animation(.easeInOut(duration: 0.25), value: showControls)
         .animation(.easeInOut(duration: 0.25), value: showSas)
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
+        .animation(.easeInOut(duration: 0.25), value: showInfo)
         .animation(.easeInOut(duration: 0.25), value: appState.peerScreenShareActive)
         .animation(.easeInOut(duration: 0.25), value: appState.remoteVideoPaused)
         .animation(.easeInOut(duration: 0.25), value: appState.showPeerVideoInviteBanner)
@@ -236,6 +248,10 @@ struct VideoCallView: View {
         }
         // The "+" of the dock: the same contact picker the audio call screen opens, with the video toggle locked to this
         // call's own type.
+        // The same session security sheet the audio call screen opens, built from the same live call data.
+        .sheet(isPresented: $showSecuritySheet) {
+            LiveInCallScreen().asSecuritySheetHost()
+        }
         .sheet(isPresented: $showAddParticipant) {
             GroupCallContactPickerSheet(
                 contacts: addParticipantCandidates,
@@ -453,16 +469,15 @@ struct VideoCallView: View {
 
     /// Compact security-chip row: SAS ✓ (only once actually verified),
     /// PQC (only once a real ML-KEM session key is live — same source as
-    /// `videoDiagSessionKey` below, NOT the literal string "PQC" that
+    /// the ML-KEM row of the diagnostics panel, NOT the literal string "PQC" that
     /// `appState.backendType` never equals), and the media-transport
     /// label (`p2p`/`turn`/`relay` from AppState, mapped to the same
     /// wording InCallScreen's TransportMode.label uses so the two call
-    /// surfaces read consistently). Tapping the shield opens the existing
-    /// diagnostics sheet, now extended with the Guardian mini-gauges
-    /// (see videoDiagPanel) — reusing one sheet rather than stacking a
-    /// second one on the video surface.
+    /// surfaces read consistently). The shield at its start opens the session
+    /// security sheet; the info toggle next to it shows the stats band.
     private var trustBar: some View {
         HStack(spacing: 6) {
+            infoControls
             if sasVerified {
                 trustChip(icon: "checkmark", label: "SAS ✓", color: .green, filled: true)
             }
@@ -472,6 +487,43 @@ struct VideoCallView: View {
             trustChip(icon: nil, label: transportChipLabel, color: .white.opacity(0.75), filled: false)
             Spacer()
         }
+    }
+
+    /// The info toggle (stats band) is always visible; the shield (session security sheet) shows only while the
+    /// toggle is open, as on Android where the trust bar is hidden while the info is minimised.
+    private var infoControls: some View {
+        HStack(spacing: 8) {
+            if showInfo {
+                Button {
+                    showSecuritySheet = true
+                } label: {
+                    Image(systemName: "checkmark.shield")
+                        .font(.system(size: 15))
+                        .foregroundColor(.white)
+                        .frame(width: 32, height: 32)
+                        .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "call.video.security_a11y", defaultValue: "Sicurezza della sessione",
+                                           comment: "Accessibility label — the shield on the video call screen that opens the session security sheet"))
+            }
+            Button {
+                showInfo.toggle()
+            } label: {
+                Image(systemName: showInfo ? "chevron.up" : "info.circle")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showInfo
+                ? String(localized: "call.video.info_hide", defaultValue: "Nascondi informazioni di sicurezza",
+                         comment: "Accessibility label — hides the stats band on the video call screen")
+                : String(localized: "call.video.info_show", defaultValue: "Mostra informazioni di sicurezza",
+                         comment: "Accessibility label — shows the stats band on the video call screen"))
+        }
+        .padding(.trailing, 4)
     }
 
     private func trustChip(icon: String?, label: String, color: Color, filled: Bool) -> some View {
@@ -758,46 +810,14 @@ struct VideoCallView: View {
 
     // MARK: - Diagnostics panel (W502)
 
+    /// What the shared diagnostics panel carries under its rows on this screen: the collapsed technical-data block
+    /// of the voice measures, only once a result exists (never a fabricated "0.00" row).
     @ViewBuilder
-    private var videoDiagPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.green)
-                Text("DIAGNOSTICA VIDEO")
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(1.2)
-                    .foregroundColor(.green)
-                Spacer()
-                Button {
-                    showDiagnostics = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.gray)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Chiudi")
-            }
+    private var videoDiagExtra: some View {
+        if appState.voiceAnalysis != nil {
             Divider().background(Color.white.opacity(0.2))
-            videoDiagTransport
-            videoDiagFrameCounters
-            videoDiagSessionKey
-            // Unified call UI — Guardian voice biometrics, interpreted
-            // (value + plain-language meaning), reusing the existing
-            // diagnostics sheet as the aggregation point for video calls
-            // rather than a second sheet. Omitted entirely (not the
-            // section header either) when no result is available, so the
-            // sheet never shows a fabricated "0.00" row.
-            if appState.voiceAnalysis != nil {
-                Divider().background(Color.white.opacity(0.2))
-                videoDiagVoiceBiometrics
-            }
+            videoDiagVoiceBiometrics
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.88)))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.green.opacity(0.35), lineWidth: 1))
     }
 
     /// Raw voice measures, as plain numbers and nothing else: no stress, breath
@@ -843,46 +863,6 @@ struct VideoCallView: View {
         return VoiceBiometricsFormat.pitch(hz: InCallScreen.VoiceBiometrics(result).pitchHz)
     }
 
-    @ViewBuilder
-    private var videoDiagTransport: some View {
-        let codec = appState.videoCodecLabel
-        let path = codec + " · AES-256-GCM"
-        videoDiagRow(String(localized: "video.diag.codec_cipher", defaultValue: "CODEC / CIFRA", comment: "Row label in the video call diagnostics panel: video codec and encryption cipher (capitals)."), path)
-        // W-SRTPCOUNTERS (2026-08-29) — effective counters: RTP packets on a
-        // native-SRTP call, sealed frames on the DataChannel path. The raw
-        // frame counters read 0 for the whole of an `audio-srtp-v1` call.
-        videoDiagRow("AUDIO TX",  appState.callService.effectiveAudioTxCount.description)
-        videoDiagRow("AUDIO RX",  appState.callService.effectiveAudioRxCount.description)
-    }
-
-    // Helpers — build strings outside @ViewBuilder to avoid String(Int)
-    // overload timeout on Xcode 26.4 (CLAUDE.md §13 v1.0.255).
-    private static func videoLatencyString(_ ms: Int) -> String {
-        guard ms > 0 else { return String(localized: "video.diag.not_available", defaultValue: "n/d", comment: "Value in the video call diagnostics panel when a measurement is not available (abbreviation).") }
-        return ms.description + " ms"
-    }
-
-    @ViewBuilder
-    private var videoDiagFrameCounters: some View {
-        let hasPipeline = appState.videoPipeline != nil
-        let pipelineState = hasPipeline ? String(localized: "video.diag.pipeline_active", defaultValue: "attiva", comment: "Value in the video call diagnostics panel: the video pipeline is running.") : String(localized: "video.diag.pipeline_inactive", defaultValue: "inattiva", comment: "Value in the video call diagnostics panel: the video pipeline is not running.")
-        let rekeyVal = "—" // no live re-key counter is published yet
-        let latencyVal = Self.videoLatencyString(appState.latencyMs)
-        videoDiagRow(String(localized: "video.diag.pipeline", defaultValue: "PIPELINE VIDEO", comment: "Row label in the video call diagnostics panel: state of the video pipeline (capitals)."), pipelineState)
-        videoDiagRow("REKEY",          rekeyVal)
-        videoDiagRow(String(localized: "video.diag.relay_latency", defaultValue: "LATENZA RELAY", comment: "Row label in the video call diagnostics panel: round-trip time to the relay server (capitals)."),  latencyVal)
-    }
-
-    @ViewBuilder
-    private var videoDiagSessionKey: some View {
-        if let key = realSessionKey {
-            let fp = Self.sessionFingerprintForDiag(key)
-            videoDiagRow(String(localized: "video.diag.session_mlkem", defaultValue: "SESSIONE ML-KEM", comment: "Row label in the video call diagnostics panel: fingerprint of the ML-KEM session key (capitals)."), fp)
-        } else {
-            videoDiagRow(String(localized: "video.diag.session_mlkem", defaultValue: "SESSIONE ML-KEM", comment: "Row label in the video call diagnostics panel: fingerprint of the ML-KEM session key (capitals)."), String(localized: "video.diag.handshake_in_progress", defaultValue: "handshake in corso…", comment: "Value in the video call diagnostics panel while the key exchange of the call is still running."))
-        }
-    }
-
     private func videoDiagRow(_ label: String, _ value: String) -> some View {
         HStack(spacing: 8) {
             Text(label)
@@ -897,15 +877,6 @@ struct VideoCallView: View {
                 .truncationMode(.middle)
             Spacer(minLength: 0)
         }
-    }
-
-    private static func sessionFingerprintForDiag(_ key: Data) -> String {
-        let digest = SHA256.hash(data: key)
-        var hex = ""
-        for byte in digest { hex += String(format: "%02x", byte) }
-        let head = String(hex.prefix(8))
-        let tail = String(hex.suffix(4))
-        return head + "…" + tail
     }
 
     // MARK: - Derived state

@@ -392,6 +392,17 @@ final class CallService: @unchecked Sendable {
     public private(set) var wireTxKbps: Double?
     public private(set) var wireRxKbps: Double?
 
+    /// Live VIDEO wire rate in kbps (the video RTP rows of the PeerConnection report), same formula and same
+    /// "no sample = nil" rule as the audio pair above. `nil` ⇒ "—". Written on the main actor by the sampler only.
+    public private(set) var videoTxKbps: Double?
+    public private(set) var videoRxKbps: Double?
+    private var lastVideoThroughputSample: (atSec: Double, tx: Int64, rx: Int64)?
+
+    /// Bytes the sealed-audio paths (DataChannel and WS relay) have moved in this call, for the diagnostics panel's
+    /// WS-relay rows. Same lock-free read discipline as the frame counters (see the threading note above).
+    public var wireBytesSent: Int64 { wireTxBytes }
+    public var wireBytesReceived: Int64 { wireRxBytes }
+
     /// Measured RTT on the leg that is ACTUALLY carrying the audio, in ms, or
     /// `nil` when no such measurement exists (WS-relay path, or ICE not
     /// converged). Written on the main actor by the sampler only.
@@ -405,6 +416,32 @@ final class CallService: @unchecked Sendable {
     /// "<rtt>+<buf>ms" on the stats band. Written on the main actor by the
     /// sampler only.
     public private(set) var mediaJitterBufferMs: Int?
+
+    /// The video twin of the rate above, from the cumulative video RTP bytes of the last PeerConnection report. A call
+    /// without a video row (or a report that has not landed yet) leaves both rates nil.
+    @MainActor
+    private func sampleVideoThroughput(nowSec: Double) {
+        let stats = getNativeAudioSrtpStats?()
+        let tx = stats?.videoBytesSent ?? -1
+        let rx = stats?.videoBytesReceived ?? -1
+        guard tx >= 0 || rx >= 0 else {
+            videoTxKbps = nil
+            videoRxKbps = nil
+            lastVideoThroughputSample = nil
+            return
+        }
+        if let prev = lastVideoThroughputSample {
+            let dtSec = nowSec - prev.atSec
+            if dtSec > 0.2, tx >= prev.tx, rx >= prev.rx {
+                videoTxKbps = tx >= 0 ? Double(tx - prev.tx) * 8.0 / 1000.0 / dtSec : nil
+                videoRxKbps = rx >= 0 ? Double(rx - prev.rx) * 8.0 / 1000.0 / dtSec : nil
+            } else {
+                videoTxKbps = nil
+                videoRxKbps = nil
+            }
+        }
+        lastVideoThroughputSample = (nowSec, max(tx, 0), max(rx, 0))
+    }
 
     /// Compute the tx/rx kbps for this tick and store the RTT + jitter-buffer
     /// delay the caller resolved for the active media leg.
@@ -467,6 +504,7 @@ final class CallService: @unchecked Sendable {
             }
         }
         lastThroughputSample = (nowSec, tx, rx)
+        sampleVideoThroughput(nowSec: nowSec)
         // W-SRTPRXDIAG (2026-08-30) — remote heartbeat of the native audio
         // RTP counters, because a silent iOS<->iOS call on 1049 (83d3f6a6)
         // was undiagnosable from Loki: both legs logged `audiosrtp tx=1`
@@ -4166,6 +4204,9 @@ final class CallService: @unchecked Sendable {
         audioWireReporter.reset()
         wireTxKbps = nil
         wireRxKbps = nil
+        videoTxKbps = nil
+        videoRxKbps = nil
+        lastVideoThroughputSample = nil
         mediaRttMs = nil
         mediaJitterBufferMs = nil
         // W466 — reset the per-call diagnostic counters/markers so the

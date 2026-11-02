@@ -66,6 +66,17 @@ struct InCallScreen: View {
     /// sheet open" UI flag, nothing security-critical is gated by it.
     @State private var showSecuritySheet: Bool = false
 
+    /// The screen is drawn as the session security sheet ALONE: the video call screen presents this sheet over itself
+    /// (see `LiveInCallScreen.asSecuritySheetHost`). The close button then dismisses the presentation.
+    private var securitySheetOnly: Bool = false
+    @Environment(\.dismiss) private var dismissPresentation
+
+    func sheetOnly(_ on: Bool) -> InCallScreen {
+        var copy = self
+        copy.securitySheetOnly = on
+        return copy
+    }
+
     /// W-SHIELDBADGES (item 1, 2026-07-31 InCallScreen Android→iOS parity)
     /// — which trust-bar shield's tap-to-explain popup is showing, if any.
     /// Local UI-only state, same posture as `showSecuritySheet` above.
@@ -584,6 +595,14 @@ struct InCallScreen: View {
     // MARK: - Body
 
     var body: some View {
+        if securitySheetOnly {
+            securitySheet
+        } else {
+            fullBody
+        }
+    }
+
+    private var fullBody: some View {
         ZStack(alignment: .bottom) {
             CallMeshBackground()
                 .background(GeometryReader { geo in
@@ -2514,7 +2533,7 @@ struct InCallScreen: View {
                         .foregroundStyle(scheme.onSurface)
                     Spacer()
                     Button {
-                        showSecuritySheet = false
+                        if securitySheetOnly { dismissPresentation() } else { showSecuritySheet = false }
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 12, weight: .semibold))

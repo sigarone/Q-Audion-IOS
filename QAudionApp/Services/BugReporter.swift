@@ -312,9 +312,12 @@ public final class BugReporter: ObservableObject {
 
     // MARK: - Send (called by overlay UI)
 
-    public func send(note: String, attachLogs: Bool = true) {
+    public func send(note: String, attachLogs: Bool = true, attachScreenshot: Bool = true) {
         guard var report = pendingReport else { return }
         report.attachLogs = attachLogs
+        // The user's choice on the screenshot (the checkbox of the sheet, on by default): declined, the image taken at
+        // trigger time is dropped here and never reaches the assembler, so nothing of it is sent.
+        if !attachScreenshot { report.screenshot = nil }
         isShowingOverlay = false
         pendingReport = nil
         let capturedNote = note
