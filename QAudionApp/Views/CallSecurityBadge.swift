@@ -68,6 +68,8 @@ struct CallSecurityBadge: View {
             Text(Self.backendLabel(appState.backendType))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundColor(backendColor)
+                .lineLimit(1)
+                .fixedSize()
 
             // Drawn only on a verified fact: a pre-shared key was mixed into this call's session key. Not on
             // the broader `pskActive` flag.
@@ -75,6 +77,8 @@ struct CallSecurityBadge: View {
                 Text("PSK")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundColor(.black)
+                    .lineLimit(1)
+                    .fixedSize()
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
                     .background(Color.yellow)
@@ -87,6 +91,8 @@ struct CallSecurityBadge: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
+        // Natural width: the pill is never squeezed by a crowded header.
+        .fixedSize(horizontal: true, vertical: false)
         .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 20), fallback: surfaceFallback)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
