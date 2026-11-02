@@ -10,9 +10,10 @@ import QAudionEngine
 ///   - Auto: 2+ errors with the same tag in monitored categories within 60s → silent upload
 ///     (only while the diagnostics opt-in is on), with nothing shown to the user.
 ///
-/// **Capture:** a screenshot and the log tail at trigger time, then AGAIN at send time
-/// (the sheet can stay up for a while): the uploaded image shows both moments side by
-/// side, the log covers from `logWindowMinutes` before the trigger up to the send.
+/// **Capture:** one screenshot taken at the moment the report button is tapped, and the
+/// log tail at trigger time, extended at send time (the sheet can stay up for a while):
+/// the uploaded image is that single screenshot, the log covers from `logWindowMinutes`
+/// before the trigger up to the send.
 ///
 /// **API constraint (CLAUDE.md rule #16):** never takes `AppState` as a parameter type.
 /// All AppState values are accessed via closures injected from `AppState.initialize()`.
@@ -48,8 +49,7 @@ public final class BugReporter: ObservableObject {
     // MARK: - Pending report model
 
     public struct PendingReport {
-        /// Trigger-time screenshot; at send time it becomes the trigger-time and the
-        /// send-time screenshots side by side.
+        /// The one screenshot of the report, taken at trigger time and never replaced.
         public var screenshot: UIImage?
         /// Trigger-time log tail, as a raw (unredacted) copy of the ring; at send time it is
         /// replaced by the longer window. W-REPORTFREEZE: kept as entries, not as text, so the
@@ -206,7 +206,7 @@ public final class BugReporter: ObservableObject {
         // equivalent" trick (see ScreenshotLockService's own kdoc) — it
         // doesn't just block the OS screenshot gesture, it blanks ANY
         // in-process render of that window, including this class's own
-        // `captureScreen()` → `window.layer.render(in:)`. That's why the
+        // `captureScreen()` → `window.drawHierarchy(in:afterScreenUpdates:)`. That's why the
         // debug capture stopped producing a usable screenshot
         // on screens reached from a screenshot-locked chat (e.g. the mesh
         // sheet): the lock silently blanked the diagnostic image too.
@@ -232,7 +232,7 @@ public final class BugReporter: ObservableObject {
         isShowingOverlay = true
     }
 
-    /// The screenshot for a manual report (trigger time and send time), with the
+    /// The screenshot for a manual report (trigger time), with the
     /// dev/TestFlight-only screenshot-lock bypass described in `triggerManual`.
     private func captureScreenForReport() -> UIImage? {
         #if QAUDION_DEV_TOOLS
@@ -320,49 +320,26 @@ public final class BugReporter: ObservableObject {
         let capturedNote = note
         Task { @MainActor [weak self] in
             guard let self = self else { return }
-            // Re-sample at SEND time: the sheet can stay up for many seconds and what
-            // the user wants to report may have happened (or still be on screen) after
-            // the trigger. Wait for the sheet to slide away so the second picture shows
-            // the app, not the card.
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            let resampled = self.resampledAtSend(report)
+            // The sheet can stay up for many seconds: refresh the log window at SEND
+            // time so it also covers what happened after the trigger.
+            let resampled = self.withLogsRefreshedAtSend(report)
             RTLog.info("bugreport", "report send age=\(resampled.sendDelayMs) min=\(Int(resampled.logWindowMinutes.rounded(.up))) count=\(resampled.screenshotCount)")
             await self.uploadReport(report: resampled, note: capturedNote)
         }
     }
 
-    /// The trigger-time report with the send-time screenshot next to the trigger-time
-    /// one, and the log from `logWindowMinutes` before the trigger up to now.
-    private func resampledAtSend(_ report: PendingReport) -> PendingReport {
+    /// The trigger-time report with its log window extended up to now. The
+    /// screenshot taken at trigger time is kept as is; no new capture is made.
+    func withLogsRefreshedAtSend(_ report: PendingReport) -> PendingReport {
         var out = report
         let sinceTrigger = max(0, Date().timeIntervalSince(report.capturedAt))
         let windowMinutes = currentLogWindowMinutes() + sinceTrigger / 60
         let logEntries = ReportLogSupport.infoAndAbove(RuntimeLogSink.shared.recentRawEntries(minutes: windowMinutes))
         if !logEntries.isEmpty { out.logEntries = logEntries }
-        let sendShot = captureScreenForReport()
-        out.screenshot = Self.sideBySide(report.screenshot, sendShot)
-        out.screenshotCount = (report.screenshot == nil ? 0 : 1) + (sendShot == nil ? 0 : 1)
+        out.screenshotCount = report.screenshot == nil ? 0 : 1
         out.sendDelayMs = Int((sinceTrigger * 1000).rounded())
         out.logWindowMinutes = windowMinutes
         return out
-    }
-
-    /// Two screenshots in one image (left: trigger time, right: send time); either one
-    /// alone when the other is missing.
-    private static func sideBySide(_ left: UIImage?, _ right: UIImage?) -> UIImage? {
-        guard let left = left else { return right }
-        guard let right = right else { return left }
-        let gap: CGFloat = 12
-        let size = CGSize(width: left.size.width + gap + right.size.width,
-                          height: max(left.size.height, right.size.height))
-        let format = UIGraphicsImageRendererFormat.default()
-        format.scale = min(left.scale, right.scale)
-        return UIGraphicsImageRenderer(size: size, format: format).image { context in
-            UIColor.black.setFill()
-            context.fill(CGRect(origin: .zero, size: size))
-            left.draw(in: CGRect(origin: .zero, size: left.size))
-            right.draw(in: CGRect(origin: CGPoint(x: left.size.width + gap, y: 0), size: right.size))
-        }
     }
 
     public func dismiss() {
@@ -724,10 +701,39 @@ public final class BugReporter: ObservableObject {
 
     // MARK: - Screen capture
 
+    struct CaptureSceneInfo {
+        var isForegroundActive: Bool
+        var windowIsKey: [Bool]
+    }
+
+    /// Picks the window to capture: the key window of the foreground-active
+    /// scene; otherwise (control centre, system alert) the key window of any
+    /// scene; otherwise the first window. `usedFallback` is true for the
+    /// latter two. Returns nil only when there is no window at all.
+    static func selectCaptureWindow(_ scenes: [CaptureSceneInfo]) -> (scene: Int, window: Int, usedFallback: Bool)? {
+        if let s = scenes.firstIndex(where: { $0.isForegroundActive && $0.windowIsKey.contains(true) }),
+           let w = scenes[s].windowIsKey.firstIndex(of: true) {
+            return (s, w, false)
+        }
+        if let s = scenes.firstIndex(where: { $0.windowIsKey.contains(true) }),
+           let w = scenes[s].windowIsKey.firstIndex(of: true) {
+            return (s, w, true)
+        }
+        if let s = scenes.firstIndex(where: { !$0.windowIsKey.isEmpty }) {
+            return (s, 0, true)
+        }
+        return nil
+    }
+
     private func captureScreen() -> UIImage? {
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first?.windows.first(where: { $0.isKeyWindow }) else { return nil }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let infos = scenes.map { CaptureSceneInfo(isForegroundActive: $0.activationState == .foregroundActive,
+                                                  windowIsKey: $0.windows.map { $0.isKeyWindow }) }
+        guard let pick = Self.selectCaptureWindow(infos) else { return nil }
+        if pick.usedFallback {
+            RTLog.info("bugreport", "capture fallback window used")
+        }
+        let window = scenes[pick.scene].windows[pick.window]
         // W-BLANKCAPTURE (2026-08-13): `window.layer.render(in:)` is the
         // legacy Core Animation offscreen path — it composites the layer
         // tree's raw bitmap, which does NOT reliably include SwiftUI's own
