@@ -39,10 +39,9 @@ import QAudionEngine
 ///   9. **Key info panel** — visible only when `keyInfo != nil`.
 ///  10. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
 ///      optional analytics toggle (`onToggleDiagnostics`).
-///  11. **Pinned control dock** — the shared `CallControlDock`, 2 rows of 4:
-///      chat / share / add (buds, Android only) over mute / audio / video /
-///      end. The shield (security sheet, which holds the diagnostics) and the
-///      report-a-problem button sit in the top bar.
+///  11. **Pinned control dock** — the shared `CallControlDock`: chat / share /
+///      add over mute / audio / video / end. The report-a-problem button is the
+///      last cell of the top row.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
 /// `confidence`, `sasWords`, `sasVerified`, `keyInfo`,
@@ -596,9 +595,6 @@ struct InCallScreen: View {
             // inset: the column ends above it at rest. While scrolling, content still passes under the inset, as
             // under any bar.
             scrollContent
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    callTopBar
-                }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     VStack(spacing: 10) {
                         pinnedSasArea
@@ -2477,26 +2473,16 @@ struct InCallScreen: View {
                      accent: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
                      filled: transportMode == .p2pSrtp)
             Spacer()
-        }
-    }
-
-    // MARK: - Top bar
-
-    /// The shield (opens the security sheet, which holds the diagnostics) on the left and the report-a-problem button on
-    /// the right: the same two places on every call screen.
-    private var callTopBar: some View {
-        HStack(spacing: 0) {
-            CallTopBarButton(icon: "checkmark.shield",
-                             accessibilityLabel: CallControlText.securityA11y,
-                             action: { showSecuritySheet = true })
-            Spacer(minLength: 0)
-            if let onReportProblem {
-                CallTopBarButton(icon: "ladybug",
-                                 accessibilityLabel: CallControlText.reportA11y,
-                                 action: onReportProblem)
+            Button(action: onToggleDiagnostics) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(scheme.onSurface)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(scheme.surfaceVariant))
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Diagnostica")
         }
-        .padding(.horizontal, 8)
     }
 
     // MARK: - Security sheet (unified call UI)
@@ -2517,32 +2503,6 @@ struct InCallScreen: View {
         String(localized: "in_call.security.voice_section_title",
                defaultValue: "Voce · \(peerDisplayName)",
                comment: "Call security sheet — title of the voice section; %@ is the display name of the other person")
-    }
-
-    /// The network diagnostics live in the security sheet: tapping closes the sheet and opens the diagnostics panel.
-    private var diagnosticsRow: some View {
-        Button {
-            showSecuritySheet = false
-            onToggleDiagnostics()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(scheme.onSurface)
-                Text("Diagnostica")
-                    .qaudionStyle(type.bodyLarge)
-                    .foregroundStyle(scheme.onSurface)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(scheme.onSurfaceVariant)
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .frame(minHeight: 48)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     private var securitySheet: some View {
@@ -2568,10 +2528,6 @@ struct InCallScreen: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 18)
                 .padding(.bottom, 12)
-
-                Divider().background(scheme.outline.opacity(0.35))
-
-                diagnosticsRow
 
                 Divider().background(scheme.outline.opacity(0.35))
 
@@ -2707,13 +2663,13 @@ struct InCallScreen: View {
 
     // MARK: - Control dock (pinned)
     //
-    // The shared `CallControlDock`: 2 rows of 4 cells, the same on every call screen and on Android.
-    //   Row 1 (secondary): Chat, Share, Add, Buds (Android only: the cell stays empty here)
+    // The shared `CallControlDock`: a compact card with 2 rows, the same on every call screen and on Android.
+    //   Row 1 (secondary): the controls that exist, in equal columns: Chat, Share, Add (Buds: Android only)
     //   Row 2 (primary):   Mute, Audio, Video, End (red, always the last cell)
     // Every cell calls the same closure it always did.
-    // The "Chat" cell is there when the caller passes `onOpenChat` (the live 1:1 call screen does), and empty otherwise.
+    // The "Chat" cell is there when the caller passes `onOpenChat` (the live 1:1 call screen does), and absent otherwise.
 
-    private var dockRows: [[CallDockItem?]] {
+    private var dockRows: [[CallDockItem]] {
         let style = CallDockStyle(scheme: scheme, extras: extras)
         var items: [CallDockItem] = []
         items.append(CallDockItems.mute(style, muted: muted, action: onToggleMute))
@@ -2739,6 +2695,10 @@ struct InCallScreen: View {
                                        isLocked: !addParticipantUnlocked,
                                        action: onAddParticipant,
                                        onLocked: onAddParticipantLocked))
+        // The single report button, in the dock where the report control was: always reachable, after the other controls.
+        if let onReportProblem {
+            items.append(CallDockItems.report(style, action: onReportProblem))
+        }
         return CallDockItems.assemble(mode: .oneToOne, items: items)
     }
 

@@ -28,9 +28,9 @@ import SwiftUI
 ///                                            vault; never from the state)
 ///        3. "HKDF session key derived"      (connected AND the session-key
 ///                                            fingerprint exists)
-///   - "Ring MM:SS" line under the name, then the call dock (the same
-///     `CallControlDock` as the connected call, bottom row only: microphone,
-///     audio, video (disabled) and the red end button, always bottom-right)
+///   - "Ring MM:SS" label, then the call dock (the same `CallControlDock` as
+///     the connected call, bottom row only: microphone, audio, video
+///     (disabled) and the red end button, always bottom-right)
 ///
 /// `state`, `pskMethodLabel` and `sessionFingerprint` drive the handshake
 /// checklist, row by row as listed above. `errorMessage` non-nil shows
@@ -210,10 +210,7 @@ struct OutgoingCallScreen: View {
                             .qaudionStyle(type.bodyLarge)
                             .italic()
                             .foregroundStyle(scheme.onSurfaceVariant)
-                            .padding(.bottom, 8)
-
-                        ringingLine
-                            .padding(.bottom, 14)
+                            .padding(.bottom, 20)
 
                         HStack(spacing: 8) {
                             MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
@@ -234,14 +231,17 @@ struct OutgoingCallScreen: View {
                         errorBanner(err).padding(.top, 12)
                     }
 
-                    Spacer().frame(height: 150) // space for the pinned dock
+                    Spacer().frame(height: 160) // space for the pinned dock
                 }
                 .padding(.horizontal, 24)
                 .qaudionReadableWidth()
             }
 
-            VStack(spacing: 0) {
+            VStack(spacing: 8) {
                 Spacer()
+                if state != .ended {
+                    ringingLine
+                }
                 CallControlDock(rows: dockRows)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
@@ -250,7 +250,7 @@ struct OutgoingCallScreen: View {
         }
     }
 
-    /// "Ringing for m:ss", under the name (not under the end button, which stays where it is in the connected call).
+    /// "Ringing for m:ss", just above the dock (where it was, under the hang-up button, before the dock).
     @ViewBuilder
     private var ringingLine: some View {
         let minutes: Int = elapsedSeconds / 60
@@ -263,7 +263,7 @@ struct OutgoingCallScreen: View {
     /// The dock of the ring: only the bottom row (microphone, audio, video disabled, end), so the end button is already where
     /// it will be when the call connects. After the call ended before it connected only the end cell is left; it closes the
     /// screen.
-    private var dockRows: [[CallDockItem?]] {
+    private var dockRows: [[CallDockItem]] {
         let style = CallDockStyle(scheme: scheme, extras: extras)
         var items: [CallDockItem] = []
         items.append(CallDockItems.end(style, ended: state == .ended, action: onHangup))
