@@ -336,6 +336,8 @@ jobs:
             -only-testing:QAudionAppTests/CallControlDockTests \
             -only-testing:QAudionAppTests/CallDiagnosticsModelTests \
             -only-testing:QAudionAppTests/CallPipLayoutTests \
+            -only-testing:QAudionAppTests/CredentialTextParserTests \
+            -only-testing:QAudionAppTests/StoreComplianceFlagsTests \
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \
             -only-testing:QAudionAppTests/CarPlayBridgeTests \

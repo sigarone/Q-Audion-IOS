@@ -115,8 +115,7 @@ final class ContactsListContainer: ObservableObject {
 
     /// Persists a QR-scanned payload as a verified local contact. A
     /// device-link payload carries a userId + pubkey so we can render it in
-    /// the contacts list immediately; fast-setup is onboarding-time
-    /// only and is ignored here (the OnboardingFlow path will consume it).
+    /// the contacts list immediately; any other payload is ignored here.
     /// Returns `true` if a new row was inserted (or an existing one updated).
     @discardableResult
     func addScannedContact(_ decoded: QrPayloadRouter.Decoded) -> Bool {
@@ -150,8 +149,7 @@ final class ContactsListContainer: ObservableObject {
                 Task { _ = await sync.replayPendingGroupInvites() }
             }
             return false  // non aggiunto come contatto — è un gruppo
-        case .fastSetup, .invalid, .unknown:
-            // fastSetup è onboarding-time, gestito da OnboardingFlow.
+        case .invalid, .unknown:
             return false
         }
         return saveContact(userId: userId, displayName: displayName, pubkey: pubkey, verified: true,

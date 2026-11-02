@@ -432,11 +432,11 @@ struct ContentView: View {
             // free-text Server URL with the placeholder
             // `bcrypto.example.com` and a generic username/password
             // form) with `OnboardingRoot` — a 1:1 visual + behavioural
-            // port of the Android canonical Welcome → FastSetup flow
+            // port of the Android canonical Welcome flow
             // (`feature-auth` module). The
             // server URL is now pinned to `PinnedServerHost.url`
             // (`https://voip.bcrypto.com`) so a malicious or stale
-            // QR cannot redirect the phone to a different origin.
+            // link cannot redirect the phone to a different origin.
             OnboardingRoot()
         }
     }

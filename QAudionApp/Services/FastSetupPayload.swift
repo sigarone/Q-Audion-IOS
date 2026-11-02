@@ -24,9 +24,9 @@ import Foundation
 /// }
 /// ```
 ///
-/// The scanner validates `kind == "bcrypto-fast-setup"` AND `version == 1`
-/// AND `server` matches the pinned host before handing the payload to
-/// `FastSetupAuth.run(...)`.
+/// `CredentialTextParser` validates `kind == "bcrypto-fast-setup"` AND
+/// `version == 1` AND that `server` matches the pinned host before the
+/// extension and password are copied into the sign-in fields.
 ///
 /// ============================================================
 /// SECURITY H-3 — PLAINTEXT CREDENTIAL IN QR
@@ -44,10 +44,7 @@ import Foundation
 ///     for real credentials over TLS, so the QR never carries a reusable
 ///     secret. Until that endpoint exists this struct keeps the field.
 ///
-/// Client-side mitigations already applied (see `FastSetupAuth`):
-///   - `password` is NEVER logged.
-///   - the local copy is overwritten/zeroed in memory immediately after
-///     the login call returns.
+/// Client-side mitigation: `password` is NEVER logged.
 /// ============================================================
 public struct FastSetupPayload: Codable, Equatable {
 
@@ -57,8 +54,7 @@ public struct FastSetupPayload: Codable, Equatable {
     public let extensionNumber: Int64
     public let phoneId: String
     // SECURITY H-3: plaintext credential in QR — server OTP endpoint
-    // required (see struct doc block). Never log this; the consumer
-    // (`FastSetupAuth`) zeroes its local copy post-login.
+    // required (see struct doc block). Never log this.
     public let password: String
     public let displayName: String
 
@@ -92,24 +88,11 @@ public struct FastSetupPayload: Codable, Equatable {
         self.displayName = displayName
     }
 
-    public enum DecodeError: Swift.Error, LocalizedError {
+    public enum DecodeError: Swift.Error {
         case notJson
         case unexpectedKind(String)
         case unsupportedVersion(Int)
         case missingField(String)
-
-        public var errorDescription: String? {
-            switch self {
-            case .notJson:
-                return String(localized: "qr.fast_setup.error.not_json", defaultValue: "QR code non valido (non è JSON).", comment: "Error shown after scanning a setup QR code whose content is not JSON")
-            case .unexpectedKind(let k):
-                return String(localized: "qr.fast_setup.error.unexpected_kind", defaultValue: "QR code non valido (kind = \(k), atteso bcrypto-fast-setup).", comment: "Error shown after scanning a setup QR code of the wrong kind. %@ is the kind value found in the code; keep 'kind' and 'bcrypto-fast-setup' as they are (technical field names)")
-            case .unsupportedVersion(let v):
-                return String(localized: "qr.fast_setup.error.unsupported_version", defaultValue: "Versione QR non supportata (v=\(v), atteso 1).", comment: "Error shown after scanning a setup QR code with an unsupported format version. %lld is the version found in the code")
-            case .missingField(let f):
-                return String(localized: "qr.fast_setup.error.missing_field", defaultValue: "QR code non valido (campo \(f) mancante).", comment: "Error shown after scanning a setup QR code that lacks a required field. %@ is the technical field name, keep it unchanged")
-            }
-        }
     }
 
     /// Parse a raw QR string (JSON) into a validated `FastSetupPayload`.
