@@ -46,6 +46,7 @@ struct VideoCallView: View {
     /// and being derived it needs no remount re-sync at all.
     private var isCameraOn: Bool { appState.localCameraSending }
     @State private var isSpeaker = true
+    @State private var showControls = true
     /// The "+" of the dock: the same contact picker sheet the audio call screen uses (promotes the call to a group call).
     @State private var showAddParticipant = false
     @Environment(\.qaudionScheme) private var scheme
@@ -66,22 +67,25 @@ struct VideoCallView: View {
 
             remoteVideoLayer
 
-            // The top bar and the dock stay on screen (no tap-to-hide): the controls are in the same place in every call
-            // state.
             VStack(spacing: 0) {
-                topBar
-                // Unified call UI — compact trust bar (SAS ✓ / PQC /
-                // transport chips). Additive: the top bar's security badge
-                // is untouched; this is a second, small row directly under
-                // it, matching the "trust bar → Guardian ribbon" order from
-                // call-guardian-reference.html. The Guardian ribbon
-                // itself lives inside the existing diagnostics sheet
-                // here (videoDiagPanel) rather than a second overlay,
-                // to avoid stacking two bottom sheets on the video
-                // surface.
-                trustBar
-                    .padding(.horizontal, 16)
-                    .padding(.top, 6)
+                if showControls {
+                    topBar
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    // Unified call UI — compact trust bar (SAS ✓ / PQC /
+                    // transport chips). Additive: topBar's existing lock
+                    // icon + CallSecurityBadge are untouched; this is a
+                    // second, small row directly under it, matching the
+                    // "trust bar → Guardian ribbon" order from
+                    // call-guardian-reference.html. The Guardian ribbon
+                    // itself lives inside the existing diagnostics sheet
+                    // here (videoDiagPanel) rather than a second overlay,
+                    // to avoid stacking two bottom sheets on the video
+                    // surface.
+                    trustBar
+                        .padding(.horizontal, 16)
+                        .padding(.top, 6)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
 
                 // Narrowband Bluetooth notice: a row of the column, between the top bars and the picture area.
                 NarrowbandBluetoothBanner()
@@ -104,8 +108,16 @@ struct VideoCallView: View {
                     }
                 }
 
-                bottomControls
-                    .padding(.bottom, 8)
+                if showControls {
+                    bottomControls
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.bottom, 8)
+                }
+            }
+        }
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showControls.toggle()
             }
         }
         // W502: diagnostics overlay (bottom sheet, above controls).
@@ -162,11 +174,13 @@ struct VideoCallView: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: showControls)
         .animation(.easeInOut(duration: 0.25), value: showSas)
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
         .animation(.easeInOut(duration: 0.25), value: appState.peerScreenShareActive)
         .animation(.easeInOut(duration: 0.25), value: appState.remoteVideoPaused)
         .animation(.easeInOut(duration: 0.25), value: appState.showPeerVideoInviteBanner)
+        .statusBarHidden(!showControls)
         .onAppear {
             ScreenshotLockService.lock()
             resolveDisplayName()
@@ -347,12 +361,7 @@ struct VideoCallView: View {
     }
 
     private var topBarContent: some View {
-        HStack(spacing: 0) {
-            // The shield opens the panel that holds the diagnostics and the session key (the security sheet of this screen).
-            CallTopBarButton(icon: "checkmark.shield",
-                             accessibilityLabel: CallControlText.securityA11y,
-                             action: { showDiagnostics.toggle() })
-
+        HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(resolvedPeerDisplayName)
                     .font(.headline)
@@ -368,7 +377,6 @@ struct VideoCallView: View {
                         .foregroundColor(.gray)
                 }
             }
-            .padding(.leading, 6)
 
             Spacer()
 
@@ -390,14 +398,33 @@ struct VideoCallView: View {
                     : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Accessibility label — SAS identity verification still pending"))
             }
 
-            CallSecurityBadge()
-
             // Report a problem or a call error: marks the moment in the call telemetry, then opens the report sheet.
-            CallTopBarButton(icon: "ladybug",
-                             accessibilityLabel: CallControlText.reportA11y,
-                             action: reportProblem)
+            Button(action: reportProblem) {
+                Image(systemName: "ladybug")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
+            }
+            .padding(.trailing, 4)
+            .accessibilityLabel(CallControlText.reportA11y)
+
+            // W502: diagnostics toggle button.
+            Button {
+                showDiagnostics.toggle()
+            } label: {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
+            }
+            .padding(.trailing, 4)
+            .accessibilityLabel("Diagnostica")
+
+            CallSecurityBadge()
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 16)
         .padding(.top, 8)
     }
 
@@ -578,7 +605,7 @@ struct VideoCallView: View {
     // (Buds: Android only). Row 2: Mute, Audio, Video, End. The flip camera is on the local preview, the report button
     // and the shield are in the top bar.
 
-    private var dockRows: [[CallDockItem?]] {
+    private var dockRows: [[CallDockItem]] {
         let style = CallDockStyle(scheme: scheme, extras: extras)
         var items: [CallDockItem] = []
         items.append(CallDockItems.mute(style, muted: isMuted, action: toggleMute))

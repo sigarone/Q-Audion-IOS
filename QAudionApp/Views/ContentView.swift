@@ -289,7 +289,8 @@ struct ContentView: View {
 
     /// W-GRPRING — the incoming-GROUP-call ring. Reuses the 1:1
     /// `IncomingCallScreen` (same ringing design: dual halo + avatar + identity
-    /// + accept/reject) with a group-specific subtitle. The ringtone is driven by
+    /// + accept/reject), with the quick-reply button hidden (no 1:1 chat to
+    /// reply into) and a group-specific subtitle. The ringtone is driven by
     /// AppState (`startInAppRingtone`), exactly as for a 1:1 call.
     ///
     /// Reject sends `group_call_decline` (spec 2.6) and never `group_call_join`;

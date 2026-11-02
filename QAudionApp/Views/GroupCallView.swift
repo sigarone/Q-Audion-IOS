@@ -70,12 +70,8 @@ struct GroupCallView: View {
             Color(red: 0.05, green: 0.07, blue: 0.12).ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Header: the shield on the left (the security sheet), the title in the middle, the layout switch and the
-                // report-a-problem button on the right. The same top bar as the 1:1 call screens.
-                HStack(spacing: 0) {
-                    CallTopBarButton(icon: "checkmark.shield",
-                                     accessibilityLabel: CallControlText.securityA11y,
-                                     action: { showSecuritySheet = true })
+                // Header
+                HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Chiamata di gruppo")
                             .font(.headline).foregroundColor(.white)
@@ -96,33 +92,51 @@ struct GroupCallView: View {
                                 : String(localized: "group_call.participants.many", defaultValue: "\(viewModel.participants.count) partecipanti", comment: "Subtitle of the group call screen: number of participants. %lld is the count.")))
                             .font(.caption).foregroundColor(.gray)
                     }
-                    .padding(.leading, 6)
                     Spacer()
                     if viewModel.callState == .active {
                         Text(viewModel.elapsedTime)
                             .font(.caption).monospacedDigit()
                             .foregroundColor(Color(red: 0, green: 0.9, blue: 0.47))
-                            .padding(.trailing, 6)
                     }
+                    // Report a problem or a call error: opens the report sheet, hosted by this
+                    // screen (see `.background(BugReportOverlay(host: .groupCall))` below).
+                    Button {
+                        BugReporter.shared.requestReport(source: .inGroupCall)
+                    } label: {
+                        Image(systemName: "ladybug")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .padding(.leading, 10)
+                    .accessibilityLabel(String(localized: "Segnala un problema"))
                     // Item 5 (2026-07-16 wire contract) — pure client-side
                     // layout toggle, no wire message at all (the engine's
                     // active-speaker detection, wired through
-                    // `GroupCallController.onActiveSpeakersChanged`). Icon
-                    // shows the CURRENT layout, same current-state-not-
-                    // destination convention as every control-bar toggle
-                    // (mute/video) below.
-                    CallTopBarButton(icon: viewModel.layoutMode == .speaker
-                                        ? "person.crop.rectangle.fill" : "square.grid.2x2.fill",
-                                     accessibilityLabel: viewModel.layoutMode == .speaker
-                                        ? CallControlText.layoutA11yGrid : CallControlText.layoutA11ySpeaker,
-                                     action: { viewModel.toggleLayoutMode() })
-                    // Report a problem or a call error: opens the report sheet, hosted by this
-                    // screen (see `.background(BugReportOverlay(host: .groupCall))` below).
-                    CallTopBarButton(icon: "ladybug",
-                                     accessibilityLabel: CallControlText.reportA11y,
-                                     action: { BugReporter.shared.requestReport(source: .inGroupCall) })
+                    // `GroupCallController.onActiveSpeakersChanged`). Placed
+                    // in the header rather than the already-crowded control
+                    // bar below; icon shows the CURRENT layout, same
+                    // current-state-not-destination convention as every
+                    // control-bar toggle (mute/video) below.
+                    Button {
+                        viewModel.toggleLayoutMode()
+                    } label: {
+                        Image(systemName: viewModel.layoutMode == .speaker
+                              ? "person.crop.rectangle.fill" : "square.grid.2x2.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .padding(.leading, 10)
+                    .accessibilityLabel(viewModel.layoutMode == .speaker
+                        ? String(localized: "group_call.layout.switch_to_grid", defaultValue: "Passa a vista griglia", comment: "VoiceOver label of the button that switches the group call from speaker view to grid view.")
+                        : String(localized: "group_call.layout.switch_to_speaker", defaultValue: "Passa a vista relatore", comment: "VoiceOver label of the button that switches the group call from grid view to speaker view."))
                 }
-                .padding(.horizontal, 8).padding(.top, 8).padding(.bottom, 4)
+                .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
 
                 // Unified call UI (group-call adaptation) — always-visible
                 // chip row + shield button, matching the 1:1 screen's
@@ -447,7 +461,7 @@ struct GroupCallView: View {
     /// The cells of the dock. While the microphone is held (an automatic join that has not seen a roster it can trust)
     /// the microphone cell shows it off, in its own colour, and does nothing: nobody hears this device whatever it is
     /// set to.
-    private var dockRows: [[CallDockItem?]] {
+    private var dockRows: [[CallDockItem]] {
         let style = CallDockStyle(scheme: scheme, extras: extras)
         var items: [CallDockItem] = []
         items.append(CallDockItems.mute(style,

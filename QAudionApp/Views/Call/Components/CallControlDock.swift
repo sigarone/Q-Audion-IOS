@@ -2,8 +2,9 @@ import SwiftUI
 
 // MARK: - Layout (pure, tested)
 
-/// The controls that can sit in the call dock. The dock is the same on every call screen: two rows of four cells of equal
-/// width, the red end button always the last cell of the bottom row.
+/// The controls that can sit in the call dock. The dock is the same on every call screen: a compact card with a top row of
+/// the secondary controls that exist and a bottom row of microphone, audio, video and the red end button (always the last
+/// cell of the bottom row). The cells of a row share the width equally; there is never an empty cell.
 enum CallControlKind: String, CaseIterable, Sendable {
     case chat
     case share
@@ -25,18 +26,16 @@ enum CallDockMode: Equatable, Sendable {
     case group
 }
 
-/// Which control sits in which cell. A control that is not available leaves its cell empty; the others do not move.
+/// Which control sits in which row. A control that is not available is left out and the others share the row equally.
 enum CallDockLayout {
-    static let columns: Int = 4
-
-    /// Bottom padding for a panel drawn above the dock (diagnostics): clears the two-row dock (about 204 pt) plus its margin.
-    static let overlayClearance: CGFloat = 230
+    /// Bottom padding for a panel drawn above the dock (diagnostics): clears the two-row dock (about 175 pt) plus its margin.
+    static let overlayClearance: CGFloat = 200
 
     /// The bottom row (the thumb zone): the most used controls, then the end button.
     static let bottomRow: [CallControlKind] = [.mute, .audio, .video, .end]
 
-    /// The top row of a call: secondary controls. Empty while connecting.
-    static func topRow(mode: CallDockMode, available: Set<CallControlKind>) -> [CallControlKind?] {
+    /// The top row of a call: the secondary controls that are available. Empty while connecting.
+    static func topRow(mode: CallDockMode, available: Set<CallControlKind>) -> [CallControlKind] {
         let wanted: [CallControlKind]
         switch mode {
         case .connecting:
@@ -46,18 +45,17 @@ enum CallDockLayout {
         case .group:
             wanted = [.chat, .share, .hand, .reaction]
         }
-        return wanted.map { available.contains($0) ? $0 : nil }
+        return wanted.filter { available.contains($0) }
     }
 
     /// The rows to draw, top first. A top row with no control at all is not drawn (the dock gets shorter), the bottom row
     /// is always there.
-    static func rows(mode: CallDockMode, available: Set<CallControlKind>) -> [[CallControlKind?]] {
-        let bottom: [CallControlKind?] = bottomRow.map { Optional($0) }
-        let top: [CallControlKind?] = topRow(mode: mode, available: available)
-        if top.allSatisfy({ $0 == nil }) {
-            return [bottom]
+    static func rows(mode: CallDockMode, available: Set<CallControlKind>) -> [[CallControlKind]] {
+        let top: [CallControlKind] = topRow(mode: mode, available: available)
+        if top.isEmpty {
+            return [bottomRow]
         }
-        return [top, bottom]
+        return [top, bottomRow]
     }
 }
 
@@ -117,51 +115,48 @@ struct CallDockItem {
 
 // MARK: - View
 
-/// The call dock: a card anchored at the bottom with two rows of four cells (56 pt circles, the end button 68 pt) and a
-/// visible name under every circle. The same on the audio call, the video call, the group call and the outgoing ring.
+/// The call dock: a compact card anchored at the bottom that is only as tall as its rows (52 pt circles, the end button
+/// 64 pt) with a visible name under every circle. The same on the audio call, the video call, the group call and the
+/// outgoing ring.
+///
+/// The card must never ask for more height than its rows: it sits in a bottom inset or under a flexible video area, where
+/// any view that accepts all the height it is offered would stretch the glass over the whole screen. So no cell is a
+/// flexible view (an empty cell used to be a clear colour, which takes every point offered) and the card is fixed to its
+/// ideal height.
 struct CallControlDock: View {
     @Environment(\.qaudionScheme) private var scheme
 
-    /// Rows to draw, top first; a nil cell is empty. Build them with `CallDockLayout.rows` and `CallDockItems`.
-    let rows: [[CallDockItem?]]
+    /// Rows to draw, top first. Build them with `CallDockLayout.rows` and `CallDockItems`.
+    let rows: [[CallDockItem]]
 
-    static let circleSize: CGFloat = 56
-    static let endCircleSize: CGFloat = 68
+    static let circleSize: CGFloat = 52
+    static let endCircleSize: CGFloat = 64
     static let maxWidth: CGFloat = 440
+    static let cornerRadius: CGFloat = 24
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             ForEach(0..<rows.count, id: \.self) { index in
                 rowView(rows[index])
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        .padding(10)
         .frame(maxWidth: Self.maxWidth)
+        // Only as tall as the rows, whatever height the parent offers.
+        .fixedSize(horizontal: false, vertical: true)
         // The dock floats over the call: one Liquid Glass surface for the whole group (its buttons keep their own solid
         // state colours on top of it), the opaque card with its outline where glass is not available.
-        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 28),
+        .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: Self.cornerRadius),
                              fallback: scheme.surface.opacity(0.9),
                              fallbackStroke: scheme.outline.opacity(0.4))
         .accessibilityElement(children: .contain)
     }
 
-    private func rowView(_ items: [CallDockItem?]) -> some View {
+    private func rowView(_ items: [CallDockItem]) -> some View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(0..<items.count, id: \.self) { index in
-                cellView(items[index])
+                CallDockCell(item: items[index])
             }
-        }
-    }
-
-    @ViewBuilder
-    private func cellView(_ item: CallDockItem?) -> some View {
-        if let item {
-            CallDockCell(item: item)
-        } else {
-            Color.clear
-                .frame(maxWidth: .infinity, minHeight: 72)
-                .accessibilityHidden(true)
         }
     }
 }
@@ -177,16 +172,16 @@ private struct CallDockCell: View {
 
     var body: some View {
         Button(action: tap) {
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 circleView
                 Text(item.label)
-                    .font(.caption2.weight(.medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             }
-            .frame(maxWidth: .infinity, minHeight: isEnd ? 88 : 72, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .top)
             .contentShape(Rectangle())
             .opacity(item.isDisabled ? 0.38 : 1.0)
         }
@@ -469,17 +464,14 @@ enum CallDockItems {
     }
 
     /// The bottom row, shared by the outgoing ring (where `video` is disabled) and the connected calls.
-    static func assemble(mode: CallDockMode, items: [CallDockItem]) -> [[CallDockItem?]] {
+    static func assemble(mode: CallDockMode, items: [CallDockItem]) -> [[CallDockItem]] {
         var byKind: [CallControlKind: CallDockItem] = [:]
         for item in items {
             byKind[item.kind] = item
         }
-        let layout: [[CallControlKind?]] = CallDockLayout.rows(mode: mode, available: Set(byKind.keys))
-        return layout.map { (row: [CallControlKind?]) -> [CallDockItem?] in
-            row.map { (kind: CallControlKind?) -> CallDockItem? in
-                guard let kind else { return nil }
-                return byKind[kind]
-            }
+        let layout: [[CallControlKind]] = CallDockLayout.rows(mode: mode, available: Set(byKind.keys))
+        return layout.map { (row: [CallControlKind]) -> [CallDockItem] in
+            row.compactMap { (kind: CallControlKind) -> CallDockItem? in byKind[kind] }
         }
     }
 }
@@ -518,18 +510,6 @@ enum CallControlText {
     }
     static var close: String {
         String(localized: "call.outgoing.dismiss", defaultValue: "Chiudi", comment: "Accessibility label of the button that closes the outgoing call screen after the call ended (callee busy or unreachable)")
-    }
-    static var decline: String {
-        String(localized: "call.control.decline", defaultValue: "Rifiuta", comment: "Name under the red decline button of the incoming call screen.")
-    }
-    static var accept: String {
-        String(localized: "call.control.accept", defaultValue: "Accetta", comment: "Name under the green accept button of the incoming call screen.")
-    }
-    static var acceptNoVideo: String {
-        String(localized: "call.control.accept_no_video", defaultValue: "Senza video", comment: "Name under the green accept button of an incoming video call when the user chose to answer without video.")
-    }
-    static var answerAudioOnly: String {
-        String(localized: "call.control.answer_audio_only", defaultValue: "Rispondi senza video", comment: "Switch on the incoming video call screen: answer with the camera off.")
     }
 
     static var muteA11yOn: String {
@@ -602,43 +582,9 @@ enum CallControlText {
         String(localized: "call.control.flip_a11y", defaultValue: "Cambia fotocamera", comment: "VoiceOver label of the button on the local preview that switches between the front and the back camera.")
     }
     static var reportA11y: String {
-        String(localized: "call.control.report_a11y", defaultValue: "Segnala un problema", comment: "VoiceOver label of the report a problem button in the top bar of the call screens.")
-    }
-    static var layoutA11yGrid: String {
-        String(localized: "call.control.layout_a11y_grid", defaultValue: "Passa a vista griglia", comment: "VoiceOver label of the button that switches the group call from speaker view to grid view.")
-    }
-    static var layoutA11ySpeaker: String {
-        String(localized: "call.control.layout_a11y_speaker", defaultValue: "Passa a vista relatore", comment: "VoiceOver label of the button that switches the group call from grid view to speaker view.")
-    }
-    static var securityA11y: String {
-        String(localized: "call.control.security_a11y", defaultValue: "Apri sicurezza chiamata", comment: "VoiceOver label of the shield button in the top bar of the call screens, which opens the call security.")
+        String(localized: "call.control.report_a11y", defaultValue: "Segnala un problema", comment: "VoiceOver label of the report a problem button of the call screens.")
     }
     static var unavailableHint: String {
         String(localized: "call.action.unavailable_hint", defaultValue: "Non disponibile", comment: "VoiceOver hint of a round call action button that is disabled.")
-    }
-}
-
-// MARK: - Top bar button
-
-/// A 48 pt button of the top bar of the call screens (shield, report a problem, group layout).
-struct CallTopBarButton: View {
-    @Environment(\.qaudionScheme) private var scheme
-
-    let icon: String
-    let accessibilityLabel: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(scheme.onSurface)
-                .frame(width: 40, height: 40)
-                .background(Circle().fill(scheme.surfaceVariant.opacity(0.7)))
-                .frame(width: 48, height: 48)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
     }
 }

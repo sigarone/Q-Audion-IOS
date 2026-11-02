@@ -222,7 +222,7 @@ struct LiveInCallScreen: View {
         if canReduceCall {
             MinimizeCallButton(action: reduceCall)
                 .padding(.top, 8)
-                .padding(.trailing, 64)
+                .padding(.trailing, 12)
         }
     }
 
