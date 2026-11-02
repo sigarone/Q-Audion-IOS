@@ -198,4 +198,21 @@ final class CallDiagnosticsModelTests: XCTestCase {
         XCTAssertEqual(CallStatsFormat.videoFlow(videoOn: false, tx: 500, rx: 500), CallStatsFormat.dash)
         XCTAssertEqual(CallStatsFormat.videoFlow(videoOn: true, tx: 500, rx: nil), "500/—")
     }
+
+    // MARK: - Video pipeline state and session fingerprint (shared with Android)
+
+    func testVideoPipelineStateHasFourStatesWithAndroidPriority() {
+        typealias S = VideoPipelineState
+        XCTAssertEqual(S.resolve(pipelineRunning: false, stalled: true, overWsRelay: true), .idle)
+        XCTAssertEqual(S.resolve(pipelineRunning: true, stalled: true, overWsRelay: true), .relay)
+        XCTAssertEqual(S.resolve(pipelineRunning: true, stalled: true, overWsRelay: false), .stalled)
+        XCTAssertEqual(S.resolve(pipelineRunning: true, stalled: false, overWsRelay: false), .active)
+        XCTAssertEqual(Set([S.active, .stalled, .relay, .idle].map(\.text)).count, 4)
+    }
+
+    @MainActor
+    func testSessionFingerprintIsSha256HeadAndTailInLowercaseHex() {
+        // SHA-256("abc") = ba7816bf 8f01cfea ... f20015ad; the Android panel pins the same string.
+        XCTAssertEqual(LiveInCallScreen.sessionFingerprintFromKey(Data("abc".utf8)), "ba7816bf\u{2026}15ad")
+    }
 }

@@ -72,11 +72,10 @@ extension CallDiagnosticsInput {
         input.jitterSec = call.getAudioRtpJitterSec?() ?? -1
         input.nackCount = stats?.inboundNackCount ?? -1
 
-        input.videoPipelineState = appState.videoPipeline != nil
-            ? String(localized: "video.diag.pipeline_active", defaultValue: "attiva",
-                     comment: "Value in the call diagnostics panel: the video pipeline is running.")
-            : String(localized: "video.diag.pipeline_inactive", defaultValue: "inattiva",
-                     comment: "Value in the call diagnostics panel: the video pipeline is not running.")
+        input.videoPipelineState = VideoPipelineState.resolve(
+            pipelineRunning: appState.videoPipeline != nil,
+            stalled: appState.isVideoStallLatched,
+            overWsRelay: appState.videoPipeline != nil && !appState.isVideoSendCarriedByWebRtc).text
         if let key = CallLiveStats.mlKemSessionKey(appState) {
             input.mlKemFingerprint = LiveInCallScreen.sessionFingerprintFromKey(key)
         }
@@ -86,6 +85,26 @@ extension CallDiagnosticsInput {
         input.wsBytesSent = call.wireBytesSent
         input.wsBytesReceived = call.wireBytesReceived
         return input
+    }
+}
+
+extension VideoPipelineState {
+    /// The value shown in the "Pipeline video" row.
+    var text: String {
+        switch self {
+        case .active:
+            return String(localized: "video.diag.pipeline_active", defaultValue: "attiva",
+                          comment: "Value in the call diagnostics panel: the video pipeline is running.")
+        case .stalled:
+            return String(localized: "video.diag.pipeline_stalled", defaultValue: "bloccata",
+                          comment: "Value in the call diagnostics panel: the video pipeline is running but frames are stuck.")
+        case .relay:
+            return String(localized: "video.diag.pipeline_relay", defaultValue: "relay (WS)",
+                          comment: "Value in the call diagnostics panel: the video goes through the server relay over WebSocket.")
+        case .idle:
+            return String(localized: "video.diag.pipeline_inactive", defaultValue: "inattiva",
+                          comment: "Value in the call diagnostics panel: the video pipeline is not running.")
+        }
     }
 }
 

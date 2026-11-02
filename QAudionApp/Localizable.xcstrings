@@ -12852,6 +12852,90 @@
         }
       }
     },
+    "video.diag.pipeline_stalled": {
+      "extractionState": "manual",
+      "comment": "Value in the video call diagnostics panel: the video pipeline is running but frames are stuck.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bloccata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "stalled"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bloqueada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bloquée"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "blockiert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "travada"
+          }
+        }
+      }
+    },
+    "video.diag.pipeline_relay": {
+      "extractionState": "manual",
+      "comment": "Value in the video call diagnostics panel: the video goes through the server relay over WebSocket.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "relay (WS)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "relay (WS)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "relay (WS)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "relay (WS)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "relay (WS)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "relay (WS)"
+          }
+        }
+      }
+    },
     "video.diag.not_available": {
       "extractionState": "manual",
       "comment": "Value in the video call diagnostics panel when a measurement is not available (abbreviation).",
