@@ -617,9 +617,10 @@ struct LiveInCallScreen: View {
     }
 
     /// The report button of the call screen: marks the moment in the call telemetry (the one-per-second debounce and the
-    /// no-op outside a call live in the emitter), then opens the report sheet over the call.
+    /// no-op outside a call live in the emitter), then opens the report sheet over the call. The marker is
+    /// recorded only with the operational-diagnostics consent; the sheet always opens.
     private func handleReportProblem() {
-        CallMediaTelemetry.shared.recordDisturbanceMarker()
+        if TelemetryService.isEnabled { CallMediaTelemetry.shared.recordDisturbanceMarker() }
         BugReporter.shared.requestReport(source: .inCall)
     }
 

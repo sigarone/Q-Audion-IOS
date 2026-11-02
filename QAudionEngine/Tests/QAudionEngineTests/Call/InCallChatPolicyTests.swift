@@ -113,7 +113,7 @@ final class InCallChatPolicyTests: XCTestCase {
         XCTAssertTrue(video.contains("chat.open(resolvedPeerDisplayName)"))
         XCTAssertTrue(video.contains("CallDockItems.assemble(mode: .oneToOne, items: items)"))
         let dock = try code("QAudionApp/Views/Call/Components/CallControlDock.swift")
-        XCTAssertTrue(dock.contains("case .oneToOne: wanted = [.chat, .share, .add, .buds]"), "Chat is the first cell of the top row")
+        XCTAssertTrue(dock.contains("case .oneToOne: wanted = [.chat, .share, .add, .buds, .report]"), "Chat is the first cell of the top row")
         XCTAssertTrue(dock.contains("static let bottomRow: [CallControlKind] = [.mute, .audio, .video, .end]"), "the hangup stays last")
     }
 

@@ -429,7 +429,7 @@ struct VideoCallView: View {
     }
 
     private func reportProblem() {
-        CallMediaTelemetry.shared.recordDisturbanceMarker()
+        if TelemetryService.isEnabled { CallMediaTelemetry.shared.recordDisturbanceMarker() }
         BugReporter.shared.requestReport(source: .inCall)
     }
 
