@@ -535,6 +535,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         s == .connected || s == .completed
     }
 
+    /// The W3C name of an ICE connection state, for the in-call diagnostics panel.
+    static func iceStateName(_ s: RTCIceConnectionState) -> String {
+        switch s {
+        case .new: return "new"
+        case .checking: return "checking"
+        case .connected: return "connected"
+        case .completed: return "completed"
+        case .failed: return "failed"
+        case .disconnected: return "disconnected"
+        case .closed: return "closed"
+        case .count: return "unknown"
+        @unknown default: return "unknown"
+        }
+    }
+
     /// W-DCTXICEGATE — diagnostic twin for the W-DCMUX fallback-reason
     /// closure in AppState: `true` when the gate above (and nothing else)
     /// is what is diverting audio to the WS relay right now.
@@ -892,6 +907,22 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         /// leaves this snapshot; the URL itself is never stored or logged.
         public var localCandidateViaWssBridge: Bool = false
 
+        // In-call diagnostics panel -- the extra readings the panel shows and no earlier consumer needed. Same
+        // report as every field above, same convention: -1 / nil = no such row or field in this report.
+        /// ICE connection state of the peer connection at the time of the report ("connected", "completed", ...).
+        public var iceConnectionState: String?
+        /// `availableOutgoingBitrate` / `availableIncomingBitrate` of the selected candidate pair, bits per second.
+        public var pairAvailableOutgoingBitrate: Double = -1
+        public var pairAvailableIncomingBitrate: Double = -1
+        /// `bytesSent` / `bytesReceived` of the transport row: everything on the wire, all streams.
+        public var transportBytesSent: Int64 = -1
+        public var transportBytesReceived: Int64 = -1
+        /// ICE server URL the selected LOCAL candidate was gathered from, only for a relay candidate (the TURN node).
+        public var localRelayCandidateUrl: String?
+        /// Cumulative video RTP bytes (outbound / inbound), summed over the video rows. -1 = no video row.
+        public var videoBytesSent: Int64 = -1
+        public var videoBytesReceived: Int64 = -1
+
         public init() {}
     }
 
@@ -974,6 +1005,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 guard let value = (raw as? NSNumber)?.int64Value, value >= 0 else { return }
                 total = total < 0 ? value : total + value
             }
+            var videoTxBytesTotal: Int64 = -1, videoRxBytesTotal: Int64 = -1
             var preferredLocalCandidateId: String?
             var preferredRemoteCandidateId: String?
             var fallbackLocalCandidateId: String?
@@ -1028,6 +1060,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     addCounter(&wireRxPackets, s.values["packetsReceived"])
                     addCounter(&wireRxBytes, s.values["bytesReceived"])
                 }
+                if s.type == "outbound-rtp", (s.values["kind"] as? String) == "video" {
+                    addCounter(&videoTxBytesTotal, s.values["bytesSent"])
+                }
+                if s.type == "inbound-rtp", (s.values["kind"] as? String) == "video" {
+                    addCounter(&videoRxBytesTotal, s.values["bytesReceived"])
+                }
                 if s.type == "outbound-rtp", (s.values["kind"] as? String) == "audio" {
                     audioTxBytes = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
                     audioTxPackets = (s.values["packetsSent"] as? NSNumber)?.int64Value ?? -1
@@ -1059,6 +1097,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     snapshot.transportDtlsCipher = s.values["dtlsCipher"] as? String
                     snapshot.transportTlsVersion = s.values["tlsVersion"] as? String
                     snapshot.transportDtlsRole = s.values["dtlsRole"] as? String
+                    snapshot.transportBytesSent = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
+                    snapshot.transportBytesReceived = (s.values["bytesReceived"] as? NSNumber)?.int64Value ?? -1
                     if wantWait {
                         waitSelectedPairId = s.values["selectedCandidatePairId"] as? String
                         waitBytesSent = (s.values["bytesSent"] as? NSNumber)?.int64Value ?? -1
@@ -1095,6 +1135,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     preferredLocalCandidateId = localId
                     preferredRemoteCandidateId = remoteId
                     snapshot.selectedCandidatePairState = pairState
+                    snapshot.pairAvailableOutgoingBitrate =
+                        (s.values["availableOutgoingBitrate"] as? NSNumber)?.doubleValue ?? -1
+                    snapshot.pairAvailableIncomingBitrate =
+                        (s.values["availableIncomingBitrate"] as? NSNumber)?.doubleValue ?? -1
                 }
             }
             // No succeeded pair ⇒ ICE never converged (or has failed) ⇒ there
@@ -1144,6 +1188,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 // N7 review fix — see `localCandidateViaWssBridge`. Compared
                 // up to the query (`?transport=`), which libwebrtc rebuilds
                 // itself when it reports the relay candidate's server URL.
+                if (localStats.values["candidateType"] as? String) == "relay" {
+                    snapshot.localRelayCandidateUrl = localStats.values["url"] as? String
+                }
                 if (localStats.values["candidateType"] as? String) == "relay",
                    let candidateUrl = localStats.values["url"] as? String,
                    let bridgeIceUrl = self.wssTurnBridgeIceUrl,
@@ -1155,6 +1202,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 snapshot.remoteCandidateType = remoteStats.values["candidateType"] as? String
                 snapshot.remoteCandidateProtocol = remoteStats.values["protocol"] as? String
             }
+            snapshot.videoBytesSent = videoTxBytesTotal
+            snapshot.videoBytesReceived = videoRxBytesTotal
+            snapshot.iceConnectionState = Self.iceStateName(self.lastIceConnectionState)
             snapshot.outboundPacketsSent = wireTxPackets
             snapshot.outboundBytesSent = wireTxBytes
             snapshot.outboundHeaderBytesSent = wireTxHeaderBytes

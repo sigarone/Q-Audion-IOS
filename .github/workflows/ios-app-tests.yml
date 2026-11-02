@@ -334,6 +334,7 @@ jobs:
             -only-testing:QAudionAppTests/CallMinimizePolicyTests \
             -only-testing:QAudionAppTests/SasCardPlacementTests \
             -only-testing:QAudionAppTests/CallControlDockTests \
+            -only-testing:QAudionAppTests/CallDiagnosticsModelTests \
             -only-testing:QAudionAppTests/CallPipLayoutTests \
             -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
             -only-testing:QAudionAppTests/CallStartSupportTests \

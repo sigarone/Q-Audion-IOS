@@ -107,18 +107,51 @@ struct LiveInCallScreen: View {
     /// TimelineView tick).
     @State private var cachedPeerAvatarUrl: URL? = nil
 
+    /// The video call screen opens the session security sheet over itself with this screen as the host: the same sheet,
+    /// built from the same live call data, with none of the rest of the screen and none of its side effects (secure
+    /// window, alerts, overlays). See `asSecuritySheetHost()`.
+    private var isSecuritySheetHost: Bool = false
+
+    func asSecuritySheetHost() -> LiveInCallScreen {
+        var copy = self
+        copy.isSecuritySheetHost = true
+        return copy
+    }
+
     var body: some View {
-        // TimelineView refreshes the body once per second so the
-        // duration label + sparkline tick without forcing CallService
-        // to push @Published updates.
+        if isSecuritySheetHost {
+            securitySheetHostBody
+        } else {
+            fullBody
+        }
+    }
+
+    /// The one clock of this screen: both bodies below draw through it.
+    private var tickingScreen: some View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             inCallScreenView
         }
+    }
+
+    private var securitySheetHostBody: some View {
+        tickingScreen
+        .onAppear { resolvePeerDisplayName() }
+        .onChange(of: appState.callContactId) { _ in resolvePeerDisplayName() }
+        .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
+            resolvePeerDisplayName()
+        }
+    }
+
+    private var fullBody: some View {
+        // TimelineView refreshes the body once per second so the
+        // duration label + sparkline tick without forcing CallService
+        // to push @Published updates.
+        tickingScreen
         // W502: network diagnostics overlay — slides up from the bottom
         // when the analytics button in the transport row is tapped.
         .overlay(alignment: .bottom) {
             if showDiagnostics {
-                diagPanel
+                CallDiagnosticsPanel(onClose: handleToggleDiagnostics)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .padding(.bottom, CallDockLayout.overlayClearance)    // clear the pinned control dock
                     .padding(.horizontal, 16)
@@ -322,8 +355,7 @@ struct LiveInCallScreen: View {
                 // a real measurement of a DIFFERENT quantity (this device to
                 // the signalling server, one ping/pong per 30 s, see
                 // `BCryptoWebSocketClient.onLatencyMeasured`) and under the
-                // RITARDO label it would be undetectably wrong. It stays where
-                // it is honest — the diagnostics overlay's "LATENZA RELAY" row.
+                // RITARDO label it would be undetectably wrong, so it is not shown.
                 rttMs: appState.callService.mediaRttMs,
                 // W-DELAYSPLIT (IOS-E6) — windowed audio jitter-buffer delay
                 // in ms, paired with rttMs above so RITARDO can show
@@ -473,6 +505,7 @@ struct LiveInCallScreen: View {
                 contactVoiceLevel: appState.contactVoiceLevel,
                 speakerChange: appState.speakerChangeVerdict
             )
+            .sheetOnly(isSecuritySheetHost)
     }
 
     // MARK: - Action handlers (extracted per SWIFT6_PATTERNS §13 — named
@@ -624,111 +657,6 @@ struct LiveInCallScreen: View {
         BugReporter.shared.requestReport(source: .inCall)
     }
 
-    // MARK: - Diagnostics panel (W502)
-
-    /// Network + crypto pipeline diagnostics panel. Slides up from the
-    /// bottom on tap of the analytics icon in the transport row.
-    /// Mirrors Android InCallScreen's diagnostics panel with available
-    /// engine counters. WebRTC RTT/bitrate/jitter will land when the
-    /// engine surfaces RTCStatisticsReport via AppState.
-    @ViewBuilder
-    private var diagPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            diagPanelHeader
-            Divider().background(Color.white.opacity(0.2))
-            diagPanelTransport
-            diagPanelFrameCounters
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.black.opacity(0.88))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.green.opacity(0.35), lineWidth: 1)
-        )
-    }
-
-    @ViewBuilder
-    private var diagPanelHeader: some View {
-        HStack {
-            Image(systemName: "chart.bar.fill")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.green)
-            Text("DIAGNOSTICA RETE")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.2)
-                .foregroundColor(.green)
-            Spacer()
-            Button(action: handleToggleDiagnostics) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.gray)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Chiudi")
-        }
-    }
-
-    // Helper — pure function so @ViewBuilder never sees a switch that returns ().
-    private func diagTransportPath(_ mode: InCallScreen.TransportMode) -> String {
-        switch mode {
-        case .p2pSrtp:        return "P2P SRTP · UDP"
-        case .turn:           return "TURN · relay"
-        case .bcryptoWsRelay: return "WSS sealed · bcrypto relay"
-        case .disconnected:   return "—"
-        }
-    }
-
-    @ViewBuilder
-    private var diagPanelTransport: some View {
-        let path = diagTransportPath(liveTransportMode)
-        let label = liveTransportMode.label
-        diagRow("PERCORSO", path)
-        diagRow("MODO",     label)
-    }
-
-    // Helpers to avoid String(Int) overload-resolution timeout in @ViewBuilder
-    // (CLAUDE.md §13 v1.0.255). All string building happens outside ViewBuilder.
-    private static func latencyString(_ ms: Int) -> String {
-        guard ms > 0 else { return String(localized: "n/d") }
-        return ms.description + " ms"
-    }
-
-    /// W-SRTPCOUNTERS (2026-08-29) — the effective counters, so these rows
-    /// count the units the call is really protecting: sealed frames on the
-    /// DataChannel path, RTP packets on the native-SRTP one, where this app
-    /// seals nothing and the raw counters would read 0 all call.
-    /// See `CallService.effectiveAudioTxCount`.
-    @ViewBuilder
-    private var diagPanelFrameCounters: some View {
-        let txVal = appState.callService.effectiveAudioTxCount.description
-        let rxVal = appState.callService.effectiveAudioRxCount.description
-        let rekeyVal = "—" // no live re-key counter is published yet
-        let latencyVal = Self.latencyString(appState.latencyMs)
-        diagRow("TX FRAME CIFRATI",   txVal)
-        diagRow("RX FRAME DECIFRATI", rxVal)
-        diagRow("REKEY",              rekeyVal)
-        diagRow("LATENZA RELAY",      latencyVal)
-    }
-
-    private func diagRow(_ label: LocalizedStringKey, _ value: String) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .tracking(0.8)
-                .foregroundColor(.gray)
-                .frame(width: 130, alignment: .leading)
-            Text(value)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundColor(.white)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-        }
-    }
-
     // MARK: - Derived state
 
     /// W-MUTEBTNSRC (2026-07-24) — reads the published mirror, so the value
@@ -776,12 +704,7 @@ struct LiveInCallScreen: View {
     /// reasoning behind the gate is unchanged: report the tuned rate only
     /// once the encoder has actually been reconfigured, never before.
     private var liveCodecKbps: Int {
-        let sealedFrames = appState.callService.framesEncryptedTx > 0
-        let rtpSent = (appState.callService.getAudioRtpBytesSent?() ?? -1) > 0
-        guard sealedFrames || rtpSent,
-              let profile = appState.callService.callIntegration?.activeAudioProfile
-        else { return 0 }
-        return profile.clamp(kbps: min(max(AudioCodecPrefs.bitrateKbps, 8), 40))
+        CallLiveStats.appliedAudioCodecKbps(appState)
     }
 
     /// W368: live SAS verification flag. Returns true iff the

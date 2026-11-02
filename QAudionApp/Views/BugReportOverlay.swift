@@ -25,6 +25,7 @@ struct BugReportOverlay: View {
     @ObservedObject var reporter = BugReporter.shared
     @State private var note: String = ""
     @State private var attachLogs: Bool = true
+    @State private var attachScreenshot: Bool = true
 
     var body: some View {
         Color.clear
@@ -32,8 +33,8 @@ struct BugReportOverlay: View {
                 get: { reporter.isShowingOverlay && host.presents(reporter.pendingReport?.source ?? 0) },
                 set: { if !$0 { reporter.dismiss() } }
             )) {
-                BugReportCard(reporter: reporter, note: $note, attachLogs: $attachLogs)
-                    .presentationDetents([.height(520)])
+                BugReportCard(reporter: reporter, note: $note, attachLogs: $attachLogs, attachScreenshot: $attachScreenshot)
+                    .presentationDetents([.height(570)])
                     .presentationDragIndicator(.visible)
             }
     }
@@ -46,6 +47,7 @@ private struct BugReportCard: View {
     @ObservedObject var reporter: BugReporter
     @Binding var note: String
     @Binding var attachLogs: Bool
+    @Binding var attachScreenshot: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,6 +65,9 @@ private struct BugReportCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
+            screenshotConsentRow
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
             logConsentRow
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
@@ -113,7 +118,7 @@ private struct BugReportCard: View {
 
     @ViewBuilder
     private var screenshotThumbnail: some View {
-        if let img = reporter.pendingReport?.screenshot {
+        if attachScreenshot, let img = reporter.pendingReport?.screenshot {
             Image(uiImage: img)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -158,6 +163,19 @@ private struct BugReportCard: View {
         .frame(height: 160)
     }
 
+    // MARK: Screenshot consent
+
+    /// Per-report choice for the screenshot taken when the report button was tapped. On by default; off, the image is
+    /// dropped and nothing of it is sent.
+    private var screenshotConsentRow: some View {
+        Toggle(isOn: $attachScreenshot) {
+            Text(String(localized: "bug_report.attach_screenshot",
+                        defaultValue: "Allega uno screenshot",
+                        comment: "Bug report sheet — checkbox: attach the screenshot of the screen to this report."))
+                .font(.system(size: 14, weight: .medium))
+        }
+    }
+
     // MARK: Log consent
 
     /// Per-report consent for the log attachment. On by default; the subtitle says exactly what is sent.
@@ -196,9 +214,10 @@ private struct BugReportCard: View {
 
             Button {
                 let capturedNote = note
-                reporter.send(note: capturedNote, attachLogs: attachLogs)
+                reporter.send(note: capturedNote, attachLogs: attachLogs, attachScreenshot: attachScreenshot)
                 note = ""
                 attachLogs = true
+                attachScreenshot = true
             } label: {
                 Text("Invia report")
                     .font(.system(size: 15, weight: .semibold))

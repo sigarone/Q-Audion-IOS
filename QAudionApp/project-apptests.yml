@@ -50,6 +50,7 @@ targets:
           - CallMinimizePolicyTests.swift
           - SasCardPlacementTests.swift
           - CallControlDockTests.swift
+          - CallDiagnosticsModelTests.swift
           - CallPipLayoutTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
