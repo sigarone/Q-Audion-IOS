@@ -64,6 +64,24 @@ final class CallControlDockTests: XCTestCase {
         }
     }
 
+    func testTheReportButtonIsTheLastCellOfTheTopRowOfAOneToOneCall() {
+        let rows = CallDockLayout.rows(mode: .oneToOne, available: [.chat, .share, .add, .report, .mute, .audio, .video, .end])
+        XCTAssertEqual(rows[0], [.chat, .share, .add, .report])
+        let alone = CallDockLayout.rows(mode: .oneToOne, available: [.report])
+        XCTAssertEqual(alone[0], [.report])
+        // Not offered on the group call.
+        XCTAssertEqual(CallDockLayout.rows(mode: .group, available: [.report]), [CallDockLayout.bottomRow])
+        XCTAssertEqual(CallDockItems.report(style, action: {}).kind, .report)
+    }
+
+    func testTheEndCellAloneStaysInTheLastColumn() {
+        XCTAssertEqual(CallDockLayout.leadingSlots(row: [.end]), 3)
+        XCTAssertEqual(CallDockLayout.leadingSlots(row: [.mute, .audio, .video, .end]), 0)
+        XCTAssertEqual(CallDockLayout.leadingSlots(row: [.chat, .share]), 0)
+        let rows = CallDockItems.assemble(mode: .connecting, items: [CallDockItems.end(style, ended: true, action: {})])
+        XCTAssertEqual(rows.map { $0.map { $0.kind } }, [[.end]])
+    }
+
     func testWhileConnectingOnlyTheBottomRowIsDrawn() {
         let rows = CallDockLayout.rows(mode: .connecting, available: [.chat, .share, .add, .mute, .audio, .video, .end])
         XCTAssertEqual(rows.count, 1)
@@ -99,7 +117,7 @@ final class CallControlDockTests: XCTestCase {
 
     func testThereIsNoHoldNoVoiceEnhancementAndNoDisturbanceControl() {
         let names: Set<String> = Set(CallControlKind.allCases.map { $0.rawValue })
-        XCTAssertEqual(names, ["chat", "share", "add", "buds", "hand", "reaction", "mute", "audio", "video", "end"])
+        XCTAssertEqual(names, ["chat", "share", "add", "buds", "hand", "reaction", "report", "mute", "audio", "video", "end"])
     }
 
     // MARK: - Items
@@ -231,13 +249,18 @@ final class CallControlDockTests: XCTestCase {
 
     func testOnlyTheDockChangedTheRestOfTheScreensIsAsItWas() throws {
         let audio = try source("QAudionApp/Views/Call/InCallScreen.swift")
-        // No top bar of its own, no shield button, the diagnostics button stays in the transport row.
+        // No top bar of its own; the trust bar keeps its security-sheet button (it is in the baseline) and the
+        // diagnostics button stays in the transport row.
         XCTAssertFalse(audio.contains("callTopBar"))
-        XCTAssertFalse(audio.contains("checkmark.shield"))
         XCTAssertFalse(audio.contains("diagnosticsRow"))
+        XCTAssertTrue(audio.contains("showSecuritySheet = true"))
         XCTAssertTrue(audio.contains("chart.bar.fill"))
-        // The single report button is next to it.
-        XCTAssertTrue(audio.contains("CallControlText.reportA11y"))
+        // The single report button is a cell of the dock (where the report control lived), not in the scrolling transport row.
+        XCTAssertTrue(audio.contains("CallDockItems.report(style"))
+        XCTAssertFalse(audio.contains("Image(systemName: \"ladybug\")"))
+        // The group call ring has no "Reply" action, as before the dock.
+        let content = try source("QAudionApp/Views/ContentView.swift")
+        XCTAssertTrue(content.contains("showReplyAction: false"))
         let video = try source("QAudionApp/Views/VideoCallView.swift")
         XCTAssertTrue(video.contains("CallControlText.reportA11y"))
         XCTAssertTrue(video.contains("chart.bar.fill"))
@@ -268,6 +291,8 @@ final class CallControlDockTests: XCTestCase {
         // whole screen. No cell is a flexible view, and the card is fixed to its ideal height.
         XCTAssertFalse(dock.contains("Color.clear"))
         XCTAssertFalse(dock.contains("minHeight"))
+        // The empty slots that keep a lone end button bottom-right have a fixed height of zero.
+        XCTAssertTrue(dock.contains(".frame(height: 0)"))
         XCTAssertTrue(dock.contains(".fixedSize(horizontal: false, vertical: true)"))
         XCTAssertEqual(CallControlDock.circleSize, 52)
         XCTAssertEqual(CallControlDock.endCircleSize, 64)
@@ -285,7 +310,7 @@ final class CallControlDockTests: XCTestCase {
                     "route_earpiece", "route_speaker", "route_wired", "route_bluetooth", "route_car",
                     "video_a11y_upgrade", "video_a11y_off", "video_a11y_on", "chat_a11y", "chat_a11y_unread",
                     "share_a11y_on", "share_a11y_off", "add_a11y", "hand_a11y_raise", "hand_a11y_lower",
-                    "reaction_a11y", "end_a11y", "end_a11y_group", "flip_a11y", "report_a11y"]
+                    "reaction_a11y", "end_a11y", "end_a11y_group", "flip_a11y", "report", "report_a11y"]
         for name in keys {
             let key = "call.control." + name
             let entry = try XCTUnwrap(strings[key] as? [String: Any], key)

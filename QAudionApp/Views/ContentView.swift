@@ -303,6 +303,7 @@ struct ContentView: View {
             avatarUrl: groupAvatarUrl(forGroupId: invite.groupId),
             callType: invite.hasVideo ? .video : .audio,
             subtitle: Self.groupCallSubtitle(invite),
+            showReplyAction: false,
             // W-VIDPRIVACY — accept-without-video is a 1:1-only feature
             // (design non-goal for group calls); the toggle still renders on
             // this shared component, but its result is intentionally ignored

@@ -12,6 +12,8 @@ enum CallControlKind: String, CaseIterable, Sendable {
     case buds
     case hand
     case reaction
+    /// The single report-a-problem button (audio call only, last of the top row).
+    case report
     case mute
     case audio
     case video
@@ -34,6 +36,16 @@ enum CallDockLayout {
     /// The bottom row (the thumb zone): the most used controls, then the end button.
     static let bottomRow: [CallControlKind] = [.mute, .audio, .video, .end]
 
+    /// Slots of the bottom row. A bottom row with fewer cells (the end cell alone after a failed call) is padded on the
+    /// left with fixed-height empty slots so the end button stays in the last column, bottom-right.
+    static let bottomSlots: Int = 4
+
+    /// How many empty slots go before a row so its last cell, when it is the end button, keeps the trailing column.
+    static func leadingSlots(row: [CallControlKind]) -> Int {
+        guard row.last == .end else { return 0 }
+        return max(0, bottomSlots - row.count)
+    }
+
     /// The top row of a call: the secondary controls that are available. Empty while connecting.
     static func topRow(mode: CallDockMode, available: Set<CallControlKind>) -> [CallControlKind] {
         let wanted: [CallControlKind]
@@ -41,7 +53,7 @@ enum CallDockLayout {
         case .connecting:
             return []
         case .oneToOne:
-            wanted = [.chat, .share, .add, .buds]
+            wanted = [.chat, .share, .add, .buds, .report]
         case .group:
             wanted = [.chat, .share, .hand, .reaction]
         }
@@ -154,6 +166,12 @@ struct CallControlDock: View {
 
     private func rowView(_ items: [CallDockItem]) -> some View {
         HStack(alignment: .top, spacing: 0) {
+            // Empty slots of zero height (never a view that takes the height it is offered).
+            ForEach(0..<CallDockLayout.leadingSlots(row: items.map { $0.kind }), id: \.self) { _ in
+                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 0)
+            }
             ForEach(0..<items.count, id: \.self) { index in
                 CallDockCell(item: items[index])
             }
@@ -419,6 +437,18 @@ enum CallDockItems {
             onLockedAction: onLocked)
     }
 
+    /// The single report-a-problem button of the audio call (marks the moment in the call telemetry, then opens the sheet).
+    static func report(_ style: CallDockStyle, action: @escaping () -> Void) -> CallDockItem {
+        return CallDockItem(
+            kind: .report,
+            icon: "ladybug",
+            label: CallControlText.report,
+            accessibilityLabel: CallControlText.reportA11y,
+            background: style.scheme.surfaceVariant,
+            iconColor: style.scheme.onSurface,
+            action: action)
+    }
+
     static func hand(_ style: CallDockStyle, raised: Bool, action: @escaping () -> Void) -> CallDockItem {
         return CallDockItem(
             kind: .hand,
@@ -504,6 +534,9 @@ enum CallControlText {
     }
     static var reaction: String {
         String(localized: "call.control.reaction", defaultValue: "Reazione", comment: "Name under the reaction button of the group call controls.")
+    }
+    static var report: String {
+        String(localized: "call.control.report", defaultValue: "Segnala", comment: "Name under the report a problem button of the call controls.")
     }
     static var end: String {
         String(localized: "call.control.end", defaultValue: "Termina", comment: "Name under the red end call button of the call controls.")

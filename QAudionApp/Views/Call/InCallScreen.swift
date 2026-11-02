@@ -40,8 +40,8 @@ import QAudionEngine
 ///  10. **Transport row** — P2P-SRTP / TURN / RELAY / CONNECTING + an
 ///      optional analytics toggle (`onToggleDiagnostics`).
 ///  11. **Pinned control dock** — the shared `CallControlDock`: chat / share /
-///      add over mute / audio / video / end. The report-a-problem button sits
-///      in the transport row, next to the diagnostics toggle.
+///      add over mute / audio / video / end. The report-a-problem button is the
+///      last cell of the top row.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
 /// `confidence`, `sasWords`, `sasVerified`, `keyInfo`,
@@ -2473,19 +2473,6 @@ struct InCallScreen: View {
                      accent: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
                      filled: transportMode == .p2pSrtp)
             Spacer()
-            // Report a problem or a call error: the single report button (it took the place of the two that were here and
-            // in the dock). Marks the moment in the call telemetry, then opens the report sheet.
-            if let onReportProblem {
-                Button(action: onReportProblem) {
-                    Image(systemName: "ladybug")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(scheme.onSurface)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(scheme.surfaceVariant))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(CallControlText.reportA11y)
-            }
             Button(action: onToggleDiagnostics) {
                 Image(systemName: "chart.bar.fill")
                     .font(.system(size: 13, weight: .semibold))
@@ -2708,6 +2695,10 @@ struct InCallScreen: View {
                                        isLocked: !addParticipantUnlocked,
                                        action: onAddParticipant,
                                        onLocked: onAddParticipantLocked))
+        // The single report button, in the dock where the report control was: always reachable, after the other controls.
+        if let onReportProblem {
+            items.append(CallDockItems.report(style, action: onReportProblem))
+        }
         return CallDockItems.assemble(mode: .oneToOne, items: items)
     }
 

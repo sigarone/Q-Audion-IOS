@@ -1303,9 +1303,21 @@
         }
       }
     },
+    "call.control.report": {
+      "extractionState": "manual",
+      "comment": "Name under the report a problem button of the call controls.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Segnala" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Report" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Signaler" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Melden" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Informar" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Informar" } }
+      }
+    },
     "call.control.report_a11y": {
       "extractionState": "manual",
-      "comment": "VoiceOver label of the report a problem button in the top bar of the call screens.",
+      "comment": "VoiceOver label of the report a problem button of the call screens.",
       "localizations": {
         "it": {
           "stringUnit": {
