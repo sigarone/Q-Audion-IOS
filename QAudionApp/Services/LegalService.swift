@@ -137,6 +137,7 @@ extension AppState {
     func finishLocalSessionAfterServerSideDeletion() {
         LocalCryptoWipe.wipeAll()
         resetAccountScopedRuntimeState()
+        InstallIdStore.shared.reset()
         authService.clearToken()
         capabilityGate.discard()
         isAuthenticated = false

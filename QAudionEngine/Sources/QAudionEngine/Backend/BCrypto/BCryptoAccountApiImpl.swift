@@ -2,7 +2,11 @@ import Foundation
 
 public final class BCryptoAccountApiImpl: AccountApi {
     private let rest: BCryptoRestClient
-    public init(rest: BCryptoRestClient) { self.rest = rest }
+    private let installId: InstallIdStore
+    public init(rest: BCryptoRestClient, installId: InstallIdStore = .shared) {
+        self.rest = rest
+        self.installId = installId
+    }
 
     public func register(phoneNumber: String, password: String, displayName: String?,
                          ageDeclared: Bool, termsAcceptance: TermsAcceptance?) async throws -> String {
@@ -21,14 +25,16 @@ public final class BCryptoAccountApiImpl: AccountApi {
     }
 
     public func login(phoneHash: String, password: String, deviceName: String) async throws -> AuthCredentials {
-        let dict: [String: Any] = ["phone_number": phoneHash, "password": password, "device_name": deviceName]
+        var dict: [String: Any] = ["phone_number": phoneHash, "password": password, "device_name": deviceName]
+        installId.add(to: &dict)
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/login", body: body)
         return try JSONDecoder().decode(AuthCredentials.self, from: data)
     }
 
     public func loginWithExtension(extension ext: Int64, password: String, deviceName: String) async throws -> AuthCredentials {
-        let dict: [String: Any] = ["extension": ext, "password": password, "device_name": deviceName]
+        var dict: [String: Any] = ["extension": ext, "password": password, "device_name": deviceName]
+        installId.add(to: &dict)
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/login/extension", body: body)
         return try JSONDecoder().decode(AuthCredentials.self, from: data)
@@ -142,11 +148,12 @@ public final class BCryptoAccountApiImpl: AccountApi {
     }
 
     public func recoveryVerify(identifier: String, recoverySecret: String, deviceName: String) async throws -> AuthCredentials {
-        let dict: [String: Any] = [
+        var dict: [String: Any] = [
             "identifier": identifier,
             "recovery_secret": recoverySecret,
             "device_name": deviceName,
         ]
+        installId.add(to: &dict)
         let body = try JSONSerialization.data(withJSONObject: dict)
         let data = try await rest.post("/api/v1/auth/recovery-verify", body: body)
         return try JSONDecoder().decode(AuthCredentials.self, from: data)
@@ -194,6 +201,7 @@ public final class BCryptoAccountApiImpl: AccountApi {
             "device_name": deviceName,
             "platform": "ios",
         ]
+        installId.add(to: &dict)
         if let name = displayName, !name.isEmpty { dict["display_name"] = name }
         // The declaration belongs to a registration only: a login never carries it.
         AgeDeclaration.add(to: &dict, declared: ageDeclared && purpose == .register,

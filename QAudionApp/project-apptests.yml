@@ -52,6 +52,7 @@ targets:
           - CallControlDockTests.swift
           - CallDiagnosticsModelTests.swift
           - CallPipLayoutTests.swift
+          - InstallIdStoreTests.swift
           - CredentialTextParserTests.swift
           - CallerBusyOutcomeTests.swift
           - CallStartSupportTests.swift
