@@ -10615,6 +10615,7 @@ final class AppState: ObservableObject {
                 self.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
                 self.resetAccountScopedRuntimeState()
+                InstallIdStore.shared.reset()
                 // The session's runtime goes with it (socket, engine, presence), so the next sign-in builds a new one;
                 // then nobody is signed in any more: the car screen (which follows `isAuthenticated`) drops its lists
                 // and shows the signed-out state, and the phone goes back to the sign-in screen.

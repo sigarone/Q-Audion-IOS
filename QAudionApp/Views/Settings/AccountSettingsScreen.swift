@@ -368,6 +368,7 @@ final class AccountSettingsContainer: ObservableObject {
                 // 2026-09-19 — the in-memory counterpart of the wipe (held service
                 // payloads, receive-side ledgers): none of it may reach a next login.
                 self.appState?.resetAccountScopedRuntimeState()
+                InstallIdStore.shared.reset()
                 // Follow-up (post-remediation audit) — unlike AppState.logout()
                 // and the remote_wipe handler, this path never invalidated the
                 // local token or flipped isAuthenticated, so a deleted account
