@@ -81,8 +81,8 @@ final class PhoneTransferWiringTests: XCTestCase {
     func testTheAppLockDropsTheStateAndTheUnlockReadsAgain() throws {
         let scene = try code("QAudionApp/QAudionApp.swift")
         XCTAssertTrue(
-            scene.contains(".onChange(of: lockService.isLocked) { locked in appState.phoneTransferNotice.setLocked(locked) if !locked { appState.refreshPhoneTransferNotice() } }"),
-            "locking drops the state and stops reads, unlocking reads again without waiting")
+            scene.contains(".onChange(of: lockService.isLocked) { locked in appState.phoneTransferNotice.setLocked(locked) appState.loginApproval.setLocked(locked) if !locked { appState.refreshPhoneTransferNotice() appState.refreshLoginApprovals() } }"),
+            "locking drops the state and stops reads (transfers and sign-in approvals), unlocking reads again without waiting")
         XCTAssertTrue(scene.contains("appState.isAppLocked = { lock.isLocked }"),
                       "the lock is also read where a read starts, so it cannot lag behind the observer")
     }

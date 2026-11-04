@@ -325,6 +325,8 @@ struct QAudionApp: App {
                     .environmentObject(appState.capabilityGate)
                     // Terms re-acceptance, withdrawal receipt and the emergency notice (see `LegalRootModifier`).
                     .legalRoot(appState: appState)
+                    // Approval of a new sign-in, the disconnect prompt and the account notices.
+                    .deviceApprovalRoot(appState: appState)
                     // W441: hide app content from app-switcher snapshots when
                     // screenshot protection is on (iOS 15+ system API).
                     .privacySensitive(screenshotProtectionEnabled)
@@ -345,7 +347,11 @@ struct QAudionApp: App {
             // while it is locked, and the list is read again from the server when it unlocks.
             .onChange(of: lockService.isLocked) { locked in
                 appState.phoneTransferNotice.setLocked(locked)
-                if !locked { appState.refreshPhoneTransferNotice() }
+                appState.loginApproval.setLocked(locked)
+                if !locked {
+                    appState.refreshPhoneTransferNotice()
+                    appState.refreshLoginApprovals()
+                }
             }
             // A share waiting behind the app lock is picked up once the app unlocks.
             .onChange(of: lockService.isLocked) { locked in
@@ -557,7 +563,10 @@ struct QAudionApp: App {
             appState.clearGenericMessageAlerts(for: .sceneActive)
             // Pending phone-number transfers: read again on a return to the foreground (a locked
             // app reads after the unlock, see the `isLocked` observer).
-            if !lockService.isLocked { appState.refreshPhoneTransferNotice(throttled: true) }
+            if !lockService.isLocked {
+                appState.refreshPhoneTransferNotice(throttled: true)
+                appState.refreshLoginApprovals()
+            }
         default:
             break
         }

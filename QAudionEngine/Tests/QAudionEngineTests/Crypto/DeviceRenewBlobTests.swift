@@ -15,6 +15,7 @@ final class DeviceRenewBlobTests: XCTestCase {
         "qaudion-mesh-announce-v1",   // the proof of a node id on a mesh link (MESH_LINK_SPEC 8.5)
         DeviceRenewBlob.domainTagDeviceRenew,  // QAUDION-DEVICE-RENEW-v1
         DeviceRenewBlob.domainTagDeviceRevoke, // QAUDION-REVOKE-v1
+        DeviceRenewBlob.domainTagRevokeOthers, // QAUDION-REVOKE-OTHERS-v1
         "qaudion-handshake-sig-v6",
         "qaudion-vn-announce-sig-v1",
         "qaudion-fa-announce-sig-v1",
@@ -66,6 +67,23 @@ final class DeviceRenewBlobTests: XCTestCase {
         XCTAssertEqual(blob.count, expectedLen)
         let tail = blob.suffix(8)
         XCTAssertEqual(Array(tail), [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef])
+    }
+
+    /// Same vector as Go `auth.BuildRevokeOthersBlob` (internal/auth/blob.go): tag, requesting device, the literal
+    /// "*", nonce, epoch as big-endian u64, each part followed by a NUL except the epoch.
+    func testRevokeOthersBlobMatchesTheServerLayout() {
+        let nonce = Data(repeating: 0xAB, count: 32)
+        let blob = DeviceRenewBlob.buildRevokeOthers(requestingDeviceId: "dev-1", nonce: nonce, epochMs: 0x0123_4567_89AB_CDEF)
+        var expected = Data("QAUDION-REVOKE-OTHERS-v1".utf8)
+        expected.append(0)
+        expected.append(Data("dev-1".utf8))
+        expected.append(0)
+        expected.append(Data("*".utf8))
+        expected.append(0)
+        expected.append(nonce)
+        expected.append(0)
+        expected.append(contentsOf: [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF])
+        XCTAssertEqual(blob, expected)
     }
 
     func testRevokeBlobStartsWithUppercaseTagThenNul() {

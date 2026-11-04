@@ -422,6 +422,8 @@ struct ChatListScreen: View {
                 // server lists one (see `PhoneTransferNoticeModel`).
                 PhoneTransferBanner(model: appState.phoneTransferNotice)
                 PasswordChangedBanner(isVisible: $appState.passwordChangedElsewhere)
+                // A new device waits for this one to approve its sign-in: draws nothing unless the server lists one.
+                LoginApprovalBanner(model: appState.loginApproval, onOpen: { appState.showLoginApprovalSheet = true })
                 searchField
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
