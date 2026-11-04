@@ -70,6 +70,7 @@
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:voip.bcrypto.com</string>
+		<string>webcredentials:voip.bcrypto.com</string>
 	</array>
 </dict>
 </plist>

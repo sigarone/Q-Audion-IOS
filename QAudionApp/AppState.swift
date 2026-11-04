@@ -137,6 +137,13 @@ final class AppState: ObservableObject {
     /// launch, before the next getProfile() round-trip completes.
     /// Populated by the startup getProfile() path and by AccountSettingsContainer.loadFromServer().
     @Published var currentUserDialExtension: String?
+    /// True after another device changed this account's password (`account_notice` / `password_changed`);
+    /// the chat list shows a dismissable banner. Cleared with the session.
+    @Published var passwordChangedElsewhere = false
+    /// When this device last changed the password itself; its own `password_changed` notice is ignored.
+    var lastLocalPasswordChangeAt: Date?
+    /// True when the last `loginWithExtension` was refused as wrong credentials (not a network failure).
+    var lastLoginRejectedAsInvalid = false
     /// 2026-08-06 fix: the SettingsScreen hero card used to show a
     /// hardcoded "Disponibile per chiamate sicure." literal for every
     /// account regardless of what the user actually set on
@@ -5682,21 +5689,20 @@ final class AppState: ObservableObject {
     /// interactive login paths above; server rejects any account that
     /// isn't Fast Setup with a generic "invalid credentials" (indistinguishable
     /// from a wrong password), so the error message here stays generic too.
-    func loginWithExtension(extension ext: Int64, credential: String) async {
+    ///
+    /// `activate: false` signs in but leaves the switch to the main screen to `activatePendingSession()`,
+    /// so the sign-in screen can still ask the "save the password?" question before it goes away.
+    func loginWithExtension(extension ext: Int64, credential: String, activate: Bool = true) async {
+        lastLoginRejectedAsInvalid = false
         do {
             let creds = try await authService.loginWithExtension(
                 extension: ext, password: credential, serverUrl: defaultServerUrl
             )
             currentUserId = creds.userId  // authService already persisted it (TokenVault)
-            isAuthenticated = true
             errorMessage = nil
-            replayPendingTrackB()
-            connectPersistentSocket()
-            bindPresenceAfterAuth()
-            reassertVoipPushTokenRegistration()
-            reassertStandardApnsTokenRegistration()
-            refreshOwnDialExtension()
+            if activate { activatePendingSession() }
         } catch {
+            if case BCryptoError.unauthorized = error { lastLoginRejectedAsInvalid = true }
             errorMessage = "Login failed: \(error.localizedDescription)"
         }
     }
@@ -5754,6 +5760,19 @@ final class AppState: ObservableObject {
         reassertVoipPushTokenRegistration()
         reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (notice push check when flag OFF)
         refreshOwnDialExtension()
+    }
+
+    /// A password change made on this device: the answer carries the whole new session, the old tokens are
+    /// dead. Stored (Keychain) and handed to the live connection, so the next request and the socket that
+    /// the server just closed reconnect with the new pair.
+    func adoptChangedPasswordSession(_ result: PasswordChangeResult) {
+        lastLocalPasswordChangeAt = Date()
+        authService.saveToken(result.accessToken)
+        authService.saveRefreshToken(result.refreshToken)
+        TokenVault.saveDeviceId(result.deviceId)
+        AuthRefreshCoordinator.shared.resetBackoff()
+        liveProvider?.applyTokenPair(access: result.accessToken, refresh: result.refreshToken, persist: false)
+        scheduleProactiveTokenRefresh()
     }
 
     /// W70: drain `PendingGroupInviteStore` chiamando `POST /groups/:id/join`
@@ -10604,6 +10623,7 @@ final class AppState: ObservableObject {
                 // A live call ends first (CallKit and the peer hear it) while the call's own state is still there.
                 self.endLiveCallsForSessionEnd()
                 self.authService.clearToken()
+                SavedLoginStore.shared.deleteAll()
                 // Whole-phase-review finding I1 (2026-08-17): this handler
                 // clears the Keychain token but neither nils `currentUserId`
                 // nor flips `isAuthenticated` (pre-existing — the latter is
@@ -10633,6 +10653,7 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 self?.endLiveCallsForSessionEnd()
                 self?.authService.clearToken()
+                SavedLoginStore.shared.deleteAll()
                 // Whole-phase-review finding I1 (2026-08-17) — same
                 // reasoning as the `remote_wipe` handler just above.
                 self?.capabilityGate.discard()
@@ -10671,6 +10692,18 @@ final class AppState: ObservableObject {
         // holds the transfer id and its expiry, nothing else: the list is read from the server
         // before anything is shown. Other codes and unknown payloads are ignored.
         ws.registerHandler(type: "account_notice") { [weak self] _, data in
+            if (data["code"] as? String) == "password_changed" {
+                let noticeDevice = data["device_id"] as? String
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if PasswordChangedNoticeFilter.shouldShow(
+                        now: Date(), lastLocalChange: self.lastLocalPasswordChangeAt,
+                        noticeDeviceId: noticeDevice, ownDeviceId: self.authService.loadDeviceId()) {
+                        self.passwordChangedElsewhere = true
+                    }
+                }
+                return
+            }
             guard PhoneTransferNotice.isPending(data) else { return }
             DispatchQueue.main.async {
                 self?.refreshPhoneTransferNotice()
@@ -18946,6 +18979,7 @@ final class AppState: ObservableObject {
         // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
         // account deletion).
         phoneTransferNotice.reset()
+        passwordChangedElsewhere = false
         // `LocalCryptoWipe.wipeAll()` empties ContactsStore without posting
         // `.contactsDidChange`, so nothing refreshes the in-memory snapshot of the
         // account that left: its names would keep labelling incoming calls, chat

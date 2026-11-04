@@ -177,6 +177,9 @@ final class AuthService {
 
     func clearToken() {
         TokenVault.clear()
+        // The password kept behind biometrics is deliberately NOT removed here: a normal sign-out keeps it
+        // for "Accedi con Face ID". Account deletion, remote wipe and account_locked call
+        // `SavedLoginStore.shared.deleteAll()` themselves.
         // Logout / session loss: drop the recovery state of the session that just ended, and
         // invalidate any flight still on the wire (its outcome must not leak into the next one).
         AuthRefreshCoordinator.shared.resetBackoff()

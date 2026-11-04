@@ -376,6 +376,7 @@ final class AccountSettingsContainer: ObservableObject {
                 // round trip caught up. Clear both explicitly, same as the
                 // other two wipe call sites.
                 self.appState?.authService.clearToken()
+                SavedLoginStore.shared.deleteAll()
                 // Whole-phase-review finding I1 (2026-08-17) — GDPR account
                 // deletion clears the Keychain token but doesn't nil
                 // `currentUserId` (pre-existing, not changed here), so

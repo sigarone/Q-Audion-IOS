@@ -139,6 +139,7 @@ extension AppState {
         resetAccountScopedRuntimeState()
         InstallIdStore.shared.reset()
         authService.clearToken()
+        SavedLoginStore.shared.deleteAll()
         capabilityGate.discard()
         isAuthenticated = false
     }
