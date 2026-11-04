@@ -99547,6 +99547,3702 @@
           }
         }
       }
+    },
+    "login_approval.wait.title": {
+      "extractionState": "manual",
+      "comment": "Waiting screen after a sign-in that needs approval: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conferma l'accesso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm the sign-in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirma el acceso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmez la connexion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung bestätigen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirme o acesso"
+          }
+        }
+      }
+    },
+    "login_approval.wait.instruction": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: what to do on the other device. %@ is the two-digit number shown on this screen.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conferma da un tuo altro dispositivo scegliendo il numero %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm from another of your devices by choosing the number %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirma desde otro de tus dispositivos eligiendo el número %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmez depuis un autre de vos appareils en choisissant le numéro %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätige auf einem deiner anderen Geräte, indem du die Zahl %@ wählst"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirme em outro dos seus dispositivos escolhendo o número %@"
+          }
+        }
+      }
+    },
+    "login_approval.wait.countdown": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: time left before the request expires. %@ is minutes and seconds, like 9:41.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scade tra %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expires in %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Caduca en %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expire dans %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Läuft ab in %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expira em %@"
+          }
+        }
+      }
+    },
+    "login_approval.wait.waiting": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: status line while the answer has not arrived.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa di conferma…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for confirmation…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esperando confirmación…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente de confirmation…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warte auf Bestätigung …"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aguardando confirmação…"
+          }
+        }
+      }
+    },
+    "login_approval.wait.connection": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the phone cannot reach the server; polling goes on.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione assente. Continuo a riprovare."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No connection. Still trying."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin conexión. Sigo intentándolo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas de connexion. Je réessaie."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Verbindung. Ich versuche es weiter."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sem conexão. Continuo tentando."
+          }
+        }
+      }
+    },
+    "login_approval.wait.email_button": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: button that sends a recovery code by email.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ricevi un codice via email"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get a code by email"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recibir un código por correo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recevoir un code par e-mail"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code per E-Mail erhalten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receber um código por e-mail"
+          }
+        }
+      }
+    },
+    "login_approval.wait.sms_button": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: button that sends a recovery code by SMS.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ricevi un codice via SMS"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get a code by SMS"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recibir un código por SMS"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recevoir un code par SMS"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code per SMS erhalten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receber um código por SMS"
+          }
+        }
+      }
+    },
+    "login_approval.wait.admin_hint": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the person no longer has the other device. %@ is the 8-character code the administrator needs.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non hai più l'altro dispositivo? Chiedi all'amministratore il codice %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No longer have your other device? Ask the administrator for the code %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Ya no tienes el otro dispositivo? Pide al administrador el código %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous n'avez plus l'autre appareil ? Demandez le code %@ à l'administrateur"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du hast das andere Gerät nicht mehr? Frag den Administrator nach dem Code %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não tem mais o outro dispositivo? Peça ao administrador o código %@"
+          }
+        }
+      }
+    },
+    "login_approval.wait.code_sent_email": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: a 6-digit code was sent by email.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ti abbiamo inviato un codice di 6 cifre via email."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We sent you a 6-digit code by email."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Te hemos enviado un código de 6 cifras por correo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nous vous avons envoyé un code à 6 chiffres par e-mail."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wir haben dir einen 6-stelligen Code per E-Mail geschickt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviamos um código de 6 dígitos por e-mail."
+          }
+        }
+      }
+    },
+    "login_approval.wait.code_sent_sms": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: a 6-digit code was sent by SMS.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ti abbiamo inviato un codice di 6 cifre via SMS."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We sent you a 6-digit code by SMS."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Te hemos enviado un código de 6 cifras por SMS."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nous vous avons envoyé un code à 6 chiffres par SMS."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wir haben dir einen 6-stelligen Code per SMS geschickt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviamos um código de 6 dígitos por SMS."
+          }
+        }
+      }
+    },
+    "login_approval.wait.code_field": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: placeholder of the field for the 6-digit code.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice a 6 cifre"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "6-digit code"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de 6 cifras"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code à 6 chiffres"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "6-stelliger Code"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de 6 dígitos"
+          }
+        }
+      }
+    },
+    "login_approval.wait.code_confirm": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: button that sends the 6-digit code.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conferma il codice"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm the code"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmar el código"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmer le code"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code bestätigen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirmar o código"
+          }
+        }
+      }
+    },
+    "login_approval.wait.error.invalid_code": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the code is not the right one.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice non corretto. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrong code. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código incorrecto. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code incorrect. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falscher Code. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código incorreto. Tente novamente."
+          }
+        }
+      }
+    },
+    "login_approval.wait.error.too_many": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: too many wrong codes.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppi tentativi. Richiedi un nuovo codice."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many tries. Ask for a new code."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiados intentos. Pide un código nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de tentatives. Demandez un nouveau code."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Versuche. Fordere einen neuen Code an."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitas tentativas. Peça um novo código."
+          }
+        }
+      }
+    },
+    "login_approval.wait.error.rate_limited": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: codes are throttled.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppe richieste. Riprova tra poco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many requests. Try again shortly."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiadas solicitudes. Inténtalo de nuevo en breve."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de demandes. Réessayez dans un instant."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Anfragen. Versuche es gleich noch einmal."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitas solicitações. Tente novamente em instantes."
+          }
+        }
+      }
+    },
+    "login_approval.wait.error.unavailable": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the recovery channel is not available for the account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo metodo non è disponibile per il tuo account."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This method is not available for your account."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este método no está disponible para tu cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette méthode n'est pas disponible pour votre compte."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Methode ist für dein Konto nicht verfügbar."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este método não está disponível para a sua conta."
+          }
+        }
+      }
+    },
+    "login_approval.wait.error.failed": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: a request failed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile completare la richiesta. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The request could not be completed. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo completar la solicitud. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La demande n'a pas pu aboutir. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Anfrage konnte nicht abgeschlossen werden. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível concluir a solicitação. Tente novamente."
+          }
+        }
+      }
+    },
+    "login_approval.wait.denied.title": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the request was denied, title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accesso negato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in denied"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acceso denegado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion refusée"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung abgelehnt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acesso negado"
+          }
+        }
+      }
+    },
+    "login_approval.wait.denied.text": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the request was denied by another device of the account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un altro tuo dispositivo ha negato questa richiesta di accesso."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another of your devices denied this sign-in request."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otro de tus dispositivos ha denegado esta solicitud de acceso."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un autre de vos appareils a refusé cette demande de connexion."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eines deiner anderen Geräte hat diese Anmeldeanfrage abgelehnt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Outro dos seus dispositivos negou este pedido de acesso."
+          }
+        }
+      }
+    },
+    "login_approval.wait.expired.title": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the request expired, title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Richiesta scaduta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request expired"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solicitud caducada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demande expirée"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anfrage abgelaufen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pedido expirado"
+          }
+        }
+      }
+    },
+    "login_approval.wait.expired.text": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: nobody answered in time.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuno ha confermato l'accesso in tempo. Puoi riprovare ad accedere."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nobody confirmed the sign-in in time. You can try signing in again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nadie confirmó el acceso a tiempo. Puedes volver a intentar acceder."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personne n'a confirmé la connexion à temps. Vous pouvez réessayer."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niemand hat die Anmeldung rechtzeitig bestätigt. Du kannst es erneut versuchen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ninguém confirmou o acesso a tempo. Você pode tentar entrar novamente."
+          }
+        }
+      }
+    },
+    "login_approval.wait.back": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: button that goes back to the sign-in form.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Torna all'accesso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back to sign-in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Volver al acceso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retour à la connexion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zurück zur Anmeldung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voltar ao acesso"
+          }
+        }
+      }
+    },
+    "login_approval.wait.accessibility_code": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: VoiceOver label of the big number. %@ is the number.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero da scegliere: %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Number to choose: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número que elegir: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro à choisir : %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu wählende Zahl: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número a escolher: %@"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.title": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuovo accesso"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New sign-in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuevo acceso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nouvelle connexion"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neue Anmeldung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Novo acesso"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.intro": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: what is asked.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un dispositivo sta cercando di accedere al tuo account. Scegli il numero che vedi sul nuovo dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A device is trying to sign in to your account. Choose the number you see on the new device."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un dispositivo intenta acceder a tu cuenta. Elige el número que ves en el dispositivo nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un appareil essaie d'accéder à votre compte. Choisissez le numéro affiché sur le nouvel appareil."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Gerät versucht, sich in deinem Konto anzumelden. Wähle die Zahl, die du auf dem neuen Gerät siehst."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um dispositivo está tentando entrar na sua conta. Escolha o número que aparece no novo dispositivo."
+          }
+        }
+      }
+    },
+    "login_approval.sheet.label.device": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: row label, name of the new device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispositivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Device"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispositivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appareil"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gerät"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispositivo"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.label.platform": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: row label, operating system of the new device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Système"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistema"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.label.area": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: row label, country and kind of network of the request.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zona"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Area"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zona"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Region"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Região"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.label.time": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: row label, when the request was made.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ora"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Time"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hora"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Heure"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uhrzeit"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hora"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.warning": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: advice when the person is not signing in.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se non stai cercando di accedere, nega la richiesta."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you are not trying to sign in, deny the request."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si no estás intentando acceder, deniega la solicitud."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si vous n'essayez pas de vous connecter, refusez la demande."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn du dich nicht anmelden willst, lehne die Anfrage ab."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se você não está tentando entrar, negue o pedido."
+          }
+        }
+      }
+    },
+    "login_approval.sheet.deny": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: button that denies the request.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nega"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deny"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Denegar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refuser"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ablehnen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Negar"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.close": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: button that closes the sheet without answering.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiudi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cerrar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schließen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fechar"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.choice_accessibility": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: VoiceOver label of a number button. %@ is the number.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Number %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zahl %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número %@"
+          }
+        }
+      }
+    },
+    "login_approval.sheet.result.approved": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: the sign-in was approved.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accesso approvato."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in approved."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acceso aprobado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion approuvée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung bestätigt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acesso aprovado."
+          }
+        }
+      }
+    },
+    "login_approval.sheet.result.denied": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: the sign-in was denied.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accesso negato."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in denied."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acceso denegado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion refusée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung abgelehnt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acesso negado."
+          }
+        }
+      }
+    },
+    "login_approval.sheet.result.wrong_code": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: the chosen number was wrong, the request was closed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero sbagliato: la richiesta è stata respinta. Se il nuovo accesso è tuo, riprova ad accedere dal nuovo dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrong number: the request was rejected. If the new sign-in is yours, try signing in again on the new device."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número equivocado: la solicitud fue rechazada. Si el nuevo acceso es tuyo, vuelve a intentarlo desde el dispositivo nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mauvais numéro : la demande a été rejetée. Si la nouvelle connexion est la vôtre, réessayez depuis le nouvel appareil."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falsche Zahl: Die Anfrage wurde abgelehnt. Wenn die neue Anmeldung von dir ist, versuche es auf dem neuen Gerät erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número errado: o pedido foi recusado. Se o novo acesso é seu, tente entrar novamente no novo dispositivo."
+          }
+        }
+      }
+    },
+    "login_approval.sheet.result.resolved": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: somebody else already answered.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa richiesta è già stata gestita."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This request has already been handled."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta solicitud ya se ha gestionado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette demande a déjà été traitée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Anfrage wurde bereits bearbeitet."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este pedido já foi tratado."
+          }
+        }
+      }
+    },
+    "login_approval.sheet.result.failed": {
+      "extractionState": "manual",
+      "comment": "Approval sheet: the answer could not be sent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile inviare la risposta. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The answer could not be sent. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo enviar la respuesta. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La réponse n'a pas pu être envoyée. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Antwort konnte nicht gesendet werden. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível enviar a resposta. Tente novamente."
+          }
+        }
+      }
+    },
+    "login_approval.banner.title": {
+      "extractionState": "manual",
+      "comment": "Chat list banner: a new device waits for approval.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un nuovo dispositivo chiede di accedere"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A new device is asking to sign in"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un dispositivo nuevo pide acceder"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un nouvel appareil demande à se connecter"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein neues Gerät möchte sich anmelden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um novo dispositivo pede para entrar"
+          }
+        }
+      }
+    },
+    "login_approval.banner.open": {
+      "extractionState": "manual",
+      "comment": "Chat list banner: button that opens the approval sheet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apri"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvrir"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abrir"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.title": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in approved on this device: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vuoi disconnettere gli altri dispositivi?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Do you want to disconnect your other devices?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Quieres desconectar tus otros dispositivos?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voulez-vous déconnecter vos autres appareils ?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Möchtest du deine anderen Geräte abmelden?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quer desconectar os seus outros dispositivos?"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.message": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in: explanation.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hai appena fatto accesso da questo dispositivo. Scegli cosa fare con gli altri."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You just signed in on this device. Choose what to do with the others."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acabas de acceder desde este dispositivo. Elige qué hacer con los demás."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous venez de vous connecter sur cet appareil. Choisissez ce qu'il faut faire des autres."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du hast dich gerade auf diesem Gerät angemeldet. Wähle, was mit den anderen geschehen soll."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você acabou de entrar neste dispositivo. Escolha o que fazer com os outros."
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.all": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in: option that disconnects every other device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnetti tutti"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnect all"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectar todos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tout déconnecter"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alle abmelden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectar todos"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.choose": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in: option that lets the person pick the devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elegir"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auswählen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolher"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.keep": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in: option that keeps the other devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mantieni"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mantener"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Garder"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Beibehalten"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manter"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.continue": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in: button that applies the chosen option.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continua"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weiter"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continuar"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.failed": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in: the other devices could not be disconnected.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile disconnettere gli altri dispositivi. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other devices could not be disconnected. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudieron desconectar los demás dispositivos. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les autres appareils n'ont pas pu être déconnectés. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die anderen Geräte konnten nicht abgemeldet werden. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível desconectar os outros dispositivos. Tente novamente."
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.done": {
+      "extractionState": "manual",
+      "comment": "Message after the other devices were disconnected.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gli altri dispositivi sono stati disconnessi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The other devices have been disconnected."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los demás dispositivos se han desconectado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les autres appareils ont été déconnectés."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die anderen Geräte wurden abgemeldet."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Os outros dispositivos foram desconectados."
+          }
+        }
+      }
+    },
+    "account_notice.sheet.title": {
+      "extractionState": "manual",
+      "comment": "Alert title for a notice about the account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avviso sull'account"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account notice"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aviso de la cuenta"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avis sur le compte"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hinweis zum Konto"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aviso da conta"
+          }
+        }
+      }
+    },
+    "account_notice.sheet.ok": {
+      "extractionState": "manual",
+      "comment": "Alert button that closes a notice.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
+    },
+    "account_notice.login_denied": {
+      "extractionState": "manual",
+      "comment": "Notice: a sign-in request on the account was denied.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una richiesta di accesso al tuo account è stata negata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A sign-in request for your account was denied."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se denegó una solicitud de acceso a tu cuenta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une demande de connexion à votre compte a été refusée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine Anmeldeanfrage für dein Konto wurde abgelehnt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um pedido de acesso à sua conta foi negado."
+          }
+        }
+      }
+    },
+    "account_notice.login_expired": {
+      "extractionState": "manual",
+      "comment": "Notice: a sign-in request on the account expired.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una richiesta di accesso al tuo account è scaduta senza risposta."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A sign-in request for your account expired without an answer."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una solicitud de acceso a tu cuenta caducó sin respuesta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une demande de connexion à votre compte a expiré sans réponse."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine Anmeldeanfrage für dein Konto ist ohne Antwort abgelaufen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um pedido de acesso à sua conta expirou sem resposta."
+          }
+        }
+      }
+    },
+    "account_notice.login_recovered": {
+      "extractionState": "manual",
+      "comment": "Notice: a new device was approved with a code sent by email or SMS, or by the administrator.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un nuovo dispositivo è stato approvato con un codice inviato via email o SMS, oppure dall'amministratore. Se non sei stato tu, contatta l'amministratore."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A new device was approved with a code sent by email or SMS, or by the administrator. If it was not you, contact the administrator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se aprobó un dispositivo nuevo con un código enviado por correo o SMS, o por el administrador. Si no fuiste tú, contacta con el administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un nouvel appareil a été approuvé avec un code envoyé par e-mail ou SMS, ou par l'administrateur. Si ce n'était pas vous, contactez l'administrateur."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein neues Gerät wurde mit einem per E-Mail oder SMS gesendeten Code oder vom Administrator bestätigt. Wenn du das nicht warst, wende dich an den Administrator."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um novo dispositivo foi aprovado com um código enviado por e-mail ou SMS, ou pelo administrador. Se não foi você, entre em contato com o administrador."
+          }
+        }
+      }
+    },
+    "account_notice.device_disconnected": {
+      "extractionState": "manual",
+      "comment": "Notice: this device was disconnected by a new sign-in.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo dispositivo è stato disconnesso da un tuo nuovo accesso. Se non sei stato tu, contatta l'amministratore."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device was disconnected by a new sign-in of yours. If it was not you, contact the administrator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo se desconectó por un nuevo acceso tuyo. Si no fuiste tú, contacta con el administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet appareil a été déconnecté par une nouvelle connexion de votre part. Si ce n'était pas vous, contactez l'administrateur."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Gerät wurde durch eine neue Anmeldung von dir abgemeldet. Wenn du das nicht warst, wende dich an den Administrator."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo foi desconectado por um novo acesso seu. Se não foi você, entre em contato com o administrador."
+          }
+        }
+      }
+    },
+    "account_notice.recovery_contact_changed": {
+      "extractionState": "manual",
+      "comment": "Notice: the recovery email or phone changed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'email o il numero per il recupero del tuo account sono stati modificati. Se non sei stato tu, contatta l'amministratore."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recovery email or number of your account was changed. If it was not you, contact the administrator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se modificó el correo o el número de recuperación de tu cuenta. Si no fuiste tú, contacta con el administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'e-mail ou le numéro de récupération de votre compte a été modifié. Si ce n'était pas vous, contactez l'administrateur."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Wiederherstellungs-E-Mail oder -Nummer deines Kontos wurde geändert. Wenn du das nicht warst, wende dich an den Administrator."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O e-mail ou o número de recuperação da sua conta foi alterado. Se não foi você, entre em contato com o administrador."
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.title": {
+      "extractionState": "manual",
+      "comment": "Settings row and screen title: optional email and phone number used to recover access.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email e numero per il recupero"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email and number for recovery"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correo y número de recuperación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-mail et numéro de récupération"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-Mail und Nummer zur Wiederherstellung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-mail e número de recuperação"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.subtitle": {
+      "extractionState": "manual",
+      "comment": "Settings row subtitle and one-line explanation of the recovery contacts.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servono solo se perdi il telefono"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only needed if you lose your phone"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Solo hacen falta si pierdes el teléfono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiles uniquement si vous perdez votre téléphone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nur nötig, wenn du dein Telefon verlierst"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Só são necessários se você perder o telefone"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.email": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: section title of the email.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correo electrónico"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-mail"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-Mail"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-mail"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.phone": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: section title of the phone number.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero di telefono"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phone number"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de teléfono"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro de téléphone"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefonnummer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de telefone"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.not_set": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: nothing is set for this contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non impostato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not set"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin configurar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non défini"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht festgelegt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não definido"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.verified": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: the contact is verified.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifié"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätigt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificado"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.unverified": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: the contact is not verified yet.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Da verificare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not verified yet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendiente de verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "À vérifier"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch nicht bestätigt"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A verificar"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.add": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: button that adds a contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aggiungi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Añadir"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajouter"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hinzufügen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adicionar"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.change": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: button that replaces a contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambia"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambiar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifier"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ändern"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alterar"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.remove": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: button that removes a contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rimuovi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quitar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supprimer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entfernen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remover"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.remove_confirm": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: confirmation question before removing a contact.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rimuovere questo contatto di recupero?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove this recovery contact?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Quitar este contacto de recuperación?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supprimer ce contact de récupération ?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diesen Wiederherstellungskontakt entfernen?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remover este contato de recuperação?"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.send_code": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: button that sends the verification code.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invia codice"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send code"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviar código"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer le code"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code senden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviar código"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.verify": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: button that checks the verification code.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bestätigen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.cancel": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: button that leaves the code step.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annulla"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Annuler"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abbrechen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelar"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.code_sent": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: a verification code was sent.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ti abbiamo inviato un codice di 6 cifre. Inseriscilo qui sotto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We sent you a 6-digit code. Enter it below."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Te hemos enviado un código de 6 cifras. Introdúcelo abajo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nous vous avons envoyé un code à 6 chiffres. Saisissez-le ci-dessous."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wir haben dir einen 6-stelligen Code geschickt. Gib ihn unten ein."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enviamos um código de 6 dígitos. Digite-o abaixo."
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.code_placeholder": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: placeholder of the code field.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice a 6 cifre"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "6-digit code"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de 6 cifras"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code à 6 chiffres"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "6-stelliger Code"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código de 6 dígitos"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.email_placeholder": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: placeholder of the email field.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nome@esempio.it"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "name@example.com"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nombre@ejemplo.es"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nom@exemple.fr"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "name@beispiel.de"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nome@exemplo.com.br"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.phone_placeholder": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: placeholder of the phone field (international format).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+39 333 1234567"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+39 333 1234567"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+39 333 1234567"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+39 333 1234567"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+39 333 1234567"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+39 333 1234567"
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.error.invalid_value": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: the email or number is not valid.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Valore non valido. Controlla e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid value. Check it and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Valor no válido. Compruébalo e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Valeur non valide. Vérifiez et réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ungültiger Wert. Prüfe ihn und versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Valor inválido. Confira e tente novamente."
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.error.invalid_code": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: the verification code is wrong.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice non corretto. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrong code. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código incorrecto. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code incorrect. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falscher Code. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Código incorreto. Tente novamente."
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.error.rate_limited": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: too many requests.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppe richieste. Riprova tra poco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many requests. Try again shortly."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiadas solicitudes. Inténtalo de nuevo en breve."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de demandes. Réessayez dans un instant."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Anfragen. Versuche es gleich noch einmal."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitas solicitações. Tente novamente em instantes."
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.error.failed": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: a request failed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile completare l'operazione. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The operation could not be completed. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo completar la operación. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'opération n'a pas pu aboutir. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Vorgang konnte nicht abgeschlossen werden. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível concluir a operação. Tente novamente."
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.load_failed": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: the current state could not be read.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile leggere le impostazioni di recupero."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recovery settings could not be read."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudieron leer los ajustes de recuperación."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les réglages de récupération n'ont pas pu être lus."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Wiederherstellungseinstellungen konnten nicht gelesen werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível ler as configurações de recuperação."
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.list_failed": {
+      "extractionState": "manual",
+      "comment": "Prompt after a sign-in: the list of devices could not be read.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile leggere l'elenco dei dispositivi. Puoi riprovare, mantenerli o disconnettere tutti."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The list of devices could not be read. You can try again, keep them or disconnect all."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo leer la lista de dispositivos. Puedes reintentar, mantenerlos o desconectarlos todos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La liste des appareils n'a pas pu être lue. Vous pouvez réessayer, les garder ou tous les déconnecter."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Geräteliste konnte nicht gelesen werden. Du kannst es erneut versuchen, sie behalten oder alle trennen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível ler a lista de dispositivos. Você pode tentar de novo, mantê-los ou desconectar todos."
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.pick.title": {
+      "extractionState": "manual",
+      "comment": "Device picker: title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli i dispositivi da disconnettere"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the devices to disconnect"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige los dispositivos que quieres desconectar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez les appareils à déconnecter"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wähle die Geräte, die getrennt werden sollen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolha os dispositivos a desconectar"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.pick.confirm": {
+      "extractionState": "manual",
+      "comment": "Device picker: button that disconnects the checked devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnetti selezionati"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnect selected"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectar seleccionados"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déconnecter la sélection"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auswahl trennen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectar selecionados"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.pick.back": {
+      "extractionState": "manual",
+      "comment": "Device picker: back to the question.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indietro"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atrás"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retour"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zurück"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voltar"
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.pick.none": {
+      "extractionState": "manual",
+      "comment": "Device picker: the account has only this device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non ci sono altri dispositivi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There are no other devices."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay otros dispositivos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il n'y a pas d'autres appareils."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es gibt keine anderen Geräte."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não há outros dispositivos."
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.pick.failed": {
+      "extractionState": "manual",
+      "comment": "Device picker: at least one disconnect failed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alcuni dispositivi non sono stati disconnessi. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some devices could not be disconnected. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Algunos dispositivos no se pudieron desconectar. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Certains appareils n'ont pas pu être déconnectés. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einige Geräte konnten nicht getrennt werden. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alguns dispositivos não puderam ser desconectados. Tente de novo."
+          }
+        }
+      }
+    },
+    "login_approval.disconnect.pick.current": {
+      "extractionState": "manual",
+      "comment": "Device picker: the row of the current device, not selectable.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo dispositivo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet appareil"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Gerät"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo"
+          }
+        }
+      }
+    },
+    "login_approval.wait.error.code_expired": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the recovery code expired or is gone.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codice scaduto. Richiedi un nuovo codice."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The code has expired. Ask for a new code."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El código ha caducado. Pide un código nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le code a expiré. Demandez un nouveau code."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Code ist abgelaufen. Fordere einen neuen Code an."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O código expirou. Peça um novo código."
+          }
+        }
+      }
+    },
+    "login_approval.wait.revoked.title": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the sessions were revoked after the approval, title.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accesso non completato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in not completed"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inicio de sesión no completado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion non terminée"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anmeldung nicht abgeschlossen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login não concluído"
+          }
+        }
+      }
+    },
+    "login_approval.wait.revoked.text": {
+      "extractionState": "manual",
+      "comment": "Waiting screen: the sessions were revoked after the approval.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le sessioni dell'account sono state chiuse subito dopo l'approvazione. Accedi di nuovo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sessions of the account were closed right after the approval. Sign in again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las sesiones de la cuenta se cerraron justo después de la aprobación. Inicia sesión de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les sessions du compte ont été fermées juste après l'approbation. Connectez-vous à nouveau."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Sitzungen des Kontos wurden direkt nach der Genehmigung beendet. Melde dich erneut an."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As sessões da conta foram encerradas logo após a aprovação. Entre novamente."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

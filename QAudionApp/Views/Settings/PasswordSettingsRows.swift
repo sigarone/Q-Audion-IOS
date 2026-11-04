@@ -17,6 +17,7 @@ struct PasswordSettingsRows: View {
         VStack(spacing: 8) {
             if passwordLogin {
                 changePasswordRow
+                recoveryContactsRow
                 if biometry != .none {
                     SettingsToggleRow(
                         title: SavedLoginTexts.settingsTitle(biometry.displayName),
@@ -37,6 +38,19 @@ struct PasswordSettingsRows: View {
                         iconColor: scheme.primary,
                         title: "settings.change_password.title",
                         subtitle: "settings.change_password.subtitle")
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Optional email and phone number that let the person approve a new sign-in with a code.
+    private var recoveryContactsRow: some View {
+        NavigationLink {
+            LazyView { RecoveryContactsScreen(model: appState.recoveryContacts) }
+        } label: {
+            SettingsRow(icon: "envelope.badge.shield.half.filled",
+                        iconColor: scheme.primary,
+                        title: "settings.recovery_contacts.title",
+                        subtitle: "settings.recovery_contacts.subtitle")
         }
         .buttonStyle(.plain)
     }

@@ -116,6 +116,22 @@ final class AuthService {
         return creds
     }
 
+    /// The extension sign-in that may answer "another device must approve this one first". A session is saved
+    /// like in `loginWithExtension`; a pending state saves nothing (this device has no session yet).
+    func loginWithExtensionOutcome(extension ext: Int64, password: String, serverUrl: String) async throws -> LoginOutcome {
+        let backendConfig = BackendConfig.pinned(serverUrl: serverUrl)
+        let provider = BCryptoBackendProvider(config: backendConfig)
+        let deviceName: String
+        #if canImport(UIKit)
+        deviceName = await UIDevice.current.name
+        #else
+        deviceName = "iOS Device"
+        #endif
+        let outcome = try await provider.accountApi.loginWithExtensionOutcome(extension: ext, password: password, deviceName: deviceName)
+        if case .credentials(let creds) = outcome { saveCredentials(creds) }
+        return outcome
+    }
+
     func saveCredentials(_ creds: AuthCredentials) {
         // SECURITY C-5 + W-USERID-PLAINTEXT — tokens AND userId → Keychain
         // (userId is PII tying local data to a real account, not "just an

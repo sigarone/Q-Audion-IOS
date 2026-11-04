@@ -40,6 +40,22 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(AuthCredentials.self, from: data)
     }
 
+    public func loginOutcome(phoneHash: String, password: String, deviceName: String) async throws -> LoginOutcome {
+        var dict: [String: Any] = ["phone_number": phoneHash, "password": password, "device_name": deviceName]
+        installId.add(to: &dict)
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let answer = try await rest.postRaw("/api/v1/auth/login", body: body)
+        return try LoginOutcome.parse(status: answer.status, data: answer.data)
+    }
+
+    public func loginWithExtensionOutcome(extension ext: Int64, password: String, deviceName: String) async throws -> LoginOutcome {
+        var dict: [String: Any] = ["extension": ext, "password": password, "device_name": deviceName]
+        installId.add(to: &dict)
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let answer = try await rest.postRaw("/api/v1/auth/login/extension", body: body)
+        return try LoginOutcome.parse(status: answer.status, data: answer.data)
+    }
+
     public func changePassword(current: String, new: String, revokeOthers: Bool) async throws -> PasswordChangeResult {
         let dict: [String: Any] = [
             "current_password": current,

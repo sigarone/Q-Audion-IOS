@@ -40,6 +40,10 @@ struct ExtensionLoginScreen: View {
     @State private var showSavePrompt = false
     @State private var pendingLogin: SavedLogin?
 
+    /// The sign-in answered "another device must approve this one": the waiting screen covers the form.
+    @State private var waitTicket: PendingLoginTicket?
+    @State private var waitApi: PendingLoginApi?
+
     private var extensionValue: Int64? {
         Int64(extensionText.trimmingCharacters(in: .whitespaces))
     }
@@ -171,6 +175,10 @@ struct ExtensionLoginScreen: View {
                     .padding(.bottom, 32)
                 }
                 .qaudionReadableWidth()
+            }
+            if let ticket = waitTicket, let api = waitApi {
+                LoginApprovalWaitView(ticket: ticket, api: api, onApproved: finishApprovedSignIn, onBack: leaveWaiting)
+                    .transition(.opacity)
             }
         }
         .fullScreenCover(isPresented: $showCamera) {
@@ -358,11 +366,40 @@ struct ExtensionLoginScreen: View {
         appState.errorMessage = nil
         // The main screen replaces this one the moment the session is active, so the session is activated
         // only after the "save the password?" question has been answered.
-        await appState.loginWithExtension(extension: ext, credential: password, activate: false)
+        let ticket = await appState.loginWithExtension(extension: ext, credential: password, activate: false)
         if let err = appState.errorMessage {
             errorText = err
             return
         }
+        if let ticket {
+            // Nothing is saved yet and the socket is not opened: the session starts when a device approves.
+            waitApi = appState.makePendingLoginApi()
+            waitTicket = ticket
+            return
+        }
+        askToSaveThenFinish(extension: ext)
+    }
+
+    /// The pending sign-in was approved (by a device, a code or the administrator): the session is stored and the
+    /// flow goes on as after a plain sign-in, with the question about keeping the password.
+    private func finishApprovedSignIn(_ approved: ApprovedLogin) {
+        waitTicket = nil
+        waitApi = nil
+        appState.completeApprovedLogin(approved)
+        guard let ext = extensionValue else {
+            finishSignIn()
+            return
+        }
+        askToSaveThenFinish(extension: ext)
+    }
+
+    /// Denied, expired or abandoned: back to the form, nothing was stored.
+    private func leaveWaiting() {
+        waitTicket = nil
+        waitApi = nil
+    }
+
+    private func askToSaveThenFinish(extension ext: Int64) {
         let login = SavedLogin(extensionNumber: String(ext), password: password)
         let store = SavedLoginStore.shared
         store.purgeIfInvalidated()

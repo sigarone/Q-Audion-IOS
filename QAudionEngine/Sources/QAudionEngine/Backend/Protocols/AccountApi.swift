@@ -18,6 +18,10 @@ public protocol AccountApi {
     /// number) — a manual-entry alternative to the QR scan/upload, for
     /// anyone who cannot scan a QR image. Matches `POST /api/v1/auth/login/extension`.
     func loginWithExtension(extension ext: Int64, password: String, deviceName: String) async throws -> AuthCredentials
+    /// Same two sign-ins, but the answer may be "a device of the account must approve this one first"
+    /// (HTTP 202) instead of a session. Default: the plain sign-in, which never answers with a pending state.
+    func loginOutcome(phoneHash: String, password: String, deviceName: String) async throws -> LoginOutcome
+    func loginWithExtensionOutcome(extension ext: Int64, password: String, deviceName: String) async throws -> LoginOutcome
     /// Refresh access token.
     func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair
     /// Logout (revokes all tokens).
@@ -294,6 +298,16 @@ public struct AuthCredentials: Codable {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiresIn = expiresIn
+    }
+}
+
+public extension AccountApi {
+    func loginOutcome(phoneHash: String, password: String, deviceName: String) async throws -> LoginOutcome {
+        .credentials(try await login(phoneHash: phoneHash, password: password, deviceName: deviceName))
+    }
+
+    func loginWithExtensionOutcome(extension ext: Int64, password: String, deviceName: String) async throws -> LoginOutcome {
+        .credentials(try await loginWithExtension(extension: ext, password: password, deviceName: deviceName))
     }
 }
 

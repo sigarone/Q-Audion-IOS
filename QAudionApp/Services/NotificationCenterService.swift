@@ -16,6 +16,9 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         /// (no PushKit/CallKit). Carries Answer/Decline actions. The server sets
         /// this category + interruption-level=time-sensitive on the push.
         case incomingCall = "INCOMING_CALL"
+        /// A new device asks to sign in to the account: the push has one action, which only opens the app (the
+        /// three numbers to choose from are inside the app, never in the notification).
+        case loginApproval = "QAUDION_LOGIN_APPROVAL"
     }
 
     /// W-NOCALLKIT — action identifiers for the incomingCall category.
@@ -66,6 +69,14 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
     /// Cold-start latch for that tap, like `pendingIncomingAction`: a tap that launches the app can
     /// arrive before AppState sets the handler.
     private var pendingPhoneTransferTap = false
+
+    /// Tap on the push that rings the doorbell of a sign-in waiting for approval (custom key "type" =
+    /// login_approval_pending): AppState reads the waiting sign-ins and opens the approval sheet. The numbers to
+    /// choose from are never in the notification: they are read over REST when the app is open.
+    var onLoginApprovalTap: (@MainActor () -> Void)?
+
+    /// Cold-start latch for that tap, like pendingPhoneTransferTap.
+    private var pendingLoginApprovalTap = false
 
     /// W-MISSEDQUIET (2026-10-04) — "the user has a call in flight" (in a call, ringing for one, or a CallKit call
     /// still open): the missed-call notification that arrives then is presented quietly
@@ -180,9 +191,16 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
             options: [.hiddenPreviewsShowTitle]
         )
 
+        let loginApprovalCategory = UNNotificationCategory(
+            identifier: Category.loginApproval.rawValue,
+            actions: [viewAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
         center.setNotificationCategories([
             kmsCategory, threatCategory, messageCategory, missedCallCategory,
-            wipeCategory, incomingCallCategory
+            wipeCategory, incomingCallCategory, loginApprovalCategory
         ])
     }
 
@@ -337,6 +355,13 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         handler()
     }
 
+    /// Runs a login-approval tap that arrived before onLoginApprovalTap was set.
+    func flushPendingLoginApprovalTap() {
+        guard pendingLoginApprovalTap, let handler = onLoginApprovalTap else { return }
+        pendingLoginApprovalTap = false
+        handler()
+    }
+
     /// W-NOCALLKIT — clear a posted incoming-call notification (answered/ended).
     func clearIncomingCall(callId: String) {
         let id = "incoming-call-\(callId)"
@@ -481,6 +506,15 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
 
     private func handleResponse(category categoryFinal: Category?, actionId actionFinal: String, info infoFinal: [String: String]) {
         if categoryFinal != .incomingCall,
+           actionFinal != UNNotificationDismissActionIdentifier,
+           AccountNotice.isApprovalPush(userInfo: infoFinal) {
+            // The default tap and the "Visualizza" button both only open the app and the sheet.
+            if let handler = self.onLoginApprovalTap {
+                handler()
+            } else {
+                self.pendingLoginApprovalTap = true
+            }
+        } else if categoryFinal != .incomingCall,
            actionFinal == UNNotificationDefaultActionIdentifier,
            PhoneTransferNotice.isPendingPush(userInfo: infoFinal) {
             if let handler = self.onPhoneTransferPendingTap {

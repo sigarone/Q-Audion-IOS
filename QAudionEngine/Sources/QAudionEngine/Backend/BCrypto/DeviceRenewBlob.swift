@@ -47,6 +47,20 @@ public enum DeviceRenewBlob {
                          nonce: nonce, epochMs: epochMs)
     }
 
+    public static let domainTagRevokeOthers = "QAUDION-REVOKE-OTHERS-v1"
+
+    /// `POST /api/v1/account/devices/revoke-others`. Layout (server `auth.BuildRevokeOthersBlob`):
+    /// `tag || 0x00 || requestingDeviceID || 0x00 || "*" || 0x00 || nonce(32) || 0x00 || epochMs(BE u64)`.
+    public static func buildRevokeOthers(
+        requestingDeviceId: String,
+        nonce: Data,
+        epochMs: UInt64
+    ) -> Data {
+        return buildBlob(domainTag: domainTagRevokeOthers,
+                         idA: requestingDeviceId, idB: "*",
+                         nonce: nonce, epochMs: epochMs)
+    }
+
     private static func buildBlob(domainTag: String, idA: String, idB: String,
                                   nonce: Data, epochMs: UInt64) -> Data {
         precondition(nonce.count == nonceLenBytes,

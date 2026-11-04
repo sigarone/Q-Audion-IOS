@@ -140,6 +140,16 @@ final class AppState: ObservableObject {
     /// True after another device changed this account's password (`account_notice` / `password_changed`);
     /// the chat list shows a dismissable banner. Cleared with the session.
     @Published var passwordChangedElsewhere = false
+    /// A new device waits for this one to approve its sign-in: the chat list banner opens the approval sheet.
+    @Published var showLoginApprovalSheet = false
+    /// "Vuoi disconnettere gli altri dispositivi?" after a sign-in approved on THIS device; the value is the
+    /// server's revoke_prompt and decides the option selected first.
+    @Published var pendingRevokePrompt: RevokePrompt?
+    /// An account notice that has a text only (sign-in denied, expired, recovered; this device disconnected; recovery
+    /// contact changed), shown as an alert. Not cleared with the session: a disconnected device still reads it.
+    @Published var accountNoticeToShow: AccountNoticeKind?
+    /// The prompt of an approved sign-in, kept until the session is activated.
+    var approvedRevokePrompt: RevokePrompt?
     /// When this device last changed the password itself; its own `password_changed` notice is ignored.
     var lastLocalPasswordChangeAt: Date?
     /// True when the last `loginWithExtension` was refused as wrong credentials (not a network failure).
@@ -3228,6 +3238,55 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Device approval: the calls of the approving device (list, approve, deny, disconnect the others). The REST
+    /// client, the device id and the device key are read at call time, like the other lazy clients here.
+    lazy var loginApprovalApi: BCryptoDeviceApprovalApi = {
+        let api = BCryptoDeviceApprovalApi()
+        api.getRestClient = { [weak self] in self?.liveProvider?.getRestClient() }
+        api.loadDeviceId = {
+            TokenVault.loadDeviceId() ?? UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id")
+        }
+        api.loadDeviceKeySeed = { [weak self] in
+            guard let provider = self?.liveProvider else { return nil }
+            return try DeviceKeyManager(vault: SovereignKeyVault(), kmsClient: provider.kmsClient).currentEd25519Priv()
+        }
+        return api
+    }()
+
+    /// Sheet and banner state for the sign-ins waiting for this device to approve them.
+    lazy var loginApproval: LoginApprovalModel = LoginApprovalModel(api: loginApprovalApi)
+
+    /// Optional recovery email and phone number (Settings > Account).
+    lazy var recoveryContacts: RecoveryContactsModel = {
+        let api = BCryptoRecoveryContactsApi()
+        api.getRestClient = { [weak self] in self?.liveProvider?.getRestClient() }
+        return RecoveryContactsModel(api: api)
+    }()
+
+    /// Reads the sign-ins that wait for this device from the server. present opens the approval sheet when
+    /// there is one (the doorbell notice and the tap on its push); a plain read (reconnect, foreground) only
+    /// feeds the banner of the chat list.
+    func refreshLoginApprovals(present: Bool = false) {
+        guard liveProvider != nil, !(isAppLocked?() ?? false) else { return }
+        Task { [weak self] in
+            await self?.loginApproval.refresh()
+            if present, self?.loginApproval.current != nil { self?.showLoginApprovalSheet = true }
+        }
+    }
+
+    /// An account_notice with a screen: the doorbell opens the approval sheet, the rest raise an alert.
+    func handleAccountNotice(_ kind: AccountNoticeKind) {
+        switch kind {
+        case .loginApprovalPending:
+            refreshLoginApprovals(present: true)
+        case .recoveryContactChanged:
+            accountNoticeToShow = kind
+            Task { [weak self] in await self?.recoveryContacts.load() }
+        case .loginDenied, .loginExpired, .loginRecovered, .deviceDisconnected:
+            accountNoticeToShow = kind
+        }
+    }
+
     /// Bumped when a notification tap asks for the chat list (the home screen shows the Chat tab at root).
     @Published private(set) var chatListOpenRequest = 0
 
@@ -4494,6 +4553,11 @@ final class AppState: ObservableObject {
             self?.openChatListForPhoneTransferNotice()
         }
         NotificationCenterService.shared.flushPendingPhoneTransferTap()
+        // Tap on the push that rings the doorbell of a sign-in waiting for approval: open the approval sheet.
+        NotificationCenterService.shared.onLoginApprovalTap = { [weak self] in
+            self?.refreshLoginApprovals(present: true)
+        }
+        NotificationCenterService.shared.flushPendingLoginApprovalTap()
 
         // W-MISSEDQUIET (2026-10-04) — "a call is in flight" for the missed-call notification: while one is, that
         // notification is shown without sound (`MissedCallAlertPolicy`). The app's own definition of a call in
@@ -5692,19 +5756,47 @@ final class AppState: ObservableObject {
     ///
     /// `activate: false` signs in but leaves the switch to the main screen to `activatePendingSession()`,
     /// so the sign-in screen can still ask the "save the password?" question before it goes away.
-    func loginWithExtension(extension ext: Int64, credential: String, activate: Bool = true) async {
+    ///
+    /// Returns the pending-approval ticket when the server answered that another device of the account must
+    /// approve this one first: nothing is stored, no socket is opened, and the caller shows the waiting screen
+    /// (makePendingLoginApi, then completeApprovedLogin when it ends in an approval).
+    @discardableResult
+    func loginWithExtension(extension ext: Int64, credential: String, activate: Bool = true) async -> PendingLoginTicket? {
         lastLoginRejectedAsInvalid = false
         do {
-            let creds = try await authService.loginWithExtension(
+            let outcome = try await authService.loginWithExtensionOutcome(
                 extension: ext, password: credential, serverUrl: defaultServerUrl
             )
-            currentUserId = creds.userId  // authService already persisted it (TokenVault)
-            errorMessage = nil
-            if activate { activatePendingSession() }
+            switch outcome {
+            case .credentials(let creds):
+                currentUserId = creds.userId  // authService already persisted it (TokenVault)
+                errorMessage = nil
+                if activate { activatePendingSession() }
+                return nil
+            case .approvalRequired(let ticket):
+                errorMessage = nil
+                return ticket
+            }
         } catch {
             if case BCryptoError.unauthorized = error { lastLoginRejectedAsInvalid = true }
             errorMessage = "Login failed: \(error.localizedDescription)"
+            return nil
         }
+    }
+
+    /// The tokenless client of the waiting screen (poll and recovery by code).
+    func makePendingLoginApi() -> PendingLoginApi {
+        let provider = BCryptoBackendProvider(config: BackendConfig.pinned(serverUrl: defaultServerUrl))
+        return BCryptoPendingLoginApi(rest: provider.getRestClient(), retaining: provider)
+    }
+
+    /// A pending sign-in was approved: stores the session like a plain sign-in does and remembers the
+    /// revoke_prompt, which activatePendingSession turns into the disconnect prompt.
+    func completeApprovedLogin(_ approved: ApprovedLogin) {
+        authService.saveCredentials(approved.credentials)
+        currentUserId = approved.credentials.userId
+        errorMessage = nil
+        approvedRevokePrompt = approved.revokePrompt
     }
 
     /// 2026-07-29 — SMS-OTP / extension-only registration onboarding.
@@ -5753,6 +5845,11 @@ final class AppState: ObservableObject {
     /// from `OnboardingRoot` to `HomeView`) and runs the same post-login
     /// wiring every other auth path already runs on success.
     func activatePendingSession() {
+        var promptToShow: RevokePrompt?
+        if let prompt = approvedRevokePrompt {
+            approvedRevokePrompt = nil
+            promptToShow = prompt
+        }
         isAuthenticated = true
         replayPendingTrackB()
         connectPersistentSocket()
@@ -5760,6 +5857,28 @@ final class AppState: ObservableObject {
         reassertVoipPushTokenRegistration()
         reassertStandardApnsTokenRegistration()  // W-NOCALLKIT (notice push check when flag OFF)
         refreshOwnDialExtension()
+        // The disconnect question comes AFTER the device key is on the server: "Disconnetti tutti" is signed with
+        // that key and the server answers 403 device_key_required for a device without a key row. On a device
+        // that was just approved the key is otherwise published by the first KMS sweep, some time after sign-in.
+        if let prompt = promptToShow {
+            Task { @MainActor [weak self] in
+                await self?.ensureDeviceKeyPublished()
+                guard let self, self.isAuthenticated else { return }
+                self.pendingRevokePrompt = prompt
+            }
+        }
+    }
+
+    /// Provisions the device keys and registers their public half on the server (idempotent, the same call the
+    /// KMS sweep makes). Best effort: a failure is not reported here, the call that needs the key fails by itself.
+    @MainActor
+    func ensureDeviceKeyPublished() async {
+        guard let provider = liveProvider else { return }
+        do {
+            _ = try await DeviceKeyManager(vault: SovereignKeyVault(), kmsClient: provider.kmsClient).ensureProvisioned()
+        } catch {
+            RTLog.info("auth", "device key publish before the disconnect question failed")
+        }
     }
 
     /// A password change made on this device: the answer carries the whole new session, the old tokens are
@@ -5767,6 +5886,16 @@ final class AppState: ObservableObject {
     /// the server just closed reconnect with the new pair.
     func adoptChangedPasswordSession(_ result: PasswordChangeResult) {
         lastLocalPasswordChangeAt = Date()
+        adoptFreshSession(result)
+    }
+
+    /// "Disconnetti tutti" after a sign-in: the server supersedes the old pair of this device with the one in
+    /// the answer, so it replaces the stored tokens exactly like a password change does.
+    func adoptRevokeOthersSession(_ result: PasswordChangeResult) {
+        adoptFreshSession(result)
+    }
+
+    private func adoptFreshSession(_ result: PasswordChangeResult) {
         authService.saveToken(result.accessToken)
         authService.saveRefreshToken(result.refreshToken)
         TokenVault.saveDeviceId(result.deviceId)
@@ -6831,6 +6960,7 @@ final class AppState: ObservableObject {
                         // Pending phone-number transfers for this account: read once per
                         // (re)connect, the first read after a launch.
                         self?.refreshPhoneTransferNotice(throttled: true)
+                        self?.refreshLoginApprovals()
                     }
                     // W-MSGOUTBOX (2026-09-01) — same once-per-reconnect
                     // gate as the two blocks above: drain `.sending` rows
@@ -10701,6 +10831,12 @@ final class AppState: ObservableObject {
                         noticeDeviceId: noticeDevice, ownDeviceId: self.authService.loadDeviceId()) {
                         self.passwordChangedElsewhere = true
                     }
+                }
+                return
+            }
+            if let kind = AccountNotice.kind(data) {
+                DispatchQueue.main.async {
+                    self?.handleAccountNotice(kind)
                 }
                 return
             }
@@ -18979,6 +19115,11 @@ final class AppState: ObservableObject {
         // A pending phone-number transfer belongs to the account that left (logout, remote wipe,
         // account deletion).
         phoneTransferNotice.reset()
+        loginApproval.reset()
+        recoveryContacts.reset()
+        showLoginApprovalSheet = false
+        pendingRevokePrompt = nil
+        approvedRevokePrompt = nil
         passwordChangedElsewhere = false
         // `LocalCryptoWipe.wipeAll()` empties ContactsStore without posting
         // `.contactsDidChange`, so nothing refreshes the in-memory snapshot of the

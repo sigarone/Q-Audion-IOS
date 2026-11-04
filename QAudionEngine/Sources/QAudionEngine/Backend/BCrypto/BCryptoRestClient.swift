@@ -322,14 +322,34 @@ public final class BCryptoRestClient {
     /// POST that hands back the raw status, body and `Retry-After` of any answer instead of mapping a
     /// non-2xx to `BCryptoError`, for an endpoint whose refusals carry a typed `{"error": code}`.
     /// A 401 whose code is not `invalid credentials` (an expired access token) gets one
-    /// refresh-and-retry, like every other request; `invalid credentials` is the endpoint's own
-    /// answer for a wrong password and must not trigger a session refresh.
+    /// refresh-and-retry, like every other request; `invalid credentials` (wrong password) and
+    /// `invalid code` (wrong verification code of a recovery contact) are the endpoints' own answers
+    /// and must not trigger a session refresh.
     func postOutcome(_ path: String, body: Data?) async throws -> (data: Data, status: Int, retryAfter: String?) {
         var outcome = try await performRequest("POST", path: path, body: body, headers: [:])
-        if outcome.1 == 401, ChangePasswordError.errorCode(in: outcome.0) != "invalid credentials" {
+        if outcome.1 == 401, !Self.isOwnVerdict401(outcome.0) {
             if try await tryRefreshToken() {
                 outcome = try await performRequest("POST", path: path, body: body, headers: [:])
             }
+        }
+        return (outcome.0, outcome.1, outcome.2)
+    }
+
+    /// A 401 that is the endpoint's own verdict, not an expired access token.
+    static func isOwnVerdict401(_ body: Data) -> Bool {
+        let code = ChangePasswordError.errorCode(in: body)
+        return code == "invalid credentials" || code == "invalid code"
+    }
+
+    /// POST for the sign-in and pending-login endpoints, whose answer is told apart by status (200 or 202, 403,
+    /// 410, 429...). Returns the raw status, body and `Retry-After` of any answer, with no token refresh: these
+    /// endpoints are public and a 401 is their own verdict. A 421 from a node that cannot issue tokens is retried
+    /// once on the pinned primary, like the other requests.
+    func postRaw(_ path: String, body: Data?) async throws -> (data: Data, status: Int, retryAfter: String?) {
+        var outcome = try await performRequest("POST", path: path, body: body, headers: [:])
+        if outcome.1 == 421, config.serverUrl != primaryServerUrl {
+            outcome = try await performRequest("POST", path: path, body: body, headers: [:],
+                                               baseUrlOverride: primaryServerUrl)
         }
         return (outcome.0, outcome.1, outcome.2)
     }
