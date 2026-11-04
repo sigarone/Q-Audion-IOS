@@ -30,6 +30,8 @@ struct ExtensionLoginScreen: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var isReading = false
     @State private var fillMessage: String?
+    /// Neutral hint after a successful fill (not an error).
+    @State private var fillNotice: String?
 
     private var extensionValue: Int64? {
         Int64(extensionText.trimmingCharacters(in: .whitespaces))
@@ -114,6 +116,14 @@ struct ExtensionLoginScreen: View {
                     fillButton
                         .padding(.horizontal, 24)
                         .padding(.top, 16)
+
+                    if let note = fillNotice {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 24)
+                            .padding(.top, 8)
+                    }
 
                     if let msg = fillMessage {
                         Text(msg)
@@ -218,6 +228,7 @@ struct ExtensionLoginScreen: View {
     private func fill(fromPhoto item: PhotosPickerItem) async {
         isReading = true
         fillMessage = nil
+        fillNotice = nil
         guard let data = try? await item.loadTransferable(type: Data.self) else {
             isReading = false
             fillMessage = String(localized: "extension_login.fill.error_load", defaultValue: "Impossibile leggere il file scelto.", comment: "Extension + password sign-in screen: the chosen photo or file could not be read.")
@@ -230,6 +241,7 @@ struct ExtensionLoginScreen: View {
     private func fill(fromFile url: URL) async {
         isReading = true
         fillMessage = nil
+        fillNotice = nil
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         await fill(from: await CredentialImageReader.read(fileURL: url))
@@ -245,6 +257,14 @@ struct ExtensionLoginScreen: View {
             extensionText = creds.extensionNumber
             password = creds.password
             fillMessage = nil
+            if creds.uncertainPositions.isEmpty {
+                fillNotice = nil
+            } else {
+                let positions = creds.uncertainPositions.map(String.init).joined(separator: ", ")
+                fillNotice = String(localized: "extension_login.fill.check_chars",
+                                     defaultValue: "Controlla i caratteri della password in posizione \(positions): la lettura potrebbe averli confusi (0 e O, 1 e I o L).",
+                                     comment: "Extension + password sign-in screen: after reading a photo, these positions (comma-separated, counted from 1) in the password may be misread; the user should check them. %@ is the list of positions.")
+            }
         case .notPinned(let server):
             fillMessage = String(localized: "extension_login.fill.server_not_pinned",
                                  defaultValue: "Il server indicato nei dati letti (\(server)) non risulta tra gli indirizzi noti per \(PinnedServerHost.host). Verifica che i dati vengano dal server di produzione e riprova; se il problema persiste contatta l'amministratore.",

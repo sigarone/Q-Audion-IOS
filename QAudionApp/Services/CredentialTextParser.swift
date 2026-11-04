@@ -5,6 +5,9 @@ import Foundation
 struct ExtractedCredentials: Equatable {
     let extensionNumber: String
     let password: String
+    /// 1-based positions in `password` of characters that cannot be in a generated password
+    /// (the recognizer may have confused 0/O, 1/I/L). Empty unless a generated-looking password was read.
+    var uncertainPositions: [Int] = []
 }
 
 enum CredentialExtraction: Equatable {
@@ -121,7 +124,7 @@ enum CredentialTextParser {
         }
 
         if let e = ext, let p = pwd {
-            return ExtractedCredentials(extensionNumber: e, password: p)
+            return makeCredentials(extensionNumber: e, password: p)
         }
 
         // Fallback on the token stream with the label words removed.
@@ -140,7 +143,7 @@ enum CredentialTextParser {
             extIndex = tokens.firstIndex(where: { isDigitsToken($0, lengths: 2...6) })
         }
         guard let idx = extIndex else {
-            if let e = ext, let p = pwd { return ExtractedCredentials(extensionNumber: e, password: p) }
+            if let e = ext, let p = pwd { return makeCredentials(extensionNumber: e, password: p) }
             return nil
         }
         let e = ext ?? tokens[idx]
@@ -152,7 +155,77 @@ enum CredentialTextParser {
         } else {
             return nil
         }
-        return ExtractedCredentials(extensionNumber: e, password: p)
+        return makeCredentials(extensionNumber: e, password: p)
+    }
+
+    // MARK: - Generated passwords read by OCR
+
+    /// Alphabet of server-generated passwords (server internal/store/generated_password.go).
+    private static let generatedAlphabet = Set("23456789ABCDEFGHJKMNPQRSTUVWXYZ")
+    private static let generatedLength = 20
+    private static let generatedGroup = 4
+    private static let generatedMinInAlphabet = 17
+
+    /// Greek and Cyrillic letters drawn like an ASCII letter. Only unambiguous look-alikes:
+    /// Greek nu and upsilon in lowercase are left out (they read as v, not n or y).
+    private static let lookAlikes: [Character: Character] = {
+        var m: [Character: Character] = [:]
+        let pairs: [(String, String)] = [
+            ("ΑΒΕΖΗΙΚΜΝΟΡΤΥΧ", "ABEZHIKMNOPTYX"),
+            ("αικορχ", "aikopx"),
+            ("АВЕКМНОРСТХУ", "ABEKMHOPCTXY"),
+            ("аекмнорстху", "aekmhopctxy"),
+        ]
+        for (from, to) in pairs { for (a, b) in zip(from, to) { m[a] = b } }
+        return m
+    }()
+
+    /// Full-width forms (U+FF01...U+FF5E) and the look-alikes above, as ASCII; anything else unchanged.
+    private static func asciiLookAlike(_ ch: Character) -> Character {
+        if let m = lookAlikes[ch] { return m }
+        if ch.unicodeScalars.count == 1, let u = ch.unicodeScalars.first, (0xFF01...0xFF5E).contains(u.value),
+           let a = Unicode.Scalar(u.value - 0xFEE0) {
+            return Character(a)
+        }
+        return ch
+    }
+
+    private static func isAsciiAlnum(_ c: Character) -> Bool {
+        c.isASCII && (c.isLetter || c.isNumber)
+    }
+
+    /// Recognizes a password of the generated shape and cleans up what the text recognizer got wrong.
+    /// The text is never upper-cased and no separator is added or removed (the server accepts the generated
+    /// password in any case, with or without dashes): only full-width and Greek/Cyrillic look-alikes become ASCII.
+    /// Applies only to the generated DISPLAY shape (5 groups of 4 joined by "-"; the server refuses user-chosen
+    /// passwords of that shape, so it is a reliable signal) or to a 20-character token that is already all
+    /// upper case with at least 17 characters in the generated alphabet. Characters outside the alphabet
+    /// (0, O, 1, I, L) are kept as read and reported by 1-based position among the 20 characters (dashes not
+    /// counted). Anything else (old hex passwords, free-form passwords of any length) returns `nil`.
+    static func normalizeGenerated(_ raw: String) -> (password: String, uncertain: [Int])? {
+        let mapped = raw.map(asciiLookAlike)
+        let groups = String(mapped).split(separator: "-", omittingEmptySubsequences: false)
+        let dashed = groups.count == generatedLength / generatedGroup
+            && groups.allSatisfy { $0.count == generatedGroup }
+        let chars = mapped.filter { $0 != "-" }
+        guard chars.count == generatedLength, chars.allSatisfy(isAsciiAlnum) else { return nil }
+        if !dashed {
+            guard mapped.count == generatedLength,
+                  !chars.contains(where: { $0.isLowercase }),
+                  chars.filter({ generatedAlphabet.contains($0) }).count >= generatedMinInAlphabet
+            else { return nil }
+        }
+        let bad = chars.enumerated()
+            .filter { !generatedAlphabet.contains(Character($0.element.uppercased())) }
+            .map { $0.offset + 1 }
+        return (String(mapped), bad)
+    }
+
+    private static func makeCredentials(extensionNumber: String, password: String) -> ExtractedCredentials {
+        if let g = normalizeGenerated(password) {
+            return ExtractedCredentials(extensionNumber: extensionNumber, password: g.password, uncertainPositions: g.uncertain)
+        }
+        return ExtractedCredentials(extensionNumber: extensionNumber, password: password)
     }
 
     private static func assign(_ field: Field, value: String, ext: inout String?, pwd: inout String?) {
