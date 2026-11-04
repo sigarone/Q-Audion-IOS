@@ -42070,44 +42070,44 @@
         }
       }
     },
-    "qr.fast_setup.error.server_not_pinned": {
+    "extension_login.fill.server_not_pinned": {
       "extractionState": "manual",
-      "comment": "Error on the quick-setup screen: the server named in the scanned QR code is not one of the known addresses of the official server. First %@ is the server found in the QR code, second %@ is the official host name; keep 'DNS' and 'allowlist' as they are",
+      "comment": "Extension + password sign-in screen: the server named in the data read from the photo or file is not one of the official server's known addresses. First %@ is the server that was read, second %@ is the official host name.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il server nel QR (%@) non risulta tra gli indirizzi noti per %@ (controllo DNS + allowlist). Verifica che il QR sia stato emesso dal server di produzione e riprova; se il problema persiste contatta l'amministratore."
+            "value": "Il server indicato nei dati letti (%@) non risulta tra gli indirizzi noti per %@. Verifica che i dati vengano dal server di produzione e riprova; se il problema persiste contatta l'amministratore."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The server in the QR code (%@) is not among the known addresses for %@ (DNS check + allowlist). Make sure the QR code was issued by the production server and try again; if the problem persists, contact the administrator."
+            "value": "The server in the data that was read (%@) is not among the known addresses for %@. Make sure the data comes from the production server and try again; if the problem persists, contact the administrator."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El servidor del QR (%@) no figura entre las direcciones conocidas de %@ (comprobación DNS + allowlist). Comprueba que el QR haya sido emitido por el servidor de producción y vuelve a intentarlo; si el problema continúa, ponte en contacto con el administrador."
+            "value": "El servidor indicado en los datos leídos (%@) no figura entre las direcciones conocidas de %@. Comprueba que los datos provienen del servidor de producción y vuelve a intentarlo; si el problema persiste, contacta con el administrador."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le serveur indiqué dans le QR code (%@) ne figure pas parmi les adresses connues de %@ (contrôle DNS + allowlist). Vérifie que le QR code a bien été émis par le serveur de production et réessaie ; si le problème persiste, contacte l'administrateur."
+            "value": "Le serveur indiqué dans les données lues (%@) ne fait pas partie des adresses connues de %@. Vérifiez que les données proviennent du serveur de production et réessayez ; si le problème persiste, contactez l'administrateur."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der Server im QR-Code (%@) gehört nicht zu den bekannten Adressen von %@ (DNS-Prüfung + Allowlist). Prüfen Sie, ob der QR-Code vom Produktionsserver ausgestellt wurde, und versuchen Sie es erneut; wenn das Problem weiterhin besteht, wenden Sie sich an den Administrator."
+            "value": "Der Server in den gelesenen Daten (%@) gehört nicht zu den bekannten Adressen von %@. Prüfe, ob die Daten vom Produktionsserver stammen, und versuche es erneut; wenn das Problem bleibt, wende dich an den Administrator."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O servidor do QR (%@) não consta entre os endereços conhecidos de %@ (verificação de DNS + allowlist). Verifique se o QR foi emitido pelo servidor de produção e tente novamente; se o problema persistir, entre em contato com o administrador."
+            "value": "O servidor indicado nos dados lidos (%@) não está entre os endereços conhecidos de %@. Verifique se os dados vêm do servidor de produção e tente novamente; se o problema continuar, entre em contato com o administrador."
           }
         }
       }

@@ -246,9 +246,9 @@ struct ExtensionLoginScreen: View {
             password = creds.password
             fillMessage = nil
         case .notPinned(let server):
-            fillMessage = String(localized: "qr.fast_setup.error.server_not_pinned",
-                                 defaultValue: "Il server nel QR (\(server)) non risulta tra gli indirizzi noti per \(PinnedServerHost.host) (controllo DNS + allowlist). Verifica che il QR sia stato emesso dal server di produzione e riprova; se il problema persiste contatta l'amministratore.",
-                                 comment: "Error on the quick-setup screen: the server named in the scanned QR code is not one of the known addresses of the official server. First %@ is the server found in the QR code, second %@ is the official host name; keep 'DNS' and 'allowlist' as they are")
+            fillMessage = String(localized: "extension_login.fill.server_not_pinned",
+                                 defaultValue: "Il server indicato nei dati letti (\(server)) non risulta tra gli indirizzi noti per \(PinnedServerHost.host). Verifica che i dati vengano dal server di produzione e riprova; se il problema persiste contatta l'amministratore.",
+                                 comment: "Extension + password sign-in screen: the server named in the data read from the photo or file is not one of the official server's known addresses. First %@ is the server that was read, second %@ is the official host name.")
         case .notFound:
             fillMessage = String(localized: "extension_login.fill.not_found", defaultValue: "Non ho trovato interno e password. Inseriscili a mano.", comment: "Extension + password sign-in screen: nothing usable was found in the chosen photo or file.")
         }
