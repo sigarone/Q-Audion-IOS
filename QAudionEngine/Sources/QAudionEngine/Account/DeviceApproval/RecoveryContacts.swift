@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 public enum RecoveryContactKind: String, Sendable {
@@ -27,22 +28,60 @@ public enum RecoveryContactError: Error, Equatable, Sendable {
     case invalidValue
     case invalidCode
     case rateLimited
+    /// 400 `signature_required`: the server wanted the device signature and the request had none.
+    case signatureRequired
+    /// 400 `epoch_ms outside skew window`: the clock of this device is wrong.
+    case clockSkew
     case failed
+}
+
+/// The bytes the device key signs to add, replace or remove a recovery contact (server
+/// `auth.BuildRecoveryContactBlob`): `tag 00 deviceId 00 kind 00 sha256Hex(value) 00 nonce(32) 00 epochMs(u64 BE)`.
+/// The hash is over the value exactly as sent (trimmed, email not lowercased, phone with its `+`); empty for a remove.
+public enum RecoveryContactBlob {
+    public static let tag = "QAUDION-RECOVERY-CONTACT-v1"
+
+    public static func valueHash(_ value: String?) -> String {
+        guard let value else { return "" }
+        return DeviceRenewBlob.hexEncode(Data(SHA256.hash(data: Data(value.utf8))))
+    }
+
+    public static func build(deviceId: String, kind: RecoveryContactKind, value: String?, nonce: Data,
+                             epochMs: UInt64) -> Data {
+        var out = Data()
+        for part in [tag, deviceId, kind.rawValue, valueHash(value)] {
+            out.append(contentsOf: part.utf8)
+            out.append(0x00)
+        }
+        out.append(nonce)
+        out.append(0x00)
+        var be = epochMs.bigEndian
+        withUnsafeBytes(of: &be) { out.append(contentsOf: $0) }
+        return out
+    }
 }
 
 public protocol RecoveryContactsApi: Sendable {
     /// `GET /api/v1/account/recovery-contacts`.
     func fetch() async throws -> RecoveryContactsStatus
-    /// `POST /api/v1/account/recovery-contacts/{email|phone}`: stores the value as unverified and sends a code.
+    /// `POST /api/v1/account/recovery-contacts/{email|phone}`, signed with the device key: stores the value as
+    /// unverified and sends a code.
     func start(kind: RecoveryContactKind, value: String) async throws
     /// `POST /api/v1/account/recovery-contacts/{email|phone}/verify` with the code.
     func verify(kind: RecoveryContactKind, code: String) async throws
-    /// `DELETE /api/v1/account/recovery-contacts/{email|phone}`.
+    /// `DELETE /api/v1/account/recovery-contacts/{email|phone}`, signed with the device key (the signature goes in
+    /// the body of the DELETE).
     func remove(kind: RecoveryContactKind) async throws
 }
 
 public final class BCryptoRecoveryContactsApi: RecoveryContactsApi, @unchecked Sendable {
     public var getRestClient: (() -> BCryptoRestClient?)?
+    /// The 32-byte Ed25519 seed of the device key, nil when it is not provisioned.
+    public var loadDeviceKeySeed: (() throws -> Data?)?
+    public var loadDeviceId: (() -> String?)?
+    /// Publishes the device key on the server before a signed call (the server answers 403 `device_key_required`
+    /// for a device without a key row). Best effort.
+    public var ensureDeviceKeyPublished: (() async -> Void)?
 
     static let basePath = "/api/v1/account/recovery-contacts"
 
@@ -62,8 +101,9 @@ public final class BCryptoRecoveryContactsApi: RecoveryContactsApi, @unchecked S
     public func start(kind: RecoveryContactKind, value: String) async throws {
         // The phone key matches the other OTP calls (`phone_number`, E.164).
         let key = kind == .email ? "email" : "phone_number"
-        let body = try JSONSerialization.data(withJSONObject: [key: value])
-        try await post("\(Self.basePath)/\(kind.rawValue)", body: body, codeFailure: .invalidValue)
+        let sent = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        try await sendSigned("POST", "\(Self.basePath)/\(kind.rawValue)", kind: kind, value: sent,
+                             extra: [key: sent], codeFailure: .invalidValue)
     }
 
     public func verify(kind: RecoveryContactKind, code: String) async throws {
@@ -72,12 +112,71 @@ public final class BCryptoRecoveryContactsApi: RecoveryContactsApi, @unchecked S
     }
 
     public func remove(kind: RecoveryContactKind) async throws {
-        guard let rest = getRestClient?() else { throw BCryptoError.unauthorized }
         do {
-            _ = try await rest.delete("\(Self.basePath)/\(kind.rawValue)")
+            try await sendSigned("DELETE", "\(Self.basePath)/\(kind.rawValue)", kind: kind, value: nil,
+                                 extra: [:], codeFailure: .failed)
         } catch BCryptoError.httpError(404) {
             return
         }
+    }
+
+    /// Publishes the device key, fetches a single-use nonce and signs the recovery-contact blob. The seed lives in
+    /// memory only for the duration of the call.
+    private func signedFields(kind: RecoveryContactKind, value: String?) async throws -> [String: Any] {
+        await ensureDeviceKeyPublished?()
+        guard let rest = getRestClient?(), let deviceId = loadDeviceId?(), !deviceId.isEmpty,
+              let seed = try loadDeviceKeySeed?() else { throw DeviceApprovalError.notReady }
+        let encoded = deviceId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? deviceId
+        let data = try await rest.get("/api/v1/auth/device-challenge?device_id=\(encoded)")
+        guard let object = ApprovalWire.object(data), let nonceHex = object["nonce_hex"] as? String,
+              let nonce = DeviceRenewBlob.hexDecode(nonceHex),
+              nonce.count == DeviceRenewBlob.nonceLenBytes else { throw DeviceApprovalError.malformedChallenge }
+        let epochMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let blob = RecoveryContactBlob.build(deviceId: deviceId, kind: kind, value: value, nonce: nonce,
+                                             epochMs: UInt64(epochMs))
+        let signature = try Curve25519.Signing.PrivateKey(rawRepresentation: seed).signature(for: blob)
+        return [
+            "requesting_device_id": deviceId,
+            "nonce_hex": nonceHex,
+            "epoch_ms": epochMs,
+            "signature_hex": DeviceRenewBlob.hexEncode(signature),
+        ]
+    }
+
+    /// Signs and sends. The nonce is single use, so a retry never replays a body: after a 401 the session is
+    /// refreshed (`GET /auth/device-challenge` is unauthenticated, so reading the challenge proves nothing about the
+    /// bearer token) and the whole call is rebuilt, with a new nonce and a new signature, once.
+    private func sendSigned(_ method: String, _ path: String, kind: RecoveryContactKind, value: String?,
+                            extra: [String: Any], codeFailure: RecoveryContactError) async throws {
+        var refreshedOnce = false
+        while true {
+            var fields = try await signedFields(kind: kind, value: value)
+            for (key, item) in extra { fields[key] = item }
+            let body = try JSONSerialization.data(withJSONObject: fields)
+            guard let rest = getRestClient?() else { throw BCryptoError.unauthorized }
+            let answer = try await rest.sendOnce(method, path, body: body)
+            if (200...299).contains(answer.status) { return }
+            if answer.status == 404, method == "DELETE" { throw BCryptoError.httpError(404) }
+            if answer.status == 401, !refreshedOnce {
+                refreshedOnce = true
+                if await rest.refreshSession(trigger: .rest401).isSuccess { continue }
+            }
+            throw Self.mapSigned(status: answer.status, data: answer.data, codeFailure: codeFailure)
+        }
+    }
+
+    /// 400 `signature_required` and 400 `epoch_ms outside skew window` (wrong device clock) are their own errors;
+    /// a 401 (bad signature, replayed or expired nonce, or a bearer that could not be refreshed) and a 403
+    /// (`device_key_required`, a device that is not the bearer's) are failures of the signing, never "the value is
+    /// wrong".
+    static func mapSigned(status: Int, data: Data, codeFailure: RecoveryContactError) -> RecoveryContactError {
+        if status == 400 {
+            let code = ApprovalWire.errorCode(data)
+            if code.contains("signature_required") { return .signatureRequired }
+            if code.contains("epoch_ms outside skew window") { return .clockSkew }
+        }
+        if status == 401 || status == 403 { return .failed }
+        return map(status: status, codeFailure: codeFailure)
     }
 
     private func post(_ path: String, body: Data, codeFailure: RecoveryContactError) async throws {
@@ -129,6 +228,8 @@ public final class RecoveryContactsModel: ObservableObject {
         case invalidValue
         case invalidCode
         case rateLimited
+        /// The clock of this device is wrong (the server refused the signed time).
+        case clockWrong
         case failed
     }
 
@@ -263,6 +364,7 @@ public final class RecoveryContactsModel: ObservableObject {
         case .invalidValue: return .invalidValue
         case .invalidCode: return .invalidCode
         case .rateLimited: return .rateLimited
+        case .clockSkew: return .clockWrong
         default: return .failed
         }
     }

@@ -354,6 +354,13 @@ public final class BCryptoRestClient {
         return (outcome.0, outcome.1, outcome.2)
     }
 
+    /// One request with any method, the raw status and body back, no token refresh and no retry. For a call whose
+    /// body carries a single-use signed nonce: a replay of the same body after a refresh would only burn the nonce.
+    func sendOnce(_ method: String, _ path: String, body: Data?) async throws -> (data: Data, status: Int, retryAfter: String?) {
+        let outcome = try await performRequest(method, path: path, body: body, headers: [:])
+        return (outcome.0, outcome.1, outcome.2)
+    }
+
     public func put(_ path: String, body: Data?, headers: [String: String] = [:]) async throws -> Data {
         try await request("PUT", path: path, body: body, headers: headers)
     }

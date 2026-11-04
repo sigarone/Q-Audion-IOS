@@ -52,13 +52,19 @@ struct LoginApprovalSheet: View {
                 .qaudionStyle(type.titleLarge)
                 .foregroundStyle(scheme.onSurface)
 
+            // What the new device calls itself is untrusted text: quoted, secondary, one line, no digits, and at
+            // the top, far from the numbers to pick.
+            untrustedLine(DeviceApprovalTexts.sheetLabelDevice, request.displayDeviceName,
+                          id: "login-approval-device-name")
+            if !request.displayPlatform.isEmpty {
+                untrustedLine(DeviceApprovalTexts.sheetLabelPlatform, request.displayPlatform, id: "login-approval-platform")
+            }
+
             Text(DeviceApprovalTexts.sheetIntro)
                 .qaudionStyle(type.bodyMedium)
                 .foregroundStyle(scheme.onSurfaceVariant)
 
             VStack(alignment: .leading, spacing: 8) {
-                row(DeviceApprovalTexts.sheetLabelDevice, request.deviceName)
-                row(DeviceApprovalTexts.sheetLabelPlatform, request.platform)
                 row(DeviceApprovalTexts.sheetLabelArea, request.area)
                 if let createdAt = request.createdAt {
                     HStack(alignment: .firstTextBaseline) {
@@ -78,7 +84,7 @@ struct LoginApprovalSheet: View {
             HStack(spacing: 12) {
                 ForEach(request.choices, id: \.self) { choice in
                     Button {
-                        Task { await model.approve(choice: choice) }
+                        Task { await model.approve(id: request.id, choice: choice) }
                     } label: {
                         Text(choice)
                             .font(.system(size: 36, weight: .bold, design: .rounded))
@@ -110,7 +116,7 @@ struct LoginApprovalSheet: View {
                 .foregroundStyle(scheme.onSurfaceVariant)
 
             HStack(spacing: 12) {
-                QAudionButton(action: { Task { await model.deny() } },
+                QAudionButton(action: { Task { await model.deny(id: request.id) } },
                               label: DeviceApprovalTexts.sheetDeny,
                               variant: .destructive,
                               enabled: !model.isBusy)
@@ -118,6 +124,26 @@ struct LoginApprovalSheet: View {
                               label: DeviceApprovalTexts.sheetClose,
                               variant: .text)
             }
+        }
+    }
+
+    /// The untrusted text between typographic quotes. When nothing is left after cleaning, a dash: the row label
+    /// already says "Dispositivo", so the word is not repeated.
+    static func quoted(_ value: String) -> String {
+        value.isEmpty ? "—" : "\u{201C}\(value)\u{201D}"
+    }
+
+    private func untrustedLine(_ label: String, _ value: String, id: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label)
+                .qaudionStyle(type.labelMedium)
+                .foregroundStyle(scheme.onSurfaceVariant)
+            Text(Self.quoted(value))
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier(id)
         }
     }
 

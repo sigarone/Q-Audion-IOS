@@ -183,6 +183,7 @@ struct RecoveryContactsScreen: View {
         case .invalidValue: return DeviceApprovalTexts.rcErrorInvalidValue
         case .invalidCode: return DeviceApprovalTexts.rcErrorInvalidCode
         case .rateLimited: return DeviceApprovalTexts.rcErrorRateLimited
+        case .clockWrong: return DeviceApprovalTexts.rcErrorClock
         case .failed: return DeviceApprovalTexts.rcErrorFailed
         }
     }
