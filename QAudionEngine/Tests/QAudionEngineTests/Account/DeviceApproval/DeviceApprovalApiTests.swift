@@ -487,6 +487,8 @@ final class DeviceApprovalApiTests: XCTestCase {
         let rest = makeRest()
         let api = BCryptoRecoveryContactsApi()
         api.getRestClient = { rest }
+        api.loadDeviceKeySeed = { Curve25519.Signing.PrivateKey().rawRepresentation }
+        api.loadDeviceId = { "dev-1" }
         return api
     }
 
@@ -501,7 +503,12 @@ final class DeviceApprovalApiTests: XCTestCase {
     }
 
     func test_recoveryContacts_calls() async throws {
-        ApprovalStubProtocol.handler = { _ in (200, "{}", [:]) }
+        let hex = nonceHex
+        ApprovalStubProtocol.handler = { request in
+            request.method == "GET"
+                ? (200, "{\"nonce_hex\":\"\(hex)\",\"server_id\":\"srv-1\",\"ttl\":60}", [:])
+                : (200, "{}", [:])
+        }
         let api = contactsApi()
         try await api.start(kind: .email, value: "a@b.it")
         try await api.start(kind: .phone, value: "+393331112233")
@@ -509,14 +516,18 @@ final class DeviceApprovalApiTests: XCTestCase {
         try await api.remove(kind: .phone)
         let recorded = ApprovalStubProtocol.recorded
         XCTAssertEqual(recorded.map { "\($0.method) \($0.path)" }, [
+            "GET /api/v1/auth/device-challenge",
             "POST /api/v1/account/recovery-contacts/email",
+            "GET /api/v1/auth/device-challenge",
             "POST /api/v1/account/recovery-contacts/phone",
             "POST /api/v1/account/recovery-contacts/email/verify",
+            "GET /api/v1/auth/device-challenge",
             "DELETE /api/v1/account/recovery-contacts/phone",
         ])
-        XCTAssertEqual(json(recorded[0].body)["email"] as? String, "a@b.it")
-        XCTAssertEqual(json(recorded[1].body)["phone_number"] as? String, "+393331112233")
-        XCTAssertEqual(json(recorded[2].body)["code"] as? String, "123456")
+        XCTAssertEqual(json(recorded[1].body)["email"] as? String, "a@b.it")
+        XCTAssertEqual(json(recorded[3].body)["phone_number"] as? String, "+393331112233")
+        XCTAssertEqual(json(recorded[4].body)["code"] as? String, "123456")
+        XCTAssertNotNil(json(recorded[6].body)["signature_hex"], "the DELETE carries its signature in the body")
     }
 
     /// A wrong verification code is a 401 `invalid code`: the person's mistake. It must reach the model as a

@@ -39,10 +39,22 @@ struct DeviceApprovalRootModifier: ViewModifier {
                             }
                         }
                     Color.clear
+                        .sheet(isPresented: $appState.showDeviceListFromNotice) {
+                            DisconnectOthersSheet(initial: .keep, startInList: true) {
+                                appState.showDeviceListFromNotice = false
+                            }
+                            .environmentObject(appState)
+                        }
+                    Color.clear
                         .alert(DeviceApprovalTexts.noticeTitle, isPresented: Binding(
                             get: { appState.accountNoticeToShow != nil },
                             set: { if !$0 { appState.accountNoticeToShow = nil } }
                         )) {
+                            if appState.accountNoticeToShow == .recoveryContactChanged {
+                                Button(DeviceApprovalTexts.noticeOpenDevices) {
+                                    appState.showDeviceListFromNotice = true
+                                }
+                            }
                             Button(DeviceApprovalTexts.noticeOk, role: .cancel) {}
                         } message: {
                             Text(Self.noticeText(appState.accountNoticeToShow))
@@ -91,8 +103,13 @@ struct DisconnectOthersSheet: View {
     @State private var devices: [AccountDevice] = []
     @State private var selected: Set<String> = []
 
-    init(initial: RevokePrompt, onDone: @escaping () -> Void) {
+    /// `startInList`: open straight on the list of devices (the "recovery contact changed" notice), where a
+    /// device that did not change it can be disconnected.
+    private let startInList: Bool
+
+    init(initial: RevokePrompt, startInList: Bool = false, onDone: @escaping () -> Void) {
         self.initial = initial
+        self.startInList = startInList
         self.onDone = onDone
         _choice = State(initialValue: DisconnectPrompt.defaultChoice(for: initial))
     }
@@ -112,6 +129,11 @@ struct DisconnectOthersSheet: View {
                     .padding(.horizontal, 20)
                     .padding(.vertical, 24)
                 }
+            }
+            .task {
+                guard startInList, !picking else { return }
+                choice = .choose
+                await apply()
             }
         }
     }

@@ -85,7 +85,7 @@ final class LoginApprovalModelTests: XCTestCase {
     func test_approve_sendsTheTappedNumber_andRemovesTheEntry() async {
         let api = FakeApprovalApi()
         let model = await make(api, entries: [request("p-1")])
-        await model.approve(choice: "47")
+        await model.approve(id: "p-1", choice: "47")
         XCTAssertEqual(api.approvedWith.first?.0, "p-1")
         XCTAssertEqual(api.approvedWith.first?.1, "47")
         XCTAssertNil(model.current)
@@ -97,7 +97,7 @@ final class LoginApprovalModelTests: XCTestCase {
         let api = FakeApprovalApi()
         api.setApprove(.success(.wrongCode))
         let model = await make(api, entries: [request("p-1")])
-        await model.approve(choice: "12")
+        await model.approve(id: "p-1", choice: "12")
         XCTAssertNil(model.current, "no retry: the server denied the entry")
         XCTAssertEqual(model.outcome, .wrongCode)
     }
@@ -107,7 +107,7 @@ final class LoginApprovalModelTests: XCTestCase {
             let api = FakeApprovalApi()
             api.setApprove(.success(result))
             let model = await make(api, entries: [request("p-1")])
-            await model.approve(choice: "47")
+            await model.approve(id: "p-1", choice: "47")
             XCTAssertNil(model.current)
             XCTAssertEqual(model.outcome, .alreadyResolved)
         }
@@ -116,7 +116,7 @@ final class LoginApprovalModelTests: XCTestCase {
     func test_deny_removesTheEntry() async {
         let api = FakeApprovalApi()
         let model = await make(api, entries: [request("p-1")])
-        await model.deny()
+        await model.deny(id: "p-1")
         XCTAssertEqual(api.denied, ["p-1"])
         XCTAssertNil(model.current)
         XCTAssertEqual(model.outcome, .denied)
@@ -126,12 +126,12 @@ final class LoginApprovalModelTests: XCTestCase {
         let api = FakeApprovalApi()
         api.setApprove(.failure(URLError(.notConnectedToInternet)))
         let model = await make(api, entries: [request("p-1")])
-        await model.approve(choice: "47")
+        await model.approve(id: "p-1", choice: "47")
         XCTAssertNotNil(model.current)
         XCTAssertEqual(model.outcome, .failed)
         XCTAssertFalse(model.isBusy)
         api.setApprove(.success(.done))
-        await model.approve(choice: "47")
+        await model.approve(id: "p-1", choice: "47")
         XCTAssertNil(model.current)
         XCTAssertEqual(model.outcome, .approved)
     }
@@ -142,7 +142,7 @@ final class LoginApprovalModelTests: XCTestCase {
         let api = FakeApprovalApi()
         api.setApprove(.failure(BCryptoError.httpError(403)))
         let model = await make(api, entries: [request("p-1")])
-        await model.approve(choice: "47")
+        await model.approve(id: "p-1", choice: "47")
         XCTAssertNotNil(model.current)
         XCTAssertEqual(model.outcome, .failed)
     }
@@ -151,7 +151,7 @@ final class LoginApprovalModelTests: XCTestCase {
         let api = FakeApprovalApi()
         api.setApprove(.failure(DeviceApprovalError.notReady))
         let model = await make(api, entries: [request("p-1")])
-        await model.approve(choice: "47")
+        await model.approve(id: "p-1", choice: "47")
         XCTAssertNotNil(model.current)
         XCTAssertEqual(model.outcome, .failed)
     }
@@ -160,10 +160,10 @@ final class LoginApprovalModelTests: XCTestCase {
         let api = FakeApprovalApi()
         api.hold(true)
         let model = await make(api, entries: [request("p-1")])
-        let first = Task { await model.approve(choice: "47") }
+        let first = Task { await model.approve(id: "p-1", choice: "47") }
         while !model.isBusy { await Task.yield() }
-        await model.approve(choice: "12")
-        await model.deny()
+        await model.approve(id: "p-1", choice: "12")
+        await model.deny(id: "p-1")
         api.hold(false)
         api.release()
         await first.value
@@ -174,7 +174,7 @@ final class LoginApprovalModelTests: XCTestCase {
     func test_refresh_doesNotBringBackAnEntryAlreadyHandled() async {
         let api = FakeApprovalApi()
         let model = await make(api, entries: [request("p-1")])
-        await model.approve(choice: "47")
+        await model.approve(id: "p-1", choice: "47")
         await model.refresh()
         XCTAssertNil(model.current, "the list still held it for a moment")
     }
@@ -212,7 +212,7 @@ final class LoginApprovalModelTests: XCTestCase {
         let api = FakeApprovalApi()
         api.hold(true)
         let model = await make(api, entries: [request("p-1")])
-        let action = Task { await model.approve(choice: "47") }
+        let action = Task { await model.approve(id: "p-1", choice: "47") }
         while !model.isBusy { await Task.yield() }
         model.reset()
         api.hold(false)
@@ -225,8 +225,55 @@ final class LoginApprovalModelTests: XCTestCase {
     func test_acknowledge_clearsTheOutcome() async {
         let api = FakeApprovalApi()
         let model = await make(api, entries: [request("p-1")])
-        await model.deny()
+        await model.deny(id: "p-1")
         model.acknowledgeOutcome()
         XCTAssertNil(model.outcome)
+    }
+
+    // MARK: - Explicit entry ids
+
+    func test_approve_withAnIdNoLongerListed_sendsNothing_andReadsTheListAgain() async {
+        let api = FakeApprovalApi()
+        let model = await make(api, entries: [request("p-1")])
+        api.setList(.success([request("p-2")]))
+        await model.approve(id: "p-1", choice: "47")
+        XCTAssertTrue(api.approvedWith.isEmpty, "the entry that was on screen is gone: nothing is signed")
+        XCTAssertEqual(model.current?.id, "p-2", "the list was read again")
+        XCTAssertNil(model.outcome)
+        XCTAssertFalse(model.isBusy)
+    }
+
+    func test_deny_withAnIdNoLongerListed_sendsNothing_andReadsTheListAgain() async {
+        let api = FakeApprovalApi()
+        let model = await make(api, entries: [request("p-1")])
+        api.setList(.success([request("p-2")]))
+        await model.deny(id: "p-1")
+        XCTAssertTrue(api.denied.isEmpty)
+        XCTAssertEqual(model.current?.id, "p-2")
+    }
+
+    func test_approve_actsOnTheGivenId_notOnTheCurrentOne() async {
+        let api = FakeApprovalApi()
+        let model = await make(api, entries: [request("p-1", at: 0), request("p-2", at: 60)])
+        XCTAssertEqual(model.current?.id, "p-1")
+        await model.approve(id: "p-2", choice: "47")
+        XCTAssertEqual(api.approvedWith.map(\.0), ["p-2"])
+        XCTAssertEqual(model.current?.id, "p-1", "the other entry is untouched")
+    }
+
+    func test_deny_actsOnTheGivenId_notOnTheCurrentOne() async {
+        let api = FakeApprovalApi()
+        let model = await make(api, entries: [request("p-1", at: 0), request("p-2", at: 60)])
+        await model.deny(id: "p-2")
+        XCTAssertEqual(api.denied, ["p-2"])
+        XCTAssertEqual(model.current?.id, "p-1")
+    }
+
+    func test_approve_withANumberThatIsNotOneOfTheEntrysChoices_isRefused() async {
+        let api = FakeApprovalApi()
+        let model = await make(api, entries: [request("p-1")])
+        await model.approve(id: "p-1", choice: "99")
+        XCTAssertTrue(api.approvedWith.isEmpty, "99 is not one of the numbers shown for p-1")
+        XCTAssertNotNil(model.current)
     }
 }

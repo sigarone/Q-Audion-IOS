@@ -101648,6 +101648,48 @@
         }
       }
     },
+    "account_notice.open_devices": {
+      "extractionState": "manual",
+      "comment": "Alert button of the notice about a changed recovery contact: opens the list of the account's devices.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vedi i dispositivi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View devices"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ver dispositivos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voir les appareils"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geräte anzeigen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ver dispositivos"
+          }
+        }
+      }
+    },
     "account_notice.login_denied": {
       "extractionState": "manual",
       "comment": "Notice: a sign-in request on the account was denied.",
@@ -102778,6 +102820,48 @@
           "stringUnit": {
             "state": "translated",
             "value": "Não foi possível concluir a operação. Tente novamente."
+          }
+        }
+      }
+    },
+    "settings.recovery_contacts.error.clock": {
+      "extractionState": "manual",
+      "comment": "Recovery contacts screen: the device clock is wrong, the server refused the signed time.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'orario di questo dispositivo non è corretto. Imposta data e ora in automatico e riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The date or time on this device is wrong. Set date and time to automatic and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La fecha o la hora de este dispositivo no es correcta. Activa la fecha y hora automáticas e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La date ou l'heure de cet appareil est incorrecte. Activez la date et l'heure automatiques puis réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datum oder Uhrzeit dieses Geräts ist falsch. Stelle Datum und Uhrzeit auf automatisch und versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A data ou a hora deste dispositivo está incorreta. Ative data e hora automáticas e tente novamente."
           }
         }
       }

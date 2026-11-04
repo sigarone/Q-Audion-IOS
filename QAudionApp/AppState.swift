@@ -148,6 +148,8 @@ final class AppState: ObservableObject {
     /// An account notice that has a text only (sign-in denied, expired, recovered; this device disconnected; recovery
     /// contact changed), shown as an alert. Not cleared with the session: a disconnected device still reads it.
     @Published var accountNoticeToShow: AccountNoticeKind?
+    /// Opens the list of the account's devices (to disconnect one) from the "recovery contact changed" notice.
+    @Published var showDeviceListFromNotice = false
     /// The prompt of an approved sign-in, kept until the session is activated.
     var approvedRevokePrompt: RevokePrompt?
     /// When this device last changed the password itself; its own `password_changed` notice is ignored.
@@ -3260,6 +3262,15 @@ final class AppState: ObservableObject {
     lazy var recoveryContacts: RecoveryContactsModel = {
         let api = BCryptoRecoveryContactsApi()
         api.getRestClient = { [weak self] in self?.liveProvider?.getRestClient() }
+        // Adding, replacing and removing a contact is signed with the device key, like "Disconnetti tutti".
+        api.loadDeviceId = {
+            TokenVault.loadDeviceId() ?? UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id")
+        }
+        api.loadDeviceKeySeed = { [weak self] in
+            guard let provider = self?.liveProvider else { return nil }
+            return try DeviceKeyManager(vault: SovereignKeyVault(), kmsClient: provider.kmsClient).currentEd25519Priv()
+        }
+        api.ensureDeviceKeyPublished = { [weak self] in await self?.ensureDeviceKeyPublished() }
         return RecoveryContactsModel(api: api)
     }()
 

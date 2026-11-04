@@ -188,3 +188,47 @@ public enum DeviceApprovalBlob {
         return out
     }
 }
+
+/// Text that the NEW device chose (its name, its platform) and that the approving device only repeats. It is
+/// untrusted: it could carry digits that look like the numbers to pick, line breaks, bidi controls. Defense in
+/// depth next to the server's own cleaning: digits (any Unicode number), control and format characters and line
+/// breaks are removed, spaces collapsed, 40 characters at most. Combining marks (Mn) are left alone. Characters that
+/// draw nothing but are not format characters (braille blank, Hangul fillers) are removed too. An empty result stays
+/// empty: the screen shows its own placeholder.
+public enum UntrustedLabel {
+    public static let maxLength = 40
+    /// U+2800 braille blank, U+115F and U+1160 Hangul choseong/jungseong fillers, U+3164 Hangul filler, U+FFA0
+    /// halfwidth Hangul filler.
+    private static let blankFillers: Set<UInt32> = [0x2800, 0x115F, 0x1160, 0x3164, 0xFFA0]
+
+    public static func clean(_ raw: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in raw.unicodeScalars {
+            let category = scalar.properties.generalCategory
+            if scalar.properties.numericType != nil { continue }
+            if blankFillers.contains(scalar.value) { continue }
+            // A line break or tab splits words: it becomes a space, so two lines are not glued together.
+            if scalar == "\n" || scalar == "\r" || scalar == "\t" || scalar == "\u{85}"
+                || category == .lineSeparator || category == .paragraphSeparator {
+                out.append(" ")
+                continue
+            }
+            switch category {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned:
+                continue
+            default:
+                out.append(scalar)
+            }
+        }
+        let collapsed = String(out).split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let capped = String(collapsed.prefix(maxLength)).trimmingCharacters(in: .whitespaces)
+        return capped
+    }
+}
+
+extension LoginApprovalRequest {
+    /// The device name for display, cleaned (see `UntrustedLabel`).
+    public var displayDeviceName: String { UntrustedLabel.clean(deviceName) }
+    /// The platform for display, cleaned (see `UntrustedLabel`).
+    public var displayPlatform: String { UntrustedLabel.clean(platform) }
+}

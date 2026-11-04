@@ -388,6 +388,12 @@ enum DeviceApprovalTexts {
                comment: "Notice: this device was disconnected by a new sign-in.")
     }
 
+    static var noticeOpenDevices: String {
+        String(localized: "account_notice.open_devices",
+               defaultValue: "Vedi i dispositivi",
+               comment: "Alert button of the notice about a changed recovery contact: opens the list of the account's devices.")
+    }
+
     static var noticeRecoveryContactChanged: String {
         String(localized: "account_notice.recovery_contact_changed",
                defaultValue: "L'email o il numero per il recupero del tuo account sono stati modificati. Se non sei stato tu, contatta l'amministratore.",
@@ -518,6 +524,12 @@ enum DeviceApprovalTexts {
         String(localized: "settings.recovery_contacts.error.rate_limited",
                defaultValue: "Troppe richieste. Riprova tra poco.",
                comment: "Recovery contacts screen: too many requests.")
+    }
+
+    static var rcErrorClock: String {
+        String(localized: "settings.recovery_contacts.error.clock",
+               defaultValue: "L'orario di questo dispositivo non è corretto. Imposta data e ora in automatico e riprova.",
+               comment: "Recovery contacts screen: the device clock is wrong, the server refused the signed time.")
     }
 
     static var rcErrorFailed: String {

@@ -7,6 +7,8 @@ import Foundation
 /// notice over the socket or as a push) calls `refresh()`, which shows what the server lists. Rules, each
 /// pinned by `LoginApprovalModelTests`:
 ///  - an empty list shows nothing; the entry shown is the oldest one;
+///  - approve and deny take the id of the entry that was displayed; an id that is no longer in the list is refused
+///    (nothing sent, the list is read again), and so is a number that is not one of that entry's choices;
 ///  - approve sends the number the person tapped; deny sends nothing else; both are signed by the API;
 ///  - a wrong number is a 403 on the server, which closes the entry as denied (no retry): the entry goes
 ///    away and the outcome says so;
@@ -59,12 +61,20 @@ public final class LoginApprovalModel: ObservableObject {
         }
     }
 
-    /// The person tapped `choice` among the numbers of the entry on screen.
-    public func approve(choice: String) async {
-        guard !isBusy, let target = current else { return }
+    /// The entry `id` that was on screen when the person tapped `choice`. Never "whatever is current now": the
+    /// list is read again first, and if the entry is no longer in it, or `choice` is not one of its numbers,
+    /// nothing is signed or sent and the sheet shows what the server really holds.
+    public func approve(id: String, choice: String) async {
+        guard !isBusy else { return }
         isBusy = true
-        outcome = nil
         let startedIn = epoch
+        await refresh()
+        guard startedIn == epoch else { return }
+        guard let target = requests.first(where: { $0.id == id }), target.choices.contains(choice) else {
+            isBusy = false
+            return
+        }
+        outcome = nil
         do {
             let result = try await api.approve(id: target.id, matchCode: choice)
             guard startedIn == epoch else { return }
@@ -79,11 +89,18 @@ public final class LoginApprovalModel: ObservableObject {
         }
     }
 
-    public func deny() async {
-        guard !isBusy, let target = current else { return }
+    /// Denies the entry `id` that was on screen; same rule as `approve(id:choice:)`.
+    public func deny(id: String) async {
+        guard !isBusy else { return }
         isBusy = true
-        outcome = nil
         let startedIn = epoch
+        await refresh()
+        guard startedIn == epoch else { return }
+        guard let target = requests.first(where: { $0.id == id }) else {
+            isBusy = false
+            return
+        }
+        outcome = nil
         do {
             let result = try await api.deny(id: target.id)
             guard startedIn == epoch else { return }
