@@ -90,6 +90,94 @@ final class CredentialTextParserTests: XCTestCase {
     func testLongNumberIsNotTakenAsExtension() {
         XCTAssertNil(CredentialTextParser.fromText("1234567890 abc"))
     }
+
+    // MARK: - Generated passwords (OCR clean-up)
+
+    private let generated = "K7M2PXQ9R4TWNBC8DFHJ"
+    private let dashed = "K7M2-PXQ9-R4TW-NBC8-DFHJ"
+
+    func testDashedDisplayShapeKeepsCaseAndDashes() {
+        let c = CredentialTextParser.fromText("Interno: 176\nPassword: k7m2-pxq9-r4tw-nbc8-dfhj")
+        XCTAssertEqual(c, ExtractedCredentials(extensionNumber: "176", password: "k7m2-pxq9-r4tw-nbc8-dfhj"))
+        let d = CredentialTextParser.normalizeGenerated(dashed)
+        XCTAssertEqual(d?.password, dashed)
+        XCTAssertEqual(d?.uncertain, [])
+    }
+
+    func testDashedShapeWithLookAlikesIsMappedAndPositionsSkipDashes() {
+        // Full-width K, Cyrillic M and P, Greek Chi, then a letter O at character 8 and a digit 1 at 20 (dashes not counted).
+        let read = "\u{FF2B}7\u{041C}2-\u{0420}\u{03A7}Q0-R4TW-NBC8-DFH1"
+        let n = CredentialTextParser.normalizeGenerated(read)
+        XCTAssertEqual(n?.password, "K7M2-PXQ0-R4TW-NBC8-DFH1")
+        XCTAssertEqual(n?.uncertain, [8, 20])
+    }
+
+    func testMixedScriptLookAlikesInAllUppercaseToken() {
+        let read = "\u{FF2B}7\u{041C}2\u{0420}\u{03A7}Q9R4TWNBC8DFHJ"
+        let c = CredentialTextParser.fromText("Interno: 176\nPassword: \(read)")
+        XCTAssertEqual(c?.password, generated)
+        XCTAssertEqual(c?.uncertainPositions, [])
+        let z = CredentialTextParser.normalizeGenerated("\u{0396}7M2PXQ9R4TWNBC8DFHJ")
+        XCTAssertEqual(z?.password, "Z7M2PXQ9R4TWNBC8DFHJ")
+        // Greek capital Nu and Upsilon look like N and Y.
+        let ny = CredentialTextParser.normalizeGenerated("\u{039D}7M2PXQ9R4TW\u{03A5}BC8DFHJ")
+        XCTAssertEqual(ny?.password, "N7M2PXQ9R4TWYBC8DFHJ")
+    }
+
+    func testGreekLowercaseNuAndUpsilonAreNotMapped() {
+        // v-shaped letters are not n or y: they stay as read, the token is not ASCII and nothing is rewritten.
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TW\u{03BD}BC8DFHJ"))
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TW\u{03C5}BC8DFHJ"))
+    }
+
+    func testLettersLAndOAndDigitsZeroOneAreFlagged() {
+        let l = CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TWNBC8DFHL")
+        XCTAssertEqual(l?.password, "K7M2PXQ9R4TWNBC8DFHL")
+        XCTAssertEqual(l?.uncertain, [20])
+        let lower = CredentialTextParser.normalizeGenerated("k7m2-pxq9-r4tw-nbc8-dfhl")
+        XCTAssertEqual(lower?.password, "k7m2-pxq9-r4tw-nbc8-dfhl")
+        XCTAssertEqual(lower?.uncertain, [20])
+        let c = CredentialTextParser.fromText("Interno: 176\nPassword: K7M2PXQ0R4TWNBC8DFHI")
+        XCTAssertEqual(c?.password, "K7M2PXQ0R4TWNBC8DFHI")
+        XCTAssertEqual(c?.uncertainPositions, [8, 20])
+        let one = CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TWNBC8DFH1")
+        XCTAssertEqual(one?.uncertain, [20])
+    }
+
+    func testBoundaryOfSeventeenInAlphabet() {
+        // Exactly 17 in the alphabet (three of 0/O/1/I/L): accepted. 16: untouched.
+        let seventeen = CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TWNBC8D" + "0O1")
+        XCTAssertEqual(seventeen?.uncertain, [18, 19, 20])
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TWNBC8" + "0O1I"))
+    }
+
+    func testInAlphabetPairsAreNotTouched() {
+        // 5, 8, 2, 6 and their letter twins are all valid: nothing changes, nothing is flagged.
+        let n = CredentialTextParser.normalizeGenerated("S5B8Z2G6K7M2PXQ9R4TW")
+        XCTAssertEqual(n?.password, "S5B8Z2G6K7M2PXQ9R4TW")
+        XCTAssertEqual(n?.uncertain, [])
+    }
+
+    func testFreeFormPasswordsAreUntouched() {
+        let lower20 = "correcthorsebattery1"
+        XCTAssertEqual(lower20.count, 20)
+        XCTAssertNil(CredentialTextParser.normalizeGenerated(lower20))
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("k7m2pxq9r4twnbc8dfhj"))  // 20 lowercase, no dashes
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("a1b2c3d4e5f60718"))
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("correct-horse-battery-staple"))
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TWNBC8DFH"))   // 19
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("K7M2PXQ9R4TWNBC8DFHJK")) // 21
+        XCTAssertNil(CredentialTextParser.normalizeGenerated("K7M2 PXQ9 R4TW NBC8 DFHJ")) // spaces, not the display shape
+        let free = CredentialTextParser.fromText("Interno: 176\nPassword: \(lower20)")
+        XCTAssertEqual(free, ExtractedCredentials(extensionNumber: "176", password: lower20))
+        let hex = CredentialTextParser.fromText("Interno: 176\nPassword: a1b2c3d4e5f60718")
+        XCTAssertEqual(hex, ExtractedCredentials(extensionNumber: "176", password: "a1b2c3d4e5f60718"))
+    }
+
+    func testGeneratedPasswordWithoutLabels() {
+        let c = CredentialTextParser.fromText("176\nK7M2PXQ9R4TWNBC8DFHJ")
+        XCTAssertEqual(c, ExtractedCredentials(extensionNumber: "176", password: generated))
+    }
 }
 
 /// UI that stays hidden in the store build until the feature behind it is real.

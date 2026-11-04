@@ -78260,6 +78260,48 @@
         }
       }
     },
+    "extension_login.fill.check_chars": {
+      "extractionState": "manual",
+      "comment": "Extension + password sign-in screen: after reading a photo, these positions (comma-separated, counted from 1) in the password may be misread; the user should check them. %@ is the list of positions.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controlla i caratteri della password in posizione %@: la lettura potrebbe averli confusi (0 e O, 1 e I o L)."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the password characters at position %@: the scan may have confused them (0 and O, 1 and I or L)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revisa los caracteres de la contraseña en la posición %@: la lectura puede haberlos confundido (0 y O, 1 e I o L)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifiez les caractères du mot de passe en position %@ : la lecture a pu les confondre (0 et O, 1 et I ou L)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfe die Zeichen des Passworts an Position %@: Beim Einlesen wurden sie vielleicht verwechselt (0 und O, 1 und I oder L)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confira os caracteres da senha na posição %@: a leitura pode tê-los confundido (0 e O, 1 e I ou L)."
+          }
+        }
+      }
+    },
     "extension_login.fill.not_found": {
       "extractionState": "manual",
       "comment": "Extension + password sign-in screen: nothing usable was found in the chosen photo or file.",
