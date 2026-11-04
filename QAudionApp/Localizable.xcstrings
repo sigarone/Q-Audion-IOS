@@ -1,6 +1,1728 @@
 {
   "sourceLanguage": "it",
   "strings": {
+    "settings.change_password.title": {
+      "extractionState": "manual",
+      "comment": "Settings row and screen title: change the account password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambia password"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change password"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort ändern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambiar contraseña"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changer le mot de passe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alterar senha"
+          }
+        }
+      }
+    },
+    "settings.change_password.subtitle": {
+      "extractionState": "manual",
+      "comment": "Settings row subtitle under Change password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli una nuova password"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a new password"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wähle ein neues Passwort"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige una contraseña nueva"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisis un nouveau mot de passe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Escolha uma nova senha"
+          }
+        }
+      }
+    },
+    "settings.change_password.current": {
+      "extractionState": "manual",
+      "comment": "Change password screen: label of the field for the current password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password attuale"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current password"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktuelles Passwort"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña actual"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mot de passe actuel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senha atual"
+          }
+        }
+      }
+    },
+    "settings.change_password.new": {
+      "extractionState": "manual",
+      "comment": "Change password screen: label of the field for the new password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuova password"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New password"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neues Passwort"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña nueva"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nouveau mot de passe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nova senha"
+          }
+        }
+      }
+    },
+    "settings.change_password.confirm": {
+      "extractionState": "manual",
+      "comment": "Change password screen: label of the field that repeats the new password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ripeti la nuova password"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repeat the new password"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neues Passwort wiederholen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repite la contraseña nueva"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répète le nouveau mot de passe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repita a nova senha"
+          }
+        }
+      }
+    },
+    "settings.change_password.hint": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the only rule for the new password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Almeno 8 caratteri."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "At least 8 characters."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mindestens 8 Zeichen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al menos 8 caracteres."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Au moins 8 caractères."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pelo menos 8 caracteres."
+          }
+        }
+      }
+    },
+    "settings.change_password.mismatch": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the two new passwords differ.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le password non coincidono."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The passwords do not match."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Passwörter stimmen nicht überein."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las contraseñas no coinciden."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les mots de passe ne correspondent pas."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As senhas não coincidem."
+          }
+        }
+      }
+    },
+    "settings.change_password.revoke_others": {
+      "extractionState": "manual",
+      "comment": "Change password screen: switch that ends the session of every other device.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disconnetti gli altri dispositivi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign out all other devices"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alle anderen Geräte abmelden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cerrar sesión en los demás dispositivos"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déconnecter les autres appareils"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desconectar os outros dispositivos"
+          }
+        }
+      }
+    },
+    "settings.change_password.submit": {
+      "extractionState": "manual",
+      "comment": "Change password screen: button that sends the change.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambia password"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change password"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort ändern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambiar contraseña"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changer le mot de passe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alterar senha"
+          }
+        }
+      }
+    },
+    "settings.change_password.done": {
+      "extractionState": "manual",
+      "comment": "Snackbar after the password was changed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password cambiata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password changed."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort geändert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña cambiada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mot de passe changé."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senha alterada."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.session": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the session is not valid any more.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sessione è scaduta. Esci e accedi di nuovo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session has expired. Sign out and sign in again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Sitzung ist abgelaufen. Melde dich ab und wieder an."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La sesión ha caducado. Cierra sesión y vuelve a iniciarla."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ta session a expiré. Déconnecte-toi puis reconnecte-toi."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A sessão expirou. Saia e entre novamente."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.rate_limited": {
+      "extractionState": "manual",
+      "comment": "Change password screen: too many attempts; %lld is the seconds to wait.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppi tentativi. Riprova tra %lld s."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Try again in %lld s."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Versuche. Versuche es in %lld s erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiados intentos. Vuelve a intentarlo en %lld s."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de tentatives. Réessaie dans %lld s."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitas tentativas. Tente novamente em %lld s."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.rate_limited_soon": {
+      "extractionState": "manual",
+      "comment": "Change password screen: too many attempts, no wait time given.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppi tentativi. Riprova tra poco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Try again shortly."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Versuche. Versuche es gleich noch einmal."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiados intentos. Vuelve a intentarlo en un momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de tentatives. Réessaie dans un instant."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitas tentativas. Tente novamente em instantes."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.unavailable_wait": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the service is busy; %lld is the seconds to wait.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servizio non disponibile. Riprova tra %lld s."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service unavailable. Try again in %lld s."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dienst nicht verfügbar. Versuche es in %lld s erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servicio no disponible. Vuelve a intentarlo en %lld s."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service indisponible. Réessaie dans %lld s."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serviço indisponível. Tente novamente em %lld s."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.unavailable_soon": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the service is busy, no wait time given.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servizio non disponibile. Riprova tra poco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service unavailable. Try again shortly."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dienst nicht verfügbar. Versuche es gleich noch einmal."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servicio no disponible. Vuelve a intentarlo en un momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service indisponible. Réessaie dans un instant."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Serviço indisponível. Tente novamente em instantes."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.short": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the new password is too short.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La nuova password deve avere almeno 8 caratteri."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The new password must have at least 8 characters."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das neue Passwort muss mindestens 8 Zeichen haben."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La contraseña nueva debe tener al menos 8 caracteres."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le nouveau mot de passe doit comporter au moins 8 caractères."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A nova senha deve ter pelo menos 8 caracteres."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.long": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the new password is too long.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La nuova password è troppo lunga: al massimo 64 caratteri."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The new password is too long: 64 characters at most."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das neue Passwort ist zu lang: höchstens 64 Zeichen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La contraseña nueva es demasiado larga: 64 caracteres como máximo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le nouveau mot de passe est trop long : 64 caractères au maximum."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A nova senha é longa demais: no máximo 64 caracteres."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.common": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the new password is on the list of common passwords.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa password è troppo comune. Scegline un'altra."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This password is too common. Choose another one."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Passwort ist zu gebräuchlich. Wähle ein anderes."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta contraseña es demasiado común. Elige otra."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce mot de passe est trop courant. Choisis-en un autre."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta senha é comum demais. Escolha outra."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.identity": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the new password contains the account extension.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La password non può contenere il tuo interno."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password cannot contain your extension."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Passwort darf deine Nebenstelle nicht enthalten."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La contraseña no puede contener tu extensión."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le mot de passe ne peut pas contenir ton poste."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A senha não pode conter o seu ramal."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.unchanged": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the new password equals the current one.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La nuova password deve essere diversa da quella attuale."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The new password must be different from the current one."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das neue Passwort muss sich vom aktuellen unterscheiden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La contraseña nueva debe ser distinta de la actual."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le nouveau mot de passe doit être différent de l'actuel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A nova senha deve ser diferente da atual."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.wrong_current": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the current password is wrong.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La password attuale non è corretta."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current password is not correct."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das aktuelle Passwort ist nicht korrekt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La contraseña actual no es correcta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le mot de passe actuel n'est pas correct."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A senha atual não está correta."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.not_available": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the account does not sign in with a password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo account non accede con la password."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account does not sign in with a password."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Konto meldet sich nicht mit einem Passwort an."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta cuenta no inicia sesión con contraseña."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce compte ne se connecte pas avec un mot de passe."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta conta não entra com senha."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.locked": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the account is locked.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account bloccato. Contatta l'amministratore."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account locked. Contact your administrator."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konto gesperrt. Wende dich an deinen Administrator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cuenta bloqueada. Ponte en contacto con el administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compte bloqué. Contacte l'administrateur."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conta bloqueada. Entre em contato com o administrador."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.malformed": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the server accepted the change but its answer could not be read.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password cambiata, ma la sessione non è stata aggiornata. Esci e accedi di nuovo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password changed, but the session was not updated. Sign out and sign in again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort geändert, aber die Sitzung wurde nicht aktualisiert. Melde dich ab und wieder an."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña cambiada, pero la sesión no se ha actualizado. Cierra sesión y vuelve a iniciarla."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mot de passe changé, mais la session n'a pas été mise à jour. Déconnecte-toi puis reconnecte-toi."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senha alterada, mas a sessão não foi atualizada. Saia e entre novamente."
+          }
+        }
+      }
+    },
+    "settings.change_password.error.generic": {
+      "extractionState": "manual",
+      "comment": "Change password screen: the change failed for another reason.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile cambiare la password. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password could not be changed. Try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Passwort konnte nicht geändert werden. Versuche es erneut."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo cambiar la contraseña. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de changer le mot de passe. Réessaie."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível alterar a senha. Tente novamente."
+          }
+        }
+      }
+    },
+    "account_notice.password_changed.banner": {
+      "extractionState": "manual",
+      "comment": "Banner on the chat list: another device changed the account password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password cambiata su un altro dispositivo; se non sei stato tu contatta l'amministratore."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password changed on another device; if it wasn't you, contact your administrator."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort auf einem anderen Gerät geändert; wenn du das nicht warst, wende dich an deinen Administrator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña cambiada en otro dispositivo; si no has sido tú, ponte en contacto con el administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mot de passe changé sur un autre appareil ; si ce n'est pas toi, contacte l'administrateur."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senha alterada em outro dispositivo; se não foi você, entre em contato com o administrador."
+          }
+        }
+      }
+    },
+    "account_notice.password_changed.dismiss": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the button that closes the password-changed banner.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiudi"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schließen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cerrar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fechar"
+          }
+        }
+      }
+    },
+    "account_notice.password_changed.title": {
+      "extractionState": "manual",
+      "comment": "Push notification title: another device changed the account password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password cambiata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password changed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort geändert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña cambiada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mot de passe changé"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senha alterada"
+          }
+        }
+      }
+    },
+    "account_notice.password_changed.body": {
+      "extractionState": "manual",
+      "comment": "Push notification body: another device changed the account password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password cambiata su un altro dispositivo. Se non sei stato tu contatta l'amministratore."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password changed on another device. If it wasn't you, contact your administrator."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort auf einem anderen Gerät geändert. Wenn du das nicht warst, wende dich an deinen Administrator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña cambiada en otro dispositivo. Si no has sido tú, ponte en contacto con el administrador."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mot de passe changé sur un autre appareil. Si ce n'est pas toi, contacte l'administrateur."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senha alterada em outro dispositivo. Se não foi você, entre em contato com o administrador."
+          }
+        }
+      }
+    },
+    "saved_login.prompt.title": {
+      "extractionState": "manual",
+      "comment": "Question after a sign-in or a password change: keep the password behind biometrics. %@ is Face ID or Touch ID.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvare la password con %@?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save the password with %@?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwort mit %@ speichern?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Guardar la contraseña con %@?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer le mot de passe avec %@ ?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar a senha com %@?"
+          }
+        }
+      }
+    },
+    "saved_login.prompt.message": {
+      "extractionState": "manual",
+      "comment": "Explanation under the question about keeping the password behind biometrics. %@ is Face ID or Touch ID.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La password resta su questo dispositivo, protetta da %@. La prossima volta potrai accedere senza digitarla."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password stays on this device, protected by %@. Next time you can sign in without typing it."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Passwort bleibt auf diesem Gerät und ist durch %@ geschützt. Beim nächsten Mal kannst du dich ohne Eintippen anmelden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La contraseña se queda en este dispositivo, protegida por %@. La próxima vez podrás iniciar sesión sin escribirla."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le mot de passe reste sur cet appareil, protégé par %@. La prochaine fois, tu pourras te connecter sans le saisir."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A senha fica neste dispositivo, protegida por %@. Da próxima vez você poderá entrar sem digitá-la."
+          }
+        }
+      }
+    },
+    "saved_login.prompt.save": {
+      "extractionState": "manual",
+      "comment": "Button: keep the password behind biometrics.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salva"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speichern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guardar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Salvar"
+          }
+        }
+      }
+    },
+    "saved_login.prompt.decline": {
+      "extractionState": "manual",
+      "comment": "Button: do not keep the password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non salvare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Don't save"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht speichern"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No guardar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ne pas enregistrer"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não salvar"
+          }
+        }
+      }
+    },
+    "saved_login.signin": {
+      "extractionState": "manual",
+      "comment": "Button on the extension sign-in screen: sign in with the saved password after a biometric check. %@ is Face ID or Touch ID.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi con %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in with %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit %@ anmelden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Iniciar sesión con %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecter avec %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrar com %@"
+          }
+        }
+      }
+    },
+    "saved_login.reason": {
+      "extractionState": "manual",
+      "comment": "Reason shown in the system biometric prompt that unlocks the saved password.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi a Q-Audion con la password salvata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in to Q-Audion with the saved password"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit dem gespeicherten Passwort bei Q-Audion anmelden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inicia sesión en Q-Audion con la contraseña guardada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecte-toi à Q-Audion avec le mot de passe enregistré"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entre no Q-Audion com a senha salva"
+          }
+        }
+      }
+    },
+    "saved_login.rejected": {
+      "extractionState": "manual",
+      "comment": "Extension sign-in screen: the server refused the saved password (it was changed elsewhere); the saved copy was removed.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La password salvata non è più valida, inseriscila di nuovo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The saved password is no longer valid. Enter it again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das gespeicherte Passwort ist nicht mehr gültig. Gib es erneut ein."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La contraseña guardada ya no es válida. Introdúcela de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le mot de passe enregistré n'est plus valide. Saisis-le à nouveau."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A senha salva não é mais válida. Digite-a novamente."
+          }
+        }
+      }
+    },
+    "saved_login.read_failed": {
+      "extractionState": "manual",
+      "comment": "Extension sign-in screen: the saved password could not be read (cancelled, or the biometrics changed).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non riesco a usare la password salvata. Inseriscila a mano."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I could not use the saved password. Enter it by hand."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das gespeicherte Passwort lässt sich nicht verwenden. Gib es von Hand ein."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No puedo usar la contraseña guardada. Introdúcela a mano."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'utiliser le mot de passe enregistré. Saisis-le à la main."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não consegui usar a senha salva. Digite-a manualmente."
+          }
+        }
+      }
+    },
+    "saved_login.settings.title": {
+      "extractionState": "manual",
+      "comment": "Settings switch: keep the password behind biometrics. %@ is Face ID or Touch ID.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password salvata con %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password saved with %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit %@ gespeichertes Passwort"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contraseña guardada con %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mot de passe enregistré avec %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senha salva com %@"
+          }
+        }
+      }
+    },
+    "saved_login.settings.stored": {
+      "extractionState": "manual",
+      "comment": "Settings switch subtitle: a password is saved and will be used to sign in.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usata per accedere senza digitarla"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used to sign in without typing it"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wird zum Anmelden ohne Eintippen verwendet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se usa para iniciar sesión sin escribirla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilisé pour se connecter sans le saisir"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usada para entrar sem digitá-la"
+          }
+        }
+      }
+    },
+    "saved_login.settings.pending": {
+      "extractionState": "manual",
+      "comment": "Settings switch subtitle: nothing saved yet, the question comes at the next sign-in or password change.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Te lo chiederò al prossimo accesso o cambio password"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I will ask at your next sign-in or password change"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ich frage beim nächsten Anmelden oder Passwortwechsel nach"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Te lo preguntaré en el próximo inicio de sesión o cambio de contraseña"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je te le demanderai à la prochaine connexion ou au prochain changement de mot de passe"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vou perguntar no próximo acesso ou troca de senha"
+          }
+        }
+      }
+    },
+    "saved_login.settings.off": {
+      "extractionState": "manual",
+      "comment": "Settings switch subtitle: the password is not saved.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non salvata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not saved"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht gespeichert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No guardada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non enregistré"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não salva"
+          }
+        }
+      }
+    },
     "call.control.mute": {
       "extractionState": "manual",
       "comment": "Name under the microphone button of the call controls.",

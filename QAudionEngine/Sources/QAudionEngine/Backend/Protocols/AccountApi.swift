@@ -117,6 +117,11 @@ public protocol AccountApi {
     /// token (pasted manually, or extracted from the deep-linked
     /// verify-landing URL). Matches `POST /api/v1/auth/email/verify-confirm`.
     func confirmEmailVerification(token: String) async throws -> EmailVerifyConfirmResponse
+
+    /// Authenticated — change the password of an account that signs in with extension + password.
+    /// `revokeOthers` also ends the session of every other device. Returns the new session of this device;
+    /// the previous tokens are dead. Throws ``ChangePasswordError``. Matches `POST /api/v1/account/password`.
+    func changePassword(current: String, new: String, revokeOthers: Bool) async throws -> PasswordChangeResult
 }
 
 /// Distinguishes a brand-new account from an existing one across the
@@ -327,6 +332,8 @@ public struct UserProfile: Codable {
     /// `Optional` for that reason, not because new accounts are exempt.
     /// See the matching note on ``PublicUser/extensionNumber``.
     public var dialExtension: Int64?
+    /// True only for an account that signs in with extension + password (`password_login`). Absent means false.
+    public var passwordLogin: Bool?
 
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
@@ -335,6 +342,7 @@ public struct UserProfile: Codable {
         case statusMessage = "status_message"
         case phoneHash = "phone_hash"
         case dialExtension = "extension"
+        case passwordLogin = "password_login"
     }
 
     public init(userId: String,
@@ -342,13 +350,15 @@ public struct UserProfile: Codable {
                 avatarUrl: String? = nil,
                 statusMessage: String? = nil,
                 phoneHash: String? = nil,
-                dialExtension: Int64? = nil) {
+                dialExtension: Int64? = nil,
+                passwordLogin: Bool? = nil) {
         self.userId = userId
         self.displayName = displayName
         self.avatarUrl = avatarUrl
         self.statusMessage = statusMessage
         self.phoneHash = phoneHash
         self.dialExtension = dialExtension
+        self.passwordLogin = passwordLogin
     }
 }
 

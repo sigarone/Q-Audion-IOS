@@ -40,6 +40,24 @@ public final class BCryptoAccountApiImpl: AccountApi {
         return try JSONDecoder().decode(AuthCredentials.self, from: data)
     }
 
+    public func changePassword(current: String, new: String, revokeOthers: Bool) async throws -> PasswordChangeResult {
+        let dict: [String: Any] = [
+            "current_password": current,
+            "new_password": new,
+            "revoke_others": revokeOthers,
+        ]
+        let body = try JSONSerialization.data(withJSONObject: dict)
+        let (data, status, retryAfter) = try await rest.postOutcome("/api/v1/account/password", body: body)
+        guard (200...299).contains(status) else {
+            throw ChangePasswordError.map(status: status, body: data, retryAfter: retryAfter)
+        }
+        guard let result = try? JSONDecoder().decode(PasswordChangeResult.self, from: data),
+              !result.accessToken.isEmpty, !result.refreshToken.isEmpty, !result.deviceId.isEmpty else {
+            throw ChangePasswordError.malformedResponse
+        }
+        return result
+    }
+
     public func refreshToken(_ refreshToken: String) async throws -> AuthTokenPair {
         let dict = ["refresh_token": refreshToken]
         let body = try JSONSerialization.data(withJSONObject: dict)

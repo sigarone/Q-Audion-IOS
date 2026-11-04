@@ -319,6 +319,21 @@ public final class BCryptoRestClient {
         try await request("POST", path: path, body: body, headers: headers)
     }
 
+    /// POST that hands back the raw status, body and `Retry-After` of any answer instead of mapping a
+    /// non-2xx to `BCryptoError`, for an endpoint whose refusals carry a typed `{"error": code}`.
+    /// A 401 whose code is not `invalid credentials` (an expired access token) gets one
+    /// refresh-and-retry, like every other request; `invalid credentials` is the endpoint's own
+    /// answer for a wrong password and must not trigger a session refresh.
+    func postOutcome(_ path: String, body: Data?) async throws -> (data: Data, status: Int, retryAfter: String?) {
+        var outcome = try await performRequest("POST", path: path, body: body, headers: [:])
+        if outcome.1 == 401, ChangePasswordError.errorCode(in: outcome.0) != "invalid credentials" {
+            if try await tryRefreshToken() {
+                outcome = try await performRequest("POST", path: path, body: body, headers: [:])
+            }
+        }
+        return (outcome.0, outcome.1, outcome.2)
+    }
+
     public func put(_ path: String, body: Data?, headers: [String: String] = [:]) async throws -> Data {
         try await request("PUT", path: path, body: body, headers: headers)
     }

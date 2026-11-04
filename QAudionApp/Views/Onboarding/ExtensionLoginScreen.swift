@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import QAudionEngine
 
 /// Typed login: PBX extension number + password, for accounts an
 /// administrator created for the user.
@@ -32,6 +33,12 @@ struct ExtensionLoginScreen: View {
     @State private var fillMessage: String?
     /// Neutral hint after a successful fill (not an error).
     @State private var fillNotice: String?
+
+    /// Password kept behind Face ID / Touch ID (see `SavedLoginStore`).
+    @State private var biometry: SavedLoginBiometry = .none
+    @State private var hasSavedLogin = false
+    @State private var showSavePrompt = false
+    @State private var pendingLogin: SavedLogin?
 
     private var extensionValue: Int64? {
         Int64(extensionText.trimmingCharacters(in: .whitespaces))
@@ -75,6 +82,12 @@ struct ExtensionLoginScreen: View {
                         .font(.body)
                         .foregroundStyle(.white.opacity(0.65))
                         .padding(.horizontal, 24)
+
+                    if hasSavedLogin && biometry != .none {
+                        savedLoginButton
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 16)
+                    }
 
                     Spacer().frame(height: 24)
 
@@ -170,6 +183,22 @@ struct ExtensionLoginScreen: View {
             )
             .ignoresSafeArea()
         }
+        .onAppear {
+            biometry = SavedLoginBiometry.current()
+            hasSavedLogin = SavedLoginStore.shared.hasSavedLogin
+        }
+        .alert(SavedLoginTexts.promptTitle(biometry.displayName), isPresented: $showSavePrompt) {
+            Button(SavedLoginTexts.promptSave) {
+                if let login = pendingLogin { SavedLoginStore.shared.save(login) }
+                finishSignIn()
+            }
+            Button(SavedLoginTexts.promptDecline, role: .cancel) {
+                SavedLoginStore.shared.decline()
+                finishSignIn()
+            }
+        } message: {
+            Text(SavedLoginTexts.promptMessage(biometry.displayName))
+        }
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { item in
             guard let item else { return }
@@ -181,6 +210,53 @@ struct ExtensionLoginScreen: View {
                       allowsMultipleSelection: false) { result in
             guard case .success(let urls) = result, let url = urls.first else { return }
             Task { await fill(fromFile: url) }
+        }
+    }
+
+    // MARK: - Saved password
+
+    private var savedLoginButton: some View {
+        Button {
+            Task { await signInWithSavedLogin() }
+        } label: {
+            Label(SavedLoginTexts.signInButton(biometry.displayName),
+                  systemImage: biometry == .touchID ? "touchid" : "faceid")
+                .font(.body.weight(.medium))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(.white.opacity(0.3), lineWidth: 1.2)
+                )
+        }
+        .disabled(isSubmitting)
+        .accessibilityIdentifier("extension-login-saved-button")
+    }
+
+    /// Reads the saved extension + password after the biometric check, fills the two fields and signs in.
+    @MainActor
+    private func signInWithSavedLogin() async {
+        errorText = nil
+        let reason = SavedLoginTexts.unlockReason
+        let store = SavedLoginStore.shared
+        let result = await Task.detached { store.load(reason: reason) }.value
+        switch result {
+        case .found(let login):
+            extensionText = login.extensionNumber
+            password = login.password
+            await submit()
+            if appState.lastLoginRejectedAsInvalid {
+                // The server no longer accepts the saved password: the copy is useless, drop it.
+                store.deleteAll()
+                hasSavedLogin = false
+                password = ""
+                errorText = SavedLoginTexts.savedRejected
+            }
+        case .notAuthenticated:
+            break
+        case .notFound:
+            hasSavedLogin = false
+            errorText = SavedLoginTexts.readFailed
         }
     }
 
@@ -280,11 +356,30 @@ struct ExtensionLoginScreen: View {
         errorText = nil
         defer { isSubmitting = false }
         appState.errorMessage = nil
-        await appState.loginWithExtension(extension: ext, credential: password)
+        // The main screen replaces this one the moment the session is active, so the session is activated
+        // only after the "save the password?" question has been answered.
+        await appState.loginWithExtension(extension: ext, credential: password, activate: false)
         if let err = appState.errorMessage {
             errorText = err
             return
         }
+        let login = SavedLogin(extensionNumber: String(ext), password: password)
+        let store = SavedLoginStore.shared
+        store.purgeIfInvalidated()
+        if store.decision == .saved {
+            store.updateIfSaved(login)
+            finishSignIn()
+        } else if store.shouldAsk && SavedLoginBiometry.current() != .none {
+            pendingLogin = login
+            showSavePrompt = true
+        } else {
+            finishSignIn()
+        }
+    }
+
+    private func finishSignIn() {
+        pendingLogin = nil
+        appState.activatePendingSession()
         onLoggedIn()
     }
 }

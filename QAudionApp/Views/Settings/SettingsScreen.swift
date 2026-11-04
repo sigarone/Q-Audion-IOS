@@ -427,6 +427,9 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
+            // Change password + saved password: drawn only for an account that signs in with a password.
+            PasswordSettingsRows()
+
             // W44: I miei numeri (multi-phone management) — 1:1 port del
             // blocco "I MIEI NUMERI" di Android `ProfileScreen.kt`. Permette
             // di registrare multipli E.164 sull'account così i peer ti
