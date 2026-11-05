@@ -38,6 +38,17 @@ enum SasCardPlacement {
         sasVerified && verdictKnown
     }
 
+    /// True when the contact counts as confirmed for THIS call. The words differ on every call, so a confirmation made on
+    /// an earlier call carries over only through the identity key: the stored confirmation must apply to the key pinned
+    /// now (`bindingAppliesToPinnedKey`) AND this call's handshake must have reported an authenticated verdict
+    /// (`identityAuthenticated`, false until it does), with no identity notice and no hold waiting for the comparison.
+    /// A confirmation of this call's own words always counts.
+    static func isConfirmedForThisCall(wordsConfirmed: Bool, bindingAppliesToPinnedKey: Bool,
+                                       identityAuthenticated: Bool, identityNotice: Bool,
+                                       awaitingConfirmation: Bool) -> Bool {
+        wordsConfirmed || (bindingAppliesToPinnedKey && identityAuthenticated && !identityNotice && !awaitingConfirmation)
+    }
+
     /// True when a comparison is really needed. `sasRequired` is the assurance state's verdict (`nil` while it is not
     /// computed yet, which is not a reason to show the card). A call held for the confirmation, or one with an identity
     /// notice, always needs it.

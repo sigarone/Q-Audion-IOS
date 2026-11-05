@@ -158,6 +158,7 @@ final class LoginApprovalTypesTests: XCTestCase {
         XCTAssertEqual(AccountNotice.kind(["code": "login_recovered"]), .loginRecovered)
         XCTAssertEqual(AccountNotice.kind(["code": "device_disconnected"]), .deviceDisconnected)
         XCTAssertEqual(AccountNotice.kind(["code": "recovery_contact_changed"]), .recoveryContactChanged)
+        XCTAssertEqual(AccountNotice.kind(["code": "phone_moved"]), .phoneMoved)
         XCTAssertEqual(AccountNotice.kind(["code": "login_approval_pending", "pending_id": "p"]), .loginApprovalPending)
         XCTAssertNil(AccountNotice.kind(["code": "phone_transfer_pending"]))
         XCTAssertNil(AccountNotice.kind(["code": 7]))

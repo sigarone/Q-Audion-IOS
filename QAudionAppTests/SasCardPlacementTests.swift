@@ -155,4 +155,48 @@ final class SasCardPlacementTests: XCTestCase {
         XCTAssertTrue(SasCardPlacement.showsVerified(sasVerified: true, verdictKnown: true))
         XCTAssertFalse(SasCardPlacement.showsVerified(sasVerified: false, verdictKnown: true))
     }
+
+    // A contact confirmed on an earlier call: the words changed, only the identity key can carry the confirmation over.
+
+    private func confirmed(words: Bool = false, bound: Bool, verdict: Bool = true, notice: Bool = false,
+                           held: Bool = false) -> Bool {
+        SasCardPlacement.isConfirmedForThisCall(wordsConfirmed: words, bindingAppliesToPinnedKey: bound,
+                                                identityAuthenticated: verdict, identityNotice: notice,
+                                                awaitingConfirmation: held)
+    }
+
+    func testAConfirmedContactWithTheSameKeyDoesNotPinTheCard() {
+        XCTAssertTrue(confirmed(bound: true))
+        XCTAssertFalse(pinned(6, verified: confirmed(bound: true), needed: needed(true)))
+    }
+
+    func testAConfirmedContactWhoseKeyChangedPinsTheCard() {
+        // The stored confirmation no longer applies to the pinned key.
+        XCTAssertFalse(confirmed(bound: false))
+        XCTAssertTrue(pinned(6, verified: confirmed(bound: false), needed: needed(true)))
+    }
+
+    func testANeverConfirmedContactPinsTheCard() {
+        XCTAssertFalse(confirmed(bound: false))
+        XCTAssertTrue(pinned(6, verified: confirmed(bound: false), needed: needed(true)))
+    }
+
+    func testAnIdentityNoticeOrAHoldKeepsTheCardEvenForAConfirmedContact() {
+        XCTAssertFalse(confirmed(bound: true, notice: true))
+        XCTAssertFalse(confirmed(bound: true, held: true))
+        XCTAssertTrue(pinned(6, verified: confirmed(bound: true, notice: true), needed: needed(true, notice: true)))
+        XCTAssertTrue(pinned(6, verified: confirmed(bound: true, held: true), needed: needed(true, awaiting: true)))
+    }
+
+    func testNothingCarriesOverBeforeTheHandshakeReportedItsVerdict() {
+        // The notice and hold flags may still be on their way: until the verdict is in, the contact is not confirmed.
+        XCTAssertFalse(confirmed(bound: true, verdict: false))
+        XCTAssertTrue(pinned(6, verified: confirmed(bound: true, verdict: false), needed: needed(true)))
+        XCTAssertTrue(confirmed(bound: true, verdict: true))
+    }
+
+    func testConfirmingThisCallsWordsAlwaysCounts() {
+        XCTAssertTrue(confirmed(words: true, bound: true, notice: true))
+        XCTAssertTrue(confirmed(words: true, bound: false, verdict: false))
+    }
 }

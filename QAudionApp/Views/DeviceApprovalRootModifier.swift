@@ -46,7 +46,7 @@ struct DeviceApprovalRootModifier: ViewModifier {
                             .environmentObject(appState)
                         }
                     Color.clear
-                        .alert(DeviceApprovalTexts.noticeTitle, isPresented: Binding(
+                        .alert(appState.accountNoticeToShow == .phoneMoved ? DeviceApprovalTexts.noticePhoneMovedTitle : DeviceApprovalTexts.noticeTitle, isPresented: Binding(
                             get: { appState.accountNoticeToShow != nil },
                             set: { if !$0 { appState.accountNoticeToShow = nil } }
                         )) {
@@ -70,6 +70,7 @@ struct DeviceApprovalRootModifier: ViewModifier {
         case .loginRecovered: return DeviceApprovalTexts.noticeLoginRecovered
         case .deviceDisconnected: return DeviceApprovalTexts.noticeDeviceDisconnected
         case .recoveryContactChanged: return DeviceApprovalTexts.noticeRecoveryContactChanged
+        case .phoneMoved: return DeviceApprovalTexts.noticePhoneMoved
         case .loginApprovalPending, .none: return ""
         }
     }

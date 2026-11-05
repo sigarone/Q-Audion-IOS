@@ -15,6 +15,8 @@ public enum AccountNoticeKind: String, Equatable, Sendable, CaseIterable {
     case deviceDisconnected = "device_disconnected"
     /// The recovery email or phone changed.
     case recoveryContactChanged = "recovery_contact_changed"
+    /// The phone number of this account was linked to another account.
+    case phoneMoved = "phone_moved"
 
     /// Notices that open a banner or alert; the doorbell opens the approval sheet instead.
     public var isInformational: Bool { self != .loginApprovalPending }

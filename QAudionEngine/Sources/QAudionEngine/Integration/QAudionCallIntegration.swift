@@ -1222,6 +1222,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `sig_invalid`, ...): the app keeps it so a call closed while still held reports the right reason.
     public var onHandshakeIdentityUnverified: ((_ callId: String, _ code: String) -> Void)?
 
+    /// Fired (callId, peerId) when this call's handshake identity verdict is an authenticated one (the signature
+    /// verified under the pinned or the published key). It is fired AFTER the notices of the same verdict, so a
+    /// consumer that sees it has already received them. Until it fires the verdict is not known.
+    public var onHandshakeIdentityAuthenticated: ((_ callId: String, _ peerId: String) -> Void)?
+
     /// Has this peer ever had a SIGNED v4 bundle verify (spec §4
     /// `v4_capable_pinned`)? Wired from a UserDefaults-backed set in AppState.
     public var isPeerV4Pinned: ((String) -> Bool)?
@@ -2080,12 +2085,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, ratchetV5Capable: ratchetV5Capable)
                 offerSigOk = true
+                onHandshakeIdentityAuthenticated?(callId, callerId)
             case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                 // D11 trust-on-publish: bundle key ≠ pin but ∈ the server's published set AND its
                 // own signature verified. Silent additive re-pin per-(peer, device); NO banner.
                 print("[QAudionCallIntegration] OFFER set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 offerSigOk = true
+                onHandshakeIdentityAuthenticated?(callId, callerId)
             }
             // Every non-malformed verdict carries the transcript, the parsed peer fingerprint and
             // the signer key (the policy returns `.malformed` otherwise).
@@ -2912,12 +2919,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             case .authenticated(let tofuPinKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: tofuPinKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, ratchetV5Capable: ratchetV5Capable)
                 acceptSigOk = true
+                onHandshakeIdentityAuthenticated?(callId, callerId)
             case .authenticatedRepinFromPublished(let deviceKey, let v4Capable, let srtpDirKeyV1Capable, let ratchetV5Capable):
                 // D11 trust-on-publish: set-proven rotation → silent additive re-pin per-(peer,
                 // device); NO banner.
                 print("[QAudionCallIntegration] ACCEPT set-proven rotation peer=\(callerId.prefix(8))… dev=\((callerDeviceId ?? "—").prefix(8))… — silent re-pin, proceeding")
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 acceptSigOk = true
+                onHandshakeIdentityAuthenticated?(callId, callerId)
             }
             guard let acceptT = acceptCheck.transcript, let peerFp = acceptCheck.peerFingerprint else {
                 reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)

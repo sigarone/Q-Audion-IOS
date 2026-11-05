@@ -639,7 +639,7 @@ struct LiveInCallScreen: View {
     /// just under an account this lookup never checked.
     private func sasIdentityTag(for peerId: String) -> String? {
         guard let pinned = PeerIdentityPinStore().pinnedKey(
-            contactId: peerId, deviceId: appState.peerDeviceId(for: peerId)
+            contactId: peerId, deviceId: appState.callPinDeviceId(for: peerId)
         ) else { return nil }
         return SasVerificationStore.identityTag(forPinnedKey: pinned)
     }
@@ -707,18 +707,28 @@ struct LiveInCallScreen: View {
         CallLiveStats.appliedAudioCodecKbps(appState)
     }
 
-    /// W368: live SAS verification flag. Returns true iff the
-    /// SasVerificationStore has the current SAS words' fingerprint
-    /// stored under the call's peer id. Computed every TimelineView
-    /// tick — cheap (one UserDefaults string read).
+    /// Live SAS verification flag. True when the contact counts as confirmed for THIS call
+    /// (`SasCardPlacement.isConfirmedForThisCall`): either these exact words were confirmed, or the contact was
+    /// confirmed before for the identity key pinned now and this call's handshake raised no notice and holds nothing.
+    /// The words change on every call, so the stored words alone never match a later call. Computed every
+    /// TimelineView tick, cheap (one Keychain read).
     private var liveSasVerified: Bool {
         let words = appState.callSasWords
         guard !words.isEmpty,
               let peer = appState.callContactId else { return false }
         guard let identityTag = sasIdentityTag(for: peer) else { return false }
         let fp = SasVerificationStore.fingerprint(forWords: words)
-        return SasVerificationStore.shared.isVerified(
-            peerUserId: peer, currentFingerprint: fp, currentIdentityTag: identityTag)
+        let store = SasVerificationStore.shared
+        return SasCardPlacement.isConfirmedForThisCall(
+            wordsConfirmed: store.isVerified(
+                peerUserId: peer, currentFingerprint: fp, currentIdentityTag: identityTag),
+            bindingAppliesToPinnedKey: store.hasVerifiedBinding(
+                peerUserId: peer, currentIdentityTag: identityTag),
+            identityAuthenticated: appState.callIdentityAuthenticated,
+            identityNotice: appState.callIdentityUnauthenticatedChange
+                || appState.callHandshakeSignatureInvalid
+                || appState.callIdentityRotationAwaitingSas,
+            awaitingConfirmation: appState.awaitingIdentityConfirmation)
     }
 
     /// The call holds the real ML-KEM session key (`callSasKeySource == .mlKem`). This, and nothing about the PSK, is
