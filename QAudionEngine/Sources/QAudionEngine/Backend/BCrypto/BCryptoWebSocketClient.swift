@@ -2530,14 +2530,21 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// `pingIntervalSec` and tears the connection down if no inbound frame
     /// arrives within `pongTimeoutSec` of the last ping. Must be called
     /// after the server has accepted our `authenticate` message.
-    private func startPingTimer() {
+    private func startPingTimer(resetInbound: Bool = true) {
         lock.lock()
         pingTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + pingIntervalSec, repeating: pingIntervalSec)
+        let tick = WebSocketKeepalivePolicy.tickInterval(ping: pingIntervalSec, pongTimeout: pongTimeoutSec)
+        timer.schedule(deadline: .now() + tick, repeating: tick)
         timer.setEventHandler { [weak self] in self?.tickKeepalive() }
         pingTimer = timer
-        lastInboundAt = Date().timeIntervalSinceReferenceDate
+        // Only a fresh authentication restarts the silence clock. A change of ping cadence (the network
+        // switched between Wi-Fi and cellular) re-arms the timer but keeps the real time of the last inbound
+        // frame; resetting it there let a path that flapped every few minutes postpone the dead-socket
+        // verdict for as long as the flapping lasted.
+        if resetInbound || lastInboundAt == 0 {
+            lastInboundAt = Date().timeIntervalSinceReferenceDate
+        }
         lock.unlock()
         timer.resume()
     }
@@ -2545,9 +2552,10 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     private func tickKeepalive() {
         lock.lock()
         let lastInbound = lastInboundAt
+        let lastPing = pingSentAt
         let isAuthenticated = _state == .authenticated
         let gen = connectionGeneration
-        // Capture the adaptive timing under the lock — applyAdaptiveTiming()
+        // Capture the adaptive timing under the lock: applyAdaptiveTiming()
         // mutates these from the path-monitor queue.
         let pingInterval = pingIntervalSec
         let pongTimeout = pongTimeoutSec
@@ -2555,22 +2563,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
         guard isAuthenticated else { return }
 
-        let age = Date().timeIntervalSinceReferenceDate - lastInbound
-        // If a full ping cycle has passed without any inbound traffic, treat the
-        // socket as dead and force a reconnect.
-        if age > pingInterval + pongTimeout {
-            // Fix (2026-07-31, found during full-audit): this is the ONE
-            // disconnect path in this file that passed no `reason:` — every
-            // other teardown path records a real one, so `_lastDisconnectReason`
-            // fell through to "unknown" here specifically. This exact branch
-            // is what a live capture (device+server logs, 2026-07-31) showed
-            // firing continuously — authenticate, ~30-90s silence, this
-            // abrupt local self-teardown (matches the server's observed
-            // "read error ... EOF" signature), reconnect, repeat — for an
-            // entire test session. Without a real reason there was no way to
-            // even confirm from logs alone that this was the exact branch
-            // firing versus some other disconnect path with a similar
-            // symptom. Now self-documenting on the next capture.
+        let now = Date().timeIntervalSinceReferenceDate
+        let age = now - lastInbound
+        switch WebSocketKeepalivePolicy.decide(now: now, lastInbound: lastInbound, lastPingSent: lastPing,
+                                               pingInterval: pingInterval, pongTimeout: pongTimeout) {
+        case .wait:
+            return
+        case .declareDead:
             let reason = "keepalive-dead-timeout: no inbound for \(String(format: "%.1f", age))s (pingInterval=\(pingInterval)s pongTimeout=\(pongTimeout)s)"
             print("[BCryptoWS] \(reason)")
             lock.lock()
@@ -2578,23 +2577,13 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
             webSocketTask = nil
             lock.unlock()
             handleDisconnect(generation: gen, reason: reason)
-            return
+        case .sendPing:
+            lock.lock()
+            pingSentAt = now
+            lock.unlock()
+            print("[BCryptoWS] ping sent (age=\(String(format: "%.1f", age))s)")
+            send(type: "ping", data: [:])
         }
-
-        lock.lock()
-        pingSentAt = Date().timeIntervalSinceReferenceDate
-        lock.unlock()
-        // Fix (2026-07-31, found during full-audit): the send-ping and
-        // receive-pong paths were both completely silent on success — only
-        // failures printed anywhere in this class. That made it impossible
-        // to tell, from a device log alone, "pings genuinely aren't leaving
-        // the device" from "pongs aren't arriving" from "this code isn't
-        // running at all" — three very different explanations for the same
-        // churn symptom. This print + the pong-received one in
-        // handleMessage's "pong"/"heartbeat_ack" branch are the minimum
-        // needed to actually distinguish them on the next capture.
-        print("[BCryptoWS] ping sent (age=\(String(format: "%.1f", age))s)")
-        send(type: "ping", data: [:])
     }
 
     // MARK: - Silent token recovery (always-reachable Phase 2)
@@ -2846,7 +2835,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // have a live authenticated socket to keep alive (startPingTimer is a
         // no-op otherwise and would needlessly churn the timer).
         if changed && authed {
-            startPingTimer()
+            startPingTimer(resetInbound: false)
         }
     }
 
