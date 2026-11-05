@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// ADR-014a §2.1 — canonical preimage for the `self_sig_b64` field carried
 /// in a v2 identity bundle (`GET /api/v1/users/{id}/identity-key`).
@@ -96,5 +97,45 @@ public enum IdentityKeyV2Preimage {
         out.append(ikX25519Pub)
         precondition(out.count == preimageLenV2, "preimage length drift: \(out.count) != \(preimageLenV2)")
         return out
+    }
+
+    /// Builds the v2 preimage and signs it with the long-term Ed25519 key.
+    /// This is the exact path the app uses when it publishes its bundle.
+    public static func signV2(
+        signingPrivate: Data,
+        uuidRaw: Data,
+        ed25519Pub: Data,
+        ikPqPub: Data,
+        ikX25519Pub: Data,
+        createdAtMs: Int64
+    ) throws -> Data {
+        let preimage = try buildV2(
+            uuidRaw: uuidRaw, ed25519Pub: ed25519Pub, ikPqPub: ikPqPub,
+            ikX25519Pub: ikX25519Pub, createdAtMs: createdAtMs
+        )
+        let signer = try Curve25519.Signing.PrivateKey(rawRepresentation: signingPrivate)
+        return try signer.signature(for: preimage)
+    }
+}
+
+/// Dedupe fingerprint for the identity publish. It covers the device id and a
+/// payload schema version, so a changed payload shape republishes on the first
+/// launch after an update even when the keys are unchanged.
+public enum IdentityPublishFingerprint {
+    /// Bump whenever the published payload shape changes.
+    public static let payloadSchemaVersion = 2
+
+    public static func v2(deviceId: String, ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data) -> String {
+        "v2|s\(payloadSchemaVersion)|\(deviceId)|\(ed25519Pub.base64EncodedString())|" +
+            "\(ikPqPub.base64EncodedString())|\(ikX25519Pub.base64EncodedString())"
+    }
+
+    public static func v1(deviceId: String, ed25519Pub: Data) -> String {
+        "v1|\(deviceId)|\(ed25519Pub.base64EncodedString())"
+    }
+
+    /// True when the stored fingerprint differs from the current one.
+    public static func needsPublish(stored: String?, current: String) -> Bool {
+        stored != current
     }
 }

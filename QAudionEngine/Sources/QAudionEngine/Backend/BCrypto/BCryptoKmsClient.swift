@@ -143,20 +143,6 @@ public final class BCryptoKmsClient {
         _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
     }
 
-    /// XC-3 (2026-08-05, v2 bundle parity follow-up) — publish the FULL v2
-    /// identity bundle: the PQ (ML-KEM-1024) and X25519 long-term legs, plus
-    /// a self-signature over `IdentityKeyV2Preimage.buildV2`'s canonical
-    /// preimage. Same endpoint as the v1 publish above (`version` in the
-    /// body is what routes the server to the v2 path), same field names as
-    /// Android `DeviceKeyProvisioner.publishIdentityBundleV2` / Desktop
-    /// `IdentityKeyStore`'s v2 publish (server
-    /// `cmd/bcrypto-lite/users_identity_key.go::handlePublishIdentityKeyV2`).
-    ///
-    /// `uuid` is deliberately NOT sent — the server derives it from the JWT
-    /// (`claims.UserID`), never from client input, so the CALLER's local
-    /// preimage must already have been built with that same uuid (see
-    /// `AppState.publishIdentityKeyWithRetry`) or the self-sig verify (server-
-    /// side, over the server's OWN uuid) will fail with 400 `self_sig invalid`.
     /// Upload one-time prekeys. Returns how many the server accepted.
     ///
     /// All-or-nothing server-side: one malformed or badly-signed item rejects
@@ -173,13 +159,26 @@ public final class BCryptoKmsClient {
         return (obj["accepted"] as? Int) ?? 0
     }
 
+    /// Publish the FULL v2
+    /// identity bundle: the PQ (ML-KEM-1024) and X25519 long-term legs, plus
+    /// a self-signature over `IdentityKeyV2Preimage.buildV2`'s canonical
+    /// preimage. Same endpoint as the v1 publish above (`version` in the
+    /// body is what routes the server to the v2 path), same field names as
+    /// the other platforms.
+    ///
+    /// `uuid` is deliberately NOT sent — the server derives it from the JWT
+    /// (`claims.UserID`), never from client input, so the CALLER's local
+    /// preimage must already have been built with that same uuid (see
+    /// `AppState.publishIdentityKeyWithRetry`) or the self-sig verify (server-
+    /// side, over the server's OWN uuid) will fail with 400 `self_sig invalid`.
     public func publishUserIdentityBundleV2(
-        ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data, selfSig: Data, createdAtMs: Int64
+        ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data, selfSig: Data, createdAtMs: Int64,
+        deviceId: String = ""
     ) async throws {
         precondition(ed25519Pub.count == 32, "Ed25519 public key must be 32 bytes")
         precondition(ikX25519Pub.count == 32, "X25519 public key must be 32 bytes")
         precondition(selfSig.count == 64, "self-signature must be 64 bytes")
-        let dict: [String: Any] = [
+        var dict: [String: Any] = [
             "public_key_b64": ed25519Pub.base64EncodedString(),
             "alg": "Ed25519",
             "ed25519_pub_b64": ed25519Pub.base64EncodedString(),
@@ -189,6 +188,8 @@ public final class BCryptoKmsClient {
             "created_at_ms": createdAtMs,
             "self_sig_b64": selfSig.base64EncodedString(),
         ]
+        // Not signed (absent from the preimage): selects the per-device record.
+        if !deviceId.isEmpty { dict["device_id"] = deviceId }
         let body = try JSONSerialization.data(withJSONObject: dict)
         _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
     }
@@ -398,12 +399,9 @@ public final class BCryptoKmsClient {
     /// Returns `nil` on 404 (peer hasn't published), transport error, or a
     /// pre-v2/legacy response missing `ik_pq_pub_b64` (no PQ leg — a
     /// KMS-prebootstrap encap is impossible against that peer; the caller
-    /// falls back to the existing default flow). Deliberately does NOT
-    /// verify the self-signature — that requires porting Android's
-    /// `IdentityKeyV2Preimage` preimage builder + Ed25519 verify, which does
-    /// not exist on iOS yet (see the TODO on
-    /// `AppState.attemptGroupCtrlKmsPreBootstrap`). Do not treat an
-    /// unverified bundle as trusted key material beyond that TODO's scope.
+    /// falls back to the existing default flow). Does NOT verify the
+    /// self-signature itself; callers verify it against `IdentityKeyV2Preimage`
+    /// before treating the bundle as trusted key material.
     public struct IdentityBundleV2 {
         public let uuidRaw: Data          // 16B, RFC 4122 raw form
         public let ed25519Pub: Data       // 32B

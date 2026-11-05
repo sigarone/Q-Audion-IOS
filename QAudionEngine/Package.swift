@@ -327,6 +327,8 @@ let package = Package(
                 .copy("Mesh/Resources/mesh-vectors.json"),
                 .copy("Resources/kat/kms-psk-v2-kat.json"),
                 .copy("Resources/kat/kms-pop-v1-kat.json"),
+                // Byte-copy of the cross-platform identity bundle v2 self-signature KAT.
+                .copy("Resources/kat/identity-bundle-v2-kat.json"),
                 // kms-rotation-v2 Phase-1 frozen KATs (byte-copies of
                 // apps/qaudion-firmware/tools/kat/kms-v2/{session-key-v3,hs-bundle-v1}-kat.json).
                 // session-KDF schema:3 (info_v3 = label||ct_bind||selected_fp_or_zero32)
