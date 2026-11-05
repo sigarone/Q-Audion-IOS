@@ -14696,9 +14696,7 @@ final class AppState: ObservableObject {
     /// platform still publishing the v1-only shape (`ed25519_pub_b64` +
     /// `device_id`). Android (`DeviceKeyProvisioner.publishIdentityBundleV2`)
     /// and Desktop (`IdentityKeyStore`) both already publish the FULL v2
-    /// bundle (PQ + X25519 legs, self-signed) — see the "known gap" this
-    /// closes, documented at `attemptGroupCtrlKmsPreBootstrap`'s header:
-    /// without a v2 publish, a remote sender's KMS-prebootstrap attempt TO
+    /// bundle (PQ + X25519 legs, self-signed). Without a v2 publish, a remote sender's KMS-prebootstrap attempt TO
     /// this device sees "no PQ leg" and silently skips prebootstrap, and any
     /// peer verifying this device's v2 bundle self-sig (D11 trust-on-publish)
     /// never gets that stronger cross-check either. `DeviceKeyManager`'s
@@ -14716,7 +14714,8 @@ final class AppState: ObservableObject {
     ///      UNCHANGED identity skips the network round-trip, and switching
     ///      from a confirmed v1 fingerprint to v2 (or vice versa) always
     ///      forces at least one fresh attempt (the fingerprint format
-    ///      includes a `v1|`/`v2|` tag, so the two never collide);
+    ///      includes a `v1|`/`v2|` tag and, for v2, the device id and a payload
+    ///      schema version, so a changed payload shape republishes);
     ///  (b) a short bounded retry (2 extra attempts, 2s/5s backoff) IN THIS
     ///      SAME sweep instead of silently deferring to whichever sweep
     ///      trigger fires next.
@@ -14784,18 +14783,19 @@ final class AppState: ObservableObject {
            let userIdStr = currentUserId,
            let uuidRaw = try? KmsPreBootstrapCbor.uuidStringToRaw(userIdStr) {
             do {
-                let preimage = try IdentityKeyV2Preimage.buildV2(
-                    uuidRaw: uuidRaw, ed25519Pub: signingPub, ikPqPub: ikPqPub,
+                let selfSig = try IdentityKeyV2Preimage.signV2(
+                    signingPrivate: sovereign.signingPrivate, uuidRaw: uuidRaw,
+                    ed25519Pub: signingPub, ikPqPub: ikPqPub,
                     ikX25519Pub: ikX25519Pub, createdAtMs: createdAtMs
                 )
-                let signer = try Curve25519.Signing.PrivateKey(rawRepresentation: sovereign.signingPrivate)
-                let selfSig = try signer.signature(for: preimage)
-                let fingerprint = "v2|\(signingPub.base64EncodedString())|" +
-                    "\(ikPqPub.base64EncodedString())|\(ikX25519Pub.base64EncodedString())"
+                let fingerprint = IdentityPublishFingerprint.v2(
+                    deviceId: deviceId, ed25519Pub: signingPub,
+                    ikPqPub: ikPqPub, ikX25519Pub: ikX25519Pub
+                )
                 await publishWithRetry(fingerprint: fingerprint) {
                     try await provider.kmsClient.publishUserIdentityBundleV2(
                         ed25519Pub: signingPub, ikPqPub: ikPqPub, ikX25519Pub: ikX25519Pub,
-                        selfSig: selfSig, createdAtMs: createdAtMs
+                        selfSig: selfSig, createdAtMs: createdAtMs, deviceId: deviceId
                     )
                 }
                 return
@@ -14803,7 +14803,7 @@ final class AppState: ObservableObject {
                 print("[AppState] identity v2 bundle build failed, falling back to v1 publish: \(error)")
             }
         }
-        let fingerprint = "v1|\(deviceId)|\(signingPub.base64EncodedString())"
+        let fingerprint = IdentityPublishFingerprint.v1(deviceId: deviceId, ed25519Pub: signingPub)
         await publishWithRetry(fingerprint: fingerprint) {
             try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
         }
@@ -29920,19 +29920,6 @@ extension AppState {
     ///     `sendControlEnvelope` — see the `.noPsk` case in
     ///     `connectPersistentSocket`'s `onSendControlEnvelope` wiring).
     ///
-    /// Known gap (NOT fixed here, out of this TODO's scope): iOS has no
-    /// code path that PUBLISHES its own v2 identity bundle (`ik_pq_pub_b64`/
-    /// `ik_x25519_pub_b64`/`self_sig_b64` via the dedicated v2 POST route —
-    /// only Android does that today). Practically this means a REMOTE
-    /// sender (Android/Desktop) trying to KMS-prebootstrap TO an iOS
-    /// receiver will see "no PQ leg" and skip prebootstrap — the RECEIVE
-    /// side below (`decodeKmsPreBootstrapEnvelope`) is implemented correctly
-    /// and forward-compatible, but won't see real traffic until iOS also
-    /// publishes a v2 bundle (separate follow-up, not requested here).
-    /// iOS also has no local one-time-prekey pool of its own (mirrors
-    /// Android's `OneTimePrekeyDao`) — `oneTimePrekeyLookup` on the decode
-    /// side is therefore always-miss by construction, which is the
-    /// correct fail-closed behaviour given iOS never published any OTPs.
     static func attemptGroupCtrlKmsPreBootstrap(
         peer: String, selfId: String, envelopeJson: String, kmsClient: BCryptoKmsClient
     ) async -> String? {
