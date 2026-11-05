@@ -480,4 +480,78 @@ final class CallKitCallLedgerTests: XCTestCase {
         XCTAssertEqual(ledger.drainOutstanding().count, iterations / 2)
         XCTAssertEqual(ledger.outstandingCount, 0)
     }
+
+    // MARK: - group activation bookkeeping
+
+    /// A 1:1 native call is promoted to a group: the group's own activation is balanced once by the group
+    /// end, the 1:1 call's mark by its own report, and neither takes the other's.
+    func test_groupActivation_promotion_balancesEachOwnerOnce() {
+        let ledger = CallKitCallLedger()
+        let oneToOne = UUID()
+        ledger.recordNativeBalance(oneToOne)
+        ledger.markAudioSelfActivated(oneToOne)
+        ledger.markGroupAudioSelfActivated()
+        XCTAssertTrue(ledger.consumeEndBalance(oneToOne).selfActivated)
+        XCTAssertTrue(ledger.consumeGroupActivationBalance())
+        XCTAssertFalse(ledger.consumeGroupActivationBalance(), "consumed once")
+    }
+
+    /// Group end before the 1:1 report: the group balance must not consume the 1:1 call's mark.
+    func test_groupActivation_groupEndFirst_leavesOneToOneMark() {
+        let ledger = CallKitCallLedger()
+        let oneToOne = UUID()
+        ledger.recordNativeBalance(oneToOne)
+        ledger.markAudioSelfActivated(oneToOne)
+        ledger.markGroupAudioSelfActivated()
+        XCTAssertTrue(ledger.consumeGroupActivationBalance())
+        XCTAssertTrue(ledger.consumeEndBalance(oneToOne).selfActivated)
+    }
+
+    /// A legacy 1:1 call's process-wide mark survives the group balance, and the group mark survives an
+    /// unknown uuid's end.
+    func test_groupActivation_unknownUuid_doesNotTouchGroupMark_andGroupBalanceDoesNotTouchLegacyFlag() {
+        let ledger = CallKitCallLedger()
+        ledger.markGroupAudioSelfActivated()
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated)
+        XCTAssertTrue(ledger.consumeGroupActivationBalance())
+        ledger.markAudioSelfActivated(nil)
+        XCTAssertFalse(ledger.consumeGroupActivationBalance())
+        XCTAssertTrue(ledger.consumeEndBalance(UUID()).selfActivated, "the legacy mark is still owed")
+    }
+
+    /// A late 1:1 push after promotion is reported only to satisfy the push: its end owns no audio.
+    func test_groupActivation_lateOneToOnePushAfterPromotion_ownsNoAudio() {
+        let ledger = CallKitCallLedger()
+        ledger.markGroupAudioSelfActivated()
+        ledger.markAudioSelfActivated(nil)
+        let late = UUID()
+        ledger.markReportOnly(late)
+        XCTAssertEqual(ledger.consumeEndBalance(late),
+                       .init(nativeManualCall: false, selfActivated: false, duplicateNative: false))
+        XCTAssertTrue(ledger.consumeGroupActivationBalance())
+        XCTAssertTrue(ledger.consumeEndBalance(UUID()).selfActivated)
+    }
+
+    /// A busy reject ends the call before its activation lands: the activation is told it is late and
+    /// nothing is marked, so no live call's balance is affected.
+    func test_groupActivation_busyReject_lateActivationMarksNothing() {
+        let ledger = CallKitCallLedger()
+        let rejected = UUID()
+        ledger.markGroupAudioSelfActivated()
+        _ = ledger.consumeEndBalance(rejected)
+        XCTAssertEqual(ledger.markAudioSelfActivatedUnlessEnded(rejected), .callAlreadyEnded)
+        XCTAssertFalse(ledger.consumeEndBalance(UUID()).selfActivated)
+        XCTAssertTrue(ledger.consumeGroupActivationBalance())
+    }
+
+    /// The placeholder report for a group push that cannot ring owns no audio and is never the live call's uuid.
+    func test_groupActivation_placeholderReport_ownsNoAudio() {
+        let ledger = CallKitCallLedger()
+        let live = UUID()
+        ledger.markGroupAudioSelfActivated()
+        let spec = ledger.groupNotPresentableReport(derivedUuid: live)
+        XCTAssertNotEqual(spec.uuid, live)
+        XCTAssertFalse(ledger.consumeEndBalance(spec.uuid).selfActivated)
+        XCTAssertTrue(ledger.consumeGroupActivationBalance())
+    }
 }

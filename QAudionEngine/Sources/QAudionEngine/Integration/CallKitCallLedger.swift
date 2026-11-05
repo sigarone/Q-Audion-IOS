@@ -102,6 +102,11 @@ final class CallKitCallLedger: @unchecked Sendable {
     /// uuids are never reused.
     private var selfActivatedNativeUUIDs: Set<UUID> = []
 
+    /// A self-managed group call's own activation of the shared audio session (no CallKit uuid exists for it).
+    /// Separate from `audioSelfActivated` so that balancing the group never takes the activation mark of a
+    /// 1:1 call, and a 1:1 call's end never takes the group's.
+    private var groupSelfActivated = false
+
     /// CallKit uuids reported only to satisfy the one-report-per-push rule and ended at once (a repeated
     /// group invite for a call this device already handled). They own no audio: ending one must neither
     /// consume the end balance of a live call nor take the process-wide self-activation flag. Kept (not
@@ -238,6 +243,23 @@ final class CallKitCallLedger: @unchecked Sendable {
         } else {
             audioSelfActivated = true
         }
+    }
+
+    /// The app activated the shared audio session for a group call that CallKit does not track.
+    func markGroupAudioSelfActivated() {
+        lock.lock()
+        defer { lock.unlock() }
+        groupSelfActivated = true
+    }
+
+    /// Atomic test-and-clear of the group activation mark: `true` once after ``markGroupAudioSelfActivated()``.
+    /// Touches nothing else, whatever other calls are live or ended.
+    func consumeGroupActivationBalance() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard groupSelfActivated else { return false }
+        groupSelfActivated = false
+        return true
     }
 
     /// What a successful `setActive(true)` of `activateAudioSession` owes.

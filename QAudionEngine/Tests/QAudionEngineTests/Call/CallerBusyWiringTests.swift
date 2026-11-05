@@ -341,7 +341,7 @@ final class CallerBusyWiringTests: XCTestCase {
     func testALateActivationIsBalancedAndAnnouncesNothing() throws {
         let body = try slice(
             try callKitProviderCode(),
-            from: "private func activateAudioSession(logSite: String, source: AudioSessionActivationSource, uuid: UUID?) async {",
+            from: "private func activateAudioSession(logSite: String, source: AudioSessionActivationSource, uuid: UUID?, groupActivation: Bool = false) async {",
             to: "public func providerDidReset(")
         XCTAssertTrue(body.contains("switch ledger.markAudioSelfActivatedUnlessEnded(uuid) {"))
         XCTAssertFalse(body.contains("ledger.markAudioSelfActivated(uuid)"),
