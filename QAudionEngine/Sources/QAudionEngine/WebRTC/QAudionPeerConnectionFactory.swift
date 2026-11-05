@@ -507,14 +507,12 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     ///     have absorbed — accepted per the owner's explicit approval of this
     ///     whole assessment, condition/test-B language notwithstanding (no
     ///     live device available in this environment to run test B first).
-    ///   - `audioJitterBufferFastAccelerate = false` — UNCHANGED by N1. The
-    ///     assessment's own P1-1 leaves this "decide after test B: `false` as
-    ///     Riferimento A, or `true` as done for W-JITTERCAP" — this pass keeps
-    ///     `false` (matching Riferimento A, and this file's pre-existing
-    ///     value) since no live-device test B ran in this environment to
-    ///     justify diverging from Riferimento A's own shipped choice; the
-    ///     smaller 17-packet ceiling already bounds the worst case
-    ///     `fastAccelerate=false`'s slower catch-up can reach.
+    ///   - `audioJitterBufferFastAccelerate = true` — field logs showed the
+    ///     receive buffer holding 150-500 ms more audio than its own target
+    ///     for 10-20 s after a short network stall (a burst of late packets),
+    ///     because the default catch-up is slow. With fast catch-up the excess
+    ///     is time-compressed away much sooner; the 17-packet cap above still
+    ///     bounds the worst case.
     ///   - `audioJitterBufferMinDelayMs` is deliberately NOT set.
     ///     W-NATIVESRTPBUILDFIX (2026-09-26): the CI simulator build proved
     ///     this pinned SDK's `RTCConfiguration` has no such member.
@@ -610,7 +608,9 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
             config.tcpCandidatePolicy = .disabled
             // N1 (network-resilience-max, this task): was 50 (~3s @ 60ms).
             config.audioJitterBufferMaxPackets = 17
-            config.audioJitterBufferFastAccelerate = false
+            // Drain a post-stall excess of buffered audio quickly (see the
+            // doc comment above).
+            config.audioJitterBufferFastAccelerate = true
             // N5 (network-resilience-max, this task) — master switch for
             // `RTCRtpEncodingParameters.networkPriority` (see doc above).
             config.enableDscp = true

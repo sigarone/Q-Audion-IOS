@@ -94,7 +94,7 @@ final class QAudionPeerConnectionFactoryTests: XCTestCase {
         XCTAssertNotNil(cfg.cryptoOptions)
         XCTAssertEqual(cfg.tcpCandidatePolicy, .disabled)
         XCTAssertEqual(cfg.audioJitterBufferMaxPackets, 17)
-        XCTAssertFalse(cfg.audioJitterBufferFastAccelerate)
+        XCTAssertTrue(cfg.audioJitterBufferFastAccelerate)
         // N5 (network-resilience-max) — the DSCP master switch that
         // `RTCRtpEncodingParameters.networkPriority` (set on the native audio
         // sender, `QAudionPeerConnectionTests`) requires to have any effect.
