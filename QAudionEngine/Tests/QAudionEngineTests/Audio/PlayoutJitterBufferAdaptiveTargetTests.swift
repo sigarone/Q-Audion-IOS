@@ -101,6 +101,38 @@ final class PlayoutJitterBufferAdaptiveTargetTests: XCTestCase {
         XCTAssertEqual(120, jb.adaptiveTargetMs, "p95 lateness of 100 ms must produce a 120 ms target")
     }
 
+    // MARK: - spike then decay
+
+    /// A burst of late arrivals raises the target, and once the link is
+    /// clean again the whole window turns over and the target returns to
+    /// the floor instead of staying high.
+    func test_aSpikeRaisesTheTargetAndItDecaysBackOnceTheLinkIsClean() {
+        let clock = Clock()
+        let jb = buffer(clock)
+        pushCadence(jb, clock, count: 100, gapMs: 20)
+        // 40 consecutive arrivals 200 ms late: well over 5% of the window.
+        pushCadence(jb, clock, count: 40, gapMs: 220)
+        XCTAssertGreaterThan(jb.adaptiveTargetMs, 120, "a sustained spike must raise the target")
+        // A clean link for more than one full window.
+        pushCadence(jb, clock, count: PlayoutJitterBuffer.adaptWindow + 64, gapMs: 20)
+        XCTAssertEqual(
+            PlayoutJitterBuffer.adaptTargetMinMs, jb.adaptiveTargetMs,
+            "the target must decay back to the floor after the spike leaves the window")
+    }
+
+    /// A handful of late arrivals (under 5% of the window) is a transient,
+    /// not a reason to park the target high.
+    func test_aFewIsolatedLateArrivalsDoNotRaiseTheTarget() {
+        let clock = Clock()
+        let jb = buffer(clock)
+        pushCadence(jb, clock, count: 120, gapMs: 20)
+        for _ in 0..<6 {
+            pushCadence(jb, clock, count: 1, gapMs: 220)
+            pushCadence(jb, clock, count: 20, gapMs: 20)
+        }
+        XCTAssertEqual(PlayoutJitterBuffer.adaptTargetMinMs, jb.adaptiveTargetMs)
+    }
+
     // MARK: - clamps
 
     func test_theCeilingClampHoldsAgainstAPathologicalLink() {
